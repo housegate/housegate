@@ -158,6 +158,8 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
   - *Spec:* "Serving is a lease the member grants the host per database; before any install the member revokes it and waits until the host has released it or it has expired."
   - *Gap:* HouseGate takes one table-state snapshot per query, so a query that started under a Replica snapshot keeps reading the copy after the host stops answering Replica. The scoping proposal bounded this by "lease TTL ≥ si_gateway `max_execution_time` plus a margin". That bound does not exist: no SI ClickHouse or chart at origin/main sets `max_execution_time` (`git grep max_execution_time` over `charts/storage-integrity`, `charts/sentio-node` and `k8s-sea/sentio-network-devnet2` finds nothing), and setting it on `si_gateway` would limit every tenant query on the host.
   - *Resolution:* HouseGate counts in-flight replica reads per database. `sitable.ReplicaReads` is fed by `sitablestate` on `OnQuery`, `OnQueryComplete` and `OnClose`. The host releases a database's lease only once both hold: it has published a snapshot without that database's Replica entries, and `ReplicaReads.InFlight(database)` is 0. The member installs on that release or on the lease's expiry (`lease_ttl`, default 30 s, renewed every `lease_ttl/3`). The host stops answering Replica `serve.HostDeadlineMargin` (3 s) before its own deadline.
+  - *Resolution — read admission (review round 1):* HouseGate takes a query's snapshot in rewrite, before `sitablestate` counts the read, and a rewrite can outlast a lease poll. So `sitablestate` counts a replica read first and then admits it only while its `TableState.Current()` still answers every accessed Replica table from the copy and owner the query was planned against; otherwise it uncounts the read and refuses it with the retryable 733 before anything reaches ClickHouse. The host reads `InFlight` only after its `Refresh` published the snapshot that drops the database, so either the host sees the count and waits, or the gate sees that snapshot and refuses. No grace poll is needed.
+  - *Resolution — member restarts (review round 1):* the member records every lease in `serve-leases.json` in its state directory before it grants or renews one, and a restarted member restores the leases that have not expired, revoked. Its installs of those databases (the startup audit's included) wait for the host's release or the lease's expiry, as before the restart.
   - *Residual (recorded, Follow-ups):* a host that loses the member endpoint stops answering at its deadline, but its queries already running can overlap a later install. Each MergeTree read keeps its own parts snapshot, so such a query reads, per table, the verified rows of one of two consecutive published entries.
   - *Why:* this ties the lease to the reads that actually hold the copy, without an unenforced server limit or a tenant-visible one.
 - **K45 — What a Replica entry and its status carry (spec §11, Host status).**
@@ -183,7 +185,7 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
 
     An eligible read is a `SELECT` or `WITH` statement on a session whose `ReplicaFailoverEligible` is still true. Any other statement clears it for the rest of the session: INSERT (INSERT … SELECT included), `SET`, DDL, `ALTER`, or any query with client Data blocks. So replaying the hello and the one query on a new upstream reproduces the session exactly.
   - *Resolution — how:*
-    - Candidates are `replica_hosts[database]` in ascending indexer id, minus the owner and any indexer without a HouseGate port, one attempt each.
+    - Candidates are `replica_hosts[database]` in ascending indexer id, minus the owner and any indexer without a HouseGate port, one attempt each. A candidate fails when it cannot take the hello or the read, or, at a read, when its first answer is itself one of the two read failures above (a reachable host whose member does not serve the database relays the owner's quarantine refusal); the agent then tries the next. A failover counts as served only at a candidate's first answer that is not such a failure.
     - The agent's injected `SQL_x_read_mode` is kept, so an `unsafe_latest` read is refused by the replica host with the safe-mode message. The P3 drill sets `SQL_x_read_mode='safe'` explicitly.
     - When every candidate fails, the client gets the original error.
   - *Why:* a mid-stream or stateful replay could return duplicate or different rows, and a silent safe-mode switch would change answers without the client asking.
@@ -197,7 +199,7 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
 - **K48 — The si_gateway grant and computed reserved names (spec gap; S3-B contract §11).**
   - *Gap:* `si_gateway` is HouseGate's upstream credential, so it runs every replica-served read, and S3-B's `SI_CLICKHOUSE_GRANTS` give it nothing on `hg_replica`.
   - *Resolution — grant:* every installation hosting a member gets `GRANT SELECT ON hg_replica.*` for `si_gateway`: the network CHI, indexer-b and indexer-c. Nothing else is granted: nothing on `hg_rstage` or `hg_member_unsafe`, and no write. Users are installation-wide, so the grant also exists on the network CHI's verifier hosts, whose `hg_replica` is empty; this is recorded as a K18-style residual.
-  - *Resolution — computed names:* the grant reopens Plan S3-A's carrier-computed reserved-name follow-up for `hg_replica`. A peer-trusted, non-forwarded leg such as `merge(concat('hg_', 'replica'), '.*')` would now read any owner's copies through `si_gateway`, bypassing HouseGate's per-database permission check. Task 43 closes this in `sireserved`'s peer rule: on such sessions, an object-carrier callable (`IsObjectCarrierName`) with any argument that is not a single string literal, numeric literal or identifier is refused 392. Every form of S3-A's peer-leg corpus still passes.
+  - *Resolution — computed names:* the grant reopens Plan S3-A's carrier-computed reserved-name follow-up for `hg_replica`. A peer-trusted, non-forwarded leg such as `merge(concat('hg_', 'replica'), '.*')` would now read any owner's copies through `si_gateway`, bypassing HouseGate's per-database permission check. Task 43 closes this in `sireserved`'s peer rule: on such sessions, an object-carrier callable (`IsObjectCarrierName`) with any argument that is not a single string literal or unsigned integer literal is refused 392. An identifier argument is refused too, bare, quoted or qualified: ClickHouse's analyzer resolves it through the statement's aliases before taking it as a name, so `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')` reads `hg_replica`, and `d.1` reads a tuple element (measured on ClickHouse 26.3.51.7 for WITH, SELECT-list, inline and enclosing-query aliases). Every form of S3-A's peer-leg corpus still passes, because its carriers take string literals only, as do the nested `remote()` legs ClickHouse 26.3 pushes into a leg.
   - *Why:* a copy is published safe data, but each database stays readable only by its permitted accounts.
 - **K49 — The P3 drill (spec §16 P3 exit).**
   - *Resolution:*
@@ -212,7 +214,7 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
     - Every host computes the same map from the registry alone.
     - The same answer lists `replica_databases`, the databases this host answers Replica now.
     - The agent asks its network-state source first, then each bound indexer other than the owner (`RpcNetworkState.StorageIntegrityReplicaHosts`), so an unreachable owner never blocks the lookup.
-    - From placement on, S3-E4 Task 79 changes the source to `DatabaseGroup` plus readiness, keeping the field's shape.
+    - From placement on, S3-E4 Task 79 changes the source to the hosts of `DatabaseGroup`'s current members (their served `host_indexer_id`, D27, never filtered by `MemberReady`, S3-E4 contract §56), keeping the field's shape; whether a listed host serves a read stays its own serving state (its Replica entries and `replica_databases`).
   - *Why:* the agent needs candidates exactly when the owner cannot answer, and a field every host computes identically needs no new RPC.
 
 ## Release ledger (consumed and produced)
@@ -239,7 +241,9 @@ Every produced value is written into this plan's Appendix C by the task that mak
    - *Lease:* before any install of a served database, the member revokes the lease, and renew answers 409 from then on. The host drops the database's Replica entries from the next snapshot. It releases the lease only once that snapshot is published and `sitable.ReplicaReads.InFlight(database)` is 0.
    - *Install:* the member installs on the release, or on the lease's expiry when the host is silent, and never while a lease is held.
    - *Failing closed:* a host that cannot reach the member stops answering Replica `serve.HostDeadlineMargin` before its local deadline, even when its chain-state read is failing.
-   - Tests: Task 45 `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestRenewAfterRevokeIsRefused`, `TestServeHoldsInstallsOfAServedDatabase`; Task 46 `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`; Task 42 `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestOnClose_EndsAnInFlightReplicaRead`.
+   - *A query planned before the drop:* a query whose rewrite took the Replica snapshot and outlasted the host's drop and release is refused 733 at `sitablestate`, never read from the copy.
+   - *A member restart:* a restarted member restores its leases from its state directory, revoked, and installs nothing of their databases before their release or expiry.
+   - Tests: Task 45 `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestRenewAfterRevokeIsRefused`, `TestServeHoldsInstallsOfAServedDatabase`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`; Task 46 `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`; Task 42 `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`.
 2. **A quarantined owner's entry keeps moving, or a copy is not what the registry says.**
    - *Trigger:* serving needs the owner to be quarantined, or unreachable from the member for `t_unreach`.
    - *Entry:* serving needs O's entry unchanged over two polls. A late acknowledgement that advances it stops serving, lets the install run and restarts the two-poll count.
@@ -254,15 +258,15 @@ Every produced value is written into this plan's Appendix C by the task that mak
    - *Read mode:* `unsafe_latest` on a Replica table is refused after the rewriter's first pass with the safe-mode text, before anything reaches ClickHouse. The copy is never `UNION ALL`'d with itself.
    - *Writes and DDL:* writes, DDL, `CREATE … AS SELECT`, and materialized views targeting a Replica table are refused 392 naming the owner. The signed ingress refuses a Replica target.
    - *Grant:* `si_gateway` gains exactly `SELECT ON hg_replica.*`.
-   - *Computed names:* on a peer-trusted, non-forwarded session, a computed carrier argument such as `merge(concat('hg_', 'replica'), '.*')` is refused 392 (K48). Every form of S3-A's peer-leg corpus still passes.
+   - *Computed names:* on a peer-trusted, non-forwarded session, a computed carrier argument such as `merge(concat('hg_', 'replica'), '.*')`, and any identifier argument, which ClickHouse resolves through the statement's aliases (`WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`) or as a tuple element (`d.1`), is refused 392 (K48). Every form of S3-A's peer-leg corpus still passes.
    - Tests: Task 43 `TestUnsafeLatestIsRefusedForReplicaTables`, `TestUnsafeLatestNeverSendsTheCopyTwice`, `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused`, `TestOnQuery_PeerLegFormsPass`, `TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner`; Task 42 `TestDecide_ReplicaRows`, `TestSnapshotSchemaRefusesAReplicaTable`; Task 47 `test_si_gateway_reads_hg_replica_only_with_the_replica_grant`, `test_grant_probe_covers_every_protocol_grant`; check: runbook §3 (`replica-grant-probe-<x>.tsv`).
 5. **The agent fails over something it must not, or fails to fail over (K46).**
    - *When:* failover happens only at hello, or at an eligible `SELECT`/`WITH`'s first answer on a session that has issued nothing else. It needs either the read-side quarantine refusal (`IsIndexerQuarantinedReadMessage`) or a broken connection before any packet reached the client.
    - *Never:* a write, an INSERT … SELECT, a session after `SET`, or a query after its first packet.
    - *Read mode:* the injected read mode is kept.
-   - *Candidates:* `replica_hosts` comes from the network-state source or any non-owner host, minus the owner. When every candidate fails, the client gets the original error.
+   - *Candidates:* `replica_hosts` comes from the network-state source or any non-owner host, minus the owner. A candidate that takes the read but answers it with the owner's quarantine refusal, or breaks before answering, is followed by the next one; only a usable answer counts as a failover. When every candidate fails, the client gets the original error.
    - *Status name:* an older client refuses the status `replica`, so every agent is upgraded before any member serves (K47); the user's local agent is upgraded by the user and only checked by the runbook (D40, `local-agent-version.txt`).
-   - Tests: Task 44 `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`; Task 47 `test_every_si_host_runs_one_reviewed_agent_sidecar`, `test_devnet2_replica_reads_follow_the_rollout`; checks: runbook §4, §6.3.
+   - Tests: Task 44 `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead`, `TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`; Task 47 `test_every_si_host_runs_one_reviewed_agent_sidecar`, `test_devnet2_replica_reads_follow_the_rollout`; checks: runbook §4, §6.3.
 6. **The member-status token or the `si_member` password reaches a container it must not (D29).**
    - *Token:* the token lives only in `<release>-si-member-status-token` (key `status-token`). On the host pod only the `sentio-node` container takes it, as `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN`; the agent sidecar, the rewriter and every volume never reference it. A YAML key for it is refused on the host and on the member.
    - *Password:* the host pod never references the `si_member` password Secret `storage-integrity-si-v2-member-<installation>`, and a `memberStatusTokenSecret.name` equal to `siMember.secret.name` is refused.
@@ -383,7 +387,7 @@ Line anchors in the tasks refer to the base revisions of the header. Paths marke
 
 - **`unsafe_latest` from copies.** This needs a per-table read mode in rewriter-proto and both engines, an amendment to Spec G D2, and a host flag that stays off outside devnet2 (spec §11 Read modes, §19). Until then, every replica read must be `SQL_x_read_mode='safe'`, and devnet2's agents inject `unsafe_latest` by default.
 - **K44's residual.** A host that loses its member endpoint stops answering Replica at its local deadline, but queries already running may overlap a later install. A HouseGate-side cancellation of replica-served queries at the deadline would close it.
-- **Placement-era `replica_hosts`.** From the `placement` switch on, `replica_hosts` and the static member groups give way to `DatabaseGroup` plus readiness (Plan S3-E4 Task 79). Until then a host whose member does not serve still appears as a candidate, and the agent tries it and moves on.
+- **Placement-era `replica_hosts`.** From the `placement` switch on, `replica_hosts` and the static member groups give way to the hosts of `DatabaseGroup`'s current members, never filtered by `MemberReady` (Plan S3-E4 Task 79, contract §56). Before and after placement a host whose member does not serve still appears as a candidate, and the agent tries it and moves on.
 - **Peers' rewriters.** Other hosts' rewriters still send a replica-served database's `remote()` legs to its owner. Only sessions that reach a member host, directly or through agent failover, read the copy.
 - **Ordinary tables of a replica-served database** are not served while the owner is down, as the spec intends. Queries that mix them with SI tables fail.
 - **Agent observability.** The agent sidecars expose no scraped metrics, so failovers are visible only in the sidecar's and the local agent's logs (`agent: replica failover`). Scraping the sidecar is a monitoring change of its own.
@@ -444,13 +448,14 @@ Nothing here produces a Replica entry. Only a host-injected table state can (sen
     - `func ServedDatabases(s Snapshot) []string` (sorted, unique; nil for a nil snapshot or one that serves nothing).
     - `type ReplicaReads struct`, `func NewReplicaReads() *ReplicaReads`, `func (r *ReplicaReads) Begin(databases []string) (end func())`, `func (r *ReplicaReads) InFlight(database string) int`, `func (r *ReplicaReads) Counts() map[string]int`.
   - `pkg/plugins/sitablestate`:
-    - `Plugin.ReplicaReads *sitable.ReplicaReads`.
+    - `Plugin.ReplicaReads *sitable.ReplicaReads` and `Plugin.TableState sitable.TableState` (the state rewrite takes the query's snapshot from; `build.go` sets it with the counter).
     - The Replica rows and the refusal `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner` (392).
+    - The read admission (K44): a counted replica read is admitted only while `TableState.Current()` answers every accessed Replica table Replica with the same `ID`, `CopyTable` and `ReplicaOf` as the query's snapshot; otherwise it is uncounted at once and refused with `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` (733, `CodeRetryable`). A nil `TableState` admits no replica read.
     - `(*Plugin).OnQueryComplete` and `(*Plugin).OnClose`, which make it a `plugin.QueryCompletePlugin` and a `plugin.ClosePlugin`.
   - `pkg/registry`: `TableStatusReplica = "replica"`; `TableStatus.ReplicaOf *uint64`, `ServedFrom string`, `OwnerEntry *OwnerEntry`, `FrozenSince int64` (all `omitempty`); `type OwnerEntry struct{ IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64 }` with the JSON tags of `replay.TrackFrontier`.
   - `pkg/network`: `RpcNetworkState.StorageIntegrityTableStatus` accepts `replica`.
   - Root package: `Options.StorageIntegrityReplicaReads *sitable.ReplicaReads`; the refusal `Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState`; the `build.go` wiring.
-  - Tests (contract §29.1 names): `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`, `TestDecide_ReplicaRows`, `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`, `TestSnapshotSchemaRefusesAReplicaTable`, `TestBuildRefusesReplicaReadsWithoutATableState`, `TestBuildWiresReplicaReadsIntoSitablestate`. Two existing tests gain the new status: `TestPlugin_SignsActiveTablesOnly` (sistatement, `replica`) and `TestGuardRefusesGovernedTablesOnPeerSessions` (sipeerguard, `sitable.Replica`).
+  - Tests (contract §29.1 names): `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`, `TestDecide_ReplicaRows`, `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`, `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`, `TestSnapshotSchemaRefusesAReplicaTable`, `TestBuildRefusesReplicaReadsWithoutATableState`, `TestBuildWiresReplicaReadsIntoSitablestate`. Two existing tests gain the new status: `TestPlugin_SignsActiveTablesOnly` (sistatement, `replica`) and `TestGuardRefusesGovernedTablesOnPeerSessions` (sipeerguard, `sitable.Replica`).
 - Consumed by:
   - Task 43 (same branch): `ServedDatabases`, `Snapshot.Served()`, `Table.CopyTable`, `Table.ReplicaOf`.
   - Task 44 (same branch): the Refused row's text, which it rebuilds through `chproto.TableRefusedMessage` byte-identically; the Replica row stays as written here.
@@ -458,19 +463,20 @@ Nothing here produces a Replica entry. Only a host-injected table state can (sen
     - its `*tablestate.Snapshot` implements `Served()` (K47), fills the Replica entries and sets the four status fields from `registry.OwnerEntry`;
     - `standalone` creates `sitable.NewReplicaReads()` for `Options.StorageIntegrityReplicaReads`;
     - `replicalease` reads `InFlight`, and the metric `sentio_node_storage_integrity_replica_reads_in_flight{database}` reads `Counts()`, where a database whose reads have all ended is absent (it reports 0 for it).
-    - A query takes its snapshot in `rewrite`, which runs before `sitablestate` counts it, so `InFlight` can still read 0 for a query that holds the last Replica snapshot of a database but has not reached `sitablestate` yet. The lease client therefore reads `InFlight` only one poll after the snapshot that dropped the database was published (Task 46's one-poll grace), never in the same poll.
+    - A query takes its snapshot in `rewrite`, which runs before `sitablestate` counts it, so `InFlight` can read 0 for a query that holds the last Replica snapshot of a database but has not reached `sitablestate` yet, however long its rewrite takes. `sitablestate` therefore counts a replica read first and then checks it against `TableState.Current()`, refusing it (733) once the current snapshot no longer serves the copy. So the lease client may read `InFlight` as soon as its `Refresh` has published the snapshot that drops the database, in the same poll: a read counted before that publish keeps `InFlight` above 0, and one that reaches the gate after it is refused (Review fix of AgentConnect round 1, which replaced Task 46's one-poll grace).
 
 Notes:
 - **`Served()` breaks every outside implementation of `sitable.Snapshot`.** In housegate that is only the test type `governedDatabaseState`. arbiter, arbiter-core and sentio-core implement none: `git grep -n 'Active() \[\]sitable.Table' origin/main` finds only sentio-node's `storageintegrityadapter/tablestate/snapshot.go:298`. This is why K47 makes `HG_TAG_P3` and `SN_COMMIT_P3` land together.
 - **The counter is wired only when set.** With `Options.StorageIntegrityReplicaReads` nil, `build.go` registers `sitablestate` as a query plugin only, exactly as today. It becomes a complete and close plugin only with a counter. The chain filters of `OnQueryComplete` equal those of `OnQuery` (the plugin opts out of peer-trusted and origin-side forwarding sessions and is not route-aware), so a skipped `OnQuery` never leaves an end behind. `OnClose` runs unconditionally, as the safety net for a client that disconnects mid-query, and a new counted read first ends an end the session still holds.
 - **What is counted.** An allowed query whose accessed tables include a Replica table counts one read per database. Metadata statements are counted too, since a `DESCRIBE` of a copy also reads `hg_replica` once Task 43 rewrites it. A refused query counts nothing, and maintenance and platform-operator sessions return before the matrix.
+- **Read admission (K44).** The count alone cannot hold a lease: rewrite takes the query's snapshot before `sitablestate` runs (`pkg/plugins/rewrite/rewriter.go:147`), and a rewrite can take seconds (an engine call, the gRPC rewriter), long enough for the host to publish a snapshot without the database, read `InFlight` 0 and release. So `beginReplicaRead` counts first and then reads `TableState.Current()`; a read whose current snapshot no longer answers each accessed table Replica from the same copy and owner is uncounted and refused with the retryable 733 before anything reaches ClickHouse. Both sides synchronize through the counter's mutex and the table state's publish: either the host's `InFlight` read sees the count, or the gate's `Current()` sees the dropping snapshot (`TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused` pins a rewriter blocked across both of the host's polls, `TestReplicaReadAdmissionNeverOverlapsARelease` the race). The second snapshot read only refuses: the query is still answered from its one snapshot (spec 2026-09-24 H1) or not at all. A copy served again under another incarnation's name, or by another owner, refuses the old plan the same way.
 - **The ingress needs no change.** `snapshotSchema` switches on `Lookup`'s status and refuses every non-Active one with its existing text, so `TestSnapshotSchemaRefusesAReplicaTable` is a pin, red only because `sitable.Replica` does not exist yet. The agent's `sistatement` claims only `status == "active"`, so an INSERT into a replica table passes through unsigned and the host refuses it 392.
 - **`registry.TableStatus` stays comparable.** The new fields are a pointer, a string, a pointer and an int, so the existing `got != want` comparison of `TestRpcNetworkState_TableStatusWireShape` still compiles; `ReplicaOf` is a pointer because indexer 0 is a valid owner.
 - **No push, PR or release here.** Tasks 43 and 44 continue on the same branch, and Task 44 opens the PR and cuts `HG_TAG_P3` / `HG_DIGEST_P3`. The only remote contact of this task is Step 1's read-only fetch.
 - **Verified while drafting** (2026-10-16) on a `git archive` of housegate `origin/main` (`862a7a8`) with S3-C1 Task 22's `CopyTable`, its two tests and its `CLAUDE.md:163` sentence applied exactly as Task 22 writes them, committed and tagged as a stand-in for `HG_TAG_P1`, with the repository's Go 1.26.3 (`GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local`):
   - Step 1's checks printed `descends`, `pkg/sitable/sitable.go:3` and an empty diff. Against the local housegate clone, `s3-ledger.py get … HG_TAG` printed `HG_TAG=v0.20.0`, and `get … HG_TAG_P1` stopped with `s3-ledger: not a row of any plan's Appendix C: ['HG_TAG_P1']; stop`, since Plan S3-C1 is not on a ledger copy yet.
   - This task's text, applied mechanically step by step from its code blocks (new files, the hunks at their anchors, the eight doc replacements), made every new test fail first with exactly the compile errors Steps 3, 8, 13 and 18 state. With the Replica rows taken out of `decide`, `TestDecide_ReplicaRows` fails with `write: err = <nil>, want ClientError code 392`.
-  - Every step's checks then passed (`-race` where the steps say so, `go vet` clean, `gofmt -l` empty). The five commit blocks left the five commits of Step 24 and ` 24 files changed, 1017 insertions(+), 41 deletions(-)`, the same as an earlier replay on `994128b`, whose code is byte-identical.
+  - Every step's checks then passed (`-race` where the steps say so, `go vet` clean, `gofmt -l` empty). The five commit blocks left the five commits of Step 24 and ` 24 files changed, 1017 insertions(+), 41 deletions(-)`, the same as an earlier replay on `994128b`, whose code is byte-identical. Review round 1's read admission adds 176 net lines inside this task's own lines (Step 24 now expects 1193 insertions); it was verified on a partial replay (sitable, sitablestate and the root option), not by a full 24-file replay (Appendix B).
   - `bazel run //:gazelle` changed nothing, `bazel build //...` passed, and `bazel test //... --nocache_test_results` ran and passed all 67 targets (`Executed 67 out of 67 tests: 67 tests pass.`), every external repository coming from the local caches. `//pkg/replay/snapshotquery:snapshotquery_test` took 27 s of its 60 s context here; on a loaded machine an earlier run ran out of it (Step 24 says what to do).
   - `go test` of every package but the three ClickHouse-container packages under `pkg/integration` passed, except `pkg/storageintegrity`, which stops on Go's vet note `intake_test.go:1802:5: suspect or` in a file this task does not touch. It stops the same way at the base, Bazel does not run that vet pass, and the package passes with `-vet=off`.
   - Nineteen mutations were each caught by the named test meant for them: no de-duplication in `Begin`, no `sync.Once`, no clone or no sort in `Served`, no `Compact` in `ServedDatabases`, `NewSnapshot` not collecting Replica tables (`TestFakeServesReplicaTables`), `Schema` answering Replica, no `omitempty`, `RpcNetworkState` still refusing `replica`, the Replica rows removed, `DROP` of a copy allowed, reads of a copy refused, counting a refused query, not ending a lost end, `OnClose` not ending, counting an operator session, the hooks registered without a counter, the counter not passed to the gate, and the option's refusal removed.
@@ -1426,7 +1432,10 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/housegate/housegate/pkg/chproto"
@@ -1440,16 +1449,26 @@ import (
 and append:
 
 ```go
-// replicaSnapshot serves db2.a and db2.b (owner indexer 0) and db3.c (owner
+// replicaTables serve db2.a and db2.b (owner indexer 0) and db3.c (owner
 // indexer 3) from member copies (spec 2026-10-14 §11); db1.p is Pending and
 // everything else is Ordinary.
-func replicaSnapshot() sitable.Snapshot {
-	return sitable.NewSnapshot(9, sitable.Ordinary, []sitable.Table{
+func replicaTables() []sitable.Table {
+	return []sitable.Table{
 		{ID: "db1.p", Status: sitable.Pending},
 		{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 0},
 		{ID: "db2.b", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.b", 1), ReplicaOf: 0},
 		{ID: "db3.c", Status: sitable.Replica, CopyTable: sitable.CopyTable("db3.c", 7), ReplicaOf: 3},
-	})
+	}
+}
+
+func replicaSnapshot() sitable.Snapshot {
+	return sitable.NewSnapshot(9, sitable.Ordinary, replicaTables())
+}
+
+// replicaState is the host's table state while it serves replicaTables: the
+// port sitablestate checks a counted replica read against.
+func replicaState() *sitable.Fake {
+	return sitable.NewFake(sitable.Ordinary, replicaTables()...)
 }
 
 func replicaQuery(sess chsession.Session, typ sqlmeta.StatementType, sql string, tables []sqlmeta.AccessedTable) *plugin.QueryContext {
@@ -1540,7 +1559,7 @@ func TestDecide_ReplicaRows(t *testing.T) {
 // table, counts nothing, and two sessions count separately.
 func TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead(t *testing.T) {
 	reads := sitable.NewReplicaReads()
-	gate := &Plugin{ReplicaReads: reads}
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	chain := &plugin.PluginChain{
 		QueryPlugins:         []plugin.QueryPlugin{gate},
 		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
@@ -1614,7 +1633,7 @@ func TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead(t *testing.T) {
 // late complete after the close changes nothing.
 func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
 	reads := sitable.NewReplicaReads()
-	gate := &Plugin{ReplicaReads: reads}
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	sess := newSession(t, 43)
 	if err := gate.OnQuery(context.Background(), replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))); err != nil {
 		t.Fatal(err)
@@ -1639,7 +1658,7 @@ func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
 // read of a copy.
 func TestOnQuery_OperatorSessionsAreNotCounted(t *testing.T) {
 	reads := sitable.NewReplicaReads()
-	gate := &Plugin{ReplicaReads: reads}
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	chain := &plugin.PluginChain{
 		QueryPlugins:         []plugin.QueryPlugin{gate},
 		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
@@ -1661,13 +1680,119 @@ func TestOnQuery_OperatorSessionsAreNotCounted(t *testing.T) {
 		chain.OnQueryComplete(context.Background(), sess)
 	}
 }
+
+// TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused is clarification
+// K44 of Plan S3-C4 with a rewriter blocked across the host's two lease
+// polls: the query took its Replica snapshot in rewrite and waited there
+// while the host published a snapshot without db2's Replica entries and then
+// found no read of db2 in flight, so it released db2's lease and the member
+// may install. When the query reaches the gate it is refused with the
+// retryable 733 before anything reaches ClickHouse, and it is not left
+// counted. A copy re-served under another name, a table served by another
+// owner and a gate without a table state refuse the same way; a query planned
+// on the current snapshot is admitted.
+func TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused(t *testing.T) {
+	ctx := context.Background()
+	state := replicaState()
+	reads := sitable.NewReplicaReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: state}
+	sess := newSession(t, 48)
+	stale := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db3.c USING (k)", accessed("db2.a", "db3.c"))
+	stale.TableSnapshot = state.Current()
+	// The host's first poll publishes a snapshot without db2's entries; its
+	// next poll finds no read of db2 in flight and releases the lease.
+	state.Set(replicaTables()[0], replicaTables()[3])
+	if n := reads.InFlight("db2"); n != 0 {
+		t.Fatalf("db2 in flight = %d before the blocked query resumed", n)
+	}
+	refused := outcome{733, "storage_integrity: table db2.a is no longer served from the copy this query was planned against; retry the query (retryable)"}
+	check(t, "stale snapshot", gate.OnQuery(ctx, stale), refused)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v after the refusal, want nothing counted", got)
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	// A query planned on the current snapshot reads db3.c.
+	fresh := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))
+	fresh.TableSnapshot = state.Current()
+	if err := gate.OnQuery(ctx, fresh); err != nil || reads.InFlight("db3") != 1 {
+		t.Fatalf("OnQuery = %v, db3 in flight %d; want an admitted, counted read", err, reads.InFlight("db3"))
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	// db2 is served again, from another incarnation's copy, or by another
+	// owner: the old plan names neither.
+	planned := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
+	for name, a := range map[string]sitable.Table{
+		"another copy":  {ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 5), ReplicaOf: 0},
+		"another owner": {ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2},
+	} {
+		state.Set(a, replicaTables()[3])
+		check(t, name, gate.OnQuery(ctx, planned), refused)
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("%s: in flight = %v, want nothing counted", name, got)
+		}
+		gate.OnQueryComplete(ctx, sess)
+	}
+	check(t, "no table state", (&Plugin{ReplicaReads: reads}).OnQuery(ctx, planned), refused)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("without a table state in flight = %v, want nothing counted", got)
+	}
+}
+
+// TestReplicaReadAdmissionNeverOverlapsARelease is clarification K44 under
+// concurrency: sessions plan against the current snapshot, yield, and then
+// reach the gate, while a host publishes a snapshot without db2's Replica
+// entries, waits until no read of db2 is in flight and releases the lease.
+// No read planned on a snapshot that serves db2 is admitted after that
+// release (a read planned later finds db2 Ordinary, which the rewriter sends
+// to its owner); run it with -race.
+func TestReplicaReadAdmissionNeverOverlapsARelease(t *testing.T) {
+	ctx := context.Background()
+	for round := range 50 {
+		state := replicaState()
+		reads := sitable.NewReplicaReads()
+		gate := &Plugin{ReplicaReads: reads, TableState: state}
+		var released atomic.Bool
+		var late atomic.Int64
+		var wg sync.WaitGroup
+		for i := range 8 {
+			sess := newSession(t, int64(1000+round*8+i))
+			wg.Go(func() {
+				for range 20 {
+					qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
+					qctx.TableSnapshot = state.Current()
+					fromCopy := qctx.TableSnapshot.Lookup("db2", "a").Status == sitable.Replica
+					runtime.Gosched()
+					if gate.OnQuery(ctx, qctx) == nil && fromCopy {
+						if released.Load() {
+							late.Add(1)
+						}
+						runtime.Gosched()
+					}
+					gate.OnQueryComplete(ctx, sess)
+				}
+			})
+		}
+		runtime.Gosched()
+		state.Set(replicaTables()[0], replicaTables()[3])
+		for reads.InFlight("db2") != 0 {
+			runtime.Gosched()
+		}
+		released.Store(true)
+		wg.Wait()
+		if n := late.Load(); n != 0 {
+			t.Fatalf("round %d: %d reads of db2 admitted after the host released its lease", round, n)
+		}
+	}
+}
 ```
 
 - [ ] **Step 13: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted'`
+Run: `W=<worktree path>; cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted|TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused|TestReplicaReadAdmissionNeverOverlapsARelease'`
 
-Expected: FAIL to compile, with `unknown field ReplicaReads in struct literal of type Plugin`, `cannot use gate (variable of type *Plugin) as plugin.QueryCompletePlugin value in array or slice literal: *Plugin does not implement plugin.QueryCompletePlugin (missing method OnQueryComplete)`, the same for `plugin.ClosePlugin (missing method OnClose)`, and `(&Plugin{}).OnQueryComplete undefined (type *Plugin has no field or method OnQueryComplete)`. Before the fix `TestDecide_ReplicaRows` would also fail on its own: `decide` falls through to allow for Replica, so its write rows would report `err = <nil>, want ClientError code 392`.
+Expected: FAIL to compile, with `unknown field ReplicaReads in struct literal of type Plugin`, `unknown field TableState in struct literal of type Plugin`, `cannot use gate (variable of type *Plugin) as plugin.QueryCompletePlugin value in array or slice literal: *Plugin does not implement plugin.QueryCompletePlugin (missing method OnQueryComplete)`, the same for `plugin.ClosePlugin (missing method OnClose)`, and `(&Plugin{}).OnQueryComplete undefined (type *Plugin has no field or method OnQueryComplete)`. Before the fix `TestDecide_ReplicaRows` would also fail on its own: `decide` falls through to allow for Replica, so its write rows would report `err = <nil>, want ClientError code 392`.
 
 - [ ] **Step 14: Give `sitablestate` the Replica rows and the in-flight count**
 
@@ -1708,6 +1833,12 @@ type Plugin struct {
 	// lease only once none is in flight. build.go then also registers the
 	// plugin as a QueryCompletePlugin and a ClosePlugin. Nil counts nothing.
 	ReplicaReads *sitable.ReplicaReads
+	// TableState is the port rewrite took the query's snapshot from. With
+	// ReplicaReads, a read is admitted only once it is counted and
+	// TableState.Current() still serves every Replica table it accesses from
+	// the copy the query was planned against (clarification K44); without a
+	// TableState no replica read is admitted.
+	TableState sitable.TableState
 
 	// replicaReadEnds maps sess.ID() (int64) to the end of the session's
 	// in-flight replica read. A session runs one query at a time.
@@ -1723,7 +1854,8 @@ replace the doc of `OnQuery` (`:66-73`) with:
 // over a retryable one; ties keep the first accessed table. With ReplicaReads
 // set, an allowed statement that accesses a Replica table begins one
 // in-flight read of each such database, which OnQueryComplete or OnClose
-// ends.
+// ends, and is admitted only while the current snapshot still serves its
+// Replica tables from the copies it was planned against (733 otherwise).
 //
 // A missing snapshot fails closed. The plugin is registered only when storage
 // integrity is enabled, and rewrite, which runs first under the same chain
@@ -1737,7 +1869,7 @@ replace the tail of `OnQuery` (`:85-95`, from `sessionDB :=` through the closing
 	sessionDB := qctx.Session.State().LogicalDatabaseName()
 	var worst severity
 	var worstErr error
-	var replicaDatabases []string
+	var served []servedAccess
 	for _, a := range accessesOf(qctx, sessionDB) {
 		t := qctx.TableSnapshot.Lookup(a.database, a.table)
 		sev, err := decide(t, a.class)
@@ -1745,24 +1877,62 @@ replace the tail of `OnQuery` (`:85-95`, from `sessionDB :=` through the closing
 			worst, worstErr = sev, err
 		}
 		if t.Status == sitable.Replica {
-			replicaDatabases = append(replicaDatabases, a.database)
+			served = append(served, servedAccess{database: a.database, table: a.table, planned: t})
 		}
 	}
-	if worstErr == nil && len(replicaDatabases) > 0 && p.ReplicaReads != nil {
-		p.beginReplicaRead(qctx.Session, replicaDatabases)
+	if worstErr == nil && len(served) > 0 && p.ReplicaReads != nil {
+		return p.beginReplicaRead(qctx.Session, served)
 	}
 	return worstErr
 }
 
+// servedAccess is one accessed table that the query's snapshot answers
+// Replica, as that snapshot answers it.
+type servedAccess struct {
+	database, table string
+	planned         sitable.Table
+}
+
 // beginReplicaRead counts the session's query as one in-flight read of each
-// replica-served database it accesses. An end the session still holds is
+// replica-served database it accesses, then admits it only if the current
+// snapshot still serves every such table from the copy and owner the query
+// was planned against (clarification K44). rewrite took the query's snapshot
+// before this count, so a query that waited there while the host published a
+// snapshot without the database, found no read in flight and released the
+// lease could otherwise read the copy during its member's install. Counting
+// first and checking the current snapshot second closes that gap: the host
+// reads InFlight only after it published the snapshot that drops the
+// database, so either it sees this read counted and waits, or this check sees
+// that snapshot and refuses, retryably, before anything reaches ClickHouse.
+// A refused read is uncounted at once. An end the session still holds is
 // ended first, so a lost complete never leaves a database counted.
-func (p *Plugin) beginReplicaRead(sess chsession.Session, databases []string) {
+func (p *Plugin) beginReplicaRead(sess chsession.Session, served []servedAccess) error {
+	databases := make([]string, 0, len(served))
+	for _, s := range served {
+		databases = append(databases, s.database)
+	}
 	slices.Sort(databases)
 	end := p.ReplicaReads.Begin(slices.Compact(databases))
 	if previous, loaded := p.replicaReadEnds.Swap(sess.ID(), end); loaded {
 		previous.(func())()
 	}
+	var current sitable.Snapshot
+	if p.TableState != nil {
+		current = p.TableState.Current()
+	}
+	for _, s := range served {
+		if current == nil || !sameCopy(current.Lookup(s.database, s.table), s.planned) {
+			p.endReplicaRead(sess)
+			return refuse(CodeRetryable, "storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", s.planned.ID)
+		}
+	}
+	return nil
+}
+
+// sameCopy reports whether now answers a table Replica from the same copy
+// and owner as planned.
+func sameCopy(now, planned sitable.Table) bool {
+	return now.Status == sitable.Replica && now.ID == planned.ID && now.CopyTable == planned.CopyTable && now.ReplicaOf == planned.ReplicaOf
 }
 
 // endReplicaRead ends the session's in-flight replica read, if any.
@@ -1833,7 +2003,7 @@ Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/plugins/sitablestate && go vet 
 
 Expected:
 - `gofmt` and `go vet` print nothing: the `sync.Map` field sits behind pointer receivers and no `Plugin` is copied, so `copylocks` is satisfied;
-- `ok  	github.com/housegate/housegate/pkg/plugins/sitablestate`, including the four new tests and the unchanged `TestDecisionMatrix`, `TestRefusalPrecedence`, `TestBypassRules`, `TestNoSnapshotFailsClosed` and the snapshot tests of `snapshot_test.go`;
+- `ok  	github.com/housegate/housegate/pkg/plugins/sitablestate`, including the six new tests (`TestReplicaReadAdmissionNeverOverlapsARelease` races 8 sessions per round against a release in 50 rounds, under `-race`) and the unchanged `TestDecisionMatrix`, `TestRefusalPrecedence`, `TestBypassRules`, `TestNoSnapshotFailsClosed` and the snapshot tests of `snapshot_test.go`;
 - `ok  	github.com/housegate/housegate` for the root package: `build.go` still builds `&sitablestate.Plugin{}`.
 
 - [ ] **Step 16: Commit the Replica rows**
@@ -1852,9 +2022,15 @@ it did not name.
 With a ReplicaReads counter, every allowed query that accesses a
 Replica table counts one read per database from OnQuery until
 OnQueryComplete or OnClose (clarification K44), so the host releases a
-serving lease only once no query still reads the copy. The plugin is
-then also a complete and close plugin; without a counter it decides
-and counts exactly as before.
+serving lease only once no query still reads the copy. A counted read
+is admitted only while the current snapshot of the gate's TableState
+still serves its Replica tables from the copies the query was planned
+against; otherwise it is uncounted and refused with the retryable 733.
+rewrite takes the query's snapshot before this count, so without the
+check a query that waited in rewrite across the host's release could
+read a copy its member is installing. The plugin is then also a
+complete and close plugin; without a counter it decides and counts
+exactly as before.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1911,9 +2087,10 @@ func TestBuildRefusesReplicaReadsWithoutATableState(t *testing.T) {
 }
 
 // TestBuildWiresReplicaReadsIntoSitablestate is clarification K44 of Plan
-// S3-C4: the host's counter reaches the table-state gate, which then also
-// ends each read at query completion and at session close. Without a counter
-// the chain is today's: the gate is a query plugin only.
+// S3-C4: the host's counter and its table state reach the table-state gate,
+// which then admits a read of a copy the current snapshot still serves and
+// ends it at query completion and at session close. Without a counter the
+// chain is today's: the gate is a query plugin only.
 func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 	reads := sitable.NewReplicaReads()
 	for _, tc := range []struct {
@@ -1927,11 +2104,12 @@ func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := minimalServerCfg(t)
 			cfg.StorageIntegrity.Enabled = boolPtr(true)
+			state := sitable.NewFake(sitable.Pending)
 			bs, err := buildServer(Options{
 				Config:                       cfg,
 				NetworkState:                 network.NewInMemoryNetworkState(),
 				Rewriter:                     siProbeStubRewriterFactory{},
-				StorageIntegrityTableState:   sitable.NewFake(sitable.Pending),
+				StorageIntegrityTableState:   state,
 				StorageIntegrityReplicaReads: tc.reads,
 			}, nil)
 			if err != nil {
@@ -1947,6 +2125,13 @@ func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 			}
 			if gate == nil || gate.ReplicaReads != tc.reads {
 				t.Fatalf("sitablestate = %+v, want the plugin with ReplicaReads %p", gate, tc.reads)
+			}
+			wantState := sitable.TableState(nil)
+			if tc.reads != nil {
+				wantState = state
+			}
+			if gate.TableState != wantState {
+				t.Fatalf("sitablestate TableState = %v, want %v (the injected state, with a counter only)", gate.TableState, wantState)
 			}
 			completes, closes := 0, 0
 			for _, candidate := range chain.QueryCompletePlugins {
@@ -1969,7 +2154,8 @@ func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 			defer client.Close()
 			defer server.Close()
 			sess := chsession.New(77, client)
-			snap := sitable.NewSnapshot(2, sitable.Ordinary, []sitable.Table{{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2}})
+			state.Set(sitable.Table{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2})
+			snap := state.Current()
 			qctx := &plugin.QueryContext{
 				Session: sess, OriginalSQL: "SELECT * FROM db2.a", Query: &chproto.Query{Body: "SELECT * FROM db2.a"},
 				StatementType: sqlmeta.StatementTypeSelect, TableSnapshot: snap,
@@ -2037,12 +2223,14 @@ func resolveStorageIntegrityTableState(opts Options, reg registry.Registry) (sit
 	// sitablestate reads the rewriter's classification and the query's
 	// snapshot, so it runs right after rewrite and before the SI ingress and
 	// commitgate (spec 2026-09-24 §7.1). With the host's replica-read counter
-	// it also ends each counted read when the query completes or its session
-	// closes (spec 2026-10-14 §11).
+	// it also checks each counted read against the current snapshot of the
+	// state rewrite took the query's snapshot from, and ends it when the
+	// query completes or its session closes (spec 2026-10-14 §11).
 	if siOptions.Enabled {
 		gate := &sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}
 		queryPlugins = append(queryPlugins, gate)
 		if opts.StorageIntegrityReplicaReads != nil {
+			gate.TableState = siState
 			queryCompletePlugins = append(queryCompletePlugins, gate)
 			closePlugins = append(closePlugins, gate)
 		}
@@ -2050,7 +2238,7 @@ func resolveStorageIntegrityTableState(opts Options, reg registry.Registry) (sit
 	}
 ```
 
-`queryCompletePlugins` and `closePlugins` are declared at `:758-759`, before this point, and assembled into the chain at `:1040` and `:1044`. The startup log line is unchanged.
+`queryCompletePlugins` and `closePlugins` are declared at `:758-759`, before this point, and assembled into the chain at `:1040` and `:1044`. `siState` is the state rewrite takes every query's snapshot from (`rewritePlug.TableState = siState`, `:868`), the injected one whenever a counter is set. The startup log line is unchanged.
 
 - [ ] **Step 20: Run the tests and see them pass**
 
@@ -2076,8 +2264,10 @@ git -C "$W" commit -m "feat(storage-integrity): Options.StorageIntegrityReplicaR
 
 The host injects the in-flight counter of replica-served reads (spec
 2026-10-14 §11, clarification K44), and build.go hands it to
-sitablestate, registering the gate's complete and close hooks only
-then. Only an injected table state answers Replica, so the option is
+sitablestate together with the table state rewrite reads, which the
+gate checks every counted read against, registering the gate's
+complete and close hooks only then. Only an injected table state
+answers Replica, so the option is
 refused with the static table set or with storage integrity off.
 Unset, the chain is exactly today's.
 
@@ -2096,7 +2286,7 @@ Each paragraph and bullet stays one line.
   - replace "`TableState{Current, Changed}`, `sitable.Static`" with "`TableState{Current, Changed}`, `ReplicaReads` (the host-injected per-database count of in-flight queries that read a copy: `Begin` with an idempotent end, `InFlight`, `Counts`; a nil counter counts nothing), `sitable.Static`".
 - `:172` (`pkg/plugins/` bullet):
   - in the `sistatement` clause replace "`{status, refused_code, refused_reason, schema_json, schema_hash, registry_version}`" with "`{status, refused_code, refused_reason, schema_json, schema_hash, registry_version}` (and, for status `replica` only, `replica_of`, `served_from`, `owner_entry`, `frozen_since`)";
-  - in the `sitablestate` clause replace "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables." with "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables. A Replica table (spec 2026-10-14 §11) admits reads and metadata only: every write, same-name `CREATE`, data-carrying creation, `DROP`, `ALTER`/`RENAME` and materialized-view `TO` target is refused with code 392 `storage_integrity: table <id> is served read-only from a copy of indexer <n>'s published data; write through its owner`. With `ReplicaReads` set (then also a complete and close plugin), each allowed query that accesses a Replica table counts one in-flight read per database until its `OnQueryComplete` or `OnClose`, and the host releases a serving lease only once the database's reads have drained.".
+  - in the `sitablestate` clause replace "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables." with "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables. A Replica table (spec 2026-10-14 §11) admits reads and metadata only: every write, same-name `CREATE`, data-carrying creation, `DROP`, `ALTER`/`RENAME` and materialized-view `TO` target is refused with code 392 `storage_integrity: table <id> is served read-only from a copy of indexer <n>'s published data; write through its owner`. With `ReplicaReads` set (then also a complete and close plugin), each allowed query that accesses a Replica table counts one in-flight read per database until its `OnQueryComplete` or `OnClose`, and is admitted only while the gate's `TableState` still serves its Replica tables from the copies it was planned against (otherwise 733 `storage_integrity: table <id> is no longer served from the copy this query was planned against; retry the query (retryable)`), so the host releases a serving lease only once the database's reads have drained and no read of the copy can start.".
 
 `README.md:195` (Dynamic table state):
 - replace "`Active` (reads served from `hg_safe` / `hg_unsafe`, writes only through the signed lane) and `Gone` (retiring or being purged)." with "`Active` (reads served from `hg_safe` / `hg_unsafe`, writes only through the signed lane), `Gone` (retiring or being purged) and `Replica` (a table another SI indexer of the network owns that this host serves read-only from its member's verified copy while that owner is quarantined or unreachable; reads and metadata only, spec 2026-10-14 §11).";
@@ -2166,7 +2356,7 @@ Expected: the five commits of Steps 6, 11, 16, 21 and 23, newest first:
 <hash> feat(sitable): the Replica status, Served() and the replica-read counter
 ```
 
-and the summary line ` 24 files changed, 1017 insertions(+), 41 deletions(-)` (the nine files of Step 6, five of Step 11, three of Step 16, four of Step 21 and three of Step 23; the counts hold when `HG_TAG_P1` has exactly the base this task was drafted on, see Base and anchors). Do not push: Task 43 continues on this branch.
+and the summary line ` 24 files changed, 1193 insertions(+), 41 deletions(-)` (the nine files of Step 6, five of Step 11, three of Step 16, four of Step 21 and three of Step 23; the drafted 1017 insertions plus the 176 net lines of review round 1's read admission in Steps 12, 14, 17 and 19, all inside lines this task adds; the counts hold when `HG_TAG_P1` has exactly the base this task was drafted on, see Base and anchors). Do not push: Task 43 continues on this branch.
 
 ---
 
@@ -2193,7 +2383,7 @@ Nothing here produces a Replica entry: only a host-injected table state can (sen
 - Modify: `pkg/rewriter/storage_integrity_test.go` — imports (`:3-12`), tests appended after `TestStorageIntegrityScrubber_RedactsStage3Databases` (after `:238`)
 - Create: `pkg/rewriter/replica_parity_test.go`
 - Modify: `pkg/rewriter/BUILD.bazel` — library deps (`:27-28`), test `srcs` (`:51-52`), test deps (`:67-70`)
-- Modify: `pkg/plugins/sireserved/plugin.go` — the peer reasons, the counter and its zero export (`:31-50`), `peerRefusal` (`:108-131`), three new functions after `PeerReservedNamespaceViolation` (`:169-175`); `IsObjectCarrierName` (`:229-251`) is reused unchanged
+- Modify: `pkg/plugins/sireserved/plugin.go` — the peer reasons, the counter and its zero export (`:31-50`), `peerRefusal` (`:108-131`), six new functions after `PeerReservedNamespaceViolation` (`:169-175`); `IsObjectCarrierName` (`:229-251`) is reused unchanged
 - Modify: `pkg/plugins/sireserved/plugin_test.go` — corpus and test appended after `:1286` (S3-A's `peerLegForms` and its tests stay byte-identical)
 - Create: `pkg/integration/storage_integrity_replica_reads_test.go`; Modify: `pkg/integration/BUILD.bazel` (`srcs`, `:45-46`)
 - Modify: `CLAUDE.md` (`:55`, `:153`, `:155`, `:172`), `README.md` (`:203`), `pkg/plugins/AGENTS.md` (`:14`, `:40`, `:42`, `:52`, `:58`), `pkg/rewriter/AGENTS.md` (`:12`, `:21`, `:28`, `:33`, `:40`)
@@ -2215,7 +2405,7 @@ Line anchors are housegate `origin/main` `862a7a8`. It carries Plan S3-A Tasks 1
   - `NewStorageIntegrityScrubber` maps `hg_replica.<CopyTable>` → `t.ID`.
   - `func sireserved.PeerCarrierArgumentViolation(sql string) (string, error)`; the refusal 392 `storage_integrity: a peer statement may pass only literal arguments to %s(); a computed database or table name is refused on a peer connection`; the reason `computed_carrier_argument` of `storage_integrity_peer_reserved_name_refusals_total{reason}`, exported at 0; the corpus `peerCarrierArgumentForms`.
   - Tests: `TestForward_ReplicaServedHelloStaysLocal`, `TestForward_USEOfAReplicaServedDatabaseStaysLocal`, `TestForward_USEOfAReplicaServedDatabaseRebindsAForwardedSessionToLocal`, `TestForward_ServingEndedIsARetryableRefusal`, `TestForward_UseElsewhereClearsTheReplicaMark`, `TestForward_WithoutTableStateBehavesAsToday`, `TestForward_PeerTrustedSessionsIgnoreReplicaServing`; `TestBuildStorageIntegrityArgsMapsReplicaTablesToTheCopy`, `TestBuildStorageIntegrityArgsWithoutReplicaTablesIsUnchanged`, `TestBuildStorageIntegrityArgsRefusesATableBothActiveAndReplica`, `TestUnsafeLatestIsRefusedForReplicaTables`, `TestUnsafeLatestNeverSendsTheCopyTwice`, `TestScrubberMapsTheCopyBackToItsLogicalTable`, `TestReplicaTableResolvesBeforeRemoteMapping`, `TestNativeEngineReplicaTableResolvesBeforeRemoteMapping`, `TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping`; `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused` (S3-A's `TestOnQuery_PeerLegFormsPass` stays unchanged and green); `TestReplicaReads_JoinOfTwoReplicaServedTablesReadsTheCopies`, `TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner`, `TestReplicaReads_OrdinaryTablesOfTheDatabaseStillGoToTheOwner`, `TestReplicaReads_ServingEndedMidSessionAsksToReconnect`.
-  - Names added here (Appendix B): `func localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string)` (`pkg/rewriter`) and its test `TestUseOfAReplicaServedDatabaseIsRewrittenLocally`; `TestBuildServer_ForwardTableStateFollowsStorageIntegrity` (root package); the unexported `(*forward.Plugin).replicaServed`, `replicaAware`, `refuseEndedReplicaServing`; the unexported `sireserved.peerReasonComputedCarrierArgument`, `carrierArgumentViolation`, `literalCallArguments`, `literalArgument`, `isPunctToken`; the test helpers `replicaServedState`, `replicaRouting`, `queryOn`, `servingEndedMessage` (forward), `replicaServingState`, `servedSnapshot` (`storage_integrity_test.go`), `replicaParityCopyA`, `replicaParityCopyB`, `replicaParityState`, `replicaParityNetwork`, `replicaParityOptions`, `requireReplicaParity` (`replica_parity_test.go`), `replicaReadsPhys`, `replicaReadsDB`, `replicaReadsOwner`, `replicaReadsCopyA`, `replicaReadsCopyB`, `replicaReadsServed`, `seedReplicaReads`, `downAddress`, `startReplicaReadsHost`, `queryUint64` (integration); the new internal-listen warning text.
+  - Names added here (Appendix B): `func localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string)` (`pkg/rewriter`) and its test `TestUseOfAReplicaServedDatabaseIsRewrittenLocally`; `TestBuildServer_ForwardTableStateFollowsStorageIntegrity` (root package); the unexported `(*forward.Plugin).replicaServed`, `replicaAware`, `refuseEndedReplicaServing`; the unexported `sireserved.peerReasonComputedCarrierArgument`, `carrierArgumentViolation`, `literalCallArguments`, `literalArgument`, `digitsOnly`, `isPunctToken`; the test helpers `replicaServedState`, `replicaRouting`, `queryOn`, `servingEndedMessage` (forward), `replicaServingState`, `servedSnapshot` (`storage_integrity_test.go`), `replicaParityCopyA`, `replicaParityCopyB`, `replicaParityState`, `replicaParityNetwork`, `replicaParityOptions`, `requireReplicaParity` (`replica_parity_test.go`), `replicaReadsPhys`, `replicaReadsDB`, `replicaReadsOwner`, `replicaReadsCopyA`, `replicaReadsCopyB`, `replicaReadsServed`, `seedReplicaReads`, `downAddress`, `startReplicaReadsHost`, `queryUint64` (integration); the new internal-listen warning text.
 - Consumed by: Task 44 (same branch: a failed-over agent session reaches a member host, whose `forward` keeps it local through this routing, and `chsession.SessionState` gains Task 44's `ReplicaFailoverEligible` beside this task's field), Task 46 (sentio-node pins `HG_TAG_P3` and feeds the Replica entries this routing serves), Tasks 47 and 48 (runbook §2 runs the two engine-gated tests against the devnet2 rewriter image into `rewriter-parity.txt`).
 
 Notes:
@@ -2228,7 +2418,7 @@ Notes:
 - **The 733 keeps the connection.** A plugin refusal ends the query and the relay keeps reading (`pkg/proxy/relay.go:1045-1052`), so the client gets the 733 on every statement until it reconnects (a fresh hello pivots to the owner) or issues a `USE` elsewhere; when serving resumes, the marked session reads again. A `USE` of a database hosted elsewhere and not served clears the mark whether or not it pivots (the session may already be routed to that peer), and so does a `USE` of a database this proxy hosts.
 - **Snapshots.** `forward` reads `TableState.Current()`, and rewrite takes the query's own snapshot afterwards (`pkg/plugins/rewrite/rewriter.go:143-151`). If serving ends between the two, a statement passes `forward` and its table then answers Ordinary, so the rewriter sends it to the owner through `remote()`, and a quarantined owner refuses it with its 392 (spec 2026-10-10 C13). No read is ever answered from a copy that the query's snapshot does not serve.
 - **`unsafe_latest`.** Spec §11's "before the engine runs" is read as contract §29.2 fixes it: the refusal needs the accessed tables, which only the engine's first pass reports, and that pass only classifies, so the refusal comes before anything reaches ClickHouse. With `SafeTable` = `UnsafeTable` = the copy, an engine's `unsafe_latest` rendering (`hg_safe ∪ hg_unsafe` minus promoted parts) would read the copy twice. `requireNoReplicaUnderUnsafeLatest` runs on the first pass's accessed ids, before `requireActiveAccessedIDs` (which would otherwise refuse with its generic `not an Active storage-integrity table` text) and before the promotion port; the first pass never reaches ClickHouse. On a host without a promotion port, `buildStorageIntegrityArgs` already refuses `unsafe_latest` with its `unavailable on this housegate` text, before the engine runs.
-- **The K48 rule.** It applies on peer-trusted, non-forwarded sessions, after S3-A's scan, placeholder and reserved-name rules. A bare or backquoted `IsObjectCarrierName` callable followed by `(` must take only arguments that are each exactly one token: a string literal (heredocs included), a word (a number or a bare identifier) or a quoted identifier; or a qualified name of two such names (`` phys.`db1.u` ``; a decimal such as `1.5` scans as that shape too). Anything else is refused 392, naming the callable as written: a call, an operator, a cast, a parenthesised literal, a signed number, an empty argument, a call that never closes. Arguments are never evaluated: the rule is "no computed argument", not a proof that a computed one is safe (constant folding). S3-A's `peerLegForms`, and the legs ClickHouse pushes into a peer leg (`remote('127.0.0.1:9000', 'phys_pr', 'prdb.l', 'housegate_test', '[HIDDEN]')`, measured by S3-A's `TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass`), carry literal arguments only and still pass. Operator sessions keep refusing every carrier by name, and ordinary and forwarded sessions are unchanged (the engines refuse `merge(concat('hg_', 'replica'), '.*')` there, pinned by the parity tests).
+- **The K48 rule.** It applies on peer-trusted, non-forwarded sessions, after S3-A's scan, placeholder and reserved-name rules. A bare or backquoted `IsObjectCarrierName` callable followed by `(` must take only arguments that are each exactly one token: a string literal (heredocs included) or an unsigned decimal integer (a word of ASCII digits only). Anything else is refused 392, naming the callable as written: a call, an operator, a cast, a parenthesised literal, a signed number, a decimal, an empty argument, a call that never closes, and every identifier, bare (`1d` included), backquoted, double-quoted or qualified (`` phys.`db1.u` ``, `d.1`). An identifier is refused because ClickHouse's analyzer resolves an identifier argument of a table function through the statement's aliases before it takes it as a name: measured on ClickHouse 26.3.51.7 (`clickhouse/clickhouse-server:26.3`), `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`, the same with `` `d` ``, `"d"` or `1d`, `SELECT *, concat('hg_', 'replica') AS d FROM merge(d, '.*')`, an inline `(concat('hg_', 'replica') AS d)` in `WHERE`, an enclosing query's `WITH`, `WITH concat('hg_', 'replica') AS phys … remote('127.0.0.1:9000', phys, 'secret')` and `WITH tuple(concat('hg_', 'replica'), 'secret') AS d … remote('127.0.0.1:9000', d.1, d.2)` each read the row of `hg_replica.secret`, while `AS 1` is a syntax error, so a digits-only word is always a number. A lexical guard cannot tell which identifiers an alias shadows, so it admits none; no legitimate leg needs one. Arguments are never evaluated: the rule is "no computed argument", not a proof that a computed one is safe (constant folding). S3-A's `peerLegForms`, and the legs ClickHouse pushes into a peer leg (`remote('127.0.0.1:9000', 'phys_pr', 'prdb.l', 'housegate_test', '[HIDDEN]')`, measured by S3-A's `TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass`), carry literal arguments only and still pass. Operator sessions keep refusing every carrier by name, and ordinary and forwarded sessions are unchanged (the engines refuse `merge(concat('hg_', 'replica'), '.*')` there, pinned by the parity tests).
 - **The internal-listen warning** (`build.go:170`) said the guard does not refuse names "built by computed table-function arguments". That is no longer true for object carriers, so the text and its test change. The network rule it states stays.
 - **Verified while drafting (2026-10-16)** on a `git archive` of housegate `origin/main` `862a7a8` with S3-C1 Task 22's `CopyTable` (contract §16) and Task 42's five commits applied as their tasks write them, then committed as a stand-in for the branch: this task's text, applied mechanically step by step from its code blocks, made every new test fail first exactly as Steps 3, 8 and 13 state; every check of Steps 5, 10, 15, 18 and 20 then passed with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (`-race` where the steps say so), `go vet` clean on the five changed packages and `gofmt -l` empty; both engine-gated tests passed with `go test` and through Bazel against the FFI library v0.17.0 and a local container of the devnet2 rewriter pin; the integration tests passed with `go test` and with `bazel test //pkg/integration:integration_test` on `clickhouse/clickhouse-server:25.8` (25.8.28.1); `bazel run //:gazelle` (offline, `--repository_disable_download`) changed nothing, `bazel build //...` passed and `bazel test //...` ended with `67 tests pass`. The five commits left ` 19 files changed, 1461 insertions(+), 39 deletions(-)`, and a second replay of the final text on a fresh copy gave the same tree. Mutations each caught by the test meant for them: no Replica check at hello, peer trust ignored, the mark not cleared on a pivot or on a local `USE`, no rebind of a forwarded session, no 733, excluded parts on a copy, no empty-copy refusal, no `unsafe_latest` refusal, no scrubber pair, no computed-argument rule, any single token accepted, an unclosed call accepted, the new reason not exported at 0, the `build.go` wiring removed (every `TestReplicaReads_*` fails at the handshake) and `localizeReplicaServedUse` removed (both engines and the integration `USE` fail). Every bash block and `Run:` line passes `bash -n` and `shellcheck`, and the fish block passes `fish --no-execute`.
 - **No push, PR or release here.** Tasks 42–44 share the branch `urwt/claude/multi-source-s3c4` and are released once as `HG_TAG_P3` by Task 44, which opens the PR. This task makes no remote or live change. The only actions that leave the machine are optional downloads, each asked for in chat first: the FFI library when it is not cached (Step 10), the user's own pull of the private rewriter image (Step 10), and a testcontainers image that is not local (Step 18). Rollback: no state and no wire change; the previous image restores today's behaviour.
@@ -3997,10 +4187,14 @@ Append to `pkg/plugins/sireserved/plugin_test.go` (after its last line, `:1286`)
 // peerCarrierArgumentForms are peer statements whose object-carrier callable
 // takes a computed argument (Plan S3-C4 K48): with si_gateway granted SELECT
 // ON hg_replica.*, such a call on a peer loopback could name any owner's copy
-// while no reserved name appears in the text. Every form is refused with 392:
-// by the computed-argument rule, naming the callable as written, or first by
-// the reserved-name rule where a literal spells a reserved name;
-// PeerCarrierArgumentViolation reports the callable for every form.
+// while no reserved name appears in the text. An identifier argument counts
+// as computed: ClickHouse 26.3's analyzer resolves it through the statement's
+// aliases (WITH, SELECT-list, inline and enclosing-query aliases) and d.1 as a
+// tuple element, so every alias form below read hg_replica on ClickHouse
+// 26.3. Every form is refused with 392: by the computed-argument rule, naming
+// the callable as written, or first by the reserved-name rule where a literal
+// spells a reserved name; PeerCarrierArgumentViolation reports the callable
+// for every form.
 var peerCarrierArgumentForms = map[string]struct{ sql, callable string }{
 	"merge of a concatenated database":   {"SELECT * FROM merge(concat('hg_', 'replica'), '.*')", "merge"},
 	"remote of a lowered database":       {"SELECT * FROM remote('x:9000', lower('HG_REPLICA'), 't')", "remote"},
@@ -4020,6 +4214,19 @@ var peerCarrierArgumentForms = map[string]struct{ sql, callable string }{
 	"remote JOIN pushed into the leg":    {"SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` ALL INNER JOIN remote('10.0.0.5:9000', concat('hg_', 'replica'), 'x') AS `__table2` ON `__table1`.`id` = `__table2`.`id`", "remote"},
 	"remote IN operand":                  {"SELECT count() FROM phys.`db1.t` WHERE id IN remote('127.0.0.1:19001', reverse('acilper_gh'), 'x')", "remote"},
 	"second carrier of the statement":    {"SELECT count() FROM remote('h', 'phys', 'db1.t') AS a JOIN merge(lower('HG_REPLICA'), '.*') AS b ON a.id = b.id", "merge"},
+	"WITH alias of a computed database":  {"WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')", "merge"},
+	"backquoted WITH alias":              {"WITH concat('hg_', 'replica') AS `d` SELECT * FROM merge(`d`, '.*')", "merge"},
+	"double-quoted WITH alias":           {"WITH concat('hg_', 'replica') AS \"d\" SELECT * FROM merge(\"d\", '.*')", "merge"},
+	"digit-leading WITH alias":           {"WITH concat('hg_', 'replica') AS 1d SELECT * FROM merge(1d, '.*')", "merge"},
+	"SELECT-list alias":                  {"SELECT *, concat('hg_', 'replica') AS d FROM merge(d, '.*')", "merge"},
+	"inline WHERE alias":                 {"SELECT * FROM merge(d, '.*') WHERE (concat('hg_', 'replica') AS d) != ''", "merge"},
+	"WITH alias of an enclosing query":   {"WITH concat('hg_', 'replica') AS d SELECT * FROM (SELECT * FROM merge(d, '.*'))", "merge"},
+	"alias shadowing a database name":    {"WITH concat('hg_', 'replica') AS phys SELECT * FROM remote('127.0.0.1:9000', phys, 'secret')", "remote"},
+	"tuple elements of an alias":         {"WITH tuple(concat('hg_', 'replica'), 'secret') AS d SELECT * FROM remote('127.0.0.1:9000', d.1, d.2)", "remote"},
+	"bare identifier arguments":          {"SELECT count() FROM remote('127.0.0.1:9000', system, tables, 'user', 'pw')", "remote"},
+	"backquoted identifier arguments":    {"SELECT count() FROM remote('10.0.0.5:9000', `phys`, `db1.u`)", "remote"},
+	"qualified identifier argument":      {"SELECT count() FROM remote('10.0.0.5:9000', phys.`db1.u`, 'user', 'pw')", "remote"},
+	"decimal argument":                   {"SELECT count() FROM cluster('default', 'phys', 'db1.t', 1.5)", "cluster"},
 }
 
 // TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused is Plan S3-C4 K48:
@@ -4027,9 +4234,10 @@ var peerCarrierArgumentForms = map[string]struct{ sql, callable string }{
 // refused with 392, counted under computed_carrier_argument and logged once.
 // The reserved-name rule runs first, so a form whose literals spell a
 // reserved name (lower('HG_REPLICA')) is refused with that rule's 392.
-// Literal arguments (string, number, bare or qualified identifier) and
-// carriers inside literals or comments pass, so the legitimate legs of
-// peerLegForms keep passing (TestOnQuery_PeerLegFormsPass).
+// Literal arguments (a string or an unsigned integer), aliases that no
+// carrier argument names, and carriers inside literals or comments pass, so
+// the legitimate legs of peerLegForms, whose carriers take string literals
+// only, keep passing (TestOnQuery_PeerLegFormsPass).
 func TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused(t *testing.T) {
 	// Every reason is exported from startup, computed_carrier_argument
 	// included, before this test's first refusal could create the series.
@@ -4051,9 +4259,8 @@ func TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused(t *testing.T) {
 	}
 	for _, sql := range []string{
 		"SELECT * FROM remote('h', 'other', 'u')",
-		"SELECT count() FROM remote('127.0.0.1:9000', system, tables, 'user', 'pw')",
-		"SELECT count() FROM remote('10.0.0.5:9000', `phys`, `db1.u`)",
-		"SELECT count() FROM remote('10.0.0.5:9000', phys.`db1.u`, 'user', 'pw')",
+		"SELECT count() FROM remote('10.0.0.5:9000', 'phys', 'db1.u', 'user', 'pw')",
+		"WITH 2 AS d SELECT count() FROM remote('10.0.0.5:9000', 'phys', 'db1.u') WHERE id > d",
 		"SELECT count() FROM cluster('default', 'phys', 'db1.t', 1)",
 		"SELECT count() FROM merge($$phys$$, $tag$^db1$tag$)",
 		"SELECT count() FROM numbers(concat('1', '0'))",
@@ -4132,7 +4339,7 @@ with:
 
 Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/plugins/sireserved/ 2>&1 | head -2; go test -count=1 . -run TestStorageIntegrityInternalListenWarning 2>&1 | grep -m1 'want'`
 
-Expected: `pkg/plugins/sireserved` fails to compile with `pkg/plugins/sireserved/plugin_test.go:1338:19: undefined: PeerCarrierArgumentViolation`; `TestStorageIntegrityInternalListenWarning` fails with `build_test.go:212: warning = "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id there, string literals included, but not names built by computed table-function arguments, so internal_listen MUST still be reachable only from trusted peer subnets", want "every object-carrier table function called with a computed argument"`.
+Expected: `pkg/plugins/sireserved` fails to compile with `pkg/plugins/sireserved/plugin_test.go:1356:19: undefined: PeerCarrierArgumentViolation`; `TestStorageIntegrityInternalListenWarning` fails with `build_test.go:212: warning = "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id there, string literals included, but not names built by computed table-function arguments, so internal_listen MUST still be reachable only from trusted peer subnets", want "every object-carrier table function called with a computed argument"`.
 
 - [ ] **Step 14: Refuse computed carrier arguments on peer loopbacks**
 
@@ -4280,12 +4487,12 @@ func PeerReservedNamespaceViolation(sql string, databases []string, rowIDColumn 
 // PeerCarrierArgumentViolation reports, on the peer scan (PeerScanOptions),
 // the first object-carrier callable (IsObjectCarrierName) outside literals
 // and comments, as written, whose arguments are not each exactly one string
-// literal, one numeric literal or one bare or qualified identifier (Plan
-// S3-C4 K48). ClickHouse constant-folds a computed argument such as
-// concat('hg_', 'replica') into a database or table name, so on a peer
-// loopback, where si_gateway may read hg_replica, only literal arguments
-// pass. A call that never closes is a violation too. Scan errors are
-// returned as is.
+// literal or one unsigned integer literal (Plan S3-C4 K48). ClickHouse
+// constant-folds a computed argument such as concat('hg_', 'replica') into a
+// database or table name, and resolves an identifier argument through the
+// statement's aliases or as a tuple element, so on a peer loopback, where
+// si_gateway may read hg_replica, only literal arguments pass. A call that
+// never closes is a violation too. Scan errors are returned as is.
 func PeerCarrierArgumentViolation(sql string) (string, error) {
 	surfaces, err := sqlsurface.ScanWith(sql, PeerScanOptions)
 	if err != nil {
@@ -4332,21 +4539,39 @@ func literalCallArguments(tokens []sqlsurface.Token) bool {
 }
 
 // literalArgument reports whether arg is exactly one string literal (a
-// heredoc included), one word (a number or a bare identifier), one quoted
-// identifier, or a qualified name of two such names. A decimal such as 1.5
-// scans as three tokens and passes as the qualified shape.
+// heredoc included) or one unsigned decimal integer (a word of ASCII digits
+// only). No identifier is a literal here, bare, quoted, digit-leading or
+// qualified: ClickHouse's analyzer resolves an identifier argument of a
+// table function through the statement's aliases before it takes it as a
+// name (WITH concat('hg_', 'replica') AS d ... merge(d, '.*'), a SELECT-list
+// or inline alias, an enclosing query's WITH) and d.1 as a tuple element,
+// so an identifier can carry a computed name. A digits-only word is always
+// that number, because ClickHouse refuses a number as an alias.
 func literalArgument(arg []sqlsurface.Token) bool {
-	isName := func(tok sqlsurface.Token) bool {
-		return tok.Kind == sqlsurface.TokenWord || tok.Kind == sqlsurface.TokenQuoted
+	if len(arg) != 1 {
+		return false
 	}
-	switch len(arg) {
-	case 1:
-		return arg[0].Kind == sqlsurface.TokenString || isName(arg[0])
-	case 3:
-		return isName(arg[0]) && isPunctToken(arg[1], ".") && isName(arg[2])
+	switch arg[0].Kind {
+	case sqlsurface.TokenString:
+		return true
+	case sqlsurface.TokenWord:
+		return digitsOnly(arg[0].Text)
 	default:
 		return false
 	}
+}
+
+// digitsOnly reports whether word is a non-empty run of ASCII digits.
+func digitsOnly(word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; i < len(word); i++ {
+		if word[i] < '0' || word[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isPunctToken(tok sqlsurface.Token, text string) bool {
@@ -4390,7 +4615,7 @@ with:
 
 Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/plugins/sireserved build.go build_test.go && go test -count=1 ./pkg/plugins/sireserved/ ./pkg/plugins/sipeerguard/ ./pkg/plugins/tablerefguard/ && go test -count=1 ./pkg/plugins/sireserved/ -run 'TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused|TestOnQuery_PeerLegFormsPass|TestOnQuery_PeerRefusalCountsAndLogs' -v 2>&1 | grep -E '^--- ' && go test -count=1 ./pkg/plugins/sireserved/ -run TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused -v 2>&1 | grep -c '^    --- PASS' && go test -count=1 . -run TestStorageIntegrityInternalListenWarning`
 
-Expected: `gofmt` lists nothing; `ok` for `sireserved`, `sipeerguard` and `tablerefguard`; `--- PASS` for `TestOnQuery_PeerLegFormsPass` (S3-A's, unchanged), `TestOnQuery_PeerRefusalCountsAndLogs` (S3-A's, unchanged) and `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused`; `29` (its 18 refused forms and 11 passing literal forms); `ok  	github.com/housegate/housegate`.
+Expected: `gofmt` lists nothing; `ok` for `sireserved`, `sipeerguard` and `tablerefguard`; `--- PASS` for `TestOnQuery_PeerLegFormsPass` (S3-A's, unchanged), `TestOnQuery_PeerRefusalCountsAndLogs` (S3-A's, unchanged) and `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused`; `41` (its 31 refused forms and 10 passing literal forms); `ok  	github.com/housegate/housegate`.
 
 - [ ] **Step 16: Commit the peer guard**
 
@@ -4407,9 +4632,12 @@ non-forwarded leg such as merge(concat('hg_', 'replica'), '.*') could
 read every owner's copies while no reserved name appears in its text.
 The peer rules now refuse, with 392 and the reason
 computed_carrier_argument (exported at 0), every object-carrier
-callable whose arguments are not each exactly one string literal,
-numeric literal or bare or qualified identifier. Arguments are never
-evaluated. S3-A's peer-leg corpus and the measured ClickHouse legs
+callable whose arguments are not each exactly one string literal or
+unsigned integer literal. An identifier argument is refused too:
+ClickHouse resolves it through the statement's aliases (WITH
+concat('hg_', 'replica') AS d ... merge(d, '.*') read hg_replica on
+26.3) or as a tuple element (d.1). Arguments are never evaluated.
+S3-A's peer-leg corpus and the measured ClickHouse legs
 keep passing; operator, ordinary and forwarded sessions are unchanged.
 The internal-listen warning no longer says computed names are not
 refused.
@@ -4790,7 +5018,7 @@ it refuses no object-carrier callable, because a legitimate leg carries a nested
 with:
 
 ```text
-it admits an object-carrier callable, because a legitimate leg carries a nested `remote()` when ClickHouse pushes a JOIN or an IN subquery over another `remote()` into it, but only with literal arguments: a carrier called with an argument that is not exactly one string literal, numeric literal or bare or qualified identifier is refused with 392 `storage_integrity: a peer statement may pass only literal arguments to <callable>(); a computed database or table name is refused on a peer connection` (`sireserved.PeerCarrierArgumentViolation`, reason `computed_carrier_argument`, corpus `peerCarrierArgumentForms`; Plan S3-C4 K48), because `si_gateway` can read `hg_replica` and ClickHouse constant-folds a computed argument such as `concat('hg_', 'replica')`.
+it admits an object-carrier callable, because a legitimate leg carries a nested `remote()` when ClickHouse pushes a JOIN or an IN subquery over another `remote()` into it, but only with literal arguments: a carrier called with an argument that is not exactly one string literal or unsigned integer literal is refused with 392 `storage_integrity: a peer statement may pass only literal arguments to <callable>(); a computed database or table name is refused on a peer connection` (`sireserved.PeerCarrierArgumentViolation`, reason `computed_carrier_argument`, corpus `peerCarrierArgumentForms`; Plan S3-C4 K48), because `si_gateway` can read `hg_replica`, ClickHouse constant-folds a computed argument such as `concat('hg_', 'replica')`, and its analyzer resolves an identifier argument through the statement's aliases (`WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`) or as a tuple element (`d.1`), so no identifier passes, bare, quoted or qualified.
 ```
 
 In `CLAUDE.md` (the start of the paragraph after the SI paragraphs; a new paragraph precedes it, `:155`), replace:
@@ -4828,7 +5056,7 @@ and one that cannot be scanned with `storage_integrity: a peer statement that ca
 with:
 
 ```text
-and one that cannot be scanned with `storage_integrity: a peer statement that cannot be checked for reserved names is refused: <scan error>` (spec 2026-10-14 §14). On the same peer connections, an object-carrier table function (`remote`, `merge`, `cluster` and the rest of `sireserved.IsObjectCarrierName`) called with an argument that is not exactly one string literal, numeric literal or bare or qualified identifier is refused with 392 `storage_integrity: a peer statement may pass only literal arguments to <callable>(); a computed database or table name is refused on a peer connection` (Plan S3-C4 K48).
+and one that cannot be scanned with `storage_integrity: a peer statement that cannot be checked for reserved names is refused: <scan error>` (spec 2026-10-14 §14). On the same peer connections, an object-carrier table function (`remote`, `merge`, `cluster` and the rest of `sireserved.IsObjectCarrierName`) called with an argument that is not exactly one string literal or unsigned integer literal (an identifier included, since ClickHouse resolves it through the statement's aliases) is refused with 392 `storage_integrity: a peer statement may pass only literal arguments to <callable>(); a computed database or table name is refused on a peer connection` (Plan S3-C4 K48).
 ```
 
 In `README.md` (the start of the "Who may write" paragraph; a new paragraph precedes it, `:203`), replace:
@@ -4914,7 +5142,7 @@ do not turn `sireserved` into a partial ClickHouse parser or inspect carrier arg
 with:
 
 ```text
-do not turn `sireserved` into a partial ClickHouse parser or try to prove a computed carrier argument safe—constant folding defeats token-level target proofs, so the operator rules refuse every carrier by name and the peer rules admit a carrier only when each argument is a single literal or identifier (Plan S3-C4 K48), never by evaluating one.
+do not turn `sireserved` into a partial ClickHouse parser or try to prove a computed carrier argument safe—constant folding defeats token-level target proofs, so the operator rules refuse every carrier by name and the peer rules admit a carrier only when each argument is a single string or unsigned integer literal, never an identifier, which ClickHouse resolves through the statement's aliases (Plan S3-C4 K48), and never by evaluating one.
 ```
 
 In `pkg/rewriter/AGENTS.md` (the test table, `:12`), replace:
@@ -5029,7 +5257,7 @@ Notes:
 - **Base revisions.** housegate `origin/main` is `862a7a8`, not the header's `66d4df7`: S3-A Tasks 1–2 merged as housegate#238 (`v0.20.0`), and housegate#239–#242 changed only S3-A's plan file (so the code is `994128b`'s). Every file this task touches is byte-identical between `66d4df7` and `862a7a8` except `build.go` (S3-A's warning text, `+2` lines after `:156`) and the three docs (S3-A's peer-rule text), so the anchors below are those of `862a7a8`; where Tasks 42 and 43 move a hunk, **Files** also gives its line after them. Tasks 42 and 43 land first on this branch; where they edit the same file (`pkg/chsession/state.go`, `pkg/plugins/sitablestate/plugin.go`, `pkg/network/rpc.go`, `build.go`, the docs), the hunks below anchor on text they leave unchanged, or on Task 43's own `ReplicaServedDatabase` field (the hunk rule).
 - **When a session fails over (K46).** Only in two places, both in the relay:
   - *At hello:* the dial to the session's first upstream fails, or phase 2 of its handshake does (a write or read error, EOF, an Exception or an unexpected packet instead of a ServerHello). `failoverAtHello` sends the post-plugin ClientHello, `Database` set to the session database, to each candidate in turn, binds the first that answers a ServerHello in place of the failed upstream, and the handshake continues on it unchanged (revision, raw ServerHello echo, both addenda). The client has seen nothing yet.
-  - *At an eligible read's first answer:* `writeQuery` arms a `SELECT` or `WITH` of an eligible session and keeps its Query packet; `spliceClientPacket` keeps its terminating empty Data block. If the first upstream packet is an Exception the failover accepts, or the connection breaks before any packet of the query was relayed, `failoverRead` prepares a candidate completely (dial, the stored upstream hello with the session database at the client leg's revision, the same revision and timezone the client already received, the addendum, the Query and, if it was already sent, the terminator) and only then rebinds the session to it (`RebindUpstream`, which closes the owner's connection). Until then the owner stays bound, so an exhausted failover lets the original Exception through and keeps the session on the owner. A query fails over at most once and never once any packet of its answer reached the client.
+  - *At an eligible read's first answer:* `writeQuery` arms a `SELECT` or `WITH` of an eligible session and keeps its Query packet; `spliceClientPacket` keeps its terminating empty Data block. If the first upstream packet is an Exception the failover accepts, or the connection breaks before any packet of the query was relayed, `failoverRead` prepares a candidate completely (dial, the stored upstream hello with the session database at the client leg's revision, the same revision and timezone the client already received, the addendum, the Query and, if it was already sent, the terminator) and only then rebinds the session to it (`RebindUpstream`, which closes the owner's connection). Until then the owner stays bound, so a failover that no candidate takes lets the original Exception through and keeps the session on the owner. The candidate's first answer then decides (review round 1): `replica_hosts` is static until placement, so a reachable candidate may take the read and still not serve it (its member does not serve the database, so its host pivots to the quarantined owner and relays the same 392, or its connection breaks before it answers). Such an answer is a failure `Reason` accepts, before any packet reached the client, so `failoverRead` keeps the failover (`failoverQuery.moving`, a `readFailover` with the candidates not tried yet and the owner's original packet or error) and moves the read to the next candidate the same way. When none is left the loop handles the owner's original Exception (relayed to the client) or read error (the session ends) instead of the last candidate's answer; the session stays on that last candidate, which routes later statements as the owner's host would. The failover is reported (`FailedOver`, `agent: replica failover`, `replica_failovers_total`) only at the first answer that is not such a failure: a packet of the answer, its EndOfStream, an opaque result or an Exception `Reason` declines. A query never fails over once any packet of its answer reached the client.
 - **Eligibility.** `chsession.SessionState.ReplicaFailoverEligible` is set by the relay after a handshake only when a failover is wired, and cleared by the first forwarded statement that is not a `SELECT`, `WITH` or standalone `USE` (`sicore.LeadingKeywords`, `sicore.ParseUseDatabaseStrict`), by any statement under an ownership plan (every signed INSERT lane, query-only, abort-with-success), by client Data that is not the terminator (external tables), and by a `USE` whose outcome the relay can no longer follow (a Cancel). So replaying the hello and the one read reproduces the session exactly: INSERT (INSERT … SELECT included), `SET`, DDL and `ALTER` never fail over and end eligibility for the session.
 - **USE and the session database.** The replayed hello's `Database` is `SessionState.LogicalDatabaseName()` (contract §29.3) or, when it is empty, the hello's: the agent registers `sessionstate` only with the SI statement plugin (`build.go:1433`), and nothing in agent mode records a `USE` there. So the relay records the target of an eligible session's `USE` in `LogicalDatabase` at that query's EndOfStream; with a nil failover nothing is recorded. Without that, a failover after `USE other` would replay the read in the hello's database. Recorded in Appendix B.
 - **The terminator and the lock.** A quarantined owner's host refuses in `OnQuery`, often before the client's terminator crossed the agent. `failoverMu` serializes the arming Query write, every client-to-upstream splice of an armed query (which also writes to the session's current upstream, not the loop's captured one) and the failover itself, so the candidate gets exactly one terminator in either order: resent from the kept bytes, or spliced afterwards. `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined` pins both orders.
@@ -5037,7 +5265,7 @@ Notes:
 - **Where the port lives.** `pkg/plugins/AGENTS.md` forbids a plugin importing `pkg/proxy` (anti-patterns, and no plugin does at `origin/main`), while contract §29.3 has `agent.ReplicaFailover` implement `proxy.UpstreamFailover` with a `proxy.FailoverPhase` argument. The types are therefore defined in `pkg/plugin/upstream_failover.go` (where the relay's other ports, such as `DeferredInsertPlan`, live) and re-exported by aliases as `proxy.FailoverPhase`, `proxy.FailoverAtHello`, `proxy.FailoverAtRead` and `proxy.UpstreamFailover`, so every contract name holds. The contract's log `agent: replica failover` names `to`, which the two-method `UpstreamFailover` never learns; the relay therefore also calls an optional `FailoverReporter` (`FailedOver(ctx, database, reason, from, to)`), which `agent.ReplicaFailover` implements. Both are recorded in Appendix B.
 - **Who gets the failover.** `buildAgentReplicaFailover` wires it only for an agent without `agent.upstream` whose network state implements `registry.StorageIntegrityReplicaDiscovery`, which only `RpcNetworkState` does (contract §29.3), and, beyond the contract, never with a pinned upstream: the pin is the operator's explicit choice, and sistatement's own switch honours it the same way (`build.go:1573`). The contract's rule alone would wire it into every SI host's agent sidecar: the sidecar is an indexer driver pinned to its own host (`-agent-driver -agent-upstream localhost:<port>`, production `charts/sentio-node/templates/node.yaml:574-576`) whose network state is the co-located storage RPC over http (`:111-136`), and its driver traffic must stay on its own host. With the pin rule the sidecars never fail over; K47's sidecar upgrade is for the status name `replica`. Recorded in Appendix B and as a contract issue. The user's local quickstart agent (`housegate -network devnet2 -listen 127.0.0.1:9000 -si on`, no pin) gets it, which is what Task 48's drill reads through.
 - **Discovery.** `StorageIntegrityReplicaHosts` asks the network-state source first and, only when it gives no decoded answer, the storage endpoint of every other indexer from `AllIndexers()` in ascending id, each endpoint once. `AllIndexers` itself is answered by the source, so with the source unreachable the lookup fails: the C4 follow-up "an unreachable indexer-a still blocks a fresh local agent's startup, though not its replica-host discovery" holds only while the source still answers `sentio_getIndexerInfos` (contract issue).
-- **Metrics and log.** `clickhouse_proxy_agent_replica_failovers_total{reason}` counts a failover that reached a serving upstream, `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}` one that did not (no candidate at all included); both reasons are exported at 0 from `init`. Each served failover is logged at info as `agent: replica failover` with `database`, `owner`, `reason`, `from` and `to`; an exhausted one at warn as `relay: no replica host served the failover; the client gets the original error`. Task 48's `si_failovers` greps the first in the local agent's log.
+- **Metrics and log.** `clickhouse_proxy_agent_replica_failovers_total{reason}` counts a failover that reached a serving upstream (a candidate whose first answer was not a failover failure), `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}` one that did not (no candidate at all included); both reasons are exported at 0 from `init`. Each served failover is logged at info as `agent: replica failover` with `database`, `owner`, `reason`, `from` and `to`; an exhausted one at warn as `relay: no replica host served the failover; the client gets the original error`. Task 48's `si_failovers` greps the first in the local agent's log.
 - **Byte for byte without a failover.** With `Server.UpstreamFailover` nil the relay's wire behaviour is unchanged: the dial and handshake errors keep their texts (`exchangeUpstreamHello` carries them), no state is armed, `ReplicaFailoverEligible` stays false and no `USE` is recorded (`TestRelayWithoutUpstreamFailoverIsUnchanged`). Only the handshake's two debug lines become one.
 - **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of housegate `origin/main` `862a7a8` as `origin/main`, Plan S3-C1 Task 22's `CopyTable` and Tasks 42 and 43 applied exactly as their texts write them (Task 42's real code, no stand-ins) with their own commit commands, and this task applied step by step with its own commit commands (16 commits ahead of `origin/main`, nothing left uncommitted), with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): every failing step failed with the messages given; every test of this task passes, the relay tests also under `-race -count=20` (2.1 s); each fails as stated below with its fix reverted (failover reason forced off, eligibility never cleared, `answered` never set, the closing guard removed, the build wiring removed). `bazel run //:gazelle` changes nothing after the `BUILD.bazel` edits below; `bazel build //...` passes and `bazel test //...` ends with `Executed 32 out of 67 tests: 67 tests pass.`; this task's integration test and Task 43's four pass with `go test` and with `bazel test //pkg/integration:integration_test` on `clickhouse/clickhouse-server:25.8` (25.8.28.1) and FFI `v0.17.0`; every bash block passes `bash -n` and `shellcheck`. At the base already, `go vet .` reports two `composites` findings in `build_collector_test.go`, and Go 1.27's vet stops plain `go test ./pkg/storageintegrity/` on `intake_test.go:1802` (`suspect or`; Bazel's test of that package passes); this task vets its own packages only.
 - **clickhouse-go drops a connection after any error** (`release` closes it, `clickhouse.go:368-388` of the `sentioxyz` fork), so the integration test follows a session after a successful `SET`, not after a refused write; the unit tests follow one after a refused write.
@@ -5074,8 +5302,8 @@ Notes:
   - `pkg/proxy`: `FailoverPhase`, `FailoverAtHello` (1), `FailoverAtRead` (2), `UpstreamFailover` (`Candidates`, `Reason`), `Server.UpstreamFailover`; metrics `clickhouse_proxy_agent_replica_failovers_total{reason}` and `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}`, both reasons exported at 0.
   - `pkg/chsession`: `SessionState.ReplicaFailoverEligible bool`.
   - `pkg/plugins/agent`: `type ReplicaFailover struct{ Discovery registry.StorageIntegrityReplicaDiscovery; Databases registry.Databases; Topology registry.Topology }` (plus an unexported owner cache), `FailoverReasonOwnerUnreachable = "owner_unreachable"`, `FailoverReasonOwnerQuarantined = "owner_quarantined"`, the info log `agent: replica failover` (`database`, `owner`, `reason`, `from`, `to`); `build.go` wiring.
-  - Tests (contract §29.3 names): `TestIsIndexerQuarantinedReadMessage`, `TestTableRefusedMessageIsTheSitablestateText`, `TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers`, `TestRpcNetworkStateReplicaHostsCachesPerDatabase`, `TestReplicaFailoverCandidatesSkipTheOwnerAndUnboundIndexers`, `TestReplicaFailoverReasonClassifiesQuarantineAndUnreachable`, `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails`, `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`.
-  - Added names (Appendix B): `plugin.FailoverPhase`, `plugin.FailoverAtHello`, `plugin.FailoverAtRead`, `plugin.UpstreamFailover`, `plugin.FailoverReporter` and the alias `proxy.FailoverReporter`; `(*agent.ReplicaFailover).FailedOver`; `(*proxy.MetricsObserver).ReplicaFailover` and `ReplicaFailoverExhausted`; the warn log `relay: no replica host served the failover; the client gets the original error` and the startup info log `agent replica read failover enabled: …`; unexported `buildAgentReplicaFailover` (root); `Relay.failover`, `failoverMu`, `failoverQuery`, `closing`, `failoverQuery` (type), `failoverStatement`, `classifyFailoverStatement`, `noteFailoverStatement`, `writeQuery`, `spliceClientPacket`, `failoverRead`, `readFailoverTo`, `prepareReadCandidate`, `failoverAtHello`, `helloCandidate`, `exchangeUpstreamHello`, `failoverCandidates`, `failoverDatabase`, `failedOver`, `failoverExhausted`, `failedUpstreamAddr`, `dialFailoverCandidate`, `failoverConn`, `replicaFailoverObserver`, `replicaFailoverAttemptTimeout` (10 s), `replicaFailoverReasons`, `agentReplicaFailoversTotal`, `agentReplicaFailoverExhaustedTotal` (proxy); `replicaHostsEntry`, `storageEndpoint`, `replicaHostsAt`, `replicaHostsFromPeers`, `RpcNetworkState.now` / `replicaMu` / `replicaHosts` (network); `tableRefusedInfix`, `indexerQuarantinedReadInfix` (chproto); tests `TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases` (registry), `TestAgentNeverFailsOverAClosedSession` (proxy), `TestReplicaFailoverLogsEachFailover` (agent), `TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState` (root); test helpers `replicaHostsNode`, `newReplicaHostsNode` (network), `failoverDB`, `quarantinedRead`, `fakeUpstream`, `startFakeUpstream`, `closedAddr`, `fakeConn`, `replicaServes`, `ownerQuarantined`, `fakeFailover`, `failoverClient`, `startFailoverRelay`, `requireNoFailover`, `replicaFailoverMetric` (proxy), `fakeReplicaDiscovery`, `replicaFailoverState` (agent), `failoverOwnerRevision`, `failoverOwnerRefusal`, `startQuarantinedOwner`, `failoverNetworkRPC`, `replicaFailovers` (integration).
+  - Tests (contract §29.3 names): `TestIsIndexerQuarantinedReadMessage`, `TestTableRefusedMessageIsTheSitablestateText`, `TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers`, `TestRpcNetworkStateReplicaHostsCachesPerDatabase`, `TestReplicaFailoverCandidatesSkipTheOwnerAndUnboundIndexers`, `TestReplicaFailoverReasonClassifiesQuarantineAndUnreachable`, `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails`, `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`, `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead` (review round 1).
+  - Added names (Appendix B): `plugin.FailoverPhase`, `plugin.FailoverAtHello`, `plugin.FailoverAtRead`, `plugin.UpstreamFailover`, `plugin.FailoverReporter` and the alias `proxy.FailoverReporter`; `(*agent.ReplicaFailover).FailedOver`; `(*proxy.MetricsObserver).ReplicaFailover` and `ReplicaFailoverExhausted`; the warn log `relay: no replica host served the failover; the client gets the original error` and the startup info log `agent replica read failover enabled: …`; unexported `buildAgentReplicaFailover` (root); `Relay.failover`, `failoverMu`, `failoverQuery`, `closing`, `failoverQuery` (type), `failoverStatement`, `classifyFailoverStatement`, `noteFailoverStatement`, `writeQuery`, `spliceClientPacket`, `failoverRead` (which returns the packet or error the loop handles), `readFailover` (type) and `failoverQuery.moving`, `describeReadFailure`, `readFailoverTo`, `prepareReadCandidate`, `failoverAtHello`, `helloCandidate`, `exchangeUpstreamHello`, `failoverCandidates`, `failoverDatabase`, `failedOver`, `failoverExhausted`, `failedUpstreamAddr`, `dialFailoverCandidate`, `failoverConn`, `replicaFailoverObserver`, `replicaFailoverAttemptTimeout` (10 s), `replicaFailoverReasons`, `agentReplicaFailoversTotal`, `agentReplicaFailoverExhaustedTotal` (proxy); `replicaHostsEntry`, `storageEndpoint`, `replicaHostsAt`, `replicaHostsFromPeers`, `RpcNetworkState.now` / `replicaMu` / `replicaHosts` (network); `tableRefusedInfix`, `indexerQuarantinedReadInfix` (chproto); tests `TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases` (registry), `TestAgentNeverFailsOverAClosedSession` (proxy), `TestReplicaFailoverLogsEachFailover` (agent), `TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState` (root); test helpers `replicaHostsNode`, `newReplicaHostsNode` (network), `failoverDB`, `quarantinedRead`, `fakeUpstream`, `startFakeUpstream`, `closedAddr`, `fakeConn`, `replicaServes`, `ownerQuarantined`, `fakeFailover`, `failoverClient`, `startFailoverRelay`, `requireNoFailover`, `replicaFailoverMetric` (proxy), `fakeReplicaDiscovery`, `replicaFailoverState` (agent), `failoverOwnerRevision`, `failoverOwnerRefusal`, `startQuarantinedOwner`, `failoverNetworkRPC`, `replicaFailovers` (integration).
   - Release ledger: `HG_TAG_P3` (the tag the release run prints) and `HG_DIGEST_P3` (the digest of `ghcr.io/housegate/housegate:<HG_TAG_P3>`), with the run record `housegate release`.
 - Consumed by:
   - Task 46 (sentio-node): pins `HG_TAG_P3` (and `CORE_TAG_P3`) in lockstep, implements `Snapshot.Served()` (K47), and answers `replica_databases` / `replica_hosts` in its own `rpc.StorageIntegrityInfo`, the JSON this task's agent decodes.
@@ -6594,6 +6822,82 @@ func TestAgentNeverFailsOverAClosedSession(t *testing.T) {
 	}
 	requireNoFailover(t, f)
 }
+
+// TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead: replica_hosts is
+// every enrolled indexer but the owner, so a candidate can take the hello
+// and the read and still not serve it: its member does not serve the
+// database, so it relays the quarantined owner's refusal, or its connection
+// breaks before it answers. The read then moves on to the next candidate,
+// and the failover is reported once, for the candidate that served. When
+// none serves, the client gets the owner's original refusal and the failover
+// counts as exhausted.
+func TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead(t *testing.T) {
+	breaksAfterTheRead := func(c *fakeConn) {
+		if c.hello("member") {
+			if _, ok := c.query(); ok {
+				_ = c.data()
+			}
+		}
+	}
+
+	t.Run("the next candidate serves", func(t *testing.T) {
+		owner := startFakeUpstream(t, ownerQuarantined)
+		refuses := startFakeUpstream(t, ownerQuarantined)
+		breaks := startFakeUpstream(t, breaksAfterTheRead)
+		replica := startFakeUpstream(t, replicaServes)
+		f := &fakeFailover{candidates: []string{refuses.addr, breaks.addr, replica.addr}}
+		served := testutil.ToFloat64(agentReplicaFailoversTotal.WithLabelValues("owner_quarantined"))
+		c := startFailoverRelay(t, owner.addr, f, nil, NewMetricsObserver())
+		c.mustHello("owner")
+		c.mustServe("q1", "SELECT count() FROM t")
+		for name, up := range map[string]*fakeUpstream{"refusing": refuses, "breaking": breaks, "serving": replica} {
+			if _, queries := up.seen(); len(queries) != 1 || queries[0].ID != "q1" {
+				t.Fatalf("%s candidate queries = %+v, want the replayed q1 once", name, queries)
+			}
+		}
+		if asked, reports := f.state(); len(asked) != 1 || len(reports) != 1 || reports[0] != failoverDB+" owner_quarantined "+replica.addr {
+			t.Fatalf("asked %v, reports %v; want one lookup and one report, for the candidate that served", asked, reports)
+		}
+		if got := testutil.ToFloat64(agentReplicaFailoversTotal.WithLabelValues("owner_quarantined")); got != served+1 {
+			t.Fatalf("failovers{owner_quarantined} = %g, want %g", got, served+1)
+		}
+		if got := c.upstreamAddress(); got != replica.addr {
+			t.Fatalf("session upstream = %q, want the replica %q", got, replica.addr)
+		}
+		c.mustServe("q2", "SELECT 1")
+	})
+
+	t.Run("no candidate serves", func(t *testing.T) {
+		owner := startFakeUpstream(t, ownerQuarantined)
+		first := startFakeUpstream(t, ownerQuarantined)
+		second := startFakeUpstream(t, ownerQuarantined)
+		f := &fakeFailover{candidates: []string{first.addr, second.addr}}
+		served := testutil.ToFloat64(agentReplicaFailoversTotal.WithLabelValues("owner_quarantined"))
+		exhausted := testutil.ToFloat64(agentReplicaFailoverExhaustedTotal.WithLabelValues("owner_quarantined"))
+		c := startFailoverRelay(t, owner.addr, f, nil, NewMetricsObserver())
+		c.mustHello("owner")
+		c.mustRefuse("q1", "SELECT count() FROM t", quarantinedRead)
+		for name, up := range map[string]*fakeUpstream{"first": first, "second": second} {
+			if _, queries := up.seen(); len(queries) != 1 {
+				t.Fatalf("%s candidate queries = %d, want the read tried once on each", name, len(queries))
+			}
+		}
+		if asked, reports := f.state(); len(asked) != 1 || len(reports) != 0 {
+			t.Fatalf("asked %v, reports %v; want one lookup and no report", asked, reports)
+		}
+		if got := testutil.ToFloat64(agentReplicaFailoverExhaustedTotal.WithLabelValues("owner_quarantined")); got != exhausted+1 {
+			t.Fatalf("failover_exhausted{owner_quarantined} = %g, want %g", got, exhausted+1)
+		}
+		if got := testutil.ToFloat64(agentReplicaFailoversTotal.WithLabelValues("owner_quarantined")); got != served {
+			t.Fatalf("failovers{owner_quarantined} = %g, want it unchanged at %g", got, served)
+		}
+		// The session stays on the last candidate that answered, which
+		// routes it as the owner would.
+		if types, exc, err := c.run("u1", "USE other"); err != nil || exc != nil || len(types) != 1 {
+			t.Fatalf("after the failover found no replica: answer %v, exception %v, err %v", types, exc, err)
+		}
+	})
+}
 ```
 
 - [ ] **Step 13: Run the tests and see them fail**
@@ -6722,6 +7026,19 @@ type failoverQuery struct {
 	read       bool           // a SELECT or WITH that may still fail over at its first answer
 	use        string         // a USE target, recorded as the session database at its EndOfStream
 	answered   bool           // a packet of its answer was relayed to the client
+	moving     *readFailover  // the read failover under way, once a candidate took the read
+}
+
+// readFailover is a read failover under way: a candidate took the read and
+// its first answer decides whether it serves. It keeps the candidates not
+// tried yet, the owner's failure the client gets when none serves (its
+// Exception packet, or its read error) and what to report once one serves.
+type readFailover struct {
+	database, reason, from, to string
+	remaining                  []string
+	original                   *chproto.Packet
+	originalErr                error
+	failures                   []error
 }
 
 type failoverStatement uint8
@@ -6813,79 +7130,111 @@ func (r *Relay) spliceClientPacket(up *chproto.Codec, pkt *chproto.Packet, input
 }
 
 // failoverRead runs before upstreamToClient handles a packet or a read error
-// of up. It returns true once the armed read moved to a replica host that has
-// been sent its Query and terminator: the loop then reads the answer from the
-// new upstream and drops this packet or error. In every other case it only
-// updates the armed query and returns false, and the loop handles the packet
-// or error exactly as without a failover. It never fails over once a packet
-// of the answer reached the client, and at most once per query.
-func (r *Relay) failoverRead(ctx context.Context, up *chproto.Codec, pkt *chproto.Packet, readErr error) bool {
+// of up, and returns what the loop handles instead. It returns true once the
+// armed read moved to a replica host that has been sent its Query and
+// terminator: the loop then reads the answer from the new upstream and drops
+// this packet or error. Otherwise it returns false with the packet or error
+// the loop handles exactly as without a failover: the one it was given, or,
+// once every candidate that took the read failed it too, the owner's original
+// refusal or read error. A candidate whose first answer is itself a failure
+// the failover moves on (the quarantined owner's refusal it relays, or a
+// connection that broke before any packet) leaves the read to the next
+// candidate, so a reachable host that cannot serve the read never ends the
+// failover. The failover counts as served, and is reported, only at the first
+// answer that is not such a failure. It never fails over once a packet of the
+// answer reached the client.
+func (r *Relay) failoverRead(ctx context.Context, up *chproto.Codec, pkt *chproto.Packet, readErr error) (bool, *chproto.Packet, error) {
 	r.failoverMu.Lock()
 	fq := r.failoverQuery
 	if fq == nil {
 		r.failoverMu.Unlock()
-		return false
+		return false, pkt, readErr
 	}
 	var exc *chproto.Exception
+	failed := false
 	switch {
 	case readErr != nil:
-		if !fq.read || fq.answered || errors.Is(readErr, chproto.ErrUnsupportedResultType) {
-			r.failoverMu.Unlock()
-			return false
-		}
-	case pkt.Type == uint64(chproto.ServerEndOfStreamCode):
-		if fq.use != "" {
-			r.sess.State().SetLogicalDatabase(fq.use)
-		}
-		r.failoverQuery = nil
-		r.failoverMu.Unlock()
-		return false
+		failed = fq.read && !fq.answered && !errors.Is(readErr, chproto.ErrUnsupportedResultType)
 	case pkt.Type == uint64(chproto.ServerExceptionCode):
 		exc, _ = pkt.Decoded.(*chproto.Exception)
-		if exc == nil || !fq.read || fq.answered {
+		failed = exc != nil && fq.read && !fq.answered
+	}
+	reason := ""
+	if failed {
+		var ok bool
+		reason, ok = r.failover.Reason(FailoverAtRead, readErr, exc)
+		failed = ok && !r.closing.Load() && ctx.Err() == nil
+	}
+	if !failed {
+		// The read's own answer, the owner's or the serving candidate's.
+		mv := fq.moving
+		fq.moving = nil
+		switch {
+		case readErr != nil && errors.Is(readErr, chproto.ErrUnsupportedResultType):
+			fq.answered = true
+		case readErr != nil, pkt.Type == uint64(chproto.ServerExceptionCode):
+			r.failoverQuery = nil
+		case pkt.Type == uint64(chproto.ServerEndOfStreamCode):
+			if fq.use != "" {
+				r.sess.State().SetLogicalDatabase(fq.use)
+			}
+			r.failoverQuery = nil
+		default:
+			fq.answered = true
+		}
+		r.failoverMu.Unlock()
+		if mv != nil {
+			r.failedOver(ctx, mv.database, mv.reason, mv.from, mv.to)
+		}
+		return false, pkt, readErr
+	}
+	mv := fq.moving
+	if mv == nil {
+		database := r.failoverDatabase(nil)
+		addrs, err := r.failoverCandidates(ctx, database)
+		if err != nil {
 			r.failoverQuery = nil
 			r.failoverMu.Unlock()
-			return false
+			r.failoverExhausted(ctx, database, reason, err)
+			return false, pkt, readErr
 		}
-	default:
-		fq.answered = true
-		r.failoverMu.Unlock()
-		return false
+		mv = &readFailover{database: database, reason: reason, from: failedUpstreamAddr(up, readErr), remaining: addrs, original: pkt, originalErr: readErr}
+		fq.moving = mv
+	} else {
+		mv.failures = append(mv.failures, fmt.Errorf("%s: %s", mv.to, describeReadFailure(readErr, exc)))
 	}
-	reason, ok := r.failover.Reason(FailoverAtRead, readErr, exc)
-	if !ok || r.closing.Load() || ctx.Err() != nil {
-		r.failoverQuery = nil
-		r.failoverMu.Unlock()
-		return false
-	}
-	database := r.failoverDatabase(nil)
-	from := failedUpstreamAddr(up, readErr)
-	to, err := r.readFailoverTo(ctx, fq, database)
+	to, err := r.readFailoverTo(ctx, fq, mv)
 	if err != nil {
 		r.failoverQuery = nil
 		r.failoverMu.Unlock()
-		r.failoverExhausted(ctx, database, reason, err)
-		return false
+		r.failoverExhausted(ctx, mv.database, mv.reason, errors.Join(append(mv.failures, err)...))
+		return false, mv.original, mv.originalErr
 	}
-	fq.read = false
+	mv.to = to
 	r.failoverMu.Unlock()
-	r.failedOver(ctx, database, reason, from, to)
-	return true
+	return true, nil, nil
 }
 
-// readFailoverTo prepares each candidate in turn (dial, the session's hello
-// with the failover database, the same revision and timezone the client
-// received, then the armed Query and its terminator) and rebinds the session
-// to the first that takes them. The failed upstream stays bound until then.
-// The caller holds failoverMu.
-func (r *Relay) readFailoverTo(ctx context.Context, fq *failoverQuery, database string) (string, error) {
-	addrs, err := r.failoverCandidates(ctx, database)
-	if err != nil {
-		return "", err
+// describeReadFailure names a candidate's failed first answer for the
+// exhausted log line.
+func describeReadFailure(readErr error, exc *chproto.Exception) string {
+	if exc != nil {
+		return fmt.Sprintf("answered code=%d %s", exc.Code, exc.Message)
 	}
+	return fmt.Sprintf("broke before answering: %v", readErr)
+}
+
+// readFailoverTo prepares the remaining candidates of mv in turn (dial, the
+// session's hello with the failover database, the same revision and timezone
+// the client received, then the armed Query and its terminator), consuming
+// each, and rebinds the session to the first that takes them. The failed
+// upstream stays bound until then. The caller holds failoverMu.
+func (r *Relay) readFailoverTo(ctx context.Context, fq *failoverQuery, mv *readFailover) (string, error) {
 	var errs []error
-	for _, addr := range addrs {
-		up, sent, err := r.prepareReadCandidate(ctx, addr, database, fq)
+	for len(mv.remaining) > 0 {
+		addr := mv.remaining[0]
+		mv.remaining = mv.remaining[1:]
+		up, sent, err := r.prepareReadCandidate(ctx, addr, mv.database, fq)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", addr, err))
 			continue
@@ -6903,6 +7252,9 @@ func (r *Relay) readFailoverTo(ctx context.Context, fq *failoverQuery, database 
 		}
 		r.sess.State().SetUpstreamHello(sent)
 		return addr, nil
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("no candidate left"))
 	}
 	return "", errors.Join(errs...)
 }
@@ -7388,8 +7740,11 @@ with:
 
 ```go
 		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
-		if r.failover != nil && r.failoverRead(ctx, up, pkt, err) {
-			continue
+		if r.failover != nil {
+			var moved bool
+			if moved, pkt, err = r.failoverRead(ctx, up, pkt, err); moved {
+				continue
+			}
 		}
 		if err != nil {
 			if errors.Is(err, chproto.ErrUnsupportedResultType) && pkt != nil {
@@ -7597,11 +7952,11 @@ Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gof
 
 Expected:
 - nothing from `gofmt` and `go vet`;
-- `--- PASS` for the eleven tests: `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined` (`after_the_terminator`, `before_the_terminator`), `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable` (`dial_refused`, `exception_at_hello`, `closed_at_hello`), `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData` (`then_the_quarantine_refusal`, `then_the_connection_breaks`), `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails` (`read`, `hello`), `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentNeverFailsOverAClosedSession`;
+- `--- PASS` for the twelve tests: `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead` (`the_next_candidate_serves`, `no_candidate_serves`), `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined` (`after_the_terminator`, `before_the_terminator`), `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable` (`dial_refused`, `exception_at_hello`, `closed_at_hello`), `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData` (`then_the_quarantine_refusal`, `then_the_connection_breaks`), `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails` (`read`, `hello`), `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentNeverFailsOverAClosedSession`;
 - the race run `ok` (about 2 s);
 - `ok` for `pkg/plugin`, `pkg/proxy` (every existing relay test unchanged, about 20 s), `pkg/chsession` and the root package.
 
-As measured: with `failoverRead`'s Reason forced to not-ok, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails` and the metrics test fail (the client gets `storage_integrity: table db2.t was refused: indexer_quarantined: …`); with `noteFailoverStatement` a no-op, `TestAgentNeverFailsOverAWrite` and `TestAgentNeverFailsOverASessionAfterSet` fail; without `fq.answered = true`, `TestAgentNeverFailsOverAfterData` fails; without the `closing` check, `TestAgentNeverFailsOverAClosedSession` fails with `candidates were asked for [db2] …`.
+As measured: with `failoverRead`'s Reason forced to not-ok, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails` and the metrics test fail (the client gets `storage_integrity: table db2.t was refused: indexer_quarantined: …`); with `noteFailoverStatement` a no-op, `TestAgentNeverFailsOverAWrite` and `TestAgentNeverFailsOverASessionAfterSet` fail; without `fq.answered = true`, `TestAgentNeverFailsOverAfterData` fails; without the `closing` check, `TestAgentNeverFailsOverAClosedSession` fails with `candidates were asked for [db2] …`; with a candidate's first answer ending the failover (the drafted `fq.read = false`), `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead` fails with the refusing candidate's `storage_integrity: table db2.t was refused: indexer_quarantined: …` and `second candidate queries = 0`, and with the failover reported when a candidate takes the read instead of at its first usable answer, with `reports [db2 owner_quarantined <each candidate> …]`.
 
 - [ ] **Step 16: Commit the relay failover**
 
@@ -7616,7 +7971,10 @@ answer (an Exception the failover accepts, or a broken connection
 before any packet reached the client): the relay replays the hello
 with the session database and the kept Query and terminator on the
 first candidate that takes them at the client's revision and
-timezone, and only then rebinds. Writes, INSERT ... SELECT, SET and
+timezone, and only then rebinds. A candidate whose first answer is
+itself such a failure (a host whose member does not serve relays the
+owner's refusal) is followed by the next one; the failover is counted
+and reported only at a candidate's first usable answer. Writes, INSERT ... SELECT, SET and
 anything after an answer packet never fail over, the injected read
 mode is kept, an exhausted failover lets the original error through,
 and a closing session never fails over (spec 2026-10-14 §11, Plan
@@ -8604,11 +8962,11 @@ Routing and rewrite (Task 43):
 - `forward.Plugin.TableState`: a hello or standalone `USE` of a replica-served database stays local; once serving ends, the session's next statement gets the retryable 733 asking to reconnect.
 - The rewrite reads Replica tables from the copy (`SafeTable` = `UnsafeTable` = `hg_replica.<copy>`), keeps the database's remote mapping for its ordinary tables, refuses `unsafe_latest` of a copy with a message naming safe mode, and the scrubber maps the copy back. Both engines resolve SI tables before remote mapping, measured with rewriter-go v0.17.0 (FFI) and the devnet2 `rewriter-grpc` v0.17.0 image.
 - Writes and DDL of a served table are refused by the engines first, as measured on ClickHouse 25.8.28.1 (`rewriter rejected SQL (code=UnsupportedStatement): insert target maps to a remote upstream; remote() can only appear as a SELECT-side table function`, and `storage-integrity table rrdb.a accepts writes only through the signed statement lane` for ALTER, DELETE, TRUNCATE, OPTIMIZE, RENAME and every CREATE), with sitablestate's 392 as the second layer.
-- `sireserved` refuses a computed object-carrier argument on a peer loopback (`merge(concat('hg_', 'replica'), '.*')`, reason `computed_carrier_argument`, K48); S3-A's `peerLegForms` and the measured peer legs still pass.
+- `sireserved` refuses a computed object-carrier argument on a peer loopback (`merge(concat('hg_', 'replica'), '.*')`, and any identifier argument, which ClickHouse resolves through the statement's aliases: `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`; reason `computed_carrier_argument`, K48); S3-A's `peerLegForms` and the measured peer legs still pass.
 
 Agent read failover (Task 44):
 - `chproto.TableRefusedMessage` / `IsIndexerQuarantinedReadMessage`; `replica_databases` / `replica_hosts` in `StorageIntegrityInfo`; `RpcNetworkState.StorageIntegrityReplicaHosts` (the network-state source, then every indexer but the owner; 30 s cache).
-- `proxy.Server.UpstreamFailover`: the relay fails a session over only at hello or at an eligible read's first answer (the read-side quarantine refusal, or a broken connection before any packet reached the client), replays the hello and that one query on the first replica host that takes them at the client's revision and timezone, and only then rebinds. Writes, INSERT ... SELECT, `SET`, anything after an answer packet and a closing session never fail over; the injected read mode is kept; an exhausted failover lets the original error through. The port lives in `pkg/plugin` and `pkg/proxy` re-exports it.
+- `proxy.Server.UpstreamFailover`: the relay fails a session over only at hello or at an eligible read's first answer (the read-side quarantine refusal, or a broken connection before any packet reached the client), replays the hello and that one query on the first replica host that takes them at the client's revision and timezone, and only then rebinds; a replica host whose first answer is itself such a failure (the owner's refusal relayed by a host whose member does not serve) is followed by the next one, and only a usable answer counts as a failover. Writes, INSERT ... SELECT, `SET`, anything after an answer packet and a closing session never fail over; the injected read mode is kept; an exhausted failover lets the original error through. The port lives in `pkg/plugin` and `pkg/proxy` re-exports it.
 - `agent.ReplicaFailover`, wired for an agent with an RPC network state and no pinned `agent.upstream`; counters `clickhouse_proxy_agent_replica_failovers_total{reason}` and `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}`; log `agent: replica failover`.
 - `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`: an agent of a quarantined owner's database reads the copies through the member host (ClickHouse 25.8.28.1, FFI v0.17.0).
 
@@ -8807,25 +9165,26 @@ Nothing here touches consensus: no Raft command, tag, Raft-reachable field, snap
   - `type Config struct{ Enabled bool; Token string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL, PollInterval time.Duration; OwnerHouseGate map[uint64]string }`; `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial func(ctx context.Context, network, addr string) (net.Conn, error); Now func() time.Time; Metrics *Metrics; Logger *slog.Logger; NodeID string }`;
   - `type Published interface{ Latest(ctx context.Context) (replay.SafeSnapshotManifest, error) }`; `type Copies interface{ Databases() []OwnerDatabase; Database(owner uint64, database string) (DatabaseCopy, bool) }`; `type OwnerDatabase struct{ Owner uint64; Database string }`; `type DatabaseCopy struct{ SnapshotID string; Entry replay.TrackFrontier; Tables []TableCopy; AuditClean bool }`; `type TableCopy struct{ TableID string; IncarnationSeq uint64; CopyTable string; SchemaHash string; Condition TableCondition }`; `type TableCondition string` with `ConditionInstalled`, `ConditionForeign`, `ConditionDiverged`, `ConditionExcluded`;
   - `type Reason string` with the closed values `owner_available`, `entry_unconfirmed`, `copy_behind`, `audit_unclean`, `table_foreign`, `table_diverged`, `table_excluded`, `table_missing`, `serving_disabled`, `feed_unavailable`, `installing`;
-  - `func New(cfg Config, deps Deps) (*Server, error)` with the five refusals of §30.2; `(*Server).Run(ctx) error`, `.Serving() ServingView`, `.Handler() http.Handler`, `.BeforeInstall(ctx, owner uint64, database string) error`, `.AfterInstall(owner uint64, database string)`;
+  - `func New(cfg Config, deps Deps) (*Server, error)` with the refusals of §30.2; `(*Server).Run(ctx) error`, `.Serving() ServingView`, `.Handler() http.Handler`, `.BeforeInstall(ctx, owner uint64, database string) error`, `.AfterInstall(owner uint64, database string)`;
   - `ServingView`, `DatabaseView`, `ServedTable`, `LeaseView` with the JSON tags of §30.3; the routes, statuses and texts of §30.3;
   - `func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error)`, `(*Client).Serving`, `.Acquire`, `.Renew`, `.Release`, `type Lease struct{ ID string; TTL time.Duration }`, `ErrLeaseRevoked`, `ErrNotServed`, `ErrUnauthorized`;
   - `func NewMetrics() *Metrics`, `(*Metrics).Register(prometheus.Registerer) error` with `sentio_node_si_member_serve_databases{state}`, `sentio_node_si_member_serve_not_serving{reason}`, `sentio_node_si_member_serve_owner_unreachable{owner}`, `sentio_node_si_member_serve_lease_waits_total{outcome}`, `sentio_node_si_member_serve_revoking_seconds`.
-- Produces (this task's own names, recorded in Appendix B as Facts F45.1–F45.13 below): `Deps.NodeID` (the view's `node_id`; §30.2 names no source for it); the Go names of the reasons `ReasonOwnerAvailable`, `ReasonEntryUnconfirmed`, `ReasonCopyBehind`, `ReasonAuditUnclean`, `ReasonTableForeign`, `ReasonTableDiverged`, `ReasonTableExcluded`, `ReasonTableMissing`, `ReasonServingDisabled`, `ReasonFeedUnavailable`, `ReasonInstalling` and `func Reasons() []Reason`; `(Config).String`, `GoString`, `LogValue` (the token printed as `<redacted>`); the refusals `serve: Deps.Registry, Deps.Published and Deps.Copies are required` and `serve: member serving URL %q is not http://host:port` (and `NewClient`'s `serve: a bearer token is required`); the endpoint's `400 member serving: acquire needs a database and a snapshot_id`, `400 member serving: lease_id is required`, `400 member serving: the body holds more than one JSON value`, `405 member serving: %s %s is not allowed; use %s`, `404 member serving: no route %s`; the log lines `member serving: database serving`, `member serving: database stopped serving`, `member serving: lease revoked; the host must release it before the database is installed`, `member serving: lease ended; installing`, `member serving: owner housegate probe failed`, `member serving: owner housegate reachable again`, `member serving: the latest published manifest is unavailable; no database is served`, `member serving: the latest published manifest is readable again`.
+- Produces (this task's own names, recorded in Appendix B as Facts F45.1–F45.14 below): `Deps.NodeID` (the view's `node_id`; §30.2 names no source for it); `Deps.StateDir` and `const LeaseFile = "serve-leases.json"` (F45.14, now in contract §30.2), with the unexported `leaseFileVersion`, `leaseFileContent`, `leaseRecord`, `lease.ttl`, `(*lease).record`, `Server.leaseFile`, `(*Server).restoreLeases`, `(*Server).recordLeasesLocked` and `writeLeaseFile`; the Go names of the reasons `ReasonOwnerAvailable`, `ReasonEntryUnconfirmed`, `ReasonCopyBehind`, `ReasonAuditUnclean`, `ReasonTableForeign`, `ReasonTableDiverged`, `ReasonTableExcluded`, `ReasonTableMissing`, `ReasonServingDisabled`, `ReasonFeedUnavailable`, `ReasonInstalling` and `func Reasons() []Reason`; `(Config).String`, `GoString`, `LogValue` (the token printed as `<redacted>`); the refusals `serve: Deps.Registry, Deps.Published and Deps.Copies are required`, `serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`, `serve: lease file %s: %v`, `serve: lease file %s has version %d, want 1`, `serve: lease file %s has a lease record without an id, a database or a ttl`, `serve: lease file %s lists database %s or lease %s twice`, the 500 `serve: record leases in %s: %v` of acquire and renew, and `serve: member serving URL %q is not http://host:port` (and `NewClient`'s `serve: a bearer token is required`); the endpoint's `400 member serving: acquire needs a database and a snapshot_id`, `400 member serving: lease_id is required`, `400 member serving: the body holds more than one JSON value`, `405 member serving: %s %s is not allowed; use %s`, `404 member serving: no route %s`; the log lines `member serving: database serving`, `member serving: database stopped serving`, `member serving: lease revoked; the host must release it before the database is installed`, `member serving: lease ended; installing`, `member serving: owner housegate probe failed`, `member serving: owner housegate reachable again`, `member serving: the latest published manifest is unavailable; no database is served`, `member serving: the latest published manifest is readable again`, `member serving: lease restored after a restart; revoked until the host releases it or it expires`, `member serving: the released lease stays recorded until it expires`.
 - Produces (package `member/install`): `Deps.AfterInstall func(owner uint64, database string)` (contract §30.6); `installGates.after`, `installGates.held` and `(*installGates).done()` (unexported).
 - Produces (package `member`): `Config.Serve *serve.Config`, `func (r *Role) ServeHandler() http.Handler`, `func (r *Role) Serving() serve.ServingView`, `func (r *Role) ServeMetrics() *serve.Metrics` (contract §30.6); unexported `serving`, `newServing(cfg Config, d Deps) (*serving, error)` (refusal `member: Config.Serve needs Deps.Client to read the published manifest`; every `serve.New` refusal returned as `member: <it>`), `(*Role).installHooks()`, `(*Role).attachServing(installJournal)`, `(*Role).runServing(ctx) error`, `installJournal`, `servedCopies`, `publishedFeed`, `servingManifestEntries = 2`; `publishedFeed` refusals `member serving: safe watermark: %w`, `member serving: the arbiter has published no manifest yet`, `member serving: manifest %s: %w`, `member serving: watermark names manifest_root %s, manifest %s has %s`, `member serving: manifest %s carries no track_frontiers`.
-- Produces (tests): contract §30.6's `TestServingRequiresTheOwnerQuarantinedOrUnreachable`, `TestServeStartsAfterTheOwnerIsUnreachableForTUnreach`, `TestServingRequiresTheEntryUnchangedOverTwoPolls`, `TestServingStopsWhenTheOwnerEntryAdvances`, `TestServingNeverStartsWithACopyBehindTheEntry`, `TestServingRefusesAForeignDivergedExcludedOrMissingTable`, `TestServingRequiresACleanAudit`, `TestServingIsOffWhenDisabled`, `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`, `TestHandlerRefusesAMissingOrWrongToken`, `TestClientRoundTripsTheServingView`, `TestNewRefusesABadConfig`, `TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros`, `TestServeHoldsInstallsOfAServedDatabase` (ClickHouse-gated), `TestInstallerWithoutAGateIsUnchanged` (`member/install`, ClickHouse-gated, F45.12), `TestRoleWiresServeIntoTheInstaller` (`member`); added here: `TestServingListsOnlyTheActiveIncarnations`, `TestBeforeInstallGivesUpWithItsContext`, `TestNewClientRefusesABadURLOrNoToken`, `TestConfigNeverPrintsItsToken` (`member/serve`), `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` (`member/install`, ClickHouse-gated), `TestServedCopiesReadTheInstallJournal`, `TestPublishedFeedReadsTheWatermarksManifestWithFrontiers` (`member`); test helpers `testToken`, `testOwner`, `testDatabase`, `entry40`, `entry41`, `ownerID`, `registrySnapshot`, `manifestAt`, `copyAt`, `fakeRegistry`, `fakePublished`, `fakeCopies`, `fakeDialer`, `errRefused`, `harness`, `testConfig`, `newHarness`, `advance`, `requireError`, `metricValues`, `requireMetrics`, `polledServer`, `requireCH`, `waitFor` (`member/serve`); `hookLog`, `newHookLog` (`member/install`); `serveTestRegistry`, `serveTestConn`, `serveTestJournal`, `newServeTestJournal`, `serveTestRole`, `serveTestWatermark`, `serveTestStore`, `serveIsMethodCall`, `serveIdentName`, `serveEntry0`, `serveEntry2` (`member`).
+- Produces (tests): contract §30.6's `TestServingRequiresTheOwnerQuarantinedOrUnreachable`, `TestServeStartsAfterTheOwnerIsUnreachableForTUnreach`, `TestServingRequiresTheEntryUnchangedOverTwoPolls`, `TestServingStopsWhenTheOwnerEntryAdvances`, `TestServingNeverStartsWithACopyBehindTheEntry`, `TestServingRefusesAForeignDivergedExcludedOrMissingTable`, `TestServingRequiresACleanAudit`, `TestServingIsOffWhenDisabled`, `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`, `TestHandlerRefusesAMissingOrWrongToken`, `TestClientRoundTripsTheServingView`, `TestNewRefusesABadConfig`, `TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros`, `TestServeHoldsInstallsOfAServedDatabase` (ClickHouse-gated), `TestInstallerWithoutAGateIsUnchanged` (`member/install`, ClickHouse-gated, F45.12), `TestRoleWiresServeIntoTheInstaller` (`member`); added here: `TestServingListsOnlyTheActiveIncarnations`, `TestBeforeInstallGivesUpWithItsContext`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed` (review round 1), `TestNewClientRefusesABadURLOrNoToken`, `TestConfigNeverPrintsItsToken` (`member/serve`), `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` (`member/install`, ClickHouse-gated), `TestServedCopiesReadTheInstallJournal`, `TestPublishedFeedReadsTheWatermarksManifestWithFrontiers` (`member`); test helpers `testToken`, `testOwner`, `testDatabase`, `entry40`, `entry41`, `ownerID`, `registrySnapshot`, `manifestAt`, `copyAt`, `fakeRegistry`, `fakePublished`, `fakeCopies`, `fakeDialer`, `errRefused`, `harness` (with `stateDir`, `stop`, `start` and `restart`), `testConfig`, `newHarness`, `advance`, `requireError`, `metricValues`, `requireMetrics`, `polledServer`, `requireCH`, `waitFor` (`member/serve`); `hookLog`, `newHookLog` (`member/install`); `serveTestRegistry`, `serveTestConn`, `serveTestJournal`, `newServeTestJournal`, `serveTestRole`, `serveTestWatermark`, `serveTestStore`, `serveIsMethodCall`, `serveIdentName`, `serveEntry0`, `serveEntry2` (`member`).
 - Produces (ledger): `CORE_TAG_P3` and the run record `arbiter-core release (Task 45)` in Appendix C of this plan (Step 30).
 - Consumed by: Task 46 (sentio-node; the host's lease client: `serve.NewClient`, `serve.Client`, `serve.Lease`, `ErrLeaseRevoked`, `ErrNotServed`, `ErrUnauthorized`, `serve.HostDeadlineMargin` and the view types; the `si-member` process: `serve.Config`, its defaults and minimums, `serve.DefaultListen`, `member.Config.Serve`, `Role.ServeHandler()`, `Role.ServeMetrics()`; its ClickHouse acceptance tests run a real `serve.Server` through `serve.New`, `serve.Deps`, `serve.DatabaseCopy`, `serve.TableCopy`, `serve.OwnerDatabase`, `serve.ConditionInstalled` and `serve.NewMetrics`), Plan S3-E1 (`serve.ServingView` gains `Consensus`), Plans S3-E4 and S3-F (`GET /v1/serving` through `si_member_serving`).
 
-Notes (Facts F45.1–F45.13 for Appendix B):
+Notes (Facts F45.1–F45.14 for Appendix B):
 - **F45.1 — The condition order.** Every poll evaluates each `(owner, database)` of `Copies.Databases()` and reports the first failing condition, in this order: `serving_disabled`; `installing`; `feed_unavailable` (the latest manifest could not be read in this poll, within `PollInterval`, or carries no entry of the owner); `owner_available`; `entry_unconfirmed`; `table_missing` (no copy of the database, or the database listed under two owners); `audit_unclean`; then, over the registry's Active incarnations of the database (`table_missing` when there is none, or when one of them belongs to another owner by `ManifestOwner`, all or nothing as the host answers it, K45): `table_foreign`, `table_diverged`, `table_excluded` (the copy of an Active incarnation at that seq has that condition), `copy_behind` (the owner's journal entry is not the published one), `table_missing` (an Active incarnation has no copy at its seq, or the copy's schema hash differs from the incarnation's or its name is not `sitable.CopyTable(id, seq)`). Contract §30.2's closed enum has no value for a duplicate listing or a mixed-owner database; both fail closed as `table_missing`. A disabled registry quarantines nobody and has no Active incarnation, so it reads `owner_available` unless `t_unreach` triggers, then `table_missing`.
 - **F45.2 — "Lists exactly the Active incarnations" (§30.2 condition 4).** The copies of incarnations that are not Active (a Pending table not yet in a table set, whose copy Task 30's copyset already keeps; a Retiring one before its copy is dropped; an older seq of an Active table) are neither served nor counted, whatever their condition, so a new table never interrupts the serving of its database. The view's `tables` lists exactly the Active incarnations, which is what the host requires (K45, contract §31.4): the host answers Replica only when the view matches the registry by seq, schema hash and copy name. A Genesis incarnation's registry `SchemaHash` is the genesis manifest's (arbiter `fsm/table_registry.go:261`), which is what Task 32's `TableState.SchemaHash` (`TableSchemaHash(NetworkID, schema)`) gives for a genesis copy, so genesis tables serve like chain ones.
 - **F45.3 — Two polls, and what resets them.** A database counts the consecutive polls that read the same owner entry; a poll whose manifest read fails, every poll while the database is installing, and `AfterInstall` reset the count to 0. So serving resumes only after two full polls since the install (contract §30.2), and after a feed failure only after two good polls (fail closed). A poll reads the registry, the manifest and the journal without the lock and applies them under it; a `BeforeInstall` or `AfterInstall` that ran in between (an epoch counter) makes that poll count as installing, so a stale journal read never confirms an entry. `FrozenSinceUnixMs` is the time of the first poll that read the owner's current entry (per owner, not reset by installs). With `Enabled` off a poll reads nothing from the arbiter, so a member whose serving is off costs no SafeState barrier (the agent window's `W-x-m` phase of Task 48).
-- **F45.4 — One lease per database.** `Acquire` succeeds only for a database the last poll found serving and only at its view's `SnapshotID`; it replaces any earlier lease of the database (a host that restarted lost its id). It is refused while installing, because `BeforeInstall` marks installing before it revokes, under the same lock. A revoked lease is never renewed (409) and still expires `LeaseTTL` after its last renew, so `BeforeInstall` waits at most one TTL. An unknown database answers 409 `member serving: database %s is not served: table_missing`. A pass that only moves an owner's journal to a later snapshot with the same entry (a carried track) changes no copy, calls no `BeforeInstall` and does not revoke: the view's `snapshot_id` moves while the lease stays held and renewable; a host that acquires again uses the new `snapshot_id` (Task 46).
+- **F45.4 — One lease per database.** `Acquire` succeeds only for a database the last poll found serving and only at its view's `SnapshotID`; it replaces any earlier lease of the database (a host that restarted lost its id), recording the new lease before it ends the old one. It is refused while installing, because `BeforeInstall` marks installing before it revokes, under the same lock. A revoked lease is never renewed (409) and still expires `LeaseTTL` after its last renew, so `BeforeInstall` waits at most one TTL. An unknown database answers 409 `member serving: database %s is not served: table_missing`. A pass that only moves an owner's journal to a later snapshot with the same entry (a carried track) changes no copy, calls no `BeforeInstall` and does not revoke: the view's `snapshot_id` moves while the lease stays held and renewable; a host that acquires again uses the new `snapshot_id` (Task 46).
 - **F45.5 — `BeforeInstall` and `AfterInstall` in the installer.** Task 32's `installGates.check` calls `BeforeInstall` at most once per database and pass, right before the first statement that changes a copy of it, in an owner's install pass (`applyOwner`) and in an audit of a copy (`auditCopy`, the equal-hash twin `DROP PART`). This task adds `installGates.done`, deferred where the gates are created, which calls `AfterInstall` once for every database whose `BeforeInstall` returned nil: after the owner's journal write (`return i.journalOwner(...)` runs before the deferred call), or once the pass failed. A failed pass after an `ATTACH` leaves unjournaled parts (`TableState.Diverged`), so the database answers `table_diverged` and is not served; a database whose `BeforeInstall` failed was never held and is not paired. Nothing waits when both seams are nil (P2). The audit's twin drops are held too, so a host never reads twins disappear under a lease.
-- **F45.6 — `BeforeInstall` itself.** It returns at once without a lease; with one it waits for the release or the expiry and counts the wait in `lease_waits_total{outcome}`; on `ctx`'s error it clears installing again (no lease is outstanding then, since it was revoked), and serving may resume after two polls.
-- **F45.7 — `ConditionExcluded` in P3.** S3-C2's journal has no exclusion; `servedCopies` marks a table excluded when its journal (`TableState.SnapshotID`, `Entry`) is not at its owner's journal entry, that is a ready copy not installed yet, which is the P5 meaning of a checkpoint's `excluded` (spec §9.1; Plan S3-E1's `ExclusionNotInstalled`). Foreign takes precedence over Diverged. `AuditClean` is the installer's (the startup and restart audits and the self-audit). An owner without a journal entry has no copy (`table_missing`).
+- **F45.6 — `BeforeInstall` itself.** It returns at once without a lease; with one it waits for the release or the expiry and counts the wait in `lease_waits_total{outcome}`; on `ctx`'s error it clears installing again (no lease is outstanding then, since it was revoked), and serving may resume after two polls. A lease restored after a restart (F45.14) is a lease here: an install waits for it the same way.
+- **F45.14 — Leases survive a restart (review round 1).** `serve.New` builds the lease tables empty, so a crashed and restarted si-member used to find no lease and install at once while its host, a separate process, still answered the database Replica from its old snapshot until its next successful poll or its lease deadline (the member's endpoint is down while it restarts). Every lease is therefore recorded in `serve.LeaseFile` (`serve-leases.json`) in `Deps.StateDir` (the member's state directory, a persistent volume; `member.newServing` passes `Config.StateDir`) before a grant or a renew is answered: id, database, owner, last renew in unix nanoseconds and the TTL it was granted with, written atomically as the install journal is (temp file, `Sync`, rename, directory `Sync`), under `mu`. A grant or renew that cannot be recorded is refused with 500 `serve: record leases in <path>: <error>` and changes nothing (the host's renew then fails, so it serves only until its deadline, which the recorded expiry covers); a release that cannot be recorded leaves the lease in the file until it expires, which only makes a restart wait longer. `New` restores every recorded lease that has not expired, revoked: its renew answers 409, the host drops it at its next poll (the view does not serve the database for two polls) and releases it once its reads drained, and an install waits for that release or the expiry exactly as before the restart. An unreadable record fails `New` (`serve: lease file <path>: <error>`, a version other than 1, or a record without an id, a database or a TTL), since the member cannot tell which leases its host still holds. `Deps.StateDir` is required (`serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`). Tests: `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted` (a host that releases, a host that stays silent, and a lease past its expiry not restored), `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed` (the record, a blocked file refusing grant and renew with 500, unreadable files refused by `New`).
+- **F45.7 — `ConditionExcluded` in P3.** S3-C2's journal has no exclusion; `servedCopies` marks a table excluded when its journal (`TableState.SnapshotID`, `Entry`) is not at its owner's journal entry, that is a ready copy not installed yet, which is the P5 meaning of a checkpoint's `excluded` (spec §9.1; Plan S3-E1's `ExclusionNotInstalled`). Foreign takes precedence over Diverged. `AuditClean` is the installer's (the startup and restart audits and the self-audit). Since S3-C2's review fix 245-1, a ready copy that no audit covered since the start or the last ClickHouse restart (one the copyset made ready after that audit) is `TableState.Diverged` and keeps `Stats.AuditClean` false until `Apply` audits it, so the view reports `audit_unclean` (the table `diverged`) until then; nothing here changes for it. An owner without a journal entry has no copy (`table_missing`).
 - **F45.8 — `publishedFeed` has its own two-entry `manifestfeed.Store`.** Each poll reads `GetSafeWatermark` from the arbiter and the manifest through the store, which fetches by snapshot id and keeps only manifests `manifestfeed.Verify` accepted (requested id, its own root, the partition ledger); it then requires the watermark's `ManifestRoot` and `track_frontiers` (K37). A separate store keeps the role's feed untouched.
 - **F45.9 — `Deps.NodeID`.** §30.3's view has `node_id`, but §30.2's `Config` and `Deps` carry no node id; `Deps.NodeID` is added, filled by `newServing` from `member.Config.NodeID`.
 - **F45.10 — Renew's 404.** Contract §31.5 says the host counts a lease `expired` "when the member answered 404", but §30.3 answers release with 200 for an unknown id; the 404 is renew's (`member serving: unknown lease %s`). `Client.Renew` wraps `ErrLeaseRevoked` for the 409 and for the 404, each with the member's text, so the host stops serving on either; contract §30.4 has no error that tells them apart and this task adds none. Task 46 tells an expired lease from a revoked one by the serving view instead: a lease has expired on the member exactly when the view of its database no longer lists it (its Appendix B, "`expired` without a 404"). `Release` never fails for an unknown id.
@@ -9078,6 +9437,11 @@ type harness struct {
 	copies  *fakeCopies
 	dialer  *fakeDialer
 	metrics *Metrics
+	// stateDir is the member's state directory, where the server records
+	// its leases; restart builds the next server on the same one.
+	stateDir string
+	// stop ends the current server's Run.
+	stop context.CancelFunc
 }
 
 // testConfig is serving on, the test token, polls every second.
@@ -9093,6 +9457,7 @@ func newHarness(t *testing.T, cfg Config, setup ...func(*harness)) *harness {
 	h := &harness{
 		t: t, reg: &fakeRegistry{}, pub: &fakePublished{}, dialer: &fakeDialer{},
 		copies: &fakeCopies{copies: map[OwnerDatabase]DatabaseCopy{}}, metrics: NewMetrics(),
+		stateDir: t.TempDir(),
 	}
 	h.reg.set(registrySnapshot(testOwner))
 	h.pub.set(manifestAt("0xs40", entry40), nil)
@@ -9100,17 +9465,37 @@ func newHarness(t *testing.T, cfg Config, setup ...func(*harness)) *harness {
 	for _, f := range setup {
 		f(h)
 	}
+	h.start(cfg)
+	return h
+}
+
+// start builds a server on the harness's ports and state directory and runs
+// it until restart or the end of the test.
+func (h *harness) start(cfg Config) {
+	h.t.Helper()
 	srv, err := New(cfg, Deps{
 		Registry: h.reg, Published: h.pub, Copies: h.copies, Dial: h.dialer.Dial,
 		Metrics: h.metrics, Logger: slog.New(slog.DiscardHandler), NodeID: "member-b",
+		StateDir: h.stateDir,
 	})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		h.t.Fatalf("New: %v", err)
 	}
-	h.srv = srv
-	go func() { _ = srv.Run(t.Context()) }()
+	ctx, stop := context.WithCancel(h.t.Context())
+	h.srv, h.stop = srv, stop
+	go func() { _ = srv.Run(ctx) }()
 	synctest.Wait()
-	return h
+}
+
+// restart stops the server as a crash would, losing everything it held in
+// memory, and starts a new one on the same state directory: the si-member
+// process restarting while its host keeps its lease.
+func (h *harness) restart(cfg Config) {
+	h.t.Helper()
+	h.stop()
+	synctest.Wait()
+	h.metrics = NewMetrics()
+	h.start(cfg)
 }
 
 // advance moves the bubble's clock by d and lets every goroutine settle.
@@ -9611,8 +9996,12 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -9854,6 +10243,186 @@ func TestBeforeInstallGivesUpWithItsContext(t *testing.T) {
 		}
 	})
 }
+
+// TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted is
+// clarification K44 across a restart of the si-member: its host keeps the
+// lease the previous process granted and may still answer the database
+// Replica. The new process reads the lease back from its state directory,
+// revoked, so an install of the database (the startup audit's included)
+// waits for the host's release or the lease's expiry instead of returning at
+// once, and a renew of the restored lease answers 409.
+func TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted(t *testing.T) {
+	t.Run("the host releases", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			h := newHarness(t, testConfig())
+			advance(time.Second)
+			id := h.acquire("0xs40")
+			advance(2 * time.Second)
+			h.restart(testConfig())
+			h.requireReason(ReasonEntryUnconfirmed)
+			if l := h.database().Lease; l == nil || *l != (LeaseView{LeaseID: id, State: "revoking", RemainingMs: 28000}) {
+				t.Fatalf("lease view after the restart %+v, want %s revoking with 28000ms left", l, id)
+			}
+			status, out := h.renew(id)
+			requireError(t, status, out, http.StatusConflict, "member serving: lease "+id+" is revoked")
+			done := make(chan error, 1)
+			go func() { done <- h.srv.BeforeInstall(t.Context(), testOwner, testDatabase) }()
+			advance(5 * time.Second)
+			select {
+			case err := <-done:
+				t.Fatalf("BeforeInstall returned %v after the restart while the host holds the lease", err)
+			default:
+			}
+			h.release(id)
+			synctest.Wait()
+			if err := <-done; err != nil {
+				t.Fatalf("BeforeInstall: %v", err)
+			}
+			requireMetrics(t, h.metrics, map[string]float64{
+				"sentio_node_si_member_serve_lease_waits_total{outcome=released}": 1,
+				"sentio_node_si_member_serve_lease_waits_total{outcome=expired}":  0,
+			})
+			h.srv.AfterInstall(testOwner, testDatabase)
+		})
+	})
+	t.Run("the host is silent", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			h := newHarness(t, testConfig())
+			advance(time.Second)
+			id := h.acquire("0xs40")
+			advance(4 * time.Second)
+			if status, _ := h.renew(id); status != http.StatusOK {
+				t.Fatalf("renew: %d", status)
+			}
+			renewed := time.Now()
+			advance(3 * time.Second)
+			h.restart(testConfig())
+			done := make(chan time.Time, 1)
+			go func() {
+				if err := h.srv.BeforeInstall(t.Context(), testOwner, testDatabase); err != nil {
+					t.Errorf("BeforeInstall: %v", err)
+				}
+				done <- time.Now()
+			}()
+			advance(renewed.Add(DefaultLeaseTTL).Sub(time.Now()) - 500*time.Millisecond)
+			select {
+			case at := <-done:
+				t.Fatalf("BeforeInstall returned %s after the last renew, before the restored lease expired", at.Sub(renewed))
+			default:
+			}
+			advance(time.Second)
+			select {
+			case at := <-done:
+				if at.Sub(renewed) != DefaultLeaseTTL {
+					t.Fatalf("BeforeInstall returned %s after the last renew, want exactly the lease ttl %s", at.Sub(renewed), DefaultLeaseTTL)
+				}
+			default:
+				t.Fatal("BeforeInstall still waits after the restored lease expired")
+			}
+			requireMetrics(t, h.metrics, map[string]float64{
+				"sentio_node_si_member_serve_lease_waits_total{outcome=expired}": 1,
+			})
+			h.srv.AfterInstall(testOwner, testDatabase)
+			// A lease past its expiry is not restored again.
+			h.restart(testConfig())
+			before := time.Now()
+			if err := h.srv.BeforeInstall(t.Context(), testOwner, testDatabase); err != nil || time.Since(before) != 0 {
+				t.Fatalf("BeforeInstall after the lease expired: %v after %s", err, time.Since(before))
+			}
+			h.srv.AfterInstall(testOwner, testDatabase)
+		})
+	})
+}
+
+// TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed: the server writes every
+// lease to LeaseFile in its state directory before it answers a grant or a
+// renew, and drops it there on release. A grant or a renew it cannot record
+// is refused with 500 and changes nothing, and New refuses a lease file it
+// cannot read, since it could not tell which leases a host still holds.
+func TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := newHarness(t, testConfig())
+		advance(time.Second)
+		path := filepath.Join(h.stateDir, LeaseFile)
+		recorded := func() []leaseRecord {
+			t.Helper()
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read the lease file: %v", err)
+			}
+			var f leaseFileContent
+			if err := json.Unmarshal(b, &f); err != nil || f.Version != 1 {
+				t.Fatalf("lease file %s: %v", b, err)
+			}
+			return f.Leases
+		}
+		id := h.acquire("0xs40")
+		if got := recorded(); len(got) != 1 || got[0] != (leaseRecord{LeaseID: id, Database: testDatabase, Owner: testOwner, RenewedUnixNano: time.Now().UnixNano(), TTLMs: 30000}) {
+			t.Fatalf("recorded %+v, want the granted lease", got)
+		}
+		advance(10 * time.Second)
+		if status, _ := h.renew(id); status != http.StatusOK {
+			t.Fatalf("renew: %d", status)
+		}
+		if got := recorded(); len(got) != 1 || got[0].RenewedUnixNano != time.Now().UnixNano() {
+			t.Fatalf("recorded %+v, want the renew's time", got)
+		}
+
+		// A lease file the server cannot replace refuses the renew and the
+		// grant, and changes neither.
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(path, "blocked"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cannotRecord := "serve: record leases in " + path + ": "
+		advance(5 * time.Second)
+		status, out := h.renew(id)
+		if msg, _ := out["error"].(string); status != http.StatusInternalServerError || !strings.HasPrefix(msg, cannotRecord) {
+			t.Fatalf("renew with an unwritable lease file: %d %v, want 500 %q...", status, out, cannotRecord)
+		}
+		if l := h.database().Lease; l == nil || l.RemainingMs != 25000 {
+			t.Fatalf("lease view %+v, want the renew not applied (25000ms left)", l)
+		}
+		h.release(id)
+		status, out = h.call(http.MethodPost, "/v1/serving/acquire", `{"database":"dex","snapshot_id":"0xs40"}`)
+		if msg, _ := out["error"].(string); status != http.StatusInternalServerError || !strings.HasPrefix(msg, cannotRecord) {
+			t.Fatalf("acquire with an unwritable lease file: %d %v, want 500 %q...", status, out, cannotRecord)
+		}
+		if l := h.database().Lease; l != nil {
+			t.Fatalf("a grant that was not recorded left lease %+v", l)
+		}
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+		next := h.acquire("0xs40")
+		if got := recorded(); len(got) != 1 || got[0].LeaseID != next {
+			t.Fatalf("recorded %+v, want only %s", got, next)
+		}
+		h.release(next)
+		if got := recorded(); len(got) != 0 {
+			t.Fatalf("recorded %+v after the release, want none", got)
+		}
+
+		// New refuses a lease file it cannot read.
+		for content, want := range map[string]string{
+			"{":                           "serve: lease file %s: unexpected EOF",
+			`{"version":2,"leases":[]}`:   "serve: lease file %s has version 2, want 1",
+			`{"version":1,"leases":[{}]}`: "serve: lease file %s has a lease record without an id, a database or a ttl",
+		} {
+			dir := t.TempDir()
+			bad := filepath.Join(dir, LeaseFile)
+			if err := os.WriteFile(bad, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := New(testConfig(), Deps{Registry: h.reg, Published: h.pub, Copies: h.copies, StateDir: dir})
+			if err == nil || err.Error() != strings.ReplaceAll(want, "%s", bad) {
+				t.Fatalf("New with lease file %q: %v, want %s", content, err, strings.ReplaceAll(want, "%s", bad))
+			}
+		}
+	})
+}
 ```
 
 Create `member/serve/handler_test.go`:
@@ -9940,7 +10509,7 @@ import (
 // TestNewRefusesABadConfig: New refuses each bad value with contract §30.2's
 // text, and fills the defaults.
 func TestNewRefusesABadConfig(t *testing.T) {
-	deps := Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}}
+	deps := Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}, StateDir: t.TempDir()}
 	cases := []struct {
 		name string
 		cfg  Config
@@ -9958,6 +10527,7 @@ func TestNewRefusesABadConfig(t *testing.T) {
 		{"port 0", Config{Token: testToken, OwnerHouseGate: map[uint64]string{3: "c:0"}}, nil, `serve: owner 3 housegate address "c:0" is not host:port`},
 		{"a named port", Config{Token: testToken, OwnerHouseGate: map[uint64]string{4: "c:http"}}, nil, `serve: owner 4 housegate address "c:http" is not host:port`},
 		{"no ports", Config{Token: testToken}, &Deps{}, "serve: Deps.Registry, Deps.Published and Deps.Copies are required"},
+		{"no state directory", Config{Token: testToken}, &Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}}, "serve: Deps.StateDir is required: the server records its leases there before it grants or renews one"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -10016,7 +10586,7 @@ func TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros(t *testing.T
 	m := NewMetrics()
 	cfg := testConfig()
 	cfg.OwnerHouseGate = map[uint64]string{0: "sentio-node-devnet2-indexer-a:32001", 2: "sentio-node-devnet2-indexer-c:34001"}
-	if _, err := New(cfg, Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}, Metrics: m}); err != nil {
+	if _, err := New(cfg, Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}, Metrics: m, StateDir: t.TempDir()}); err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	want := map[string]float64{
@@ -10090,6 +10660,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -10249,6 +10820,11 @@ type Deps struct {
 	Metrics *Metrics
 	// Logger receives serving transitions; nil is slog.Default().
 	Logger *slog.Logger
+	// StateDir is the member's state directory (member.Config.StateDir). The
+	// server records every lease it holds in its LeaseFile before it grants
+	// or renews one, and New reads the leases back, so a restarted member
+	// never installs under a lease its previous process granted (K44).
+	StateDir string
 	// NodeID is the member's node id, answered as ServingView.NodeID.
 	NodeID string
 }
@@ -10323,6 +10899,8 @@ type Server struct {
 	metrics *Metrics
 	logger  *slog.Logger
 	nodeID  string
+	// leaseFile is LeaseFile in Deps.StateDir.
+	leaseFile string
 
 	// mu guards everything below. It is never held across a call of a port
 	// or a wait.
@@ -10344,10 +10922,14 @@ func New(cfg Config, deps Deps) (*Server, error) {
 	if deps.Registry == nil || deps.Published == nil || deps.Copies == nil {
 		return nil, errors.New("serve: Deps.Registry, Deps.Published and Deps.Copies are required")
 	}
+	if deps.StateDir == "" {
+		return nil, errors.New("serve: Deps.StateDir is required: the server records its leases there before it grants or renews one")
+	}
 	s := &Server{
 		cfg: cfg, reg: deps.Registry, pub: deps.Published, copies: deps.Copies,
 		dial: deps.Dial, now: deps.Now, metrics: deps.Metrics, logger: deps.Logger, nodeID: deps.NodeID,
-		dbs: map[OwnerDatabase]*dbState{}, owners: map[uint64]*ownerState{},
+		leaseFile: filepath.Join(deps.StateDir, LeaseFile),
+		dbs:       map[OwnerDatabase]*dbState{}, owners: map[uint64]*ownerState{},
 		leases: map[string]*lease{}, byID: map[string]*lease{},
 	}
 	if s.dial == nil {
@@ -10365,6 +10947,9 @@ func New(cfg Config, deps Deps) (*Server, error) {
 	for owner, addr := range cfg.OwnerHouseGate {
 		s.owners[owner] = &ownerState{addr: addr}
 		s.metrics.ownerUnreachable.WithLabelValues(strconv.FormatUint(owner, 10)).Set(0)
+	}
+	if err := s.restoreLeases(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -10821,7 +11406,7 @@ func (s *Server) viewLocked(now time.Time) ServingView {
 			}
 		}
 		if l := s.leases[key.Database]; l != nil && l.owner == key.Owner {
-			dv.Lease = l.view(now, s.cfg.LeaseTTL)
+			dv.Lease = l.view(now)
 		}
 		view.Databases = append(view.Databases, dv)
 	}
@@ -10837,26 +11422,60 @@ Create `member/serve/lease.go`:
 package serve
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
 // A lease lets the host answer one database Replica. A database has at most
-// one; it expires LeaseTTL after its grant or last renew, and once revoked it
+// one; it expires its ttl after its grant or last renew, and once revoked it
 // can no longer be renewed.
 type lease struct {
 	id        string
 	database  string
 	owner     uint64
-	renewed   time.Time // grant or last renew
+	renewed   time.Time     // grant or last renew
+	ttl       time.Duration // the LeaseTTL it was granted with
 	revoked   bool
 	revokedAt time.Time
 	done      chan struct{} // closed when the lease ends
 	ended     string        // waitReleased or waitExpired once done is closed
+}
+
+// LeaseFile is the file in Deps.StateDir where the server records every
+// lease it holds, before it grants or renews one (clarification K44). A
+// member that restarts reads it back, so it never installs a database under
+// a lease its previous process granted and its host still holds.
+const LeaseFile = "serve-leases.json"
+
+// leaseFileVersion is the only LeaseFile version this package reads and
+// writes.
+const leaseFileVersion = 1
+
+// leaseFileContent is LeaseFile's JSON.
+type leaseFileContent struct {
+	Version int           `json:"version"`
+	Leases  []leaseRecord `json:"leases"`
+}
+
+// leaseRecord is one recorded lease: its expiry is RenewedUnixNano plus
+// TTLMs, on the member's clock.
+type leaseRecord struct {
+	LeaseID         string `json:"lease_id"`
+	Database        string `json:"database"`
+	Owner           uint64 `json:"owner"`
+	RenewedUnixNano int64  `json:"renewed_unix_nano"`
+	TTLMs           int64  `json:"ttl_ms"`
 }
 
 // The outcomes of a lease wait, the metric label outcome.
@@ -10865,14 +11484,127 @@ const (
 	waitExpired  = "expired"
 )
 
-func (l *lease) expiresAt(ttl time.Duration) time.Time { return l.renewed.Add(ttl) }
+func (l *lease) expiresAt() time.Time { return l.renewed.Add(l.ttl) }
 
-func (l *lease) view(now time.Time, ttl time.Duration) *LeaseView {
+func (l *lease) view(now time.Time) *LeaseView {
 	state := "held"
 	if l.revoked {
 		state = "revoking"
 	}
-	return &LeaseView{LeaseID: l.id, State: state, RemainingMs: max(l.expiresAt(ttl).Sub(now), 0).Milliseconds()}
+	return &LeaseView{LeaseID: l.id, State: state, RemainingMs: max(l.expiresAt().Sub(now), 0).Milliseconds()}
+}
+
+func (l *lease) record(renewed time.Time) leaseRecord {
+	return leaseRecord{LeaseID: l.id, Database: l.database, Owner: l.owner, RenewedUnixNano: renewed.UnixNano(), TTLMs: l.ttl.Milliseconds()}
+}
+
+// restoreLeases reads LeaseFile back when New runs after a restart. Every
+// lease the previous process recorded that has not expired is restored
+// revoked: its database serves again only after two polls of this process,
+// so the lease is never renewed, and BeforeInstall waits for its release or
+// its expiry exactly as the previous process would have. A missing file
+// holds no lease. A file New cannot read fails New, since the member could
+// not tell which leases its host still holds.
+func (s *Server) restoreLeases() error {
+	b, err := os.ReadFile(s.leaseFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("serve: lease file %s: %w", s.leaseFile, err)
+	}
+	var f leaseFileContent
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&f); err != nil {
+		return fmt.Errorf("serve: lease file %s: %w", s.leaseFile, err)
+	}
+	if f.Version != leaseFileVersion {
+		return fmt.Errorf("serve: lease file %s has version %d, want %d", s.leaseFile, f.Version, leaseFileVersion)
+	}
+	now := s.now()
+	for _, r := range f.Leases {
+		if r.LeaseID == "" || r.Database == "" || r.TTLMs <= 0 {
+			return fmt.Errorf("serve: lease file %s has a lease record without an id, a database or a ttl", s.leaseFile)
+		}
+		if s.leases[r.Database] != nil || s.byID[r.LeaseID] != nil {
+			return fmt.Errorf("serve: lease file %s lists database %s or lease %s twice", s.leaseFile, r.Database, r.LeaseID)
+		}
+		l := &lease{
+			id: r.LeaseID, database: r.Database, owner: r.Owner,
+			renewed: time.Unix(0, r.RenewedUnixNano), ttl: time.Duration(r.TTLMs) * time.Millisecond,
+			revoked: true, revokedAt: now, done: make(chan struct{}),
+		}
+		if !now.Before(l.expiresAt()) {
+			continue
+		}
+		s.leases[l.database], s.byID[l.id] = l, l
+		s.logger.Info("member serving: lease restored after a restart; revoked until the host releases it or it expires",
+			"database", l.database, "owner", l.owner, "remaining", l.expiresAt().Sub(now))
+	}
+	return nil
+}
+
+// recordLeasesLocked replaces LeaseFile with the leases of byID as they are
+// once the change about to be applied is: without drop, with add, and with
+// renewed as the last renew of renewing. It runs under mu, before the change
+// is applied, so the file always lists every lease a host may hold; the file
+// is small and local, the one blocking call mu is held across.
+func (s *Server) recordLeasesLocked(drop, add, renewing *lease, renewed time.Time) error {
+	f := leaseFileContent{Version: leaseFileVersion, Leases: []leaseRecord{}}
+	for _, l := range s.byID {
+		switch l {
+		case drop:
+		case renewing:
+			f.Leases = append(f.Leases, l.record(renewed))
+		default:
+			f.Leases = append(f.Leases, l.record(l.renewed))
+		}
+	}
+	if add != nil {
+		f.Leases = append(f.Leases, add.record(add.renewed))
+	}
+	slices.SortFunc(f.Leases, func(a, b leaseRecord) int { return strings.Compare(a.LeaseID, b.LeaseID) })
+	if err := writeLeaseFile(s.leaseFile, f); err != nil {
+		return fmt.Errorf("serve: record leases in %s: %w", s.leaseFile, err)
+	}
+	return nil
+}
+
+// writeLeaseFile replaces path atomically: a temp file in the same directory,
+// Sync, rename, directory Sync (the pattern of the install journal), so a
+// crash leaves either the old or the new record.
+func writeLeaseFile(path string, f leaseFileContent) error {
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".serve-leases-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }
 
 // newLeaseID is 128 random bits in hex.
@@ -10898,7 +11630,7 @@ var (
 // sweepLocked ends every lease whose expiry has passed.
 func (s *Server) sweepLocked(now time.Time) {
 	for _, l := range s.byID {
-		if !now.Before(l.expiresAt(s.cfg.LeaseTTL)) {
+		if !now.Before(l.expiresAt()) {
 			s.endLocked(l, waitExpired)
 		}
 	}
@@ -10952,10 +11684,14 @@ func (s *Server) acquire(database, snapshotID string) (*lease, error) {
 	if err != nil {
 		return nil, err
 	}
-	if old := s.leases[database]; old != nil {
+	l := &lease{id: id, database: database, owner: found.key.Owner, renewed: now, ttl: s.cfg.LeaseTTL, done: make(chan struct{})}
+	old := s.leases[database]
+	if err := s.recordLeasesLocked(old, l, nil, time.Time{}); err != nil {
+		return nil, err
+	}
+	if old != nil {
 		s.endLocked(old, waitReleased)
 	}
-	l := &lease{id: id, database: database, owner: found.key.Owner, renewed: now, done: make(chan struct{})}
 	s.leases[database], s.byID[id] = l, l
 	s.updateMetricsLocked(now)
 	return l, nil
@@ -10973,6 +11709,9 @@ func (s *Server) renew(id string) error {
 	case l.revoked:
 		return errRevokedLease
 	}
+	if err := s.recordLeasesLocked(nil, nil, l, now); err != nil {
+		return err
+	}
 	l.renewed = now
 	return nil
 }
@@ -10981,10 +11720,18 @@ func (s *Server) release(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if l := s.byID[id]; l != nil {
+	l := s.byID[id]
+	if l != nil {
 		s.endLocked(l, waitReleased)
 	}
 	s.sweepLocked(now)
+	if l != nil {
+		// A release the file misses only makes a restart wait for the
+		// lease's expiry instead.
+		if err := s.recordLeasesLocked(nil, nil, nil, time.Time{}); err != nil {
+			s.logger.Warn("member serving: the released lease stays recorded until it expires", "database", l.database, "error", err)
+		}
+	}
 	s.updateMetricsLocked(now)
 }
 
@@ -11017,7 +11764,7 @@ func (s *Server) BeforeInstall(ctx context.Context, owner uint64, database strin
 
 	for {
 		s.mu.Lock()
-		wait := l.expiresAt(s.cfg.LeaseTTL).Sub(s.now())
+		wait := l.expiresAt().Sub(s.now())
 		s.mu.Unlock()
 		timer := time.NewTimer(max(wait, 0))
 		select {
@@ -11378,6 +12125,8 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("member serving: unknown lease %s", id))
 	case errors.Is(err, errRevokedLease):
 		writeError(w, http.StatusConflict, fmt.Sprintf("member serving: lease %s is revoked", id))
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
 		writeJSON(w, http.StatusOK, renewResponse{TTLMs: s.cfg.LeaseTTL.Milliseconds()})
 	}
@@ -11492,7 +12241,7 @@ func polledServer(t *testing.T) (*Server, *httptest.Server) {
 	reg.set(registrySnapshot(testOwner))
 	pub.set(manifestAt("0xs40", entry40), nil)
 	copies.set(testOwner, testDatabase, copyAt("0xs40", entry40))
-	srv, err := New(testConfig(), Deps{Registry: reg, Published: pub, Copies: copies, Logger: slog.New(slog.DiscardHandler), NodeID: "member-b"})
+	srv, err := New(testConfig(), Deps{Registry: reg, Published: pub, Copies: copies, Logger: slog.New(slog.DiscardHandler), NodeID: "member-b", StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -11952,7 +12701,7 @@ func TestServeHoldsInstallsOfAServedDatabase(t *testing.T) {
 	metrics := NewMetrics()
 	cfg := testConfig()
 	cfg.PollInterval, cfg.LeaseTTL = 100*time.Millisecond, MinLeaseTTL
-	srv, err := New(cfg, Deps{Registry: reg, Published: pub, Copies: copies, Metrics: metrics, Logger: slog.New(slog.DiscardHandler), NodeID: "member-b"})
+	srv, err := New(cfg, Deps{Registry: reg, Published: pub, Copies: copies, Metrics: metrics, Logger: slog.New(slog.DiscardHandler), NodeID: "member-b", StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -12937,6 +13686,7 @@ func newServing(cfg Config, d Deps) (*serving, error) {
 		Metrics:   metrics,
 		Logger:    d.Logger,
 		NodeID:    cfg.NodeID,
+		StateDir:  cfg.StateDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("member: %w", err)
@@ -13293,7 +14043,7 @@ section = """### Member serving (stage 3 P3)
 - O's entry has been the same over two polls, counted again from zero after every install (`entry_unconfirmed`);
 - the audits are clean (`audit_unclean`), the copy of every Active incarnation of the database is installed (`table_foreign`, `table_diverged`, `table_excluded`), the copy is at O's entry (`copy_behind`), and the copies are exactly the registry's Active incarnations of the database, all of O, with their seq, schema hash and `sitable.CopyTable` name (`table_missing`).
 
-The host takes one lease per served database through the endpoint the si-member process mounts (`DefaultListen` `:9096`): `GET /v1/serving` (the `ServingView`), `POST /v1/serving/acquire` (`{"database","snapshot_id"}` at the view's snapshot), `POST /v1/serving/renew` and `POST /v1/serving/release` (`{"lease_id"}`), each with `Authorization: Bearer <token>` (401 otherwise); `serve.Client` is the host's side. A lease expires `LeaseTTL` (30 s, at least 10 s) after its grant or last renew, and a database that stops serving revokes it: renew then answers 409. The installer calls `BeforeInstall` before it changes any copy of a database, which stops serving, revokes the lease and waits until the host released it or it expired, and `AfterInstall` once the owner's journal records the pass, so a host never reads a copy while it changes. The series `sentio_node_si_member_serve_databases{state}`, `sentio_node_si_member_serve_not_serving{reason}`, `sentio_node_si_member_serve_owner_unreachable{owner}`, `sentio_node_si_member_serve_lease_waits_total{outcome}` and `sentio_node_si_member_serve_revoking_seconds` are exported from startup, zeros included (`Role.ServeMetrics`).
+The host takes one lease per served database through the endpoint the si-member process mounts (`DefaultListen` `:9096`): `GET /v1/serving` (the `ServingView`), `POST /v1/serving/acquire` (`{"database","snapshot_id"}` at the view's snapshot), `POST /v1/serving/renew` and `POST /v1/serving/release` (`{"lease_id"}`), each with `Authorization: Bearer <token>` (401 otherwise); `serve.Client` is the host's side. A lease expires `LeaseTTL` (30 s, at least 10 s) after its grant or last renew, and a database that stops serving revokes it: renew then answers 409. The installer calls `BeforeInstall` before it changes any copy of a database, which stops serving, revokes the lease and waits until the host released it or it expired, and `AfterInstall` once the owner's journal records the pass, so a host never reads a copy while it changes. The server records every lease in `serve-leases.json` (`serve.LeaseFile`) in the member's state directory before it grants or renews one (500 if it cannot); a member that restarts restores the leases that have not expired, revoked, so its installs of their databases, the startup audit's included, wait for the host's release or the expiry as before the restart, and an unreadable record fails startup. The series `sentio_node_si_member_serve_databases{state}`, `sentio_node_si_member_serve_not_serving{reason}`, `sentio_node_si_member_serve_owner_unreachable{owner}`, `sentio_node_si_member_serve_lease_waits_total{outcome}` and `sentio_node_si_member_serve_revoking_seconds` are exported from startup, zeros included (`Role.ServeMetrics`).
 
 `TestServeHoldsInstallsOfAServedDatabase` runs the lease protocol against ClickHouse with the other ClickHouse-gated tests (`ARBITER_CH_INTEGRATION=1`, `CH_ADDR`, target `//member/serve:serve_test`).
 
@@ -13504,13 +14254,13 @@ Nothing changes until it is configured (contract §29 "Inert by default"): witho
 - Consumes (`CORE_TAG_P3`, contract §30, verbatim): package `github.com/sentioxyz/arbiter-core/member/serve` (Bazel `@arbiter_core//member/serve`): `type Config struct{ Enabled bool; Token string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL, PollInterval time.Duration; OwnerHouseGate map[uint64]string }`, `DefaultOwnerUnreachableAfter`, `MinOwnerUnreachableAfter`, `DefaultOwnerProbeInterval`, `DefaultLeaseTTL`, `MinLeaseTTL`, `HostDeadlineMargin` (3 s), `DefaultListen` (`":9096"`); `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial …; Now func() time.Time; Metrics *Metrics; Logger *slog.Logger }` (Task 45 also gives it `NodeID string`, answered as `ServingView.NodeID`; the acceptance leaves it empty), `Published`, `Copies`, `OwnerDatabase`, `DatabaseCopy`, `TableCopy`, `TableCondition` with `ConditionInstalled`, `type Reason string` (the closed set of §30.2, used here only as string values), `func New(cfg Config, deps Deps) (*Server, error)`, `(*Server).Run`, `Handler`, `Serving`; `ServingView`, `DatabaseView`, `ServedTable`, `LeaseView` with the JSON tags of §30.3; `func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error)`, `(*Client).Serving`, `Acquire`, `Renew`, `Release`, `type Lease struct{ ID string; TTL time.Duration }`, `ErrLeaseRevoked`, `ErrNotServed`, `ErrUnauthorized`; `func NewMetrics() *Metrics`, `(*Metrics).Register(prometheus.Registerer) error` (series `sentio_node_si_member_serve_*`). Package `member`: `Config.Serve *serve.Config`, `(*Role).ServeHandler() http.Handler`, `Serving() serve.ServingView`, `ServeMetrics() *serve.Metrics` (nil handler and nil metrics without `Config.Serve`). `CORE_TAG_P3`'s `go.mod` requires housegate `HG_TAG_P1` and arbiter-proto `PROTO_TAG` (contract §30.1), and `TestHandlePromote_PostReplaceFailureRestartRetryConverges`, which this repository's CI runs from `@arbiter_core//snode:snode_test`, still exists.
 - Consumes (sentio-node at `SN_COMMIT_P2`): Plan S3-B Task 12's `StorageIntegrityClickhousePasswordEnv`, `validateClickhouseLogin`, `refuseStorageIntegrityClickhousePasswordKey`, `yamlMappingValues(node *yaml.Node, key string) []*yaml.Node`, the K11 table state (a held Active table answers Pending with its schema), the owner-audit runtime field `ownerAudit` and its registration in `registerMetrics`; Plan S3-C1 Task 25's `StorageIntegrityConfig.Backup`, `refuseStorageIntegrityBackupKeys`, `newBackupCommand`, `newRestoreDrillCommand`; Plan S3-C2 Task 35's `config.SIMemberConfig`, `StorageIntegrityMemberConfig`, `LoadSIMemberConfig`, `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `(SIMemberConfig).Validate`, `(SIMemberConfig).MemberConfig`, the test helpers `siMemberMinimalYAML`, `loadSIMemberText`, `clearSIMemberEnv`, package `simember` with `run`, `runDeps{openClickHouse, newRole, listen, started}`, `siMemberRole`, `defaultRunDeps`, `newSIMemberCollector`, and its test helpers `fakeSIMemberRole`, `newFakeSIMemberRole`, `startDisabledTableRegistry`, `loadSIMemberRunTestConfig`, `httpGet`; existing table-state test helpers `outageRegistry`, `outageDatabases`, `newOutageHost`, `newFakeRegistry`, `capturingLogger`, `testLogger`, `schemaFor`, `chainInc`, `activeIDs`, `siDatabase`, `activation`, `testNetwork`; standalone fixtures `newScriptedRegistryFollower`, `scriptedRegistryFollower`, `activeTenantRegistry`, `testTableStateDeps`, `newTestTableStateRuntime`, `fixedDatabaseInfos`, `newStartupTransaction`, `gatheredMetricNames`, `storageIntegrityHostMetricNames`, the AST helpers `readStandaloneSource`, `namedFunction`, `identifierCall`, `nodeContains`, `nestedSelectorExpression`, `selectorCall`, `compositeFieldValues`, `identifierExpression`, and the acceptance harness `requireStorageIntegrityCHAcceptance`, `openStorageIntegrityAcceptanceConn`, `startStorageIntegrityAcceptanceProxy`, `storageIntegrityAcceptanceProxyConfig`, `storageIntegrityAcceptanceRewriter`, `dialStorageIntegritySession`, `quoteSmokeIdentifier`, `throttlingSNodeRole`, `acceptanceStatementSubmitter`, `acceptanceStatusQuerier`, `acceptancePayloadWriter`, `acceptanceMergeGuard`; rpc test helpers `fixedStorageIntegrityInfo`, `getInfo`, `serveForTest`, `callStorageRPC`.
 - Produces (contract §31, verbatim): `config.StorageIntegrityConfig.ReplicaReads StorageIntegrityReplicaReads` (`yaml:"replica_reads"`), `type config.StorageIntegrityReplicaReads struct{ MemberStatusURL string \`yaml:"member_status_url"\` }`, `const config.StorageIntegrityMemberStatusTokenEnv = "STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN"` and the four host refusals of §31.2; `StorageIntegrityMemberConfig.Serve StorageIntegrityMemberServe` (`yaml:"serve"`), `type config.StorageIntegrityMemberServe struct{ Enabled bool; Listen string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL time.Duration; OwnerHouseGate map[uint64]string }` with the YAML keys of §31.3 and its seven refusals; `simember.siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role siMemberRole) (*http.Server, error)` (contract issue: its role parameter is the `siMemberRole` interface, not `*member.Role`, see the Notes); `tablestate.ReplicaTable`, `ReplicaDatabase`, `ReplicaSource`, `Inputs.Replicas`, `Config.Replicas`, `(*Snapshot).Served`, `func tablestate.ReplicaHosts(r Registry) map[string][]uint64`, the series `sentio_node_storage_integrity_tables{status="replica"}`, `sentio_node_storage_integrity_replica_serving{database}`, `sentio_node_storage_integrity_member_status_up`, `sentio_node_storage_integrity_replica_reads_in_flight{database}`, `sentio_node_storage_integrity_replica_lease_releases_total{outcome}` (`released`, `expired`); `replicalease.Config{Member, InFlight, Refresh, Now, PollInterval, Metrics, Logger}`, `DefaultPollInterval = time.Second`, `func New(cfg Config) (*Client, error)`, `(*Client).Run`, `(*Client).Serving`; `rpc.StorageIntegrityInfo.ReplicaDatabases` (`json:"replica_databases"`) and `ReplicaHosts` (`json:"replica_hosts"`), always present; `sentio-node storage-integrity member-serving` (`newMemberServingCommand`) and its refusal `storage_integrity.replica_reads.member_status_url is not set: this host has no member to ask`; the 24 named tests of §31.8; the CI filter and count; release `SN_COMMIT_P3`, `SN_DIGEST_P3` (the rows `` | `SN_COMMIT_P3` | `<40 hex>` | Task 46 | `` and `` | `SN_DIGEST_P3` | `sha256:<64 hex>` | Task 46 | `` and the run record `sentio-node release` of this plan's Appendix C, Step 23).
-- Produces (added here, Appendix B): package `config`: `(StorageIntegrityReplicaReads).validate(token string) error`, `isHTTPHostPortURL`, `refuseStorageIntegrityMemberStatusTokenKey(data []byte) error`, `(StorageIntegrityMemberServe).ListenAddr() string`, `(StorageIntegrityMemberServe).ServeConfig(token string) *serve.Config` (nil without a token; every default applied; its own copy of the owner map), unexported `validate`, `ownerUnreachableAfter`, `ownerProbeInterval`, `leaseTTL`, `isListenAddress`, `isHostPort`, `refuseSIMemberServeTokenKey(data []byte) error`, the file `config/si_member_serve.go`. Package `tablestate`: `const LeaseReleased = "released"`, `LeaseExpired = "expired"`, `(*Metrics).RegisterReplicaReads(reg prometheus.Registerer) error`, `ObserveMemberStatus(up bool)`, `ObserveLeaseRelease(outcome string)`, unexported `leaseOutcomes`, `replicaEntries`, `replicasEqual`, `sortReplicaTables`, `content.replicas`, `registryInput.replicas`, `Snapshot.served`, the Issue reasons `not served from the member's copy: …` (this host governs the database; the member names this host's own indexer %d as the owner; the member lists no table; table %s is owned by indexer %d, not %d; the member lists %s, which has no Active incarnation of indexer %d in the registry; the member lists %s twice; the member's copy of %s is incarnation %d, the registry's Active one is %d; … has schema hash %s, the registry's is %s; … is %s, not %s; the member does not list %s, an Active table of indexer %d; table %s: %v), the log line `storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing`, the file `replica.go`. Package `replicalease`: `type Client`, the refusals `replicalease: the member status client is required`, `replicalease: the in-flight replica-read counter is required`, `replicalease: the table-state refresh is required`, the log lines `storage-integrity member serving endpoint is unreachable; replica leases end at their deadline`, `storage-integrity member serving endpoint answers again`, `storage-integrity replica lease acquired; serving the database from the member's copy`, `storage-integrity replica lease not acquired`, `storage-integrity replica lease renew failed; serving until its deadline`, `storage-integrity replica lease dropped; the database is no longer answered from the member's copy` (reasons `lease deadline`, `no longer served`, `lease unknown to the member`, `lease revoked`), `storage-integrity replica lease release failed; retrying until its deadline`, `storage-integrity replica lease ended`, `storage-integrity replica leases refreshed the table state, which reported an error`; the test-support package `replicaleasetest` (`Member`, `NewMember(t testing.TB, token string, ttl time.Duration) *Member`, `URL`, `Serve`, `StopServing`, `Forget`, `Close`, `Calls`, `Held`). Package `standalone`: deps field `replicaMember *serve.Client`, runtime fields `replicaReads` and `leases`, `(*storageIntegrityTableStateRuntime).replicaReadsCounter() *sitable.ReplicaReads`, `newStorageIntegrityMemberClient(memberStatusURL string) (*serve.Client, error)`, `storageIntegrityMemberClientTimeout` (5 s), `func PrintStorageIntegrityMemberServing(ctx context.Context, cfg *config.Config, out io.Writer) error`, `storageIntegrityReplicaCollector`, `newStorageIntegrityReplicaCollector`, the task name `storage integrity replica leases`, the errors `storage integrity member status client: %w`, `storage-integrity replica leases: %w`, `register storage-integrity replica-read metrics: %w`, `member-serving requires a config`, `member-serving: %w`, `member-serving: read the serving view of %s: %w`, the help texts of the two collector series. Package `commands`: the command's `Short` and `Long`. Package `simember`: `siMemberRole` gains `ServeHandler() http.Handler` and `ServeMetrics() *serve.Metrics`, `runDeps.serving func(addr net.Addr)`, `prepareSIMemberServing`, the errors `si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty`, `si-member serve: the member role has no serving endpoint`, `si-member serve metrics: %w`, `si-member serving listener %s: %w`, the exit part `serving endpoint`, the log lines `si-member serving endpoint listening` and `shut down the si-member serving endpoint`. Tests beyond §31.8: `TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads`, `TestNewRefusesAnIncompleteConfig` (replicalease), `TestStorageIntegrityCommandOffersMemberServing` (commands). Test-only names: `fakeReplicas`, `replicaFrozenSince`, `replicaOf`, `replicaHost` (tablestate); `leaseNetwork`, `leaseToken`, `leaseOwner`, `leaseSelf`, `leaseDatabase`, `leaseTTL`, `leaseRegistry`, `leaseChain`, `leaseReadiness`, `leaseClock`, `leaseSchema`, `leaseRegistryView`, `leaseHost`, `startLeaseHost` (tablestate_test); `testToken`, `testDatabase`, `testSnapshot`, `testClock`, `testHost`, `newTestHost`, `servingView` (replicalease); `replicaTestToken`, `replicaTestDatabase`, `replicaTenantRegistry`, `replicaTestView`, `replicaTestDeps`, `storageIntegrityReplicaMetricNames`, `replicaSeries`, the acceptance harness fields `replicaState` and `replicaReads` with `replicaStateOf` and `(*storageIntegrityAcceptanceRewriter).replicaCopy`, `(*scriptedRegistryFollower).publish`, `replicaCHNetwork`, `replicaCHSelf`, `replicaCHOwner`, `replicaCHSeq`, `replicaCHToken`, `replicaCHSigner`, `replicaCHFeed`, `replicaCHCopies`, `replicaCHDatabase`, `replicaCHClock`, `replicaCHHost`, `startReplicaCHHost`, `createReplicaCHCopy` (standalone); `servingTestHandler`, `servingRun`, `startServingRun` and the fake role's fields `handler` and `serveMetrics` (simember). CI: the step name suffix `, replica reads`, the patterns `Test(StorageIntegrity|SIMember)`. The README subsection `### Storage-integrity replica reads (stage 3 P3)`. Local: the container `sn-s3c4-t46-ch`. The PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c4-46.md` and its state file `$HOME/.cache/s3-ledger/record-s3c4-46` (the ledger tool, the worktree `multi-source-s3c4-ledger-46` and the record commit are contract §32.7's).
+- Produces (added here, Appendix B): package `config`: `(StorageIntegrityReplicaReads).validate(token string) error`, `isHTTPHostPortURL`, `refuseStorageIntegrityMemberStatusTokenKey(data []byte) error`, `(StorageIntegrityMemberServe).ListenAddr() string`, `(StorageIntegrityMemberServe).ServeConfig(token string) *serve.Config` (nil without a token; every default applied; its own copy of the owner map), unexported `validate`, `ownerUnreachableAfter`, `ownerProbeInterval`, `leaseTTL`, `isListenAddress`, `isHostPort`, `refuseSIMemberServeTokenKey(data []byte) error`, the file `config/si_member_serve.go`. Package `tablestate`: `const LeaseReleased = "released"`, `LeaseExpired = "expired"`, `(*Metrics).RegisterReplicaReads(reg prometheus.Registerer) error`, `ObserveMemberStatus(up bool)`, `ObserveLeaseRelease(outcome string)`, unexported `leaseOutcomes`, `replicaEntries`, `replicasEqual`, `sortReplicaTables`, `content.replicas`, `registryInput.replicas`, `Snapshot.served`, the Issue reasons `not served from the member's copy: …` (this host governs the database; the member names this host's own indexer %d as the owner; the member lists no table; table %s is owned by indexer %d, not %d; the member lists %s, which has no Active incarnation of indexer %d in the registry; the member lists %s twice; the member's copy of %s is incarnation %d, the registry's Active one is %d; … has schema hash %s, the registry's is %s; … is %s, not %s; the member does not list %s, an Active table of indexer %d; table %s: %v), the log line `storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing`, the file `replica.go`. Package `replicalease`: `type Client`, the refusals `replicalease: the member status client is required`, `replicalease: the in-flight replica-read counter is required`, `replicalease: the table-state refresh is required`, the log lines `storage-integrity member serving endpoint is unreachable; replica leases end at their deadline`, `storage-integrity member serving endpoint answers again`, `storage-integrity replica lease acquired; serving the database from the member's copy`, `storage-integrity replica lease not acquired`, `storage-integrity replica lease renew failed; serving until its deadline`, `storage-integrity replica lease dropped; the database is no longer answered from the member's copy` (reasons `lease deadline`, `no longer served`, `lease unknown to the member`, `lease revoked`), `storage-integrity replica lease release failed; retrying until its deadline`, `storage-integrity replica lease ended`, `storage-integrity replica leases refreshed the table state, which reported an error`; the test-support package `replicaleasetest` (`Member`, `NewMember(t testing.TB, token string, ttl time.Duration) *Member`, `URL`, `Serve`, `StopServing`, `Forget`, `Close`, `Calls`, `Held`). Package `standalone`: deps field `replicaMember *serve.Client`, runtime fields `replicaReads` and `leases`, `(*storageIntegrityTableStateRuntime).replicaReadsCounter() *sitable.ReplicaReads`, `newStorageIntegrityMemberClient(memberStatusURL string) (*serve.Client, error)`, `storageIntegrityMemberClientTimeout` (5 s), `func PrintStorageIntegrityMemberServing(ctx context.Context, cfg *config.Config, out io.Writer) error`, `storageIntegrityReplicaCollector`, `newStorageIntegrityReplicaCollector`, the task name `storage integrity replica leases`, the errors `storage integrity member status client: %w`, `storage-integrity replica leases: %w`, `register storage-integrity replica-read metrics: %w`, `member-serving requires a config`, `member-serving: %w`, `member-serving: read the serving view of %s: %w`, the help texts of the two collector series. Package `commands`: the command's `Short` and `Long`. Package `simember`: `siMemberRole` gains `ServeHandler() http.Handler` and `ServeMetrics() *serve.Metrics`, `runDeps.serving func(addr net.Addr)`, `prepareSIMemberServing`, the errors `si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty`, `si-member serve: the member role has no serving endpoint`, `si-member serve metrics: %w`, `si-member serving listener %s: %w`, the exit part `serving endpoint`, the log lines `si-member serving endpoint listening` and `shut down the si-member serving endpoint`. Tests beyond §31.8: `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestNewRefusesAnIncompleteConfig` (replicalease), `TestStorageIntegrityCommandOffersMemberServing` (commands). Test-only names: `fakeReplicas`, `replicaFrozenSince`, `replicaOf`, `replicaHost` (tablestate); `leaseNetwork`, `leaseToken`, `leaseOwner`, `leaseSelf`, `leaseDatabase`, `leaseTTL`, `leaseRegistry`, `leaseChain`, `leaseReadiness`, `leaseClock`, `leaseSchema`, `leaseRegistryView`, `leaseHost`, `startLeaseHost` (tablestate_test); `testToken`, `testDatabase`, `testSnapshot`, `testClock`, `testHost`, `newTestHost`, `servingView` (replicalease); `replicaTestToken`, `replicaTestDatabase`, `replicaTenantRegistry`, `replicaTestView`, `replicaTestDeps`, `storageIntegrityReplicaMetricNames`, `replicaSeries`, the acceptance harness fields `replicaState` and `replicaReads` with `replicaStateOf` and `(*storageIntegrityAcceptanceRewriter).replicaCopy`, `(*scriptedRegistryFollower).publish`, `replicaCHNetwork`, `replicaCHSelf`, `replicaCHOwner`, `replicaCHSeq`, `replicaCHToken`, `replicaCHSigner`, `replicaCHFeed`, `replicaCHCopies`, `replicaCHDatabase`, `replicaCHClock`, `replicaCHHost`, `startReplicaCHHost`, `createReplicaCHCopy` (standalone); `servingTestHandler`, `servingRun`, `startServingRun` and the fake role's fields `handler` and `serveMetrics` (simember). CI: the step name suffix `, replica reads`, the patterns `Test(StorageIntegrity|SIMember)`. The README subsection `### Storage-integrity replica reads (stage 3 P3)`. Local: the container `sn-s3c4-t46-ch`. The PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c4-46.md` and its state file `$HOME/.cache/s3-ledger/record-s3c4-46` (the ledger tool, the worktree `multi-source-s3c4-ledger-46` and the record commit are contract §32.7's).
 
 Notes:
 - **Lockstep pins (K47).** `HG_TAG_P3`'s `sitable.Snapshot` gains `Served()`, which only sentio-node's table state implements outside housegate, so after the pin `go build` fails with `*Snapshot does not implement sitable.Snapshot (missing method Served)` until Step 3 adds it; Steps 2–3 are therefore one commit. Go's MVS keeps `HG_TAG_P3` over `CORE_TAG_P3`'s own `HG_TAG_P1` require, and the `housegate` `git_override` does the same for Bazel. arbiter-proto is not pinned here: both tags require at most `PROTO_TAG`, so its require stays.
 - **All or nothing per database (K45).** `replicaEntries` takes the member's view of one database and the registry's live incarnations, and answers Replica only when the database is not governed here, the view's owner is not this host's indexer, the view lists at least one table, every live Active incarnation of the database is the view's owner's, and the view lists exactly those incarnations, each with the registry's seq, schema hash and `sitable.CopyTable(id, seq)`, and each schema passes `resolveSchema`'s self-check. Any disagreement keeps every table of the database as it was (Ordinary: a peer's table) and logs one Issue that names the database. Tables of the database whose live incarnation is Pending, Retiring or Purging are not compared and stay Ordinary, as before P3. Readiness does not matter: the member verified the copy. `Snapshot.Schema` keeps missing a Replica table (journal recovery and cleanup never run for a peer's table), so the signed ingress refuses it through its existing not-active refusal (contract §29.1). A governed database is refused first: if the registry wrongly attributed every table of a database this host hosts to another indexer, the owner checks alone would pass (`TestBuildNeverAnswersReplicaInAGovernedDatabase` covers that case).
 - **The refresh rule (K44).** `Refresh` asks the replica source before anything else, with the state's clock, and `applyRegistryWithoutChain` applies a change of the serving views the same way it applies a registry change, on the chain state of the last successful read. So the deadline rule holds even while the chain-state read fails, and the table state's own `Run` (every `RefreshInterval`, 1 s) republishes within a second of a lease crossing its deadline minus `serve.HostDeadlineMargin`, even when the lease client is stuck in a slow request. `content.equal` compares the serving views field by field (owner, snapshot id, entry, frozen-since, tables), so an unchanged view publishes nothing and a copy that moved to another snapshot is a new version; it also compares each table's `CopyTable` and `ReplicaOf` (contract §31.4), which the view comparison already implies.
-- **The lease client (K44).** A poll is: `GET /v1/serving`; drop every held lease whose local deadline minus `serve.HostDeadlineMargin` passed, whose database the view no longer lists as serving from the lease's snapshot, or that the view no longer lists as the database's lease (it expired, or the member restarted); renew the others that are due (TTL/3 after the last grant or renew, the deadline the send time plus the TTL answered, so it is never later than the member's own expiry); acquire a lease for every serving database without one (a dropped lease not yet released blocks a new one, so two never overlap); when anything was dropped or acquired, `Refresh` the table state; then release every dropped lease whose database a snapshot published on an *earlier* poll no longer serves and that has no replica read in flight. The one-poll grace covers a query that captured the previous snapshot and has not yet reached `sitablestate`'s `Begin`. A lease the member still lists (held or revoking) is released with `POST /v1/serving/release` and counts `released`; one it no longer lists, or whose deadline passed while the member could not be reached, has expired on the member and counts `expired` without a call. A renew answering 409 or 404 (`errors.Is(err, serve.ErrLeaseRevoked)`) drops the lease; any other renew failure keeps serving until the deadline.
+- **The lease client (K44).** A poll is: `GET /v1/serving`; drop every held lease whose local deadline minus `serve.HostDeadlineMargin` passed, whose database the view no longer lists as serving from the lease's snapshot, or that the view no longer lists as the database's lease (it expired, or the member lost its state directory; a restarted member lists its restored leases as `revoking`, Task 45 F45.14); renew the others that are due (TTL/3 after the last grant or renew, the deadline the send time plus the TTL answered, so it is never later than the member's own expiry); acquire a lease for every serving database without one (a dropped lease not yet released blocks a new one, so two never overlap); when anything was dropped or acquired, `Refresh` the table state; then release every dropped lease whose database a snapshot published by this poll's `Refresh` or an earlier one no longer serves and that has no replica read in flight. No grace poll is needed (Review fix of AgentConnect round 1): a query that captured the previous snapshot in rewrite may reach `sitablestate` any time later, but `sitablestate` counts it first and then refuses it (733) because the current snapshot no longer serves the copy (Task 42, contract §29.1), so `InFlight` read after the publish covers every read that can still reach the copy. A lease the member still lists (held or revoking) is released with `POST /v1/serving/release` and counts `released`; one it no longer lists, or whose deadline passed while the member could not be reached, has expired on the member and counts `expired` without a call. A renew answering 409 or 404 (`errors.Is(err, serve.ErrLeaseRevoked)`) drops the lease; any other renew failure keeps serving until the deadline.
 - **`expired` without a 404 (contract clarification).** Contract §31.5 counts `expired` "when the member answered 404". The member answers 404 only to a renew of an unknown lease (§30.3; a release of an unknown id answers 200), and contract §30.4 gives the client no error that tells 404 from 409. The client therefore reads the same fact from the serving view: a lease the view no longer lists is one a renew would answer 404 for. Recorded in Appendix B.
 - **`siMemberServe` takes the role interface (contract issue).** Contract §31.3 writes `siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role *member.Role) (*http.Server, error)`. Plan S3-C2 Task 35's `run` holds the role as the `siMemberRole` interface (its `newRole` seam returns it), and a real `*member.Role` cannot be built in a unit test without ClickHouse, an arbiter and a DA store (`member.New` refuses nil deps). So `siMemberRole` gains `ServeHandler()` and `ServeMetrics()`, which `*member.Role` implements, and `siMemberServe` takes `siMemberRole`; Task 35's fake role gains the two methods (nil, a role without `Config.Serve`). Recorded in Appendix B.
 - **The member's endpoint (D29, K47).** `MemberConfig` sets `member.Config.Serve` from `serve.ServeConfig(token)` only when `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN` is set; `run` then registers the role's serving series on the process's own registry, builds the endpoint and binds `serve.listen` (default `:9096`, S3-C3's `siMember.statusPort`) before the role runs, so a busy port fails the start, serves it as a fourth part beside the metrics server, the follower and the role, and shuts it down with the others. The bearer check is `member/serve`'s own handler; sentio-node never reads the token beyond passing it. `serve.enabled` without the token is refused at load. `poll_interval` has no YAML key (the strict decoder refuses it); `member/serve` uses its default 5 s. `owner_housegate` keys are YAML integers (`map[uint64]string`): a quoted key such as `"0":` is refused by the decoder, so Task 47 renders each key bare and each duration as a quoted string (`owner_unreachable_after: "60s"`); `TestStorageIntegrityMemberServeValidation` loads exactly that form.
@@ -13519,7 +14269,7 @@ Notes:
 - **The two YAML refusals (D29).** Both read the YAML nodes (through aliases and merge keys, Plan S3-B Task 12's `yamlMappingValues`), so an empty or null value is refused too: the host's in `decodeConfigYAML` after Plans S3-B's and S3-C1's refusals, whether or not storage integrity is enabled; the member's in `loadSIMemberConfig` right after Task 35's `refuseSIMemberSecretKeys`, before the strict decode, so its own text and not `field token not found` names the key. The member test keeps the contract's name `TestDecodeConfigYAMLRefusesAMemberServeTokenKey` although the member's decoder is `LoadSIMemberConfig`.
 - **The CI count.** The acceptance step counts `--- PASS: TestStorageIntegrity` lines, which the two new tests (`TestSIMember…`) do not match, so the SKIP check and the count become `Test(StorageIntegrity|SIMember)` patterns (`grep -E`), and the expected count goes from 6 to 8. Neither new test has subtests, so no indented PASS line is counted twice.
 - **Order and rollback.** `SN_COMMIT_P3` needs `HG_TAG_P3` and `CORE_TAG_P3` recorded and sentio-node `main` at or after `SN_COMMIT_P2`. A host or member that runs `SN_DIGEST_P3` without the new values behaves as on `SN_DIGEST_P2` apart from the additive series and info fields; both can return to their previous image (Task 48's §8). An image older than `SN_COMMIT_P3` ignores `replica_reads` on the host (lenient YAML) but refuses `serve` on the member (strict decoder), which is why Task 47 renders the member's `serve` block only with `siMember.serve.endpoint`, for the P3 member image.
-- **Verification while drafting** (Appendix B). Plan S3-A has meanwhile been released (housegate `v0.20.0`, arbiter-core `v0.15.0`, arbiter-proto `v0.12.0` are on origin/main), so the upstream stand-ins were built on those releases: `HG_TAG_P1` is housegate `v0.20.0` with Plan S3-C1 Task 22's `CopyTable` and `OwnerEntry`; `HG_TAG_P3` is that with Task 42's drafting tree and Task 44's `si_info.go` hunks; `CORE_TAG_P2` is arbiter-core `v0.15.0` with stand-ins of Plan S3-C2's `member` packages and Task 29's `wire.TableRegistrySnapshot.ManifestOwner`; `CORE_TAG_P3` is that with Task 45's `member/serve` sources verbatim (its own tests pass there) and a `member.Role` stand-in carrying contract §30.6's `Config.Serve` and three methods. The sentio-node prior state is `git archive` of `origin/main` (`5d2f169`) with the markdown of Plan S3-B Task 12, Plan S3-C1 Task 25 and Plan S3-C2 Task 35 applied mechanically (every Create, replace and append; the pins emulated by `go.mod` replaces and their own `MODULE.bazel` scripts), except Task 25's backup and restore-drill code (stubbed, since S3-C1's objstore library is not stood in) and Task 35's `simember/install_ch_test.go` (it needs the real member packages). This task's markdown was then replayed onto it step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go`: Step 2's pin script changed exactly its six lines and was idempotent, every "Expected: FAIL" appeared with the stated messages, every package passed after each implementation step, `-race` passed on every touched package, `gofmt` and `go vet ./...` were clean and `go test ./...` passed. Offline Bazel (`--repository_disable_download`, `--override_module` to the two P3 stand-ins) built `//...` and passed `bazel test //...`, `//storageintegrityadapter/tablestate:tablestate_test` with its external test files included, and `bazel run //:gazelle` changed no line this task writes (it only dropped deps that the stubbed Task 25 and Task 35 files no longer import). Against a local `clickhouse/clickhouse-server:25.8.32.4` with Keeper, Step 18's block printed its nine PASS lines, and the acceptance step of the new `ci.yml`, run through Bazel, passed with 8 PASS markers. Steps 19 and 21's local blocks printed exactly their expected lines. Of 28 mutations (the deadline margin dropped in `Serving` or in the poll; a release while reads are in flight or on the dropping poll; a lease missing from the view kept; renews at TTL/2; a revoked renew kept; the serving-change rule removed from the chain-failure path; the replica source not asked; a wrong copy name, a stale seq or an unlisted Active table accepted; the governed check removed; `served_from` or `frozen_since` dropped; each YAML token refusal disabled; a URL with a path accepted; `enabled` without the token accepted; the token printed by `member-serving`; the si-member's serving config dropped; the lease client not started; HouseGate given no counter; `[]` or an empty host list rendered `null`; the owner listed as its own replica host), each failed a named test except one equivalent (dropping `CopyTable` and `ReplicaOf` from `content.equal`, which the serving views already imply). Every bash block and `Run:` line passes `bash -n` and `shellcheck` with its placeholders filled; `buildifier -mode=check -lint=warn` passes on every `BUILD.bazel` written below, and `actionlint` reports nothing new on `ci.yml`. Two defects of earlier plans surfaced and were worked around in the scratch prior state only: Plan S3-B Task 12's `evaluate` doc hunk ends on a partial line (`func evaluate(`), and Plan S3-C2 Task 35's `config/BUILD.bazel` deps hunk expects an `@arbiter_core//dataplane/objstore` line that Plan S3-C1 Task 25 never adds (neither task's config imports objstore).
+- **Verification while drafting** (Appendix B). Plan S3-A has meanwhile been released (housegate `v0.20.0`, arbiter-core `v0.15.0`, arbiter-proto `v0.12.0` are on origin/main), so the upstream stand-ins were built on those releases: `HG_TAG_P1` is housegate `v0.20.0` with Plan S3-C1 Task 22's `CopyTable` and `OwnerEntry`; `HG_TAG_P3` is that with Task 42's drafting tree and Task 44's `si_info.go` hunks; `CORE_TAG_P2` is arbiter-core `v0.15.0` with stand-ins of Plan S3-C2's `member` packages and Task 29's `wire.TableRegistrySnapshot.ManifestOwner`; `CORE_TAG_P3` is that with Task 45's `member/serve` sources verbatim (its own tests pass there) and a `member.Role` stand-in carrying contract §30.6's `Config.Serve` and three methods. The sentio-node prior state is `git archive` of `origin/main` (`5d2f169`) with the markdown of Plan S3-B Task 12, Plan S3-C1 Task 25 and Plan S3-C2 Task 35 applied mechanically (every Create, replace and append; the pins emulated by `go.mod` replaces and their own `MODULE.bazel` scripts), except Task 25's backup and restore-drill code (stubbed, since S3-C1's objstore library is not stood in) and Task 35's `simember/install_ch_test.go` (it needs the real member packages). This task's markdown was then replayed onto it step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go`: Step 2's pin script changed exactly its six lines and was idempotent, every "Expected: FAIL" appeared with the stated messages, every package passed after each implementation step, `-race` passed on every touched package, `gofmt` and `go vet ./...` were clean and `go test ./...` passed. Offline Bazel (`--repository_disable_download`, `--override_module` to the two P3 stand-ins) built `//...` and passed `bazel test //...`, `//storageintegrityadapter/tablestate:tablestate_test` with its external test files included, and `bazel run //:gazelle` changed no line this task writes (it only dropped deps that the stubbed Task 25 and Task 35 files no longer import). Against a local `clickhouse/clickhouse-server:25.8.32.4` with Keeper, Step 18's block printed its nine PASS lines, and the acceptance step of the new `ci.yml`, run through Bazel, passed with 8 PASS markers. Steps 19 and 21's local blocks printed exactly their expected lines. Of 28 mutations (the deadline margin dropped in `Serving` or in the poll; a release while reads are in flight or before the dropping poll's `Refresh`; a lease missing from the view kept; renews at TTL/2; a revoked renew kept; the serving-change rule removed from the chain-failure path; the replica source not asked; a wrong copy name, a stale seq or an unlisted Active table accepted; the governed check removed; `served_from` or `frozen_since` dropped; each YAML token refusal disabled; a URL with a path accepted; `enabled` without the token accepted; the token printed by `member-serving`; the si-member's serving config dropped; the lease client not started; HouseGate given no counter; `[]` or an empty host list rendered `null`; the owner listed as its own replica host), each failed a named test except one equivalent (dropping `CopyTable` and `ReplicaOf` from `content.equal`, which the serving views already imply). Every bash block and `Run:` line passes `bash -n` and `shellcheck` with its placeholders filled; `buildifier -mode=check -lint=warn` passes on every `BUILD.bazel` written below, and `actionlint` reports nothing new on `ci.yml`. Two defects of earlier plans surfaced and were worked around in the scratch prior state only: Plan S3-B Task 12's `evaluate` doc hunk ends on a partial line (`func evaluate(`), and Plan S3-C2 Task 35's `config/BUILD.bazel` deps hunk expects an `@arbiter_core//dataplane/objstore` line that Plan S3-C1 Task 25 never adds (neither task's config imports objstore).
 
 - [ ] **Step 1: Worktree, ledger and contract check**
 
@@ -15769,8 +16519,9 @@ func (m *Member) StopServing(database string, reason serve.Reason) {
 	m.revokeLocked(database)
 }
 
-// Forget drops every lease without revoking it, as a restarted member does:
-// a renew then answers 404.
+// Forget drops every lease without revoking it, as a member does whose
+// lease expired or that lost its state directory (a restarted member restores
+// its leases, revoked): a renew then answers 404.
 func (m *Member) Forget() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -15954,6 +16705,9 @@ type testHost struct {
 	mu        sync.Mutex
 	inFlight  map[string]int
 	refreshes []map[string]tablestate.ReplicaDatabase
+	// onRefresh, when set, runs at the end of every refresh, after the
+	// snapshot it stands for is published.
+	onRefresh func()
 }
 
 func newTestHost(t *testing.T, ttl time.Duration) *testHost {
@@ -15992,8 +16746,12 @@ func (h *testHost) setInFlight(database string, n int) {
 func (h *testHost) refresh(context.Context) error {
 	serving := h.client.Serving(h.clock.Now())
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.refreshes = append(h.refreshes, serving)
+	onRefresh := h.onRefresh
+	h.mu.Unlock()
+	if onRefresh != nil {
+		onRefresh()
+	}
 	return nil
 }
 
@@ -16062,8 +16820,9 @@ func servingView() serve.DatabaseView {
 // clarification K44 (contract §31.5): the client acquires a lease for a
 // serving database and serves it; when the member revokes it, the client
 // stops serving it at once and refreshes, so the published snapshot no longer
-// answers it Replica, and releases the lease only on a later poll once no
-// replica read of the database is in flight, counting it released.
+// answers it Replica, and releases the lease only once that snapshot is
+// published and no replica read of the database is in flight, counting it
+// released.
 func TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain(t *testing.T) {
 	h := newTestHost(t, 30*time.Second)
 	h.member.Serve(servingView())
@@ -16113,21 +16872,32 @@ func TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain(t *tes
 	require.Equal(t, 1, h.member.Calls("acquire"), "a database that is not serving is not acquired again")
 }
 
-// TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads pins the grace of
-// one poll between the snapshot that drops a database and its release: a
-// query that captured the previous snapshot reaches sitablestate's in-flight
-// count within that poll.
-func TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads(t *testing.T) {
+// TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase pins the
+// release order of clarification K44 (contract §31.5): with no replica read
+// in flight, the poll that drops a database releases its lease, but only
+// once that poll's Refresh has published the snapshot without the database.
+// No grace poll is needed: sitablestate admits a read of a copy only after it
+// counted the read and found the current snapshot still serving that copy, so
+// a read that reaches the gate after this Refresh is refused, and one counted
+// before it keeps InFlight above 0.
+func TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase(t *testing.T) {
 	h := newTestHost(t, 30*time.Second)
 	h.member.Serve(servingView())
 	h.step()
+	var releasedAtRefresh []int
+	h.mu.Lock()
+	h.onRefresh = func() { releasedAtRefresh = append(releasedAtRefresh, h.member.Calls("release")) }
+	h.mu.Unlock()
 	h.member.StopServing(testDatabase, serve.Reason("owner_available"))
 	h.clock.advance(time.Second)
 	h.step()
-	require.Zero(t, h.member.Calls("release"), "the poll that dropped the database never releases it")
+	require.Empty(t, h.lastRefresh(), "the poll's Refresh published a snapshot without the database")
+	require.Equal(t, []int{0}, releasedAtRefresh, "nothing is released before that snapshot is published")
+	require.Equal(t, 1, h.member.Calls("release"), "the same poll releases the lease once the snapshot is published")
+	require.Equal(t, 1.0, h.releases(tablestate.LeaseReleased))
 	h.clock.advance(time.Second)
 	h.step()
-	require.Equal(t, 1, h.member.Calls("release"))
+	require.Equal(t, 1, h.member.Calls("release"), "a lease is released once")
 }
 
 // TestLeaseClientRenewsAtAThirdOfTheTTL pins contract §31.5: the lease is
@@ -16167,8 +16937,9 @@ func TestLeaseClientRenewsAtAThirdOfTheTTL(t *testing.T) {
 
 // TestLeaseClientStopsServingWhenRenewIsRefused pins contract §31.5: a renew
 // the member refuses (409, revoked) stops serving at once, and so does a
-// lease the member no longer holds (a restarted member, whose renew would
-// answer 404); a member that cannot be reached is served until
+// lease the member no longer holds (one that expired there, or a member that
+// lost its state directory; its renew would answer 404); a member that cannot
+// be reached is served until
 // HostDeadlineMargin before the local deadline and then dropped. A lease the
 // member no longer holds, or whose deadline passed before any release, counts
 // expired and is not released.
@@ -16639,7 +17410,7 @@ func (c *Client) step(ctx context.Context) {
 		}
 		c.markRefreshed(poll)
 	}
-	c.release(ctx, poll, view, viewErr)
+	c.release(ctx, view, viewErr)
 }
 
 func (c *Client) observeMember(err error) {
@@ -16673,7 +17444,8 @@ func (c *Client) dropAndRenew(ctx context.Context, view serve.ServingView, viewE
 			changed = true
 		case viewErr == nil && !holdsLease(view, database, l.id):
 			// The member lists the database serving but holds no lease of
-			// ours: it expired, or the member restarted. It may install now.
+			// ours: it expired, or the member lost its state directory. It may
+			// install now.
 			c.dropLocked(database, l, "lease unknown to the member")
 			changed = true
 		}
@@ -16747,18 +17519,22 @@ func (c *Client) markRefreshed(poll uint64) {
 	}
 }
 
-// release lets go of every dropped lease whose database a snapshot published
-// in an earlier poll no longer serves and which has no replica read in
-// flight. The one-poll grace covers a query that captured the previous
-// snapshot and has not reached sitablestate's in-flight count yet. A lease
-// the member still lists is released and counts released; one it no longer
-// lists, or whose local deadline passed while the member could not be
-// reached, has expired on the member and counts expired.
-func (c *Client) release(ctx context.Context, poll uint64, view serve.ServingView, viewErr error) {
+// release lets go of every dropped lease whose database a published snapshot
+// no longer serves (a Refresh of this poll or an earlier one) and which has
+// no replica read in flight. InFlight is read only after that snapshot was
+// published, and sitablestate admits a read of a copy only after counting it
+// and finding the current snapshot still serving that copy (clarification
+// K44): a read counted before the snapshot keeps InFlight above 0, and one
+// that reaches the gate after it is refused, however long its rewrite took,
+// so no grace poll is needed. A lease the member still lists is released and
+// counts released; one it no longer lists, or whose local deadline passed
+// while the member could not be reached, has expired on the member and
+// counts expired.
+func (c *Client) release(ctx context.Context, view serve.ServingView, viewErr error) {
 	for _, database := range c.droppedDatabases() {
 		c.mu.Lock()
 		l := c.leases[database]
-		ready := l.refreshedAt != 0 && l.refreshedAt < poll
+		ready := l.refreshedAt != 0
 		id, deadline := l.id, l.deadline
 		c.mu.Unlock()
 		if !ready || c.cfg.InFlight(database) != 0 {
@@ -16973,7 +17749,7 @@ rules_go compiles the external `tablestate_test` files against the test archive 
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)" && GOWORK=off go vet ./storageintegrityadapter/... && GOWORK=off go test ./storageintegrityadapter/... -count=1 -v 2>&1 | grep -E -- '^(--- |    --- |ok|FAIL)' | grep -E 'Lease|ReplicaEntries|ok|FAIL' && GOWORK=off go test -race ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=3`
 
-Expected: `--- PASS:` for `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused` (with `revoked`, `unknown_lease` and `unreachable`), `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable` and `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`, `ok` for `replicalease` and `tablestate` (`replicaleasetest` has no tests); the race run is `ok` three times.
+Expected: `--- PASS:` for `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused` (with `revoked`, `unknown_lease` and `unreachable`), `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable` and `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`, `ok` for `replicalease` and `tablestate` (`replicaleasetest` has no tests); the race run is `ok` three times.
 
 ```bash
 W=<worktree path>
@@ -16984,10 +17760,14 @@ every second, acquires a lease for each serving database, renews it at a
 third of its TTL and serves it (tablestate.ReplicaSource) only until
 serve.HostDeadlineMargin before its local deadline. A database that stops
 being served, a revoked lease or one the member no longer holds is
-dropped at once and the table state refreshed; the lease is released on
-a later poll once no replica read of it is in flight, counted released,
-or expired when the member no longer held it (Plan S3-C4 contract §31.5,
-K44). replicaleasetest fakes the member endpoint for the tests.
+dropped at once and the table state refreshed; the lease is released
+once that refresh published the snapshot without the database and no
+replica read of it is in flight, counted released, or expired when the
+member no longer held it (Plan S3-C4 contract §31.5, K44). No grace
+poll: sitablestate admits a read of a copy only after counting it and
+finding the current snapshot still serving that copy, so a read whose
+rewrite outlived the release is refused. replicaleasetest fakes the
+member endpoint for the tests.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -19269,9 +20049,10 @@ func startReplicaCHHost(t *testing.T, ctx context.Context, quarantined bool, mem
 		Copies: replicaCHCopies{copy: serve.DatabaseCopy{SnapshotID: snapshotID, Entry: entry, AuditClean: true,
 			Tables: []serve.TableCopy{{TableID: h.logicalID, IncarnationSeq: replicaCHSeq, CopyTable: h.copyTable,
 				SchemaHash: schemaHash, Condition: serve.ConditionInstalled}}}},
-		Now:     clock.Now,
-		Metrics: serve.NewMetrics(),
-		Logger:  slog.Default(),
+		Now:      clock.Now,
+		Metrics:  serve.NewMetrics(),
+		Logger:   slog.Default(),
+		StateDir: t.TempDir(),
 	})
 	require.NoError(t, err)
 	endpoint := httptest.NewServer(h.member.Handler())
@@ -23266,7 +24047,7 @@ Expected: each grant gone from `si_grants <host>` within a few minutes, no Click
 
 ### 8.2 During or after §4
 
-In reverse order of what ran: the monitoring commit; each serving commit, indexer-a's member first (its member restarts with serving off; its host stops answering `replica` at the lease's end, at most `leaseTTL`, 30 s, later); each host commit (that host back to its previous image and the `v0.15.0` sidecar without replica reads: one host-pod restart); each member commit (that member back to the P2 image without its endpoint: a member-pod restart). Never revert a host commit while any member serves: revert every serving commit first, so no `v0.15.0` agent meets a `replica` status. One block per commit; this is the full sequence after §5.4:
+In reverse order of what ran: the monitoring commit; each serving commit, indexer-a's member first (its member restarts with serving off and restores its host's lease from `serve-leases.json` in its state directory, revoked, so it installs nothing of that database before the host released the lease or it expired; the host stops answering `replica` at its next poll of the member, at the latest at the lease's end, `leaseTTL`, 30 s); each host commit (that host back to its previous image and the `v0.15.0` sidecar without replica reads: one host-pod restart); each member commit (that member back to the P2 image without its endpoint: a member-pod restart). Never revert a host commit while any member serves: revert every serving commit first, so no `v0.15.0` agent meets a `replica` status. Revert a member commit only after its host's: the P2 member image keeps no lease record, so it must never start while its host may still answer `replica`. One block per commit; this is the full sequence after §5.4:
 
 Confirm before running.
 
@@ -23333,11 +24114,11 @@ A drill that fails after §6.2 (a member that does not serve, a read that answer
 
 ### 9.3 Leases
 
-`StorageIntegrityReplicaLeaseStuck` fires when a member has waited more than 2 minutes for its host to release a serving lease before an install (`sentio_node_si_member_serve_revoking_seconds`). The member revokes a served database's lease before installing any part of it; the host drops the database's Replica entries from its next snapshot and releases the lease only once that snapshot is published and its in-flight replica reads of the database are 0 (`sentio_node_storage_integrity_replica_reads_in_flight{database}`), or the lease expires after `leaseTTL` (30 s) without a renewal. A wait that does not end means a long-running read on the copy or a host that keeps renewing: read the host's in-flight series and its log, and let the read finish or end that client's session; installs of that database are paused meanwhile, so its copy falls behind and serving stops. `sentio_node_storage_integrity_replica_lease_releases_total{outcome="expired"}` rising means hosts that go silent mid-lease. Never shorten `leaseTTL` below 10 s or raise it to cover long queries; a query that must outlive an install is K44's residual.
+`StorageIntegrityReplicaLeaseStuck` fires when a member has waited more than 2 minutes for its host to release a serving lease before an install (`sentio_node_si_member_serve_revoking_seconds`). The member revokes a served database's lease before installing any part of it; the host drops the database's Replica entries from its next snapshot and releases the lease only once that snapshot is published and its in-flight replica reads of the database are 0 (`sentio_node_storage_integrity_replica_reads_in_flight{database}`), or the lease expires after `leaseTTL` (30 s) without a renewal. A wait that does not end means a long-running read on the copy or a host that keeps renewing: read the host's in-flight series and its log, and let the read finish or end that client's session; installs of that database are paused meanwhile, so its copy falls behind and serving stops. `sentio_node_storage_integrity_replica_lease_releases_total{outcome="expired"}` rising means hosts that go silent mid-lease. Never shorten `leaseTTL` below 10 s or raise it to cover long queries; a query that must outlive an install is K44's residual. A member records every lease in `serve-leases.json` in its state directory (`/data/si-member`, its persistent volume) before it grants or renews one, and a restarted member restores the leases that have not expired, revoked, so it installs nothing of their databases before the host releases them or they expire; never delete that file or the member's volume while its host may answer `replica`. An si-member that fails to start with `serve: lease file …` has an unreadable lease record: report it; the user decides whether to move the file aside, and only once the host lists no `replica_databases` (`si_info <x>`) and one `leaseTTL` has passed.
 
 ### 9.4 Agent failover
 
-The agent fails a read over only at hello (the dial to the owner or its handshake fails) or at the first answer of a `SELECT` or `WITH` on a session that has issued nothing else (the owner's read-side quarantine refusal, or a connection that broke before any packet reached the client). It never fails over a write, an `INSERT … SELECT`, DDL, a session after `SET`, or a query after its first packet. Candidates are `replica_hosts[database]` in ascending indexer id, minus the owner and any indexer without a HouseGate port, one attempt each; when every candidate fails, the client gets the original error. The injected `SQL_x_read_mode` is kept, so a copy refuses an `unsafe_latest` read with the safe-mode text; clients that must read during an owner's outage set `SQL_x_read_mode='safe'`. Failovers are logged by the agent (`agent: replica failover`, with `database`, `owner`, `reason`, `from` and `to`); the agent sidecars expose no scraped metrics, so their logs and the local agent's are the only record. Until placement is on (stage 3 P5), `replica_hosts` is every enrolled SI indexer but the owner, computed by every host from the registry, so a host whose member does not serve a database is still tried and refuses; the agent moves on. The sidecars keep lanes `off` (stage-1 runbook §11 rule); moving them to `lanes: auto` is its own window. Never roll a sidecar or the local agent back below `<HG_TAG_P3>` while any member serves (§8.2's order).
+The agent fails a read over only at hello (the dial to the owner or its handshake fails) or at the first answer of a `SELECT` or `WITH` on a session that has issued nothing else (the owner's read-side quarantine refusal, or a connection that broke before any packet reached the client). It never fails over a write, an `INSERT … SELECT`, DDL, a session after `SET`, or a query after its first packet. Candidates are `replica_hosts[database]` in ascending indexer id, minus the owner and any indexer without a HouseGate port, one attempt each; a candidate that takes the read but answers it with the owner's quarantine refusal (its member does not serve the database) or breaks before answering counts as failed, and the agent tries the next; when every candidate fails, the client gets the original error. The injected `SQL_x_read_mode` is kept, so a copy refuses an `unsafe_latest` read with the safe-mode text; clients that must read during an owner's outage set `SQL_x_read_mode='safe'`. Failovers are logged by the agent (`agent: replica failover`, with `database`, `owner`, `reason`, `from` and `to`); the agent sidecars expose no scraped metrics, so their logs and the local agent's are the only record. Until placement is on (stage 3 P5), `replica_hosts` is every enrolled SI indexer but the owner, computed by every host from the registry, so a host whose member does not serve a database is still tried and refuses; the agent moves on. The sidecars keep lanes `off` (stage-1 runbook §11 rule); moving them to `lanes: auto` is its own window. Never roll a sidecar or the local agent back below `<HG_TAG_P3>` while any member serves (§8.2's order).
 ````
 
 The stage-1 runbook's stage 8 and its sidecar rule now point to the P3 window. In `docs/storage-integrity-devnet2-multi-source.md`, replace (`:15`):
@@ -26840,7 +27621,7 @@ Expected: `P3_END=<the value written>`. Anything else (for example the plans PR 
 
 **What rollback means here.** Nothing in this task is consensus-irreversible, and every change has a way back: runbook §8's blocks, each its own confirmed step with its own Gate sentence, copied with `p3_block` and run in reverse order of what ran, so that `p3-edit.py state` keeps reading a prefix of the sequence. Before a commit block ran, there is nothing to undo (a preview is a throwaway clone). During the drill (§8.3): release indexer-c first (a new copy of runbook §6.4 block 1, `p3_block 6.4 1 confirmed`), whatever else follows. After pushes, the runbook's `si_revert_p3 <commit record> <release or chi:<manifest>:<CHI>>` reverts the recorded commit on a fresh `origin/main`, runs the render tests, pushes and syncs or applies that one target (a revert that conflicts with a later commit is aborted and changes nothing); run `p3_fresh_main` from a block of this task before each:
 - M: `p3_block 8.2 1 confirmed` (`si_revert_p3 monitoring-commit storage-integrity-si-v2`; the rule group goes, no pod changes).
-- S-a, then S-c, then S-b: `p3_block 8.2 2 confirmed`, `p3_block 8.2 3 confirmed`, `p3_block 8.2 4 confirmed` (each member restarts with serving off; a held lease is revoked first, and its host stops answering Replica at the lease's end, K44). Never revert a host commit while any member serves.
+- S-a, then S-c, then S-b: `p3_block 8.2 2 confirmed`, `p3_block 8.2 3 confirmed`, `p3_block 8.2 4 confirmed` (each member restarts with serving off and restores its held lease, revoked, from its state directory; its host stops answering Replica at its next poll, at the latest at the lease's end, and the member installs only after the release or the expiry, K44). Never revert a host commit while any member serves.
 - W-a-h, W-a-m, then W-c-h, W-c-m, then W-b-h, W-b-m: `p3_block 8.2 5 confirmed` and `p3_block 8.2 6 confirmed` for indexer-a, and for x = c, then b, the same two with the line replaced, `p3_block 8.2 5 confirmed 'x=a' 'x=c'` and `p3_block 8.2 6 confirmed 'x=a' 'x=c'` (the host returns to its previous image and the `v0.15.0` sidecar in one restart and drops `replica_reads`; the member returns to `SN_DIGEST_P2`, whose decoder refuses the `serve` key the revert also removes). A host never runs the P3 sidecar without its own sync (stage-1 runbook §11 rule).
 - G-n, then G-c, then G-b: `p3_block 8.1 1 confirmed`, `p3_block 8.1 2 confirmed`, `p3_block 8.1 3 confirmed` (a users reload removes each grant; the CHI manifests are applied by hand, never by helmfile, K22).
 
@@ -26877,13 +27658,14 @@ Names this plan consumes from earlier contracts are listed with their source in 
   - `func (r *ReplicaReads) Counts() map[string]int` (a copy, for metrics).
 
 `pkg/plugins/sitablestate`:
-- **Field:** `Plugin` gains `ReplicaReads *sitable.ReplicaReads`.
+- **Fields:** `Plugin` gains `ReplicaReads *sitable.ReplicaReads` and `TableState sitable.TableState`, the state rewrite takes the query's snapshot from.
 - **`decide`, Replica rows:**
   - `classRead`, `classMetadata` and `classNone` allow.
   - `classWrite`, `classCreate`, `classCreateData`, `classDrop`, `classOtherDDL` and `classViewTarget` give `nonRetryable` with `CodeNonRetryable` (392) and the message (verbatim, `%s` = table id, `%d` = `ReplicaOf`): `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner`.
   - `classUnreadable` keeps its earlier refusal.
 - **In-flight tracking:**
   - When `OnQuery` allows a statement and at least one accessed table answers Replica, it calls `p.ReplicaReads.Begin(<sorted unique databases of those tables>)` and keeps `end` per session.
+  - **Read admission (K44).** Only after that count, `OnQuery` reads `p.TableState.Current()`. Unless it answers every accessed table that the query's snapshot answers Replica with status Replica and the same `ID`, `CopyTable` and `ReplicaOf`, the read is uncounted at once and refused with `CodeRetryable` (733) and the message (verbatim, `%s` = table id): `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)`. A nil `TableState` with a counter admits no replica read. So a read whose snapshot rewrite took before the host published a snapshot without the database never starts after the host read `InFlight` 0 (§31.5).
   - The plugin implements `plugin.QueryCompletePlugin` (`OnQueryComplete` calls the session's `end`) and `plugin.ClosePlugin` (`OnClose` calls it).
   - Maintenance and platform-operator sessions, which return before the matrix, are not counted.
 
@@ -26899,11 +27681,11 @@ Names this plan consumes from earlier contracts are listed with their source in 
 Other housegate parts of Task 42:
 - **`pkg/network`:** `RpcNetworkState.StorageIntegrityTableStatus` accepts `TableStatusReplica`. Any other unknown name stays the error `rpc: getStorageIntegrityTableStatus %s.%s: unknown status %q`.
 - **Signed ingress:** `pkg/plugins/storageintegrity` is unchanged. `snapshotSchema` refuses a Replica target with its existing text `storage_integrity: table %s is not active; the signed lane admits only active tables` (392), pinned by a test.
-- **Options:** `proxy.go` gains `StorageIntegrityReplicaReads *sitable.ReplicaReads` (comment: host-injected in-flight counter of replica-served reads; nil counts nothing), placed after `StorageIntegrityTableState`. `build.go` passes it to `&sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}`. Setting it without `StorageIntegrityTableState` is refused (verbatim): `Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState`.
+- **Options:** `proxy.go` gains `StorageIntegrityReplicaReads *sitable.ReplicaReads` (comment: host-injected in-flight counter of replica-served reads; nil counts nothing), placed after `StorageIntegrityTableState`. `build.go` passes it to `&sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}` and, with a counter, sets the gate's `TableState` to the resolved state that rewrite reads (`siState`). Setting it without `StorageIntegrityTableState` is refused (verbatim): `Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState`.
 
 Named tests (Task 42):
 - `pkg/sitable`: `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`.
-- `pkg/plugins/sitablestate`: `TestDecide_ReplicaRows` (the full class × Replica matrix), `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`.
+- `pkg/plugins/sitablestate`: `TestDecide_ReplicaRows` (the full class × Replica matrix), `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused` (a rewriter blocked across the host's two polls), `TestReplicaReadAdmissionNeverOverlapsARelease` (the race, under `-race`).
 - `pkg/registry`: `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`.
 - `pkg/network`: `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`.
 - `pkg/plugins/storageintegrity`: `TestSnapshotSchemaRefusesAReplicaTable`.
@@ -26926,7 +27708,7 @@ Named tests (Task 42):
 - **Scrubber:** `NewStorageIntegrityScrubber` maps `hg_replica.<CopyTable>` → `t.ID` for every served table. These qualified pairs come before the reserved-database redactions.
 
 `pkg/plugins/sireserved` (K48):
-- **Function:** `func PeerCarrierArgumentViolation(sql string) (string, error)` returns the callable's name. It fires when an object-carrier callable (`IsObjectCarrierName`) outside literals has an argument that is not exactly one string literal, one numeric literal or one bare or qualified identifier.
+- **Function:** `func PeerCarrierArgumentViolation(sql string) (string, error)` returns the callable's name. It fires when an object-carrier callable (`IsObjectCarrierName`) outside literals has an argument that is not exactly one string literal (heredocs included) or one unsigned integer literal (a word of ASCII digits only). Every identifier argument fires it, bare, quoted, digit-leading or qualified, because ClickHouse resolves an identifier argument through the statement's aliases (`WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`) or as a tuple element (`d.1`).
 - **Where it runs:** on peer-trusted, non-forwarded sessions, after S3-A's peer rules.
 - **Refusal** (392, verbatim): `storage_integrity: a peer statement may pass only literal arguments to %s(); a computed database or table name is refused on a peer connection`.
 - **Metric and log:** the metric `storage_integrity_peer_reserved_name_refusals_total{reason}` gains the reason `computed_carrier_argument` (exported at 0 from startup). The warn log is S3-A's, `peer statement refused by storage-integrity reserved-name guard`, with `reason=computed_carrier_argument`.
@@ -26958,7 +27740,7 @@ Named tests (Task 43):
 - **Interface:** `type FailoverPhase uint8` with `FailoverAtHello FailoverPhase = 1` and `FailoverAtRead FailoverPhase = 2`; `type UpstreamFailover interface{ Candidates(ctx context.Context, database string) ([]string, error); Reason(phase FailoverPhase, cause error, exc *chproto.Exception) (reason string, ok bool) }`. `Candidates` returns `host:port` addresses in order.
 - **Wiring:** `Server` gains `UpstreamFailover UpstreamFailover`, passed to the relay. Nil means today's relay byte for byte.
 - **At hello:** phase 2 of the handshake fails (a dial error, EOF, a read error, or an Exception instead of a ServerHello) and `Reason(FailoverAtHello, err, exc)` is ok. The relay then tries each candidate in order: dial, then the handshake with the session's ClientHello, with `Database` set to `SessionState.LogicalDatabaseName()`.
-- **At an eligible read:** the query is eligible when `SessionState.ReplicaFailoverEligible` is true and the statement starts with `SELECT` or `WITH` (`sicore.LeadingKeywords`). The relay keeps its Query packet and the terminating empty Data block. If the first upstream packet is an Exception with `Reason(FailoverAtRead, nil, exc)` ok, or the connection breaks before any packet of the query was relayed to the client, the relay redials the candidates as at hello and resends both packets.
+- **At an eligible read:** the query is eligible when `SessionState.ReplicaFailoverEligible` is true and the statement starts with `SELECT` or `WITH` (`sicore.LeadingKeywords`). The relay keeps its Query packet and the terminating empty Data block. If the first upstream packet is an Exception with `Reason(FailoverAtRead, nil, exc)` ok, or the connection breaks before any packet of the query was relayed to the client, the relay redials the candidates as at hello and resends both packets. The candidate's first answer is checked the same way: when it is itself such a failure, the relay moves the read to the next candidate; when no candidate is left, the client gets the owner's original Exception (or the session ends with the owner's read error) and the session stays on the last candidate. The failover is reported and counted served only at the first answer that is not such a failure (review round 1).
 - **Never fails over** once any packet of the query's answer reached the client, and never for any other statement.
 - **Eligibility:** `chsession.SessionState.ReplicaFailoverEligible bool` is true after hello and false from the first statement that is not `SELECT`, `WITH` or `USE`, or that carries client Data. That covers INSERT, including INSERT … SELECT, as well as `SET`, DDL and `ALTER`.
 - **Metrics** (`observer.go`): `clickhouse_proxy_agent_replica_failovers_total{reason}` counts a failover that reached a serving upstream. `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}` counts every candidate failing; the client then gets the original error. Both reasons are pre-exported at 0.
@@ -26975,7 +27757,7 @@ Named tests (Task 44):
 - `pkg/chproto`: `TestIsIndexerQuarantinedReadMessage`, `TestTableRefusedMessageIsTheSitablestateText`.
 - `pkg/network`: `TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers`, `TestRpcNetworkStateReplicaHostsCachesPerDatabase`.
 - `pkg/plugins/agent`: `TestReplicaFailoverCandidatesSkipTheOwnerAndUnboundIndexers`, `TestReplicaFailoverReasonClassifiesQuarantineAndUnreachable`.
-- `pkg/proxy`: `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails`, `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`.
+- `pkg/proxy`: `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails`, `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead`.
 - New `pkg/integration/storage_integrity_agent_replica_failover_test.go`: `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`.
 
 **Release (Task 44, after Tasks 42–44 are merged; confirm each step):**
@@ -27000,9 +27782,10 @@ Config and defaults:
   - `serve: lease ttl %s is below the minimum %s`
   - `serve: owner probe interval %s must be at least 1s and below the unreachable threshold %s`
   - `serve: owner %d housegate address %q is not host:port`
+  - `serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`, and, for a lease record it cannot read, `serve: lease file %s: %v`, `serve: lease file %s has version %d, want 1`, `serve: lease file %s has a lease record without an id, a database or a ttl` and `serve: lease file %s lists database %s or lease %s twice` (review round 1)
 
 Ports, implemented by `member.Role`:
-- `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial func(ctx context.Context, network, addr string) (net.Conn, error); Now func() time.Time; Metrics *Metrics; Logger *slog.Logger }`.
+- `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial func(ctx context.Context, network, addr string) (net.Conn, error); Now func() time.Time; Metrics *Metrics; Logger *slog.Logger; StateDir string }` (`StateDir`, the member's state directory, added in review round 1; `member.Role` passes `Config.StateDir`).
 - `type Published interface{ Latest(ctx context.Context) (replay.SafeSnapshotManifest, error) }` gives the latest published manifest, read from the arbiter in this call and validated by the S3-C2 feed rules.
 - `type Copies interface{ Databases() []OwnerDatabase; Database(owner uint64, database string) (DatabaseCopy, bool) }`.
 - `type OwnerDatabase struct{ Owner uint64; Database string }`.
@@ -27027,6 +27810,7 @@ Leases:
 - At most one lease per database. It holds an id of 128 random bits in hex, a grant time and a last renew.
 - It expires `LeaseTTL` after its last grant or renew.
 - A database that stops serving is revoked: renew answers 409 from then on.
+- **Lease record (review round 1).** Before it answers a grant or a renew, the server replaces `LeaseFile` (`const LeaseFile = "serve-leases.json"`) in `Deps.StateDir` atomically with every lease it holds, as `{"version":1,"leases":[{"lease_id","database","owner","renewed_unix_nano","ttl_ms"}]}`. A grant or renew it cannot record is refused (500 `serve: record leases in %s: %v`) and changes nothing; a release rewrites the file without the lease. `New` restores every recorded lease that has not expired (`renewed_unix_nano` + `ttl_ms`, on the member's clock) as revoked, so after a restart renew answers 409 and `BeforeInstall` waits for the host's release or that expiry, exactly as before the restart.
 
 Install gate:
 - `func (s *Server) BeforeInstall(ctx context.Context, owner uint64, database string) error` marks the database `installing` and revokes its lease. It returns once the lease is released or expired, at once when no lease exists, or with `ctx.Err()`.
@@ -27040,8 +27824,8 @@ Install gate:
 | Route | Request | 200 answer | Errors (verbatim) |
 |---|---|---|---|
 | `GET /v1/serving` | — | `ServingView` | — |
-| `POST /v1/serving/acquire` | `{"database","snapshot_id"}` | `{"lease_id","ttl_ms"}` | 409 `member serving: database %s is not served: %s` (reason); 409 `member serving: database %s moved to snapshot %s; acquire again` |
-| `POST /v1/serving/renew` | `{"lease_id"}` | `{"ttl_ms"}` | 409 `member serving: lease %s is revoked`; 404 `member serving: unknown lease %s` |
+| `POST /v1/serving/acquire` | `{"database","snapshot_id"}` | `{"lease_id","ttl_ms"}` | 409 `member serving: database %s is not served: %s` (reason); 409 `member serving: database %s moved to snapshot %s; acquire again`; 500 `serve: record leases in %s: %v` (no lease granted) |
+| `POST /v1/serving/renew` | `{"lease_id"}` | `{"ttl_ms"}` | 409 `member serving: lease %s is revoked`; 404 `member serving: unknown lease %s`; 500 `serve: record leases in %s: %v` (the renew not applied) |
 | `POST /v1/serving/release` | `{"lease_id"}` | `{}` (an unknown or released id also answers 200) | — |
 
 A bad body answers 400 `member serving: %v`, and a wrong method answers 405.
@@ -27077,7 +27861,7 @@ The view types, with their JSON tags:
 
 Named tests (Task 45, `member/serve` unless noted):
 - Serving conditions: `TestServingRequiresTheOwnerQuarantinedOrUnreachable`, `TestServeStartsAfterTheOwnerIsUnreachableForTUnreach`, `TestServingRequiresTheEntryUnchangedOverTwoPolls`, `TestServingStopsWhenTheOwnerEntryAdvances`, `TestServingNeverStartsWithACopyBehindTheEntry`, `TestServingRefusesAForeignDivergedExcludedOrMissingTable`, `TestServingRequiresACleanAudit`, `TestServingIsOffWhenDisabled`.
-- Leases: `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`.
+- Leases: `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`.
 - Endpoint, client, config and metrics: `TestHandlerRefusesAMissingOrWrongToken`, `TestClientRoundTripsTheServingView`, `TestNewRefusesABadConfig`, `TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros`.
 - `member/install`: `TestInstallerWithoutAGateIsUnchanged`.
 - `member`: `TestRoleWiresServeIntoTheInstaller`.
@@ -27170,7 +27954,7 @@ Its loop:
 - **Acquire:** for each `serving` database without a lease.
 - **Renew:** at a third of the TTL.
 - **Revoked or failing:** on `ErrLeaseRevoked`, or on any failure past the local deadline, it drops the database from `Serving` and calls `Refresh`.
-- **Release:** `Release` runs only after the published snapshot no longer serves the database and `InFlight(database) == 0`. It counts `released`, or `expired` when the member answered 404.
+- **Release:** `Release` runs only after the published snapshot no longer serves the database and `InFlight(database) == 0`, read after that snapshot was published: on the poll whose `Refresh` dropped the database or a later one, with no grace poll, because `sitablestate` refuses a read whose snapshot no longer matches the current one (§29.1's read admission). It counts `released`, or `expired` when the member answered 404.
 
 **31.6 RPCs** (`rpc/storage_integrity_info.go`, `standalone/storage_integrity_info.go`):
 - `rpc.StorageIntegrityInfo` gains `ReplicaDatabases []string` with tag `json:"replica_databases"` (always present, `[]` when none) and `ReplicaHosts map[string][]uint64` with tag `json:"replica_hosts"` (always present, `{}` when none).
@@ -27359,11 +28143,12 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Relay fires OnQueryComplete exactly once per client Query, including when the OnQuery chain rejects it. It refuses a pipelined Query while another is still active, so one end slot per session is safe. OnQueryComplete uses the same chain filters as OnQuery, and OnClose runs every close plugin.
 - sitablestate registers its complete and close hooks only when Options.StorageIntegrityReplicaReads is set. Unset, the chain is exactly today's.
 - Maintenance and platform-operator sessions bypass rewrite (their SQL is forwarded verbatim), so they never read hg_replica copies. Not counting them, as the contract says, is safe.
-- A query takes its table snapshot in the rewrite plugin (pkg/plugins/rewrite/rewriter.go:147), before sitablestate counts it. Task 46's lease client therefore reads InFlight only one poll after publishing the snapshot that drops the database (its one-poll grace). Task 42's Consumed-by section records this.
+- A query takes its table snapshot in the rewrite plugin (pkg/plugins/rewrite/rewriter.go:147), before sitablestate counts it. The drafted one-poll grace of Task 46's lease client did not bound that gap (a rewrite can outlast a poll); sitablestate's read admission (count, then check TableState.Current()) replaced it in review round 1. Task 42's Consumed-by section and Notes record this.
 - Edits in this redraft: the base moved to 862a7a8, and Step 1 now writes the ledger tool first, as Task 46 does. Step 1 also chains fetch && s3-ledger get && urwt-create, and names both stop texts of s3-ledger get. A Task 46 hand-off note was added, along with the new verification record.
 - pkg/config/agent_quickstart_test.go is not gofmt-clean at the base with Go 1.26.3, so Step 24's gofmt check is scoped to the 19 Go files this task changes. pkg/storageintegrity hits a vet note at intake_test.go:1802 at the base (go test only, not Bazel).
 - Names added while drafting: sitablestate.Plugin.replicaReadEnds (unexported sync.Map: session id to the end func of its in-flight replica read); (*sitablestate.Plugin).beginReplicaRead and endReplicaRead (unexported helpers); (*sitablestate.Plugin).OnQueryComplete and OnClose (the QueryCompletePlugin/ClosePlugin methods §29.1 requires); test helpers replicaTable (pkg/sitable), replicaSnapshot, replicaQuery, replicaErr (pkg/plugins/sitablestate)
 - Verified while drafting: Fresh git archive of housegate origin/main 862a7a8 in work/c4/task-42-r3, with S3-C1 Task 22's CopyTable, its two tests and its CLAUDE.md sentence applied verbatim, tagged as the HG_TAG_P1 stand-in. Step 1's checks printed 'descends', 'pkg/sitable/sitable.go:3' and an empty diff. / The task text was applied mechanically from its code blocks with Go 1.26.3 (GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local). Steps 3, 8, 13 and 18 failed with exactly the compile errors the task states, and every pass step, -race run, vet and gofmt check passed. The five commits and '24 files changed, 1017 insertions(+), 41 deletions(-)' matched. A second full replay of the final text gave an identical git tree (35c82d7). / go test passed on every package except the three under pkg/integration that need ClickHouse containers. pkg/storageintegrity needed -vet=off for a vet note that is also present at the base. / bazel run //:gazelle changed nothing, bazel build //... passed, and bazel test //... --nocache_test_results gave 'Executed 67 out of 67 tests: 67 tests pass.' All external repositories came from local caches. / 19 mutations were each caught by their named test: dedup, sync.Once, Served clone/sort, Compact, NewSnapshot collecting Replica, Schema answering Replica, omitempty, rpc refusing replica, the Replica rows, DROP allowed, reads refused, a refused query counted, a lost end kept, OnClose not ending, an operator session counted, hooks always registered, the counter not passed, the option refusal removed. / Read-only ledger lookups against the local housegate clone (no fetch): s3-ledger get HG_TAG printed 'HG_TAG=v0.20.0'. s3-ledger get HG_TAG_P1 stopped with "not a row of any plan's Appendix C: ['HG_TAG_P1']; stop"; Step 1 now states this stop. / All 7 bash blocks and 11 Run lines pass bash -n with the placeholders filled. shellcheck reports only SC2016 on Step 22's check, whose literal backticks are intended. The markdown has no hard-wrapped prose and no TBD or TODO.
+- Review fixes (AgentConnect round 1), finding 2 (read admission, with Task 46): rewrite takes a query's snapshot before sitablestate counts the read, so a query whose rewrite outlasted the host's dropping snapshot and its InFlight == 0 release check was admitted and read the copy while the member installed (reproduced on the Task 42 stand-in: after the drop and a 0 InFlight, OnQuery returned nil and counted the read). sitablestate now counts first and then checks TableState.Current() (new Plugin.TableState, set by build.go with the counter), uncounting and refusing with the retryable 733 `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` when a Replica table is no longer served from the same copy and owner. New tests TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused (a rewriter blocked across both host polls) and TestReplicaReadAdmissionNeverOverlapsARelease (50 rounds of 8 racing sessions); the existing gate tests and TestBuildWiresReplicaReadsIntoSitablestate give the gate a table state. Verified on a git archive of housegate origin/main 862a7a8 with a CopyTable stand-in and Task 42's sitable, sitablestate and root-option blocks applied from the plan text: Step 13 fails to compile as stated, Steps 15 and 20 pass (sitablestate under -race, three counts), gofmt and go vet clean; mutations each caught: no current-snapshot check (both new tests), the check before the count with a yield between (the race test), build.go not setting TableState (the root test). Step 24's stat moves from 1017 to 1193 insertions (41 deletions unchanged): computed from the per-file line deltas of the four changed files (+45, +119, +2, +10), all inside lines Task 42 adds, not measured on a full 24-file replay.
 
 ### Task 43
 
@@ -27375,8 +28160,9 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - The unsafe_latest refusal runs right after the classification pass, before requireActiveAccessedIDs and the promotion port. Nothing reaches ClickHouse.
 - The K48 peer rule passes S3-A's peerLegForms and the ClickHouse-measured secondary legs (TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass). The test now checks that the reason is exported at 0 before its first refusal, which a mutation proved the earlier draft did not pin.
 - Task 44 depends on this task's SessionState field layout (ReplicaServedDatabase directly followed by LastQueryID and LastClientInfo), on the five commits, and on the integration helpers. All are kept stable.
-- Names added while drafting: func localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string) in pkg/rewriter: it drops the remote mapping only for a standalone USE of a served database, because both engines refuse a USE of a remote-mapped database; TestUseOfAReplicaServedDatabaseIsRewrittenLocally (pkg/rewriter); TestBuildServer_ForwardTableStateFollowsStorageIntegrity (root package); unexported forward helpers: (*Plugin).replicaServed, replicaAware, refuseEndedReplicaServing; unexported sireserved helpers: peerReasonComputedCarrierArgument, carrierArgumentViolation, literalCallArguments, literalArgument, isPunctToken; forward test helpers: replicaServedState, replicaRouting, queryOn, servingEndedMessage; rewriter test helpers: replicaServingState, servedSnapshot (storage_integrity_test.go); replicaParityCopyA, replicaParityCopyB, replicaParityState, replicaParityNetwork, replicaParityOptions, requireReplicaParity (new replica_parity_test.go, which holds the engine-gated tests; native_smoke_test.go is unchanged); integration helpers consumed by Task 44: replicaReadsPhys, replicaReadsDB, replicaReadsOwner, replicaReadsCopyA, replicaReadsCopyB, replicaReadsServed, seedReplicaReads, downAddress, startReplicaReadsHost(t *testing.T, state sitable.TableState) *testenv.TestProxy, queryUint64; new internal-listen warning text in build.go: computed object-carrier arguments are now refused, and the guard is described as lexical
+- Names added while drafting: func localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string) in pkg/rewriter: it drops the remote mapping only for a standalone USE of a served database, because both engines refuse a USE of a remote-mapped database; TestUseOfAReplicaServedDatabaseIsRewrittenLocally (pkg/rewriter); TestBuildServer_ForwardTableStateFollowsStorageIntegrity (root package); unexported forward helpers: (*Plugin).replicaServed, replicaAware, refuseEndedReplicaServing; unexported sireserved helpers: peerReasonComputedCarrierArgument, carrierArgumentViolation, literalCallArguments, literalArgument, digitsOnly, isPunctToken; forward test helpers: replicaServedState, replicaRouting, queryOn, servingEndedMessage; rewriter test helpers: replicaServingState, servedSnapshot (storage_integrity_test.go); replicaParityCopyA, replicaParityCopyB, replicaParityState, replicaParityNetwork, replicaParityOptions, requireReplicaParity (new replica_parity_test.go, which holds the engine-gated tests; native_smoke_test.go is unchanged); integration helpers consumed by Task 44: replicaReadsPhys, replicaReadsDB, replicaReadsOwner, replicaReadsCopyA, replicaReadsCopyB, replicaReadsServed, seedReplicaReads, downAddress, startReplicaReadsHost(t *testing.T, state sitable.TableState) *testenv.TestProxy, queryUint64; new internal-listen warning text in build.go: computed object-carrier arguments are now refused, and the guard is described as lexical
 - Verified while drafting: Setup: fresh git archive of housegate origin/main, plus a stand-in for S3-C1 Task 22's CopyTable, plus Task 42's five commits (24 files, +1017/-41, as Task 42 states). / The task text was applied mechanically, step by step, with a parser of the replace/append/create blocks. Steps 3, 8 and 13 failed exactly as stated; the line numbers and messages were re-measured, including the Step 13 shift to plugin_test.go:1338:19. / Every pass check ran under GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test (with -race where stated), and all passed. go vet is clean on the five changed packages, and gofmt -l is empty. / Native engine (FFI v0.17.0) and gRPC engine (a local container of the devnet2 pin, emulated amd64) both passed under go test and under bazel test with both --test_env variables. / The integration tests passed under go test and under bazel test //pkg/integration:integration_test on ClickHouse 25.8.28.1. / bazel run //:gazelle (offline) changed nothing, bazel build //... passed, and bazel test //... ended with 67 tests pass. / Roughly 18 mutations were each caught by the test meant for them, covering forward, rewriter, sireserved, the build wiring and USE localization. A second replay of the final text on a fresh clone gave an identical tree (19 files, +1461/-39). / All 6 bash blocks and 17 Run lines pass bash -n and shellcheck. The fish block passes fish --no-execute, and the 5 commit messages end with the Co-Authored-By line. / The rewriter container was stopped afterwards. No real repository or worktree was edited, and nothing was fetched or pushed.
+- Review fixes (AgentConnect round 1), finding 1 (alias-backed carrier arguments): the K48 peer rule admitted a bare, quoted or qualified identifier as a literal carrier argument, but ClickHouse's analyzer resolves an identifier argument of a table function through the statement's aliases first, so `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')` passed the guard and read `hg_replica`. Reproduced in a local `clickhouse/clickhouse-server:26.3` container (26.3.51.7): that statement, its backquoted, double-quoted and digit-leading (`1d`) alias variants, a SELECT-list alias, an inline `WHERE` alias, an enclosing query's `WITH`, an alias named `phys` and the tuple elements `d.1`, `d.2` each returned the row of `hg_replica.secret`; `AS 1` is a syntax error. The guard now admits only one string literal or one digits-only word per argument (`literalArgument`, new `digitsOnly`), so every identifier and the qualified and decimal shapes are refused with the unchanged 392 and reason. `peerCarrierArgumentForms` gained 13 refused forms (the nine alias forms, the three identifier forms that were in the passing list, and a decimal); the passing list gained a literal user/password `remote()` and a `WITH 2 AS d` alias that no carrier argument names. The same container showed 26.3 rendering the nested `remote()` it pushes into a leg (JOIN and IN subquery, `prefer_localhost_replica=0`) with string literals only, so S3-A's legs are unaffected; the engines refuse every object carrier by name on ordinary sessions (rewriter-go v0.17.0 `TestTableRef_TableFunctionsAndEnginesAreAllowlisted`). Verified on a `git archive` of housegate `origin/main` `862a7a8` with Steps 12 and 14 applied from the plan text: Step 13 fails as stated (`plugin_test.go:1356:19`), Step 15 passes with `41` subtests, `gofmt -l` and `go vet` clean; with the old `literalArgument` restored the 13 new forms fail.
 
 ### Task 44
 
@@ -27391,6 +28177,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Placeholders were removed from every command: W is the URWT path literal, and the PR URL, merge commit, tag and digest are kept in files beside the worktree. All 17 bash blocks pass bash -n and shellcheck, and the fish commands pass fish -n.
 - Names added while drafting: plugin.FailoverPhase, plugin.FailoverAtHello, plugin.FailoverAtRead, plugin.UpstreamFailover (defined in pkg/plugin/upstream_failover.go; re-exported by alias as the contract's proxy.FailoverPhase, proxy.FailoverAtHello, proxy.FailoverAtRead, proxy.UpstreamFailover); plugin.FailoverReporter { FailedOver(ctx, database, reason, from, to string) } and its alias proxy.FailoverReporter; (*agent.ReplicaFailover).FailedOver (emits the contract log 'agent: replica failover' with database, owner, reason, from, to); agent.ReplicaFailover gains an unexported owners sync.Map (owner per database, for the log); (*proxy.MetricsObserver).ReplicaFailover(reason) and ReplicaFailoverExhausted(reason); unexported agentReplicaFailoversTotal, agentReplicaFailoverExhaustedTotal, replicaFailoverReasons; warn log 'relay: no replica host served the failover; the client gets the original error'; startup info log 'agent replica read failover enabled: ...'; unexported buildAgentReplicaFailover (root build.go); relay internals Relay.failover/failoverMu/failoverQuery/closing, writeQuery, spliceClientPacket, failoverRead, readFailoverTo, prepareReadCandidate, failoverAtHello, helloCandidate, exchangeUpstreamHello, failoverCandidates, failoverDatabase, failedUpstreamAddr, dialFailoverCandidate, failoverConn, replicaFailoverAttemptTimeout (10s); network internals: RpcNetworkState.now/replicaMu/replicaHosts, replicaHostsEntry, storageEndpoint, replicaHostsAt, replicaHostsFromPeers; chproto tableRefusedInfix, indexerQuarantinedReadInfix; extra tests: TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases (registry), TestAgentNeverFailsOverAClosedSession (proxy), TestReplicaFailoverLogsEachFailover (agent), TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState (root); local-only release files beside the worktree: $HOME/src/remotesrc/claude/housegate/multi-source-s3c4.pr-body.md, .pr-url, .merge, .hg-tag-p3, .hg-digest-p3 (later commands read them back, so no value is typed in by hand)
 - Verified while drafting: Scratch dir <scratch> git archive of housegate origin/main 862a7a8 (base), then the real Task 42 with S3-C1 Task 22 (t42), then task-43.md applied mechanically (t43, all 54 operations), then task-44.md (55 operations). / Git simulation at a fake HOME URWT path: each commit block of Tasks 42, 43 and 44 ran verbatim. Result: 16 commits ahead of origin/main, with no file left uncommitted by Task 44's git add lists. / Steps 3, 8, 13 and 18 fail with exactly the compile errors stated (for example client_error_test.go:205 undefined: TableRefusedMessage; rpc.now undefined; undefined: FailoverPhase / r.failover undefined / ReplicaFailoverEligible undefined; undefined: ReplicaFailover / agent.ReplicaFailover). / Steps 5, 10, 15 and 20 pass: gofmt and vet are clean; the listed PASS lines and subtests appear; -race -count=20 passed in 2.1 s; go list -deps shows that pkg/plugins/agent does not import pkg/proxy (count 0). / Mutations fail the named tests: Reason forced to not ok, noteFailoverStatement made a no-op, fq.answered removed, the closing check removed ('candidates were asked for [db2] and reports []'), and the build wiring reverted ('an RPC network state: UpstreamFailover = <nil>, want *agent.ReplicaFailover'). With the integration wiring off, the test fails with the stated 392 refusal text. / bazel run //:gazelle made no changes; bazel build //... passed; bazel test //... reported 'Executed 32 out of 67 tests: 67 tests pass.' / Integration: TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember and Task 43's four TestReplicaReads_* passed with go test and with bazel test //pkg/integration:integration_test (CH 25.8.28.1, FFI v0.17.0 cached). / Docs grep counts of Step 25 match (1; 1/1; 1/1; 1; 2). Step 30's content-check block ran against the simulated tree with tags and printed 2 1 1 1 1 1 2 2 1, the two contains lines and the merge commit. / Ledger R1, R2 and R4 ran verbatim (with h pointed at a fake origin and urwt-create.sh replaced by a git-worktree stand-in) against a stand-in Appendix C of contract §32.7: the empty, ref, set and get outputs are as stated, the diff was '1 file changed, 5 insertions(+), 3 deletions(-)' with 2 sub-items, the push went to the plans branch, and R4 printed both values. / bash -n and shellcheck passed on all 17 bash blocks; fish -n passed on every fish command and on the bash lines said to run unchanged in fish; no markdown hard wraps.
+- Review fixes (AgentConnect round 1), finding 4 (a reachable candidate that cannot serve): failoverRead set fq.read = false and reported the failover as soon as a candidate took the hello and the read, so a candidate whose member does not serve the database, whose host then relays the quarantined owner's 392 (replica_hosts is static until placement), ended the failover with that refusal and the next candidate was never tried. Reproduced on the replay of Tasks 42 to 44 (housegate origin/main 862a7a8, a CopyTable stand-in): the new TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead failed with the refusing candidate's `storage_integrity: table db2.t was refused: indexer_quarantined: ...` and `second candidate queries = 0`. Fix: failoverQuery.moving keeps a readFailover (database, reason, from, to, the candidates not tried, the owner's original packet or read error, the candidates' failures); a candidate's first answer that Reason accepts, before any packet reached the client, moves the read to the next candidate; when none is left the loop handles the owner's original Exception or read error (failoverRead now returns the packet and error the loop handles) and the exhausted counter and warn line count it once; FailedOver, the agent log and replica_failovers_total fire only at the first usable answer (a packet, EndOfStream, an opaque result, or an Exception Reason declines). The new test covers a refusing candidate, a candidate that breaks after the read and a serving one in that order (one lookup, one report for the serving one, the counter +1, the session on it), and two refusing candidates (the owner's refusal, no report, exhausted +1). Every earlier relay test passes unchanged, the relay tests under -race -count=20, the whole pkg/proxy package under -race, gofmt and go vet clean; the plan text replays byte-identically to the verified scratch; reporting at the move fails the new test with one report per candidate. K46, Review Focus 5, contract §29.3, the notes, the commit message, the PR body and runbook §9.4 say the same.
 
 ### Task 45
 
@@ -27410,6 +28197,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - No consensus change: consensus.go, wire, authority, conformance, snode, verifier, dataplane and cut-release.yml are untouched; LocalNodeFeatures unchanged; arbiter-proto and housegate pins stay CORE_TAG_P2's
 - Names added while drafting: serve.Deps.NodeID (the view's node_id; contract §30.2 Deps names no source for it); serve.ReasonOwnerAvailable ... serve.ReasonInstalling (Go names of the 11 closed Reason values) and func serve.Reasons() []Reason; (serve.Config).String, GoString, LogValue (the token printed as <redacted>); refusals 'serve: Deps.Registry, Deps.Published and Deps.Copies are required' and 'serve: member serving URL %q is not http://host:port'; endpoint texts: 400 'member serving: acquire needs a database and a snapshot_id', 400 'member serving: lease_id is required', 400 'member serving: the body holds more than one JSON value', 405 'member serving: %s %s is not allowed; use %s', 404 'member serving: no route %s'; eight 'member serving: ...' log lines (database serving / stopped serving, lease revoked, lease ended, owner probe failed / reachable again, manifest unavailable / readable again); member/install unexported installGates.after, installGates.held, (*installGates).done(); member/serving.go (new): unexported serving, newServing(cfg, d) with refusal 'member: Config.Serve needs Deps.Client to read the published manifest', (*Role).installHooks, attachServing, runServing, installJournal, servedCopies, publishedFeed, servingManifestEntries = 2, publishedFeed's five 'member serving: ...' refusals; tests beyond the contract: TestServingListsOnlyTheActiveIncarnations, TestBeforeInstallGivesUpWithItsContext, TestNewClientRefusesABadURLOrNoToken, TestConfigNeverPrintsItsToken (member/serve), TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite (member/install, ClickHouse-gated), TestServedCopiesReadTheInstallJournal, TestPublishedFeedReadsTheWatermarksManifestWithFrontiers (member), with the listed test helpers; files: $HOME/.cache/s3-ledger/record-s3c4-45.md (run record), record-s3c4-45.tag (Step 29's verified tag, read by Step 30), record-s3c4-45 (R1 state); PR body ~/src/remotesrc/claude/arbiter-core/multi-source-s3c4.pr-body.md; local container arbiter-core-s3c4-serve-ch
 - Verified while drafting: Scratch base work/c4/task-45-r3/base: git archive of arbiter-core origin/main cfd4f42 (v0.15.0) plus every file the current drafts of S3-C1 Tasks 23-24 and S3-C2 Tasks 29-34 create (extracted 2026-10-16 from the revised drafts; Task 29/30/32/34 code identical to what r2 used), Task 29's ManifestOwner hunk, Task 30's IncarnationSchema export and sitable resolve directive, the BUILD data/tags attributes of Tasks 30/32/33/34, the CI targets of Tasks 23 and 30-33, the README edits of Tasks 23 and 34; housegate origin/main v0.20.0 with S3-C1 Task 22's helpers and arbiter-proto v0.12.0 via replace and a Bazel local_path_override; committed and tagged v0.17.0 as the CORE_TAG_P2 stand-in; Bazel 9.1.0 offline (--repository_disable_download): gazelle stable, bazel test //... 27 targets PASS / Every Task 45 step applied mechanically from the final text (Create blocks, python scripts, commits) in work/c4/task-45-r3/run: Step 2 printed every expected line; Step 4 go get/tidy offline moved no module, go.mod diff and MODULE.bazel use_repo line as stated; Steps 4, 13, 18, 22 failed to build with the listed messages (Step 13's expected corrected to the nine undefined errors); Steps 10, 15, 20, 24 passed under Bazel with and without the race detector (runs_per_test=10 for serve); Step 26 passed 28 targets with and without race, consensus.go unchanged, no stage-3 feature string, six commits; Steps 23 and 25 diff stats as stated (config.go 4, role.go 14, 17 insertions 1 deletion; README 17 insertions) / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go vet ./member/..., go test -race -count=10 ./member/serve/ and go test -race ./member/... passed / ClickHouse-gated: TestServeHoldsInstallsOfAServedDatabase PASS on clickhouse/clickhouse-server:25.8 (25.8.28.1) through Bazel twice and on 26.3 (26.3.51.7) through go test; Task 32's whole install suite plus TestInstallerWithoutAGateIsUnchanged and TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite PASS on both (only the ARBITER_CH_RESTART test skips) / Mutations each failed a named test: drop r.attachServing(inst), drop start(serving, r.runServing), nil AfterInstall in the role (build failure), polls < 1, only 409 mapped to ErrLeaseRevoked, never excluding a lagging table, drop defer gates.done() in applyOwner / actionlint clean on the edited ci.yml; //member/serve:serve_test inserted after //member/install:install_test / A fresh re-application of the final markdown to a fresh base copy reproduced the verified tree byte for byte (sources, ci.yml, README; go.mod identical after Step 4) and go test ./member/... passed / Step 29's content-check block ran on a scratch tag with a stand-in gh; Step 30 R1, R2 (to a local bare origin) and R4 ran through s3-ledger.py (Plan S3-C1 contract §19, verbatim) on a stand-in housegate with this plan's Appendix C: printed 'not recorded yet', 'Task 45 recorded CORE_TAG_P3=... and its run record 'arbiter-core release'', the push, and CORE_TAG_P3=<value> / All 24 bash blocks pass bash -n (bash 5 and macOS /bin/bash 3.2) and shellcheck (one SC2046 for the repository's gofmt -l $(git ls-files '*.go') idiom); the blocks of Steps 27-29 pass fish -n / No real repository or worktree edited, no fetch/push, no cluster or remote GitHub call; scratch docker containers removed
+- Review fixes (AgentConnect round 1), finding 3 (leases across a member restart): serve.New started with empty lease tables, so a restarted si-member's BeforeInstall found no lease and its startup audit or install changed the copy at once while the host still answered Replica under the lease the previous process granted (reproduced: a second server on the same ports and state, built without restoring leases as the drafted New did, returned from BeforeInstall at the restart, 3 s after the last renew, while the host held the lease: `BeforeInstall returned 3s after the last renew, before the restored lease expired`). Fix (F45.14): Deps.StateDir (required; member.newServing passes Config.StateDir, the member's persistent volume) and LeaseFile serve-leases.json, written atomically under mu before every grant and renew (500 `serve: record leases in %s: %v` when it cannot be, the change not applied) and after every release; New restores the unexpired leases revoked, so renew answers 409 and BeforeInstall waits for the host's release or the recorded expiry; an unreadable file fails New. Each lease keeps the TTL it was granted with (lease.ttl), so a restart with another LeaseTTL keeps the old expiry. Every serve.New call of the plan gains a StateDir (fakes_test's harness, now with start/restart, client_test, metrics_test, serve_test with a new no-state-directory case, serve_ch_test, member.newServing, and Task 46's startReplicaCHHost); handler.go maps a renew error to 500. Tests TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted (host releases; host silent, returning exactly one TTL after the last renew; an expired lease not restored) and TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed. Verified on a git archive of arbiter-core origin/main cfd4f42 with stand-ins of S3-C2's ManifestOwner and S3-C1's OwnerEntry/CopyTable (housegate origin/main 862a7a8) and the plan's member/serve files: the new tests fail to compile first (undefined LeaseFile, leaseRecord, Deps.StateDir), then `go test` and `go test -race -count=3` pass, gofmt and go vet clean, and the files replayed from the plan text are byte-identical to the verified ones; with restoreLeases disabled both new tests fail. member/serving.go and serve_ch_test.go were not compiled (they need S3-C2's member packages and ClickHouse); their edit is one keyed field each, gofmt-checked. Runbook §8.2 and §9.3 and Task 48's revert note now describe the restored lease, and §8.2 reverts a member commit only after its host's.
 
 ### Task 46
 
@@ -27418,12 +28206,13 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Without storage_integrity.replica_reads.member_status_url nothing changes on a host except the additive label value status="replica" (at 0) and the always-present info fields replica_databases [] and replica_hosts; without STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN the si-member builds member.Config with Serve nil and opens no listener.
 - The host decoder (decodeConfigYAML) is lenient yaml.Unmarshal, so an older host image ignores replica_reads; the member decoder (LoadSIMemberConfig) is KnownFields-strict, so an older member image refuses serve, which is why Task 47 renders serve only with siMember.serve.endpoint.
 - owner_housegate keys decode as YAML integers (map[uint64]string): a quoted key is refused; quoted durations ("60s") decode, and the member test now loads exactly the chart's render form.
-- The lease client releases a dropped lease only on a later poll than the one whose Refresh dropped it, and only at InFlight == 0; it counts expired when the serving view no longer lists the lease (or its deadline passed while the member was unreachable), since the member answers 404 only to renew and the serve client has no 404-specific error.
+- The lease client releases a dropped lease only after the Refresh that dropped it has published, on that poll or a later one, and only at InFlight == 0 (the drafted one-poll grace was replaced by sitablestate's read admission, review fix of AgentConnect round 1); it counts expired when the serving view no longer lists the lease (or its deadline passed while the member was unreachable), since the member answers 404 only to renew and the serve client has no 404-specific error.
 - The CI acceptance step's PASS count goes 6 -> 8 (5 at the base plus S3-B Task 12's login test, then the two TestSIMemberServes... tests); its SKIP check and count use grep -E 'Test(StorageIntegrity|SIMember)'.
 - After Plan S3-C1 Task 25, commands/storage_integrity.go ends with newRestoreDrillCommand and commands/storage_integrity_test.go with TestStorageIntegrityCommandListsBackupAndRestoreDrill; after S3-B Task 12, config/config_test.go ends with TestStorageIntegrityOwnerAuditValidation: the task's append anchors now say so.
 - rules_go accepts tablestate's external test package importing replicalease (which imports tablestate): bazel test //storageintegrityadapter/tablestate:tablestate_test passed.
-- Names added while drafting: config: (StorageIntegrityReplicaReads).validate(token), isHTTPHostPortURL, refuseStorageIntegrityMemberStatusTokenKey(data), (StorageIntegrityMemberServe).ListenAddr(), (StorageIntegrityMemberServe).ServeConfig(token) *serve.Config (nil without a token), unexported validate/ownerUnreachableAfter/ownerProbeInterval/leaseTTL/isListenAddress/isHostPort, refuseSIMemberServeTokenKey(data); new file config/si_member_serve.go; tablestate: const LeaseReleased = "released", LeaseExpired = "expired"; (*Metrics).RegisterReplicaReads(reg), ObserveMemberStatus(up), ObserveLeaseRelease(outcome); unexported replicaEntries, replicasEqual, sortReplicaTables, content.replicas, registryInput.replicas, Snapshot.served; Issue reasons 'not served from the member's copy: ...'; the warn log 'storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing'; new file replica.go; replicalease: type Client; refusals 'replicalease: the member status client is required', '... the in-flight replica-read counter is required', '... the table-state refresh is required'; its log lines (acquired, not acquired, renew failed, dropped with reasons lease deadline / no longer served / lease unknown to the member / lease revoked, release failed, ended, endpoint unreachable / answers again); replicalease/replicaleasetest (test support): Member, NewMember(t, token, ttl), URL, Serve, StopServing, Forget, Close, Calls, Held; standalone: deps field replicaMember *serve.Client; runtime fields replicaReads and leases; (*storageIntegrityTableStateRuntime).replicaReadsCounter(); newStorageIntegrityMemberClient(url); storageIntegrityMemberClientTimeout (5 s); PrintStorageIntegrityMemberServing(ctx, cfg, out); storageIntegrityReplicaCollector / newStorageIntegrityReplicaCollector; task name 'storage integrity replica leases'; errors 'storage integrity member status client: %w', 'storage-integrity replica leases: %w', 'register storage-integrity replica-read metrics: %w', 'member-serving requires a config', 'member-serving: %w', 'member-serving: read the serving view of %s: %w'; files storage_integrity_member_serving.go, storage_integrity_replica_metrics.go; simember: siMemberRole gains ServeHandler() http.Handler and ServeMetrics() *serve.Metrics; runDeps.serving func(net.Addr); prepareSIMemberServing; siMemberServe(cfg, token, role siMemberRole); errors 'si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty', 'si-member serve: the member role has no serving endpoint', 'si-member serve metrics: %w', 'si-member serving listener %s: %w'; exit part 'serving endpoint'; logs 'si-member serving endpoint listening', 'shut down the si-member serving endpoint'; new file simember/serve.go; commands: newMemberServingCommand with its Short and Long; tests beyond contract §31.8: TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads, TestNewRefusesAnIncompleteConfig (replicalease), TestStorageIntegrityCommandOffersMemberServing (commands); CI: acceptance step name suffix ', replica reads', SKIP/PASS patterns 'Test(StorageIntegrity|SIMember)', expected count 8; README subsection '### Storage-integrity replica reads (stage 3 P3)'; local names: container sn-s3c4-t46-ch, PR body ~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md, run record $HOME/.cache/s3-ledger/record-s3c4-46.md and state file record-s3c4-46
+- Names added while drafting: config: (StorageIntegrityReplicaReads).validate(token), isHTTPHostPortURL, refuseStorageIntegrityMemberStatusTokenKey(data), (StorageIntegrityMemberServe).ListenAddr(), (StorageIntegrityMemberServe).ServeConfig(token) *serve.Config (nil without a token), unexported validate/ownerUnreachableAfter/ownerProbeInterval/leaseTTL/isListenAddress/isHostPort, refuseSIMemberServeTokenKey(data); new file config/si_member_serve.go; tablestate: const LeaseReleased = "released", LeaseExpired = "expired"; (*Metrics).RegisterReplicaReads(reg), ObserveMemberStatus(up), ObserveLeaseRelease(outcome); unexported replicaEntries, replicasEqual, sortReplicaTables, content.replicas, registryInput.replicas, Snapshot.served; Issue reasons 'not served from the member's copy: ...'; the warn log 'storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing'; new file replica.go; replicalease: type Client; refusals 'replicalease: the member status client is required', '... the in-flight replica-read counter is required', '... the table-state refresh is required'; its log lines (acquired, not acquired, renew failed, dropped with reasons lease deadline / no longer served / lease unknown to the member / lease revoked, release failed, ended, endpoint unreachable / answers again); replicalease/replicaleasetest (test support): Member, NewMember(t, token, ttl), URL, Serve, StopServing, Forget, Close, Calls, Held; standalone: deps field replicaMember *serve.Client; runtime fields replicaReads and leases; (*storageIntegrityTableStateRuntime).replicaReadsCounter(); newStorageIntegrityMemberClient(url); storageIntegrityMemberClientTimeout (5 s); PrintStorageIntegrityMemberServing(ctx, cfg, out); storageIntegrityReplicaCollector / newStorageIntegrityReplicaCollector; task name 'storage integrity replica leases'; errors 'storage integrity member status client: %w', 'storage-integrity replica leases: %w', 'register storage-integrity replica-read metrics: %w', 'member-serving requires a config', 'member-serving: %w', 'member-serving: read the serving view of %s: %w'; files storage_integrity_member_serving.go, storage_integrity_replica_metrics.go; simember: siMemberRole gains ServeHandler() http.Handler and ServeMetrics() *serve.Metrics; runDeps.serving func(net.Addr); prepareSIMemberServing; siMemberServe(cfg, token, role siMemberRole); errors 'si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty', 'si-member serve: the member role has no serving endpoint', 'si-member serve metrics: %w', 'si-member serving listener %s: %w'; exit part 'serving endpoint'; logs 'si-member serving endpoint listening', 'shut down the si-member serving endpoint'; new file simember/serve.go; commands: newMemberServingCommand with its Short and Long; tests beyond contract §31.8: TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase, TestNewRefusesAnIncompleteConfig (replicalease), TestStorageIntegrityCommandOffersMemberServing (commands); CI: acceptance step name suffix ', replica reads', SKIP/PASS patterns 'Test(StorageIntegrity|SIMember)', expected count 8; README subsection '### Storage-integrity replica reads (stage 3 P3)'; local names: container sn-s3c4-t46-ch, PR body ~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md, run record $HOME/.cache/s3-ledger/record-s3c4-46.md and state file record-s3c4-46
 - Verified while drafting: Fresh scratch <scratch> stand-ins hg-p1 (housegate v0.20.0 + S3-C1 Task 22 CopyTable/OwnerEntry), hg (Task 42's verified tree + OwnerEntry + Task 44's si_info.go hunks applied from its markdown), core-p2 (arbiter-core v0.15.0 + S3-C2 member stand-ins + Task 29's ManifestOwner), core (core-p2 + Task 45's member/serve sources verbatim, whose own tests pass, + a member.Role stand-in with Config.Serve and the three methods). / sentio-node prior state: git archive origin/main 5d2f169 with the markdown of S3-B Task 12, S3-C1 Task 25 and S3-C2 Task 35 applied mechanically by a hunk applier (pins emulated with go.mod replaces and the tasks' MODULE.bazel scripts); Task 25's standalone backup code stubbed and Task 35's simember/install_ch_test.go left out; prior state gofmt-clean, go vet and go test ./... green. / Replayed the task markdown step by step (GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go): Step 2's pin script changed exactly 6 lines (six -, six +) and was idempotent; build failed with 'missing method Served' as stated; every Expected FAIL (Steps 4, 6, 8, 10, 12, 14, 16) showed the stated messages; every implementation step passed; Step 5/7/9/11/13/15/17/18 git status lists matched. / All 24 contract §31.8 tests plus the three extra tests pass; go test -race on config, storageintegrityadapter/..., rpc, standalone, commands, simember; gofmt clean; go vet ./... clean. / Offline Bazel 9.1.0 (--repository_disable_download, --override_module housegate/arbiter_core to the P3 stand-ins): bazel build //... and bazel test //... (18 tests) passed; bazel run //:gazelle changed no line this task writes (only stand-in artifacts of the stubbed Task 25/35 files). / ClickHouse 25.8.32.4 with Keeper: Step 18's block printed nine PASS lines incl. TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost (3.0 s) and TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost (4.0 s); the new ci.yml acceptance step run through Bazel passed with 8 PASS markers. / Step 19's CI-script check printed 'step script ok', 'eight passes accepted', 'storage-integrity acceptance skipped', 'expected 8 ... saw 7'; Step 21's binary block printed exactly its 7 expected lines, no LEAK; Step 22's PR-body block printed 0 and 1. / Step 1's ledger reads and Step 23's R1/R2/R4 blocks ran against a local bare origin (real S3-A plan on main, stub C2/C4 plans on the -cf branch; git worktree add in place of urwt-create.sh): ref, get, empty, set and the push printed the expected lines and filled the two rows and the 'sentio-node release' item. / Step 1's contract greps run against git repos of the hg/core stand-ins gave the stated counts (6 sitable, 4 ReplicaReads, 6 table_status, 2 si_info, 1 proxy, sitablestate 1, 6 serve constants, 5 client/error/metrics, 4 member, snode 1). / 28 mutations: 27 killed by named tests, 1 equivalent survives (CopyTable/ReplicaOf dropped from content.equal). / All 30 bash blocks and 19 Run lines pass bash -n and shellcheck with placeholders filled (Step 21's gofmt Run line rewritten to xargs -0 to clear SC2046); buildifier -mode=check -lint=warn passes on the 7 BUILD files; actionlint reports only the pre-existing SC2046 at ci.yml:35; fences balanced, no hard-wrapped prose.
+- Review fixes (AgentConnect round 1), finding 2 (with Task 42): the one-poll grace did not bound the gap between rewrite's snapshot and sitablestate's count, so a slow rewrite could reach the copy after the release. Task 42's read admission closes it, and the lease client now releases a dropped lease on the poll whose Refresh published the dropping snapshot (after that Refresh) or later, at InFlight == 0, without a grace poll; release lost its poll parameter. TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads became TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase, which checks through a refresh hook that nothing is released before the dropping snapshot is published. Verified in a stub module (the plan's replicalease client, its tests and replicaleasetest over Task 45's member/serve from the plan, a tablestate stand-in of the plan's ReplicaDatabase/Metrics names, housegate stand-ins): the new test fails first (`the same poll releases the lease once the snapshot is published`: expected 1, actual 0), then the package passes with -race; releasing before the Refresh fails it.
 
 ### Task 47
 
@@ -27454,6 +28243,10 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Structure: 23 steps. Each grant, window, serving or monitoring window ends the turn. Steps 22–23 are the docs-only record PR and the Appendix C record of P3_END with the run record 'P3 run' (R1–R4 through s3-ledger.py). Rollback uses the runbook's §8 blocks in reverse order, each its own confirmed step.
 - Names added while drafting: session $HOME/si-devnet2-stage3-p3-session ($S) with live-path, ledger.env, helpers.sh, blocks/, task48/ ($T48); p3-helpers.py subcommands chain DOCS_DIR RUNBOOK, map RUNBOOK, block RUNBOOK SECTION N confirmed|read-only [OLD NEW]...; p3-edit.py subcommands state, check, apply <stage>, files <stage>, same <dir> <file>... (independent check of contract §32.5); stage names pr, G-b, G-c, G-n, W-b-m, W-b-h, W-c-m, W-c-h, W-a-m, W-a-h, S-b, S-c, S-a, M; task48.sh helpers: p3_tool, p3_record, p3_value, p3_id, p3_installation, p3_p3_image, p3_p2_image, p3_p3_sidecar, p3_db, p3_fresh_main, p3_tests, p3_pod, p3_pod_key, p3_container_image, p3_secret_refs, p3_token_refs, p3_host_metrics, p3_replica_series, p3_series, p3_view_check, p3_replica_hosts_check, p3_status_is, p3_member_window_check, p3_host_window_check, p3_owner_targets, p3_serve_check, p3_local_agent, p3_probe_ok, p3_copies_equal, p3_pinned_host_image, p3_replica_status_check, p3_promotions, p3_block, p3_user_script, p3_clear, p3_runbook_shape, p3_user_scripts_ok, p3_pins_match, p3_stage_block, p3_prev_stage, p3_render_check, p3_edit_check, p3_preview, p3_pushed_is; variables S, T48, p3_runbook (in task48.sh); user scripts $T48/user-6.1-baseline.sh, user-6.3-reads.sh, user-6.3-refusals.sh, user-6.5-read.sh (and user-6.1-baseline-2.sh only after a retryable 733); block files $S/blocks/<nnn>-<what>.sh and <nnn>-runbook-<section>-<n>.sh; clones $T48/rehearsal/ and $T48/preview-<label>-<n>/; evidence task48-record.env keys START_UTC, TESTS, BUDGET_HALF, PROMOTIONS_START, EPOCH_START, GEN_C_START, ACCEPT_5301, WINDOW_END_UTC, LOCAL_AGENT, SERVING_ON_UTC, MONITORING_UTC, BASELINE_COUNT, PUBLISHED_C, QUARANTINE_GENERATION, QUARANTINE_UTC, SERVED_UTC, FAILOVERS, READ_ROUNDS, RELEASE_UTC, SERVING_ENDED_UTC, END_UTC, P3_END, PROMOTIONS_END, STATE_BYTES, RECORD_PR; evidence task48-preview-<label>.env (tree, parent, files, clone), markers task48-cleared-<script>, task48-ran-<script>, task48-local-agent-ok, and task48-* check files (task48-preconditions.txt, task48-window-<x>-member.txt, task48-window-<x>-host.txt, task48-serving-<x>-*.json, task48-status-replica-<x>.json, task48-quarantine.txt, task48-release.txt, task48-serving-ended.txt, task48-end.txt, task48-ledger.env, task48-record-pr.txt, task48-s3c2-plan.md ...); record PR branch urwt/claude/multi-source-s3c4-record, title 'docs(storage-integrity): record the devnet2 stage-3 P3 run'; ledger worktree multi-source-s3c4-ledger-48 with record-s3c4-48, record-s3c4-48.md, record-s3c4-48-pr.md, record-s3c4-48-pr-url
 - Verified while drafting: Stand-in production checkout: task-47-r3/dev commit 1b48db6, which is base 75514e3de-era production with the S3-B/C1/C3 drafts and Task 47 applied, its runbook filled with stand-in pins. That runbook is byte-identical to the current task-47.md's runbook after the fill. / Step 3's rehearsal block, run as written, passed (rc=0, 8 min). For all 13 stages, si_p3_edit and p3-edit.py produced the same content, the 174 render tests passed, and the render diffs were exactly the objects contract §32.5 allows. The 13 reverts led back to stage pr with an empty diff. / Live flow, simulated on a linked worktree with a bare remote and stubbed sync/apply/rollout: for all 13 commits, p3_fresh_main, p3_preview, the runbook's confirmed block via p3_block, and p3_pushed_is all passed; final state 'stage M'. / Failure paths, simulated: when main moved between preview and block, si_p3_commit refused and nothing was committed; a retry with a new preview then pushed. When the push was refused by a hook, p3_pushed_is reported 'not on origin/main (the push failed)', and the documented recovery (record moved aside, local commit dropped, new preview) then pushed. / Rollback, simulated with runbook §8.2 blocks 1–6 (including the x=a→x=c/x=b replacements) and §8.1 blocks 1–3: after each revert, p3-edit.py state read the previous stage, and the remote ended equal to the start (empty diff). / Drill, simulated with a fake housegate and clickhouse-client in PATH: the user scripts were generated from runbook §6.1/§6.3/§6.5 and run. Task 48's checks of drill-baseline.txt, drill-count, drill-reads.txt (last line, failover lines), drill-refusals.txt and serving-ended.txt all passed. The script guards also held: a second run, an uncleared run and a run without a key each refuse. / Runbook §7 block, run with stubs, produced p3-end.txt, and Step 21's parsing of it passed. The Python of Steps 22 and 23 ran on a fake record, and s3-ledger.py set accepted the run record and P3_END. / p3_runbook_shape, p3_user_scripts_ok, p3_pins_match and p3-edit.py check all passed on the stand-in. / Every block of the final markdown checked clean: bash -n on 77 bash blocks, fish -n on 7 fish blocks, and ast.parse on 2 Python files. shellcheck flagged only intended SC2015 info notes, after excluding SC2154/SC1091 for sourced variables. No hard wraps. The embedded tools are byte-identical to the tested files.
+
+### Review fixes (AgentConnect round 1): cross-plan
+
+- K50's last resolution bullet and the Follow-ups' placement-era bullet now say that from placement on S3-E4 Task 79 lists the hosts of every current `DatabaseGroup` member, never filtered by `MemberReady` (S3-E4 contract §56, its review finding 2: the drafted "plus readiness", read as `MemberReady`, would have emptied every list from `PLACEMENT_EPOCH` until P6 step 6). F45.7 notes that after Plan S3-C2's review fix 245-1 a ready copy no audit covered since the start or the last ClickHouse restart is `Diverged` and keeps `AuditClean` false until `Apply` audits it. No code of this plan changes; Task 45's two hunk scripts were re-run on S3-C2's fixed Tasks 29–34 code and both apply.
 
 ## Appendix C: execution record
 
