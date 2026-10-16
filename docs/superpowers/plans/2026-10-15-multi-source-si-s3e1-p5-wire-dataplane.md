@@ -46,6 +46,8 @@ The spec leaves these P5 wire and data-plane details open; each is resolved here
 - **K65 — The `stage3_v1` release rule (spec §10.3).** `arbiter.Stage3Feature = "stage3_v1"` joins `LocalNodeFeatures()` in `CORE_TAG_P5` (Task 63), so every SNode and verifier built with it advertises it at `RegisterNode` and every arbiter binary that pins it reports it in `GetProtocolInfo`. Resolution: arbiter pins `CORE_TAG_P5` only in S3-E2 Task 64 on branch `urwt/claude/multi-source-s3e`, and no arbiter release happens between that pin and S3-E4 Task 78; S3-D's `ARBITER_TAG_P4` is cut before. A data-plane binary on `CORE_TAG_P5` may run against an earlier leader, whose feature book keeps unknown strings without acting on them. Why: an arbiter release claiming `stage3_v1` without the v21 decoder would let the activation gate pass on a voter that cannot restore v21.
 - **K66 — The member consensus mode ships in `CORE_TAG_P5` (spec §8.1–§8.3, §8.6, §8.8, §9.1; §16 P6 "parameter updates").** Resolution: Tasks 62–63 ship the verify role, the `hg_member_unsafe` reconciler, readiness and checkpoint signing, the hardlink source and purge reports, reachable only through `member.Config.Consensus` (nil keeps the P2 member byte for byte) and its `Register` and `CreateReplicas` gates; sentio-node's config keys (S3-E4 Task 79) and production values (S3-F Task 83) turn them on. Why: S3-F needs no code release in the middle of the switch sequence, and S3-E4 Task 78's harness runs real members.
 - **K67 — Member and stage-3 RPC gating (spec §6.4, §7.4, §9.1, §10.4).** Resolution: before its switch every stage-3 RPC answers FAILED_PRECONDITION, without a NotLeader detail, with the verbatim texts of contract §39 (`member readiness is refused until the placement switch is on`, `member checkpoints are refused until the checkpoints switch is on`, `group rebalancing is refused until the placement switch is on`, `marking a member lagging is refused until the checkpoints switch is on`), and Apply refuses the same commands with the same texts, plus `re-selection is refused until the reselection switch is on` for tag 39 (S3-E3 Tasks 71, 73, 74, 75); the data-plane client maps the RPC answer to `dataplane.ErrStage3SwitchOff`, and the member treats it as "not yet", retries at its interval and never pages. Why: a member deployed ahead of its switch must neither alarm nor be counted, and one text per refusal keeps every voter's answer identical.
+- **The network pool of the owner's Keeper audit (spec §8.2, line 174; review fix, AgentConnect round 1).** Spec §8.2 has the owner's sweep alert on any replica on its paths "that is not the owner, a pool verifier or a current or past member", but the arbiter's purge node set, the only node list the data plane reads, holds every registered, non-evicted SNode and verifier, every registered member of every group among them, and the registry view does not carry the `verifiers` parameter. Resolution: the audit's pool is `wire.TableRegistrySnapshot.NetworkPool` of the purge node set: its nodes that are no `si_indexers` SNode and that the registry view names nowhere as a current, past or Leaving member of a group, a purge member of an incarnation or the node of a published checkpoint sequence (contract §42.1); another owner's SNode and a registered member of another group are reported on the owner's paths. Why: it keeps §8.2's alert for every member the registry has placed, which is every member that can hold an `hg_member_unsafe` replica through its own reconciler; the residual is a replica created through the leaked `si_member_ddl` credential (which exists only from S3-F step 6) of a registered member that no group names yet: such a member counts as a pool node until the arbiter serves the pool's node ids, a user decision recorded in Appendix B, Task 61.
+- **A registered member's own id at its startup (S3-C2 K29, spec §6.1 line 104; review fix, AgentConnect round 1).** K29 has the member refuse at startup an id that is in the arbiter's purge node set, but from its VERIFIER registration (S3-F step 4) a consensus-mode member's own id is there, so the refusal would stop every later start of every registered member. Resolution: with `member.Config.Consensus` the startup check leaves the member's own id out of the purge node set it compares with, keeps the refusal of an `si_indexers` SNode's id, and refuses an id the registry serves as a group member of another host (contract §42.3, Task 63); without it the check is K29's. Why: after the signed-claims activation a VERIFIER registration under the id is signed with its `verifiers` entry's key, which only the member holds, and Apply refuses a member entry whose id any node record holds (S3-E2 Task 64), so the id's presence is the member's own registration; the registry view carries no `verifiers` parameter, so the entry's key itself is checked by the arbiter at every `RegisterNode` the mode sends, not by the start.
 
 ## Release ledger (consumed and produced)
 
@@ -65,8 +67,8 @@ Plans S3-E2 (Task 64 pins all three), S3-E3, S3-E4 (Task 79 pins `CORE_TAG_P5` a
 1. **A field silently dropped, or a pool entry's bytes changed.** `VerifierEntry` is rebuilt field by field in arbiter-core's normalizer (`authority/consensus.go:125`) and wire converters (`wire/consensus.go:139-149`), and every devnet2 entry is hashed into the params digest of every epoch. Expected: every new field survives normalize, clone and the pb round trip; a pool entry with any member field set is refused, and a pool-only update hashes and encodes exactly as under `CORE_TAG_P4` (the existing `ActivationUpdateHash` and every existing golden pass unedited); a member entry is explicit in every field, with weight 1–64 and its failure domain equal to `stage3.indexer_failure_domains[host]`. Tests: Task 59 `TestVerifierEntryEveryFieldSurvivesNormalize`, `TestPoolVerifierEntryKeepsItsV20CanonicalForm`, `TestPoolVerifierEntryRefusesMemberFields`, `TestMemberVerifierEntryRules`, `TestStage3CanonicalMirrorsMatchProto`; Task 60 `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`; Task 57 `TestStage3ConsensusFieldNumbers`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`.
 2. **A pre-P5 binary meets P5 bytes, or a number is wrong.** Every number of contract §39 becomes a consensus constant at the v21 activation, and the strict decoder refuses an unknown field at any depth. Expected: every appended field left unset produces exactly the bytes `v0.11.0` writes and, set, only appends its own tags; tags 38–42 are the only new oneof members and tag 29 stays unused; no read-only message (groups, cutovers, the selection record) is reachable from `RaftCommand`; the two descriptor baselines and `buf breaking` against `PROTO_TAG_P4` are clean; S3-A's `conformance/stage3_reads_test.go` differs from `PROTO_TAG_P4` only in D25's three count changes; `GroupMember.host_indexer_id` keeps indexer 0 distinct from absent and is the only proto3 optional among the new messages; the encoded bytes of every tag-38–42 fixture are frozen; an unknown exclusion reason is refused at decode, never applied. Tests: Task 57 `TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged`, `TestStage3ConsensusRaftCommandTags`, `TestStage3ConsensusReadMessagesAreNotRaftReachable`, `TestStage3ConsensusFieldLedgers`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`, the unedited `TestSnapshotQueryDescriptorFixtureIdentities`; Task 60 `TestStage3CommandBytesAreFrozen`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero`.
 3. **Admission code 12 or 13 reaches a host's ingress.** A HouseGate older than `HG_TAG_P5` maps an unknown code to `OutcomeUnknown` and sends the statement to status probing (housegate `pkg/storageintegrity/arbiter_proto.go:426-427`). Expected: with `HG_TAG_P5` both are coded terminal rejects whose prepared parts are removed and whose coordinate is unspent; code 12 reaches the client as a retryable 733 with the exact verifiers-unavailable message and the session survives; code 13 as 252 back-pressure with the `storage_integrity: back-pressure:` prefix, counted in `storage_integrity_backpressure_total`, session preserved; code 14 stays unknown. Tests: Task 58 `TestVerifiersUnavailableIsATerminalRejectWithItsCode`, `TestCopiesBackpressureIsATerminalRejectWithItsCode`, the edited `TestIndexerQuarantinedIsATerminalRejectWithItsCode`, `TestVerifiersUnavailableMessage`, `TestCopiesBackpressureMessage`, `TestRelay_StagedVerifiersUnavailableRejection_KeepsSessionAndServesNextQuery`, `TestRelay_StagedCopiesBackpressureRejection_KeepsSessionAndServesNextQuery`, `TestRelay_DeferredUpstreamVerifiersUnavailable_KeepsSessionAndServesNextQuery`, `TestVerifiersUnavailableReachesTheClientAsARetryableRefusal`, `TestCopiesBackpressureReachesTheClientAsARetryableBackpressure`.
-4. **One table name on both Keeper roots.** A key can have an unscoped incarnation from before the purge switch and a scoped one after it; ClickHouse removes every child of a path when its last replica drops (S3-A M10). Expected: the unscoped path and every existing call are byte-identical; a scoped path is never under `/sentio/<shard>/unsafe`; create, drop, purge, sweep and `clearDecommissioned` each act on the incarnation's own path; dropping a stale last replica on the unscoped path after a scoped re-create leaves the scoped table's Keeper tree and writes intact; the owner's audit reports an unknown replica or a root above an incarnation path and drops nothing. Tests: Task 61 `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds`, `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`.
-5. **A member deployed ahead of its switches, or one that lost its state.** `CORE_TAG_P5` reaches hosts in S3-E4, long before S3-F's steps 4–8. Expected: without `member.Config.Consensus` the member is the P2/P3 member byte for byte; with it, nothing registers until `Register` and no replica is created until `CreateReplicas`, the purge switch, registration and placement all hold; a switch refusal maps to `ErrStage3SwitchOff`, is retried at the interval and never pages; `checkpoint_seq` is above both the journal and the published value, durable before submit, and restarts when `replica_signer` rotates, so a member that lost its state resumes; `REPLICA_ALREADY_EXISTS` stops that table and never runs `SYSTEM DROP REPLICA`; a purge is reported only after the drop and quiescence (at once for an incarnation never held). Tests: Task 62 `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`; Task 63 `TestConsensusConfigNilKeepsTheP2Role`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq`, `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`.
+4. **One table name on both Keeper roots.** A key can have an unscoped incarnation from before the purge switch and a scoped one after it; ClickHouse removes every child of a path when its last replica drops (S3-A M10). Expected: the unscoped path and every existing call are byte-identical; a scoped path is never under `/sentio/<shard>/unsafe`; create, drop, purge, sweep and `clearDecommissioned` each act on the incarnation's own path; dropping a stale last replica on the unscoped path after a scoped re-create leaves the scoped table's Keeper tree and writes intact; the owner's audit reports an unknown replica (another owner's SNode and a registered member of another group included, though the purge node set lists both) or a root above an incarnation path and drops nothing. Tests: Task 61 `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds`, `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`.
+5. **A member deployed ahead of its switches, or one that lost its state.** `CORE_TAG_P5` reaches hosts in S3-E4, long before S3-F's steps 4–8. Expected: without `member.Config.Consensus` the member is the P2/P3 member byte for byte; with it, the verify role is built with the role's own boot nonce, which Task 62's constructor requires, a restart with the member's registration already in the purge node set starts while an SNode's id or one the registry serves as another host's group member is still refused, nothing registers until `Register` and no replica is created until `CreateReplicas`, the purge switch, registration and placement all hold; a switch refusal maps to `ErrStage3SwitchOff`, is retried at the interval and never pages; `checkpoint_seq` is above both the journal and the published value, durable before submit, and restarts when `replica_signer` rotates, so a member that lost its state resumes; `REPLICA_ALREADY_EXISTS` stops that table and never runs `SYSTEM DROP REPLICA`; a purge is reported only after the drop and quiescence (at once for an incarnation never held). Tests: Task 62 `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`; Task 63 `TestConsensusConfigNilKeepsTheP2Role`, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq`, `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`.
 
 ## Task order and dependencies
 
@@ -99,7 +101,7 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 **arbiter-core** (Tasks 59–63)
 - Task 59: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (proto pin); `consensus.go` (`VerifierEntry` fields, `IsMember`, `ConsensusParamsUpdate.Stage3`), `stage3.go` (new), `types.go` (codes 12–13), `consensus_stage3_test.go` (new); `authority/consensus.go` (normalizer), `authority/stage3.go` (new), `authority/stage3_test.go` (new), `authority/stage3_golden_test.go` (new, frozen), `authority/authoritytest/stage3.go` (new, frozen), `authority/BUILD.bazel`, `authority/authoritytest/BUILD.bazel`; `conformance/stage3_wire_test.go` (new), `conformance/BUILD.bazel`.
 - Task 60: `wire/consensus.go`, `wire/stage3.go` (new), `wire/command.go`, `wire/requests.go`, `wire/table_registry_snapshot.go`, `wire/stage3_registry.go` (new), S3-C2's `wire/block_verification.go` (or wherever S3-C2 put `wire.BlockVerification`), `wire/stage3_test.go` (new), `wire/stage3_golden_test.go` (new, frozen), `wire/BUILD.bazel`.
-- Task 61: `dataplane/ddl/naming.go`, `table.go`, `keeper_roots.go` (new), their tests and `BUILD.bazel`; `dataplane/tableset/reconciler.go`, `keeper_audit.go` (new), their tests; `wire/table_registry_snapshot.go` (`KnownKeeperReplica`).
+- Task 61: `dataplane/ddl/naming.go`, `table.go`, `keeper_roots.go` (new), their tests and `BUILD.bazel`; `dataplane/tableset/reconciler.go`, `keeper_audit.go` (new), their tests; `wire/table_registry_snapshot.go` (`NetworkPool`, `KnownKeeperReplica`).
 - Task 62: `dataplane/evidence/{handler,replay_core,scanner,registration}.go` (new) and tests, `BUILD.bazel`; `verifier/verifier.go`, `backends.go`, `claims.go`, `registration_state.go`, `registry.go` (delegation); `member/consensus/{config,verify_role,unsafe_reconciler,quiescence}.go` (new) and tests, `BUILD.bazel`.
 - Task 63: `dataplane/member_commands.go` (new) and test; `member/consensus/{readiness,checkpoint,checkpoint_seq,purge,status,metrics}.go` (new) and tests; S3-C2's `member/sources` (`MemberUnsafeHardlink`), `member` (`Config.Consensus`, role wiring, metrics), S3-C4's `member/serve` (the `consensus` status field); `consensus.go` (`Stage3Feature`, `LocalNodeFeatures`), `consensus_test.go`, `snode/tracks_test.go` (feature list); `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (`scripts/update-housegate.sh $HG_TAG_P5`); `README.md` (the member consensus mode and the Keeper roots).
 
@@ -131,7 +133,7 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 ## Follow-ups (not in this plan)
 
 - sentio-node exports `tableset.Stats.KeeperFindings` as `sentio_node_storage_integrity_keeper_findings{reason}` and registers `Role.ConsensusMetrics()` on the si-member registry (S3-E4 Task 79, widened under D30), and production alerts on them and on the member series of contract §42.3 (S3-E4 Task 80, S3-F Task 83).
-- sentio-node's member consensus-mode config keys (ed25519 seed file, `replica_signer` key file, consent file), `storage-integrity member-consent-statement`, the reconciler process `si-member --role reconciler` that runs `consensus.NewUnsafeReconciler` as `si_member_ddl`, and `replica_hosts` from `DatabaseGroup`'s ready members through their served `GroupMember.host_indexer_id` (D27, no node-to-host mapping of its own; a member served without a host is skipped) (S3-E4 Task 79, D30). The member keys themselves are made in the user's terminal, the `replica_signer` with Foundry `cast wallet new` or an equivalent the user prefers (D40), never by an agent or a host; this plan's only keys are `authoritytest` fixtures.
+- sentio-node's member consensus-mode config keys (ed25519 seed file, `replica_signer` key file, consent file), `storage-integrity member-consent-statement`, the reconciler process `si-member --role reconciler` that runs `consensus.NewUnsafeReconciler` as `si_member_ddl`, and `replica_hosts` from `DatabaseGroup`'s current members, whatever their readiness, through their served `GroupMember.host_indexer_id` (D27, no node-to-host mapping of its own; a member served without a host is skipped; never filtered by `MemberReady`, S3-E4 contract §56) (S3-E4 Task 79, D30). The member keys themselves are made in the user's terminal, the `replica_signer` with Foundry `cast wallet new` or an equivalent the user prefers (D40), never by an agent or a host; this plan's only keys are `authoritytest` fixtures.
 - Every FSM, server, orchestrator and `arbiter-admin` change of stage 3, including the K67 refusals (S3-E2–E4).
 - The GroupKey and placement digest domains, preimage types and their goldens live with the arbiter FSM (S3-E3 Tasks 71–72); this plan adds no domain constant for them.
 - The si-member pod must mount the member state volume read-only into the `si-member-reconciler` container, which reads `quiescence.json` (S3-F Task 83, the S3-C2 K30 layout).
@@ -2362,7 +2364,7 @@ Notes:
 - Modify: `pkg/storageintegrity/arbiter_proto.go` (after `AdmissionCodeIndexerQuarantined`, `:394-400`; the coded-reject case list, `:423-424`), `pkg/storageintegrity/admission_code_test.go` (`:81-83`; append after `:86`)
 - Modify: `pkg/chproto/client_error.go` (the session-preserving doc list and its constants, `:30-57`; new functions before `isTableRefusalMessage`, `:109`, `:145` at `HG_TAG_P3`), `pkg/chproto/client_error_test.go` (append after the last test, `:194`, `:247` at `HG_TAG_P3`)
 - Modify: `storage_integrity_ingress.go` (after the `INDEXER_QUARANTINED` branch, `:852-866`), `storage_integrity_table_state_runtime_test.go` (imports `:10-12`; before `TestAdmissionUsesTheSnapshotSchemaNotTheResolver`, `:305`), `storage_integrity_ingress_unspent_test.go` (`:100`)
-- Modify: `pkg/proxy/relay.go` (`isSessionPreservingIngressException` doc and 733 case, `:2301-2305` and `:2323-2324`; `:2323-2327` and `:2345-2346` at `HG_TAG_P3`), `pkg/proxy/relay_reject_test.go` (before `testStagedSessionPreservingRejection`, `:182`; before `testDeferredUpstreamSessionPreservingRejection`, `:432`; rows after `:540`), `pkg/proxy/relay_unspent_test.go` (`:74`)
+- Modify: `pkg/proxy/relay.go` (`isSessionPreservingIngressException` doc and 733 case, `:2301-2305` and `:2323-2324`; `:2326-2330` and `:2348-2349` at `HG_TAG_P3`), `pkg/proxy/relay_reject_test.go` (before `testStagedSessionPreservingRejection`, `:182`; before `testDeferredUpstreamSessionPreservingRejection`, `:432`; rows after `:540`), `pkg/proxy/relay_unspent_test.go` (`:74`)
 - Modify: `CLAUDE.md` (the relay diagram, `:110-113`, `:111-114` at `HG_TAG_P3`; the `pkg/storageintegrity` bullet, `:177`, `:180` at `HG_TAG_P3`), `README.md` (Dynamic table state, `:195`)
 - Ledger: Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md` on the ledger copy (row `HG_TAG_P5`, item `housegate release (Task 58)`), from URWT `multi-source-s3e1-ledger-58`
 - Local only, never committed: beside the worktree, `$HOME/src/remotesrc/claude/housegate/multi-source-s3e1.proto-tag-p5`, `.hg-tag-p3`, `.pr-body.md`, `.pr-url`, `.merge` and `.hg-tag-p5`; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19's tool), `record-58.md` (the run record) and `record-58` (the ledger worktree's path and ref), and `record-58-pr.md` / `record-58-pr-url` only when the ledger copy is `origin/main`
@@ -3078,7 +3080,7 @@ with:
 		}
 ```
 
-In `pkg/proxy/relay.go`, the doc of `isSessionPreservingIngressException` (`:2301-2305` at `origin/main`, `:2323-2327` at `HG_TAG_P3`), replace:
+In `pkg/proxy/relay.go`, the doc of `isSessionPreservingIngressException` (`:2301-2305` at `origin/main`, `:2326-2330` at `HG_TAG_P3`), replace:
 
 ```go
 // code 252 with the back-pressure prefix, code 733 with the exact
@@ -3102,7 +3104,7 @@ with:
 // than three verifiers, spec 2026-10-14 §7.3), and code 392 with the exact spec §9.6 "no longer accepts
 ```
 
-and its 733 case (`:2323-2324`, `:2345-2346` at `HG_TAG_P3`), replace:
+and its 733 case (`:2323-2324`, `:2348-2349` at `HG_TAG_P3`), replace:
 
 ```go
 	case chproto.CodeTableIsBeingRestarted:
@@ -9048,7 +9050,7 @@ Expected, in order: `gofmt-clean`; gazelle's run lines, then `0` (gazelle has no
 Spec §8.8 (incarnation-scoped Keeper paths, the owner sweep's alerts), §8.2 (who may hold a replica on an owner's path), §15 (the arbiter-core line) and §17 (the data-plane proofs: a stale unscoped last replica dropped after a scoped re-create, a same-name re-create on both path kinds); contract §42.1, clarification K60 (`purge_members`), Review Focus 4. Today every `hg_unsafe` replica of a table joins one Keeper path, `/sentio/<shard>/unsafe/<db__table>` (`dataplane/ddl/naming.go:42-46`), whatever its incarnation, and ClickHouse removes every child of a table's path when its last replica drops (Plan S3-A M10). A key re-created after a purge therefore lands on the path a stale replica of the purged incarnation may still hold, and from the purge switch (S3-E2 Task 69) the members' `hg_member_unsafe` replicas join these paths too. The arbiter marks every incarnation recorded after the switch `scoped_keeper_path` (Task 60's `wire.TableIncarnation.ScopedKeeperPath`); this task gives such an incarnation its own path `/sentio/<shard>/unsafe_inc/<db__table>/<seq>`, under a sibling root, and makes the data plane act on each incarnation's own path:
 
 - `dataplane/ddl`: `KeeperScope` and `ZooKeeperPathFor`, with `IncarnationIntentsFor`, `EnsureTableFor`, `DropTableFor`, `KeeperReplicasAt` and `DropReplicaAt` acting on the scope's path; the existing `ZooKeeperPath`, `IncarnationIntents`, `EnsureTable`, `DropTable`, `KeeperReplicas`, `DropReplica` and `KeeperUnsafeTables` keep their signatures and delegate with the unscoped scope, byte for byte; the `REPLICA_ALREADY_EXISTS` recovery drops a stranded replica only on the scope's own path; `ListKeeperRoots` lists both roots and tells incarnation paths from every other replicated-table root under `unsafe_inc`;
-- `wire`: `TableRegistrySnapshot.KnownKeeperReplica`, the set of nodes that may hold a replica on an owner's path;
+- `wire`: `TableRegistrySnapshot.NetworkPool`, the network pool as the registry view shows it, and `TableRegistrySnapshot.KnownKeeperReplica`, the set of nodes that may hold a replica on an owner's path;
 - `dataplane/tableset`: `KeeperScopeOf`; create, verify, `clearDecommissioned`, purge, sweep and the leftover drops on the incarnation's own path; the owner SNode's sweep of surviving paths over both roots; and the owner's report-only Keeper audit (`Stats.KeeperFindings`, `Stats.KeeperAuditRuns`), which reports unknown replicas and non-incarnation roots and drops nothing.
 
 Nothing changes on devnet2 with this code alone (contract §38, data-plane inertness): no incarnation is scoped before switch 1, so every statement on a legacy path is the one `CORE_TAG_P4` issues, the only new Keeper reads are the listing of `unsafe_inc` (empty there, `UNSAFE_INC_ROOT`) and the audit's reads every ten minutes, and the audit only reports.
@@ -9058,12 +9060,12 @@ Notes:
 - **A sibling root.** ClickHouse removes every child of a table's path when its last replica drops (S3-A M10), so an incarnation path may never lie below a legacy table path. `unsafe` and `unsafe_inc` are siblings under `/sentio/<shard>` (contract §42.1's two constants); `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot` checks it for any table name, and `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica` drops a stale last replica on `/sentio/<shard>/unsafe/<t>` after a scoped re-create and keeps writing to `/sentio/<shard>/unsafe_inc/<t>/<seq>`.
 - **An incarnation's scope.** `KeeperScopeOf(inc)` is `{inc.Seq, inc.ScopedKeeperPath}`. The arbiter fixes the flag when it records the incarnation (S3-E2 Task 69), so an incarnation never moves between paths; a genesis table is never scoped (its target's scope carries the unmarked seq 0, and every function that acts on a path refuses a scoped scope with seq 0: `ddl: an incarnation-scoped Keeper path needs an incarnation seq of at least 1`). Local table names do not change: an incarnation's three tables keep `CHTableName`, only `hg_unsafe`'s `ReplicatedMergeTree` path differs, and `VerifyProtocolTable` compares the live `zookeeper_path` with the scope's, so a table on the wrong path is drift, fatal as today. `Intents` (`build.go`) still renders the legacy path, which `IncarnationIntentsFor` replaces for a scoped scope, so `BuildDDL` and every golden DDL stay byte-identical.
 - **Both roots in the owner's sweep.** `sweepPurgedKeeperPaths` (only with `Config.SweepDecommissioned`, the owner SNode) lists both roots with `ListKeeperRoots` and keeps today's rule for a legacy path of a key whose live incarnation has no tables. Two cases are new: the legacy path of a key whose live incarnation is scoped (only retired incarnations used that path, so this node's own stranded replica and every replica outside the purge node set are removed, without touching the live incarnation's tables), and the incarnation path of a Purged or Refused scoped incarnation it owns (no other incarnation shares it). Every other path is left alone; the audit reports the ones that are no incarnation path at all.
-- **The Keeper audit.** It runs only with `Config.SweepDecommissioned` (the owner SNode: verifiers and members never audit), at the first pass and then once `Config.KeeperAuditInterval` (0 → `DefaultKeeperAuditInterval`, ten minutes) has passed since the last audit that completed, after the sweep of the same pass, and only while the registry is followed. A legacy path is judged against every unscoped incarnation of its physical name this reconciler owns, an incarnation path against its own incarnation, and another owner's paths are left to that owner; each `KeeperRoots.NonIncarnation` path, and each incarnation path whose seq is no `scoped_keeper_path` incarnation of that table, is reported whoever owns the name. It reads the purge node set only when it lists a replica other than its own. Contract §42.1's two warn texts are logged once per finding, when it first appears (the `reportUnknown` precedent), and `Stats.KeeperFindings` holds the last audit's findings sorted by path then replica; a failed audit is logged as `keeper audit failed; the next pass retries it` and retried at the next pass. It drops nothing (`TestOwnerKeeperAuditDropsNothing`). sentio-node exports the findings as `sentio_node_storage_integrity_keeper_findings{reason}` in S3-E4 Task 79.
-- **What `KnownKeeperReplica` counts.** Contract §42.1's four sets: the owner's SNode (`si_indexers[Owner(inc)].snode_node_id`), the purge node set (every registered, non-evicted SNode and verifier, so the network pool and registered members), a current or past member of `G(Owner(inc), inc.DatabaseID)`, and `inc.PurgeMembers`. A removed member is merged into `PastMembers` (S3-E3 contract §50, `RebalanceGroup` effect 3); the function also checks `Leaving` directly, so a Leaving member, which keeps its replicas until it is released, stays known however the view prunes `PastMembers`. An incarnation that names no owner belongs to the founding indexer (`Owner`).
+- **The Keeper audit.** It runs only with `Config.SweepDecommissioned` (the owner SNode: verifiers and members never audit), at the first pass and then once `Config.KeeperAuditInterval` (0 → `DefaultKeeperAuditInterval`, ten minutes) has passed since the last audit that completed, after the sweep of the same pass, and only while the registry is followed. A legacy path is judged against every unscoped incarnation of its physical name this reconciler owns, an incarnation path against its own incarnation, and another owner's paths are left to that owner; each `KeeperRoots.NonIncarnation` path, and each incarnation path whose seq is no `scoped_keeper_path` incarnation of that table, is reported whoever owns the name. It reads the purge node set only when it lists a replica other than its own, and derives the network pool from it once per audit (`NetworkPool`). Contract §42.1's two warn texts are logged once per finding, when it first appears (the `reportUnknown` precedent), and `Stats.KeeperFindings` holds the last audit's findings sorted by path then replica; a failed audit is logged as `keeper audit failed; the next pass retries it` and retried at the next pass. It drops nothing (`TestOwnerKeeperAuditDropsNothing`). sentio-node exports the findings as `sentio_node_storage_integrity_keeper_findings{reason}` in S3-E4 Task 79.
+- **What `KnownKeeperReplica` counts.** Contract §42.1's four sets, spec §8.2's "the owner, a pool verifier or a current or past member" plus the incarnation's purge members: the owner's SNode (`si_indexers[Owner(inc)].snode_node_id`), the network pool, a current or past member of `G(Owner(inc), inc.DatabaseID)`, and `inc.PurgeMembers`. The arbiter's purge node set is not the pool: it lists every registered, non-evicted SNode and verifier, so every other owner's SNode and every registered member of every group too, and taking it whole would hide exactly the replica of an unrelated member that the audit exists to report. The registry view does not carry the `verifiers` parameter, so `NetworkPool(purgeNodeSet)` derives the pool from what the view does carry: the purge node set without the SNode of every `si_indexers` entry and without every node the view names as a current, past or Leaving member of any group, as a purge member of any incarnation or by a published checkpoint sequence. A registered member that the view names nowhere yet (from its registration at S3-F step 4 to its first placement) counts as a pool node there; it holds no `hg_member_unsafe` replica then, because its reconciler creates one only for an incarnation of a group it is placed in and `si_member_ddl` exists only from S3-F step 6 (spec §8.2, contract §42.3), so the residual is a leaked `si_member_ddl` credential of a member that no group names (Appendix B, Task 61: a pool list served by the arbiter would close it). A removed member is merged into `PastMembers` (S3-E3 contract §50, `RebalanceGroup` effect 3); the function also checks `Leaving` directly, so a Leaving member, which keeps its replicas until it is released, stays known however the view prunes `PastMembers`. An incarnation that names no owner belongs to the founding indexer (`Owner`); before the signed-claims activation no `si_indexers` entry exists, so the pool is then the whole purge node set. (Review fix, AgentConnect round 1, finding 3.)
 - **Inertness, measured.** With no scoped incarnation, every DDL and Keeper statement is byte-identical (`TestZooKeeperPathForUnscopedIsByteIdentical` records the statements of the legacy entry points on a fake connection), and the existing ClickHouse suites of `ddl`, `tableset`, `snode` and `verifier` pass unchanged; the owner SNode issues one more Keeper read per pass (the `unsafe_inc` listing, plus one per table under it once there are any).
 - **Beyond contract §42.1's names** (recorded in Appendix B): the tests `TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath` (ClickHouse), `TestListKeeperRootsClassifiesChildren`, `TestKeeperScopeOfFollowsTheRegistryMark`, `TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers` and `TestNewDefaultsTheKeeperAuditInterval`; the log text `keeper audit failed; the next pass retries it`; the unexported `KeeperScope.validate`, `keeperRootPath`, `dropReplicaAtPath`, `canonicalIncarnationSeq` (`ddl`), `target.scope`, `sweepRetiredPath`, `dropTables`, `leftoverScopes`, `auditKeeperIfDue`, `auditKeeper`, `keeperFindingOf` and the `Reconciler` fields `keeperFindings`, `keeperAuditRuns`, `lastKeeperAudit` (`tableset`); the test helpers `keeperFakeConn`, `nameRows`, `isolatedShard`, `strandReplicaAt`, `replicaState`, `createReplicatedAt` (`ddl`), `isolatedShard`, `isolatedPinned`, `scopedInc`, `fakeView.setSnap`, `peer`, `replicaOf`, `replicasAt`, `keeperRoots`, `hasScoped`, `insertUnsafe`, `unsafeRows`, `syncReplica`, `syncBuffer`, `auditedOwner`, `strayRoot` (`tableset`); the new test files `wire/known_keeper_replica_test.go`, `dataplane/ddl/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_roots_test.go`, `keeper_roots_ch_test.go`, `dataplane/tableset/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_audit_test.go`, `keeper_audit_ch_test.go`.
 - **The ClickHouse pair.** The gated tests run on a local two-node pair in the topology of CI's `integration-clickhouse` job (node A hosts the shared Keeper, ephemeral loopback ports, the CI image `clickhouse/clickhouse-server:25.8`), and Step 29 repeats `ddl` and `tableset` on devnet2's `clickhouse/clickhouse-server:26.3.37.3`. `arbiter-core-ci` is the CI-only password the public repository commits in `scripts/ci/clickhouse-default-password.xml` for these throwaway containers (CI's own job sets it the same way); it guards nothing else. Every new test that reads a whole root or creates incarnation paths uses a Keeper shard of its own (`isolatedShard`, 1 000 000–1 999 999; Plan S3-D's tests use 2 000 000 and up), because the `ddl`, `tableset`, `snode` and `verifier` targets share one Keeper; reruns on the same Keeper start clean. Bazel runs the integration targets one at a time (`--local_test_jobs=1`): on a loaded workstation, parallel targets made the shared Keeper's sessions expire (`code: 999, message: Session expired`) in pre-existing tests of three targets.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Plan S3-D Task 50's two `ddl` functions appended to `table.go` as its text writes them and stand-ins of Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Groups` and group types (contract §41's fields; this task uses nothing else of Task 60), this task was applied step by step from its own text with its own commands (Go 1.27.1 and Go 1.26.3 with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`; Bazel 9.1.0): every failing step failed with the errors given and every passing step passed; gazelle changed exactly the `BUILD.bazel` lines given; `go vet` is clean, `go test -race` passes for `ddl`, `tableset`, `wire` and `conformance`, `bazel build //...` passed and `bazel test --build_tests_only --@rules_go//go/config:race //...` ended `Executed 9 out of 17 tests: 17 tests pass.` on that base; on a local pair of ClickHouse 25.8.28.1 the five integration targets passed through Bazel (`Executed 5 out of 5 tests: 5 tests pass.`, the `snode` and `verifier` suites unchanged), and again on the same Keeper, and `ddl`, `tableset`, `snode` and `verifier` passed on 26.3.51.7, the local 26.3 image (96 top-level `--- PASS` lines in `ddl` and `tableset`, none skipped). Seventeen mutations, each reverting one fix (a scoped path nested under the legacy root, the scoped path left out of the intent, the stale-replica recovery on the legacy path, no root above an incarnation path, purge or past members unknown, no scoped sweep, no legacy sweep under a scoped live key, the purge or `clearDecommissioned` on the legacy path, an audit that drops, logs every run or runs on every node, leftovers always on the legacy path), each failed at least one test of this task. Every bash block passes `bash -n`, `zsh -n` and `shellcheck -s bash`, and the fish lines `fish -n`; the plan text (every new file and replace pair) applied to a fresh export reproduces the tested tree byte for byte, and every block of Steps 1–30 ran in zsh (the Bash tool's shell) against a scratch worktree with a stand-in `$W.core-tag-p4` and printed what it expects (Step 29 on the local 26.3.51.7 image). The `BUILD.bazel` line counts of Steps 7–27 and the stat line of Step 28 are measured on `cfd4f42`'s `BUILD.bazel` files: a list an earlier plan already extended the same way (a test dependency gazelle adds here) shows one line fewer.
+- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Plan S3-D Task 50's two `ddl` functions appended to `table.go` as its text writes them and stand-ins of Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Groups` and group types (contract §41's fields; this task uses nothing else of Task 60, apart from the `MemberCheckpointSeqs` that the review fix of Appendix B reads), this task was applied step by step from its own text with its own commands (Go 1.27.1 and Go 1.26.3 with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`; Bazel 9.1.0): every failing step failed with the errors given and every passing step passed; gazelle changed exactly the `BUILD.bazel` lines given; `go vet` is clean, `go test -race` passes for `ddl`, `tableset`, `wire` and `conformance`, `bazel build //...` passed and `bazel test --build_tests_only --@rules_go//go/config:race //...` ended `Executed 9 out of 17 tests: 17 tests pass.` on that base; on a local pair of ClickHouse 25.8.28.1 the five integration targets passed through Bazel (`Executed 5 out of 5 tests: 5 tests pass.`, the `snode` and `verifier` suites unchanged), and again on the same Keeper, and `ddl`, `tableset`, `snode` and `verifier` passed on 26.3.51.7, the local 26.3 image (96 top-level `--- PASS` lines in `ddl` and `tableset`, none skipped). Seventeen mutations, each reverting one fix (a scoped path nested under the legacy root, the scoped path left out of the intent, the stale-replica recovery on the legacy path, no root above an incarnation path, purge or past members unknown, no scoped sweep, no legacy sweep under a scoped live key, the purge or `clearDecommissioned` on the legacy path, an audit that drops, logs every run or runs on every node, leftovers always on the legacy path), each failed at least one test of this task. Every bash block passes `bash -n`, `zsh -n` and `shellcheck -s bash`, and the fish lines `fish -n`; the plan text (every new file and replace pair) applied to a fresh export reproduces the tested tree byte for byte, and every block of Steps 1–30 ran in zsh (the Bash tool's shell) against a scratch worktree with a stand-in `$W.core-tag-p4` and printed what it expects (Step 29 on the local 26.3.51.7 image). The `BUILD.bazel` line counts of Steps 7–27 and the stat line of Step 28 are measured on `cfd4f42`'s `BUILD.bazel` files: a list an earlier plan already extended the same way (a test dependency gazelle adds here) shows one line fewer.
 - **Remote actions.** Only the image pulls of Steps 2 and 29 when an image is not in the local Docker cache; each needs explicit user confirmation in chat before running. This task pushes nothing and opens no PR (Task 63 does both for Tasks 59–63). Go and Bazel use what Task 59's pin downloaded: if a command starts fetching (`go: downloading`, Bazel `Fetching`), stop it and ask, because a download is a remote read that needs explicit user confirmation in chat. Nothing touches devnet2 or sea.
 - **Values across commands.** The Bash tool keeps no variables between calls, so every block sets `W` itself and reads what earlier steps wrote: `$W.core-tag-p4` (Task 59's record of the ledger's `CORE_TAG_P4`) and, in `$HOME/.cache/s3e1-task61/` (mode 700), `base` (the branch head before this task, Step 1), `pair.env` (the pair's two addresses, Step 2, removed in Step 30) and `targets` (the integration targets, Step 28). Nothing there is committed.
 
@@ -9072,7 +9074,7 @@ Notes:
 - Modify: `dataplane/ddl/table.go` (`IncarnationIntents` `:47-60`; the doc and head of `EnsureTable` `:62-79`; the doc and signature of `dropStaleReplica` `:110-116` and its end `:125-128`; `DropTable` through `DropReplica` `:130-179`; Plan S3-D's `ReplicaIsActive` and `ScopedUnsafeRootChildren` at the end of the file stay unchanged)
 - Create: `dataplane/ddl/keeper_roots.go`
 - Test: `dataplane/ddl/keeper_scope_test.go` (new) — `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestIncarnationIntentsForUsesTheIncarnationPath`; `dataplane/ddl/keeper_scope_ch_test.go` (new, ClickHouse and Keeper) — `TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath`; `dataplane/ddl/keeper_roots_test.go` (new) — `TestListKeeperRootsClassifiesChildren`; `dataplane/ddl/keeper_roots_ch_test.go` (new, ClickHouse and Keeper) — `TestListKeeperRootsSeparatesIncarnationPathsFromOtherRoots`
-- Modify: `wire/table_registry_snapshot.go` (`KnownKeeperReplica` after `Owner`, `:181-186`; at `CORE_TAG_P4` Plan S3-C2's `ManifestOwner` follows it)
+- Modify: `wire/table_registry_snapshot.go` (`NetworkPool` and `KnownKeeperReplica` after `Owner`, `:181-186`; at `CORE_TAG_P4` Plan S3-C2's `ManifestOwner` follows them)
 - Test: `wire/known_keeper_replica_test.go` (new) — `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`
 - Modify: `dataplane/tableset/reconciler.go` (`Config.SweepDecommissioned` `:70-73`; the end of `Stats` `:110-112`; the `leftoverDrops` field `:135-136`; `New` `:161-163`; `Stats()` `:319`; `target` `:381-386`; `reconcileRegistry` `:392-393`, `:409-411`, `:488-503`; `ensurePresent` `:525-532`, `:539-540`, `:549-552`, `:570-576`; `purge` `:669-671`, `:692-693`, `:705-706`; `sweep` `:721-724`, `:736-739`; `clearDecommissioned` `:744-755`, `:778-781`; `sweepPurgedKeeperPaths` and the head of `dropLeftover` `:815-844`)
 - Create: `dataplane/tableset/keeper_audit.go`
@@ -9083,13 +9085,13 @@ Notes:
 
 **Interfaces:**
 - Consumes:
-  - Task 60 (contract §41): `wire.TableIncarnation.ScopedKeeperPath bool`, `.PurgeMembers []string`; `wire.TableRegistrySnapshot.Groups []DatabaseGroup`; `wire.DatabaseGroup{OwnerIndexerID uint64; DatabaseID string; Members []GroupMember; PastMembers []string; Leaving []LeavingMember; …}`, `wire.GroupMember.NodeID`, `wire.LeavingMember.NodeID`; `func (s TableRegistrySnapshot) Group(owner uint64, databaseID string) (DatabaseGroup, bool)`.
+  - Task 60 (contract §41): `wire.TableIncarnation.ScopedKeeperPath bool`, `.PurgeMembers []string`; `wire.TableRegistrySnapshot.Groups []DatabaseGroup`, `.MemberCheckpointSeqs []MemberCheckpointSeq`; `wire.DatabaseGroup{OwnerIndexerID uint64; DatabaseID string; Members []GroupMember; PastMembers []string; Leaving []LeavingMember; …}`, `wire.GroupMember.NodeID`, `wire.LeavingMember.NodeID`, `wire.MemberCheckpointSeq.NodeID`; `func (s TableRegistrySnapshot) Group(owner uint64, databaseID string) (DatabaseGroup, bool)`.
   - Task 59: the worktree, its branch and `$W.core-tag-p4`.
   - Plan S3-A §3: `dataplane/chtest` (through the existing `requireCH` and `requireReplicaCH`) and the CI env `ARBITER_CH_INTEGRATION`, `ARBITER_CH_KEEPER`, `ARBITER_CH_REPLICA`, `CH_ADDR`, `CH_REPLICA_ADDR`, `CH_USER`, `CH_PASSWORD`.
   - Existing at `cfd4f42`: `ddl.Pinned`, `CHTableName`, `Intents`, `IncarnationComment`, `ParseIncarnationComment`, `Mode`, `keeperChildren`, `quoteIdent`, `quoteLiteral`, `validatePinned`, `clickHouseCode`, `codeReplicaAlreadyExists`, `ensureDatabases`, `VerifyProtocolTable`; `wire.TableRegistrySnapshot.Owner`, `.SIIndexer`, `arbiter.SIIndexerEntry.SNodeNodeID`, `wire.TableStatusPurged`, `wire.TableStatusRefused`; `tableset.Arbiter.PurgeNodeSet`, `Config.SweepDecommissioned`, `Config.Owner`, `incarnation`, `owns`, `sortedKeys`, `attributable`, `notifyDropped`, `countLeftover`; test helpers `goldenPinned`, `goldenSchema`, `goldenUnsafeDDL`, `requireCH`, `requireKeeper`, `requireReplicaCH`, `testPinned`, `dropDatabasesSync`, `ensureSchema`, `uniqueSuffix` (`ddl`), `requireCH`, `requireReplicaCH`, `testPinned`, `suffix`, `schemaFor`, `chainInc`, `fakeView`, `newFakeView`, `fakeArbiter`, `newReconciler`, `pinClock`, `testClock`, `mustReconcile`, `localComments`, `nopConnT` (`tableset`).
 - Produces (contract §42.1, verbatim):
   - `dataplane/ddl`: `const KeeperUnsafeRoot = "unsafe"`, `const KeeperScopedUnsafeRoot = "unsafe_inc"`; `type KeeperScope struct{ IncarnationSeq uint64; Scoped bool }`; `func ZooKeeperPathFor(keeperShardID uint32, tableID string, s KeeperScope) string`; `func IncarnationIntentsFor(p Pinned, t payloadexec.TableSchema, s KeeperScope) (TableIntent, TableIntent, TableIntent, error)`; `func EnsureTableFor(ctx context.Context, conn clickhouse.Conn, p Pinned, t payloadexec.TableSchema, s KeeperScope, mode Mode) error`; `func DropTableFor(ctx context.Context, conn clickhouse.Conn, p Pinned, tableID string, s KeeperScope) error`; `func KeeperReplicasAt(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32, tableID string, s KeeperScope) ([]string, error)`; `func DropReplicaAt(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32, tableID string, s KeeperScope, replica string) error`; `type ScopedKeeperPath struct{ Table string; IncarnationSeq uint64 }`; `type KeeperRoots struct{ Legacy []string; Scoped []ScopedKeeperPath; NonIncarnation []string }`; `func ListKeeperRoots(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32) (KeeperRoots, error)`; the existing seven functions delegating, byte for byte.
-  - `wire`: `func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, purgeNodeSet []string, replica string) bool`.
+  - `wire`: `func (s TableRegistrySnapshot) NetworkPool(purgeNodeSet []string) []string`; `func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, pool []string, replica string) bool` (`pool` is `NetworkPool`'s result, never the whole purge node set).
   - `dataplane/tableset`: `func KeeperScopeOf(inc wire.TableIncarnation) ddl.KeeperScope`; `Config.KeeperAuditInterval time.Duration`; `const DefaultKeeperAuditInterval = 10 * time.Minute`; `type KeeperFindingReason string` with `KeeperFindingUnknownReplica` (`unknown_replica`) and `KeeperFindingNonIncarnationRoot` (`non_incarnation_root`); `type KeeperFinding struct{ Path, Replica string; Reason KeeperFindingReason }`; `Stats.KeeperFindings []KeeperFinding`, `Stats.KeeperAuditRuns uint64`; the warn texts `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`), verbatim.
   - Tests: contract §42.1's fourteen Task 61 names (Files, Test) and the five added ones of the Notes.
 - Consumed by: Task 62 (`consensus.UnsafeReconciler` creates `hg_member_unsafe` replicas at `ddl.ZooKeeperPathFor(cfg.KeeperShardID, tableID, tableset.KeeperScopeOf(inc))`), Task 63 (purge reports and readiness read `ddl.KeeperReplicasAt` and `ddl.ZooKeeperPathFor` with `tableset.KeeperScopeOf`), Plan S3-E2 Task 69 (the arbiter sets `scoped_keeper_path` after switch 1, which this task's paths follow), Plan S3-E4 Task 79 (sentio-node exports `Stats.KeeperFindings` with both reasons always present), Plan S3-F (the operating rules read the findings).
@@ -9113,7 +9115,7 @@ For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/arbit
 
 ```bash
 W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" || exit 1
-grep -c -E '^[[:space:]]+(ScopedKeeperPath[[:space:]]+bool|PurgeMembers[[:space:]]+\[\]string|Groups[[:space:]]+\[\]DatabaseGroup)$' wire/table_registry_snapshot.go
+grep -c -E '^[[:space:]]+(ScopedKeeperPath[[:space:]]+bool|PurgeMembers[[:space:]]+\[\]string|Groups[[:space:]]+\[\]DatabaseGroup|MemberCheckpointSeqs[[:space:]]+\[\]MemberCheckpointSeq)$' wire/table_registry_snapshot.go
 grep -c -E '^func \(s TableRegistrySnapshot\) Group\(owner uint64, databaseID string\) \(DatabaseGroup, bool\) \{$' wire/stage3_registry.go
 grep -c -E '^func (ScopedUnsafeRootChildren|ReplicaIsActive)\(' dataplane/ddl/table.go
 grep -c -E '^func ZooKeeperPath\(p Pinned, tableID string\) string \{$' dataplane/ddl/naming.go
@@ -9121,7 +9123,7 @@ grep -c -E '^func \(r \*Reconciler\) sweepPurgedKeeperPaths\(ctx context\.Contex
 git grep -c -E 'KeeperScope|ZooKeeperPathFor|ListKeeperRoots|KnownKeeperReplica|KeeperFinding|KeeperAuditInterval' -- '*.go' || echo "none of this task's names"
 ```
 
-Expected, one line each: `3` (Task 60's `ScopedKeeperPath`, `PurgeMembers` and `Groups`), `1` (Task 60's `Group`), `2` (Plan S3-D's two `ddl` functions), `1`, `1` (the two anchors this task replaces), then `none of this task's names`. A smaller first or second count: Task 60 is not on the branch: stop. A third count of `0`: the base is not `CORE_TAG_P4`: stop. A `0` in the fourth or fifth: an earlier change rewrote that function: re-read it before Steps 5 and 20. Any match of the last command: this task ran before: stop and ask.
+Expected, one line each: `4` (Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Groups` and `MemberCheckpointSeqs`), `1` (Task 60's `Group`), `2` (Plan S3-D's two `ddl` functions), `1`, `1` (the two anchors this task replaces), then `none of this task's names`. A smaller first or second count: Task 60 is not on the branch: stop. A third count of `0`: the base is not `CORE_TAG_P4`: stop. A `0` in the fourth or fifth: an earlier change rewrote that function: re-read it before Steps 5 and 20. Any match of the last command: this task ran before: stop and ask.
 
 - [ ] **Step 2: Start the local ClickHouse pair and run the baseline**
 
@@ -10358,6 +10360,7 @@ Create `wire/known_keeper_replica_test.go`:
 package wire
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/sentioxyz/arbiter-core"
@@ -10365,10 +10368,12 @@ import (
 
 // TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers: a replica on
 // an owner's Keeper path is known when it is the owner's SNode, a node of the
-// purge node set (the network pool among them), a current, Leaving or past
-// member of the incarnation's group, or one of its purge members (housegate
-// spec 2026-10-14 §8.2, §8.8); anything else is the Keeper audit's
-// unknown_replica.
+// network pool, a current, Leaving or past member of the incarnation's group,
+// or one of its purge members (housegate spec 2026-10-14 §8.2, §8.8);
+// anything else is the Keeper audit's unknown_replica, another owner's SNode
+// and a registered member of another group included. The purge node set
+// lists every registered member, so the pool is that set without the SNodes
+// and without every node the registry names as a member.
 func TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers(t *testing.T) {
 	owner := uint64(1)
 	snap := TableRegistrySnapshot{
@@ -10383,38 +10388,56 @@ func TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers(t *testing.T) {
 				PastMembers: []string{"member-old"}, Leaving: []LeavingMember{{NodeID: "member-leaving"}}},
 			{OwnerIndexerID: 1, DatabaseID: "nft", Members: []GroupMember{{NodeID: "member-nft"}}},
 		},
+		MemberCheckpointSeqs: []MemberCheckpointSeq{{NodeID: "member-seq", OwnerIndexerID: 0, CheckpointSeq: 3}},
 	}
 	inc := TableIncarnation{Seq: 4, DatabaseID: "dex", TableID: "swaps", OwnerIndexerID: &owner, ScopedKeeperPath: true,
 		PurgeMembers: []string{"member-c"}}
-	purgeNodeSet := []string{"snode-1", "snode-2", "verifier-1"}
+	mints := TableIncarnation{Seq: 5, DatabaseID: "nft", TableID: "mints", OwnerIndexerID: &owner, ScopedKeeperPath: true,
+		PurgeMembers: []string{"member-p"}}
+	snap.Incarnations = []TableIncarnation{inc, mints}
+	// GetPurgeNodeSet: every registered, non-evicted SNode and verifier, so
+	// every registered member of every group as well as the pool.
+	purgeNodeSet := []string{"member-a", "member-c", "member-leaving", "member-nft", "member-old", "member-p", "member-seq",
+		"member-x", "snode-1", "snode-2", "verifier-2", "verifier-1", "verifier-1"}
+	pool := snap.NetworkPool(purgeNodeSet)
+	if !slices.Equal(pool, []string{"verifier-1", "verifier-2"}) {
+		t.Fatalf("NetworkPool = %v, want [verifier-1 verifier-2]: no SNode and no node the registry names as a member", pool)
+	}
 	for _, tc := range []struct {
 		replica string
 		want    bool
 	}{
 		{"snode-2", true},        // the owner's SNode
-		{"verifier-1", true},     // a pool verifier (purge node set)
-		{"snode-1", true},        // another registered SNode (purge node set)
+		{"verifier-1", true},     // a pool verifier
 		{"member-a", true},       // a current member of G(1, dex)
 		{"member-old", true},     // a past member
 		{"member-leaving", true}, // a Leaving member keeps its replicas until released
 		{"member-c", true},       // a purge member of the incarnation
-		{"member-x", false},      // a member of another owner's group of the same database
-		{"member-nft", false},    // a member of another database's group
+		{"snode-1", false},       // another owner's SNode, registered
+		{"member-x", false},      // a registered member of another owner's group of the same database
+		{"member-nft", false},    // a registered member of another database's group
+		{"member-p", false},      // a registered purge member of another incarnation
+		{"member-seq", false},    // a registered member the view names only by its checkpoint sequence
 		{"intruder", false},
 		{"", false},
 	} {
-		if got := snap.KnownKeeperReplica(inc, purgeNodeSet, tc.replica); got != tc.want {
+		if got := snap.KnownKeeperReplica(inc, pool, tc.replica); got != tc.want {
 			t.Errorf("KnownKeeperReplica(%q) = %v, want %v", tc.replica, got, tc.want)
 		}
 	}
 
 	// Without a group or si_indexers (before placement and the signed-claims
-	// activation) only the purge node set and the purge members are known; the
-	// owner then is the founding indexer, and its SNode is a registered node.
+	// activation) the pool is the whole purge node set, and only it and the
+	// purge members are known; the owner then is the founding indexer, and
+	// its SNode is a registered node.
 	bare := TableRegistrySnapshot{}
 	legacy := TableIncarnation{Seq: 1, DatabaseID: "dex", TableID: "swaps"}
-	if !bare.KnownKeeperReplica(legacy, []string{"snode-1"}, "snode-1") || bare.KnownKeeperReplica(legacy, nil, "snode-1") {
+	if p := bare.NetworkPool([]string{"snode-1"}); !slices.Equal(p, []string{"snode-1"}) ||
+		!bare.KnownKeeperReplica(legacy, p, "snode-1") || bare.KnownKeeperReplica(legacy, nil, "snode-1") {
 		t.Fatal("a bare snapshot must know exactly the purge node set")
+	}
+	if snap.NetworkPool(nil) != nil {
+		t.Fatal("an empty purge node set has no pool")
 	}
 	if !snap.KnownKeeperReplica(legacy, nil, "snode-1") || snap.KnownKeeperReplica(legacy, nil, "snode-2") {
 		t.Fatal("an incarnation that names no owner belongs to the founding indexer, whose SNode is snode-1")
@@ -10433,15 +10456,18 @@ Expected: FAIL to build:
 
 ```
 # github.com/sentioxyz/arbiter-core/wire [github.com/sentioxyz/arbiter-core/wire.test]
-wire/known_keeper_replica_test.go:49:18: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
-wire/known_keeper_replica_test.go:59:11: bare.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
-wire/known_keeper_replica_test.go:62:11: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
-wire/known_keeper_replica_test.go:65:11: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
+wire/known_keeper_replica_test.go:43:15: snap.NetworkPool undefined (type TableRegistrySnapshot has no field or method NetworkPool)
+wire/known_keeper_replica_test.go:65:18: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
+wire/known_keeper_replica_test.go:76:15: bare.NetworkPool undefined (type TableRegistrySnapshot has no field or method NetworkPool)
+wire/known_keeper_replica_test.go:77:9: bare.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
+wire/known_keeper_replica_test.go:80:10: snap.NetworkPool undefined (type TableRegistrySnapshot has no field or method NetworkPool)
+wire/known_keeper_replica_test.go:83:11: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
+wire/known_keeper_replica_test.go:86:11: snap.KnownKeeperReplica undefined (type TableRegistrySnapshot has no field or method KnownKeeperReplica)
 FAIL	github.com/sentioxyz/arbiter-core/wire [build failed]
 FAIL
 ```
 
-- [ ] **Step 15: Add `KnownKeeperReplica`**
+- [ ] **Step 15: Add `NetworkPool` and `KnownKeeperReplica`**
 
 In `wire/table_registry_snapshot.go`, replace `Owner` (`:181-186`):
 
@@ -10464,15 +10490,61 @@ func (s TableRegistrySnapshot) Owner(inc TableIncarnation) uint64 {
 	return s.Params.SIIndexerID
 }
 
+// NetworkPool returns, sorted and without duplicates, the nodes of
+// purgeNodeSet (the arbiter's purge node set: every registered, non-evicted
+// SNode and verifier, every registered member among them) that are the
+// network pool as the registry view shows it (housegate spec 2026-10-14
+// §8.2): no si_indexers entry's SNode, and named nowhere in the view as a
+// current, past or Leaving member of a group, a purge member of an
+// incarnation or the node of a published checkpoint sequence. The view does
+// not carry the verifiers parameter, so a registered member that it names
+// nowhere yet, before it is first placed in a group, counts here; such a
+// member holds no hg_member_unsafe replica (plan S3-E1 contract §42.3).
+func (s TableRegistrySnapshot) NetworkPool(purgeNodeSet []string) []string {
+	named := map[string]bool{}
+	for _, e := range s.SIIndexers {
+		named[e.SNodeNodeID] = true
+	}
+	for _, g := range s.Groups {
+		for _, m := range g.Members {
+			named[m.NodeID] = true
+		}
+		for _, id := range g.PastMembers {
+			named[id] = true
+		}
+		for _, l := range g.Leaving {
+			named[l.NodeID] = true
+		}
+	}
+	for _, inc := range s.Incarnations {
+		for _, id := range inc.PurgeMembers {
+			named[id] = true
+		}
+	}
+	for _, seq := range s.MemberCheckpointSeqs {
+		named[seq.NodeID] = true
+	}
+	var pool []string
+	for _, id := range purgeNodeSet {
+		if id != "" && !named[id] {
+			pool = append(pool, id)
+		}
+	}
+	slices.Sort(pool)
+	return slices.Compact(pool)
+}
+
 // KnownKeeperReplica reports whether replica may hold a Keeper replica on the
 // path of inc's hg_unsafe and hg_member_unsafe tables (housegate spec
-// 2026-10-14 §8.2, §8.8): the owner's SNode, a node of purgeNodeSet (the
-// arbiter's purge node set: every registered, non-evicted SNode and verifier,
-// the network pool and registered members among them), a current or past
-// member of the group G(Owner(inc), inc.DatabaseID) (a Leaving member, which
-// keeps its replicas until its release, is a past member too), or a node of
-// inc.PurgeMembers. The owner's Keeper audit reports every other replica.
-func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, purgeNodeSet []string, replica string) bool {
+// 2026-10-14 §8.2: the owner, a pool verifier or a current or past member;
+// §8.8): the owner's SNode, a node of pool (the network pool, NetworkPool of
+// the arbiter's purge node set), a current or past member of the group
+// G(Owner(inc), inc.DatabaseID) (a Leaving member, which keeps its replicas
+// until its release, is a past member too), or a node of inc.PurgeMembers.
+// Another owner's SNode and a member of another group are not known, though
+// the purge node set lists them. The owner's Keeper audit reports every
+// other replica.
+func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, pool []string, replica string) bool {
 	if replica == "" {
 		return false
 	}
@@ -10480,7 +10552,7 @@ func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, purgeNod
 	if entry, ok := s.SIIndexer(owner); ok && entry.SNodeNodeID == replica {
 		return true
 	}
-	if slices.Contains(purgeNodeSet, replica) || slices.Contains(inc.PurgeMembers, replica) {
+	if slices.Contains(pool, replica) || slices.Contains(inc.PurgeMembers, replica) {
 		return true
 	}
 	group, ok := s.Group(owner, inc.DatabaseID)
@@ -10493,7 +10565,7 @@ func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, purgeNod
 }
 ```
 
-At `CORE_TAG_P4` Plan S3-C2's `ManifestOwner` follows `Owner`; `KnownKeeperReplica` goes between them.
+At `CORE_TAG_P4` Plan S3-C2's `ManifestOwner` follows `Owner`; `NetworkPool` and `KnownKeeperReplica` go between them.
 
 - [ ] **Step 16: Run the test and see it pass**
 
@@ -10501,7 +10573,7 @@ Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && 
 
 Expected: `gofmt` lists nothing; `--- PASS: TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers (0.00s)` and `ok  	github.com/sentioxyz/arbiter-core/wire	<t>s`; then `ok` for `wire` and `conformance`.
 
-- [ ] **Step 17: Commit `KnownKeeperReplica`**
+- [ ] **Step 17: Commit `NetworkPool` and `KnownKeeperReplica`**
 
 ```bash
 W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
@@ -10513,14 +10585,17 @@ Expected: gazelle's build lines, then exactly ` M wire/BUILD.bazel`, ` M wire/ta
 ```bash
 W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
 git -C "$W" add wire/table_registry_snapshot.go wire/known_keeper_replica_test.go wire/BUILD.bazel
-git -C "$W" commit -q -m "feat(wire): KnownKeeperReplica
+git -C "$W" commit -q -m "feat(wire): NetworkPool and KnownKeeperReplica
 
 A replica on an owner's Keeper path is known when it is the owner's
-SNode, a node of the purge node set, a current or past member of the
+SNode, a node of the network pool, a current or past member of the
 incarnation's database group (a Leaving member is a past member), or
 one of the incarnation's purge members (housegate spec 2026-10-14
-§8.2, §8.8; plan S3-E1 contract §42.1). The owner's Keeper audit
-reports every other replica.
+§8.2, §8.8; plan S3-E1 contract §42.1). The purge node set lists
+every registered member too, so NetworkPool takes from it only the
+nodes that are no SNode and that the registry names nowhere as a
+member. The owner's Keeper audit reports every other replica, another
+owner's SNode and a registered member of another group included.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git -C "$W" status --porcelain | wc -l | tr -d ' '
@@ -11756,12 +11831,17 @@ func TestOwnerKeeperAuditReportsAnUnknownReplica(t *testing.T) {
 	scopedIncarnation := scopedInc(t, 2, scoped, wire.TableStatusActive)
 	legacyInc.OwnerIndexerID, scopedIncarnation.OwnerIndexerID = &owner, &owner
 	scopedIncarnation.PurgeMembers = []string{"member-c"}
-	view, arb := newFakeView(), &fakeArbiter{nodeSet: []string{p.NodeID, "verifier-1"}}
+	// The purge node set lists every registered node: the owner, the pool
+	// verifier and each registered member, member-x of another database's
+	// group among them.
+	view, arb := newFakeView(), &fakeArbiter{nodeSet: []string{p.NodeID, "member-b", "member-c", "member-old", "member-x", "verifier-1"}}
 	view.setSnap(wire.TableRegistrySnapshot{
 		SIIndexers:   []arbiter.SIIndexerEntry{{IndexerID: 0, SNodeNodeID: p.NodeID}},
 		Incarnations: []wire.TableIncarnation{legacyInc, scopedIncarnation},
-		Groups: []wire.DatabaseGroup{{OwnerIndexerID: 0, DatabaseID: "db",
-			Members: []wire.GroupMember{{NodeID: "member-b"}}, PastMembers: []string{"member-old"}}},
+		Groups: []wire.DatabaseGroup{
+			{OwnerIndexerID: 0, DatabaseID: "db", Members: []wire.GroupMember{{NodeID: "member-b"}}, PastMembers: []string{"member-old"}},
+			{OwnerIndexerID: 0, DatabaseID: "other", Members: []wire.GroupMember{{NodeID: "member-x"}}},
+		},
 	})
 	source, clock, logs := auditedOwner(t, conn, p, view, arb)
 	mustReconcile(t, source)
@@ -11769,9 +11849,10 @@ func TestOwnerKeeperAuditReportsAnUnknownReplica(t *testing.T) {
 		t.Fatalf("the first pass audits only the owner's own replicas: %+v", st)
 	}
 	// A pool verifier, a group member, a past member, the scoped
-	// incarnation's purge member and an intruder each hold a replica of both
-	// tables on the second server.
-	for _, name := range []string{"verifier-1", "member-b", "member-old", "member-c", "intruder"} {
+	// incarnation's purge member, a registered member of another database's
+	// group and an intruder each hold a replica of both tables on the second
+	// server.
+	for _, name := range []string{"verifier-1", "member-b", "member-old", "member-c", "member-x", "intruder"} {
 		q := peer(t, replicaConn, p, name)
 		replicaOf(t, replicaConn, q, legacy, ddl.KeeperScope{IncarnationSeq: 1}, false)
 		replicaOf(t, replicaConn, q, scoped, scopedScope, false)
@@ -11787,22 +11868,24 @@ func TestOwnerKeeperAuditReportsAnUnknownReplica(t *testing.T) {
 	want := []KeeperFinding{
 		{Path: legacyPath, Replica: "intruder", Reason: KeeperFindingUnknownReplica},
 		{Path: legacyPath, Replica: "member-c", Reason: KeeperFindingUnknownReplica},
+		{Path: legacyPath, Replica: "member-x", Reason: KeeperFindingUnknownReplica},
 		{Path: scopedPath, Replica: "intruder", Reason: KeeperFindingUnknownReplica},
+		{Path: scopedPath, Replica: "member-x", Reason: KeeperFindingUnknownReplica},
 	}
 	st := source.Stats()
 	if st.KeeperAuditRuns != 2 || !reflect.DeepEqual(st.KeeperFindings, want) {
 		t.Fatalf("audit runs %d, findings %+v; want 2 and %+v", st.KeeperAuditRuns, st.KeeperFindings, want)
 	}
 	line := "keeper replica on an owner path is not the owner, a pool verifier or a current or past member"
-	if n := strings.Count(logs.String(), line); n != 3 {
-		t.Fatalf("logged %d unknown-replica warnings, want 3:\n%s", n, logs.String())
+	if n := strings.Count(logs.String(), line); n != 5 {
+		t.Fatalf("logged %d unknown-replica warnings, want 5:\n%s", n, logs.String())
 	}
 	if !strings.Contains(logs.String(), "table="+scoped.TableID+" path="+scopedPath+" replica=intruder") {
 		t.Fatalf("the warning names the table, path and replica:\n%s", logs.String())
 	}
 	clock.advance(DefaultKeeperAuditInterval)
 	mustReconcile(t, source)
-	if st := source.Stats(); st.KeeperAuditRuns != 3 || !reflect.DeepEqual(st.KeeperFindings, want) || strings.Count(logs.String(), line) != 3 {
+	if st := source.Stats(); st.KeeperAuditRuns != 3 || !reflect.DeepEqual(st.KeeperFindings, want) || strings.Count(logs.String(), line) != 5 {
 		t.Fatalf("a repeated finding is kept and not logged again: %+v\n%s", st, logs.String())
 	}
 	nonOwner := newReconciler(t, conn, p, view, arb, nil)
@@ -11919,17 +12002,17 @@ Expected: FAIL to build:
 
 ```
 # github.com/sentioxyz/arbiter-core/dataplane/tableset [github.com/sentioxyz/arbiter-core/dataplane/tableset.test]
-dataplane/tableset/keeper_audit_ch_test.go:85:30: st.KeeperAuditRuns undefined (type Stats has no field or method KeeperAuditRuns)
-dataplane/tableset/keeper_audit_ch_test.go:85:61: st.KeeperFindings undefined (type Stats has no field or method KeeperFindings)
-dataplane/tableset/keeper_audit_ch_test.go:97:28: source.Stats().KeeperAuditRuns undefined (type Stats has no field or method KeeperAuditRuns)
-dataplane/tableset/keeper_audit_ch_test.go:100:16: undefined: DefaultKeeperAuditInterval
-dataplane/tableset/keeper_audit_ch_test.go:104:12: undefined: KeeperFinding
-dataplane/tableset/keeper_audit_ch_test.go:105:51: undefined: KeeperFindingUnknownReplica
-dataplane/tableset/keeper_audit_ch_test.go:106:51: undefined: KeeperFindingUnknownReplica
-dataplane/tableset/keeper_audit_ch_test.go:107:51: undefined: KeeperFindingUnknownReplica
-dataplane/tableset/keeper_audit_ch_test.go:110:8: st.KeeperAuditRuns undefined (type Stats has no field or method KeeperAuditRuns)
-dataplane/tableset/keeper_audit_ch_test.go:110:54: st.KeeperFindings undefined (type Stats has no field or method KeeperFindings)
-dataplane/tableset/keeper_audit_ch_test.go:110:54: too many errors
+dataplane/tableset/keeper_audit_ch_test.go:90:30: st.KeeperAuditRuns undefined (type Stats has no field or method KeeperAuditRuns)
+dataplane/tableset/keeper_audit_ch_test.go:90:61: st.KeeperFindings undefined (type Stats has no field or method KeeperFindings)
+dataplane/tableset/keeper_audit_ch_test.go:103:28: source.Stats().KeeperAuditRuns undefined (type Stats has no field or method KeeperAuditRuns)
+dataplane/tableset/keeper_audit_ch_test.go:106:16: undefined: DefaultKeeperAuditInterval
+dataplane/tableset/keeper_audit_ch_test.go:110:12: undefined: KeeperFinding
+dataplane/tableset/keeper_audit_ch_test.go:111:51: undefined: KeeperFindingUnknownReplica
+dataplane/tableset/keeper_audit_ch_test.go:112:51: undefined: KeeperFindingUnknownReplica
+dataplane/tableset/keeper_audit_ch_test.go:113:51: undefined: KeeperFindingUnknownReplica
+dataplane/tableset/keeper_audit_ch_test.go:114:51: undefined: KeeperFindingUnknownReplica
+dataplane/tableset/keeper_audit_ch_test.go:115:51: undefined: KeeperFindingUnknownReplica
+dataplane/tableset/keeper_audit_ch_test.go:115:51: too many errors
 FAIL	github.com/sentioxyz/arbiter-core/dataplane/tableset [build failed]
 FAIL
 ```
@@ -11961,9 +12044,11 @@ type KeeperFindingReason string
 
 const (
 	// KeeperFindingUnknownReplica: a replica on one of the owner's Keeper
-	// paths that is not the owner, a node of the purge node set, a current
-	// or past member of the incarnation's group, or one of its purge members
-	// (wire.TableRegistrySnapshot.KnownKeeperReplica).
+	// paths that is not the owner, a node of the network pool, a current or
+	// past member of the incarnation's group, or one of its purge members
+	// (wire.TableRegistrySnapshot.KnownKeeperReplica over NetworkPool of the
+	// purge node set): another owner's SNode and a registered member of
+	// another group are reported too.
 	KeeperFindingUnknownReplica KeeperFindingReason = "unknown_replica"
 	// KeeperFindingNonIncarnationRoot: a replicated-table root under the
 	// incarnation-scoped root that is not the path of a scoped_keeper_path
@@ -12055,7 +12140,7 @@ func (r *Reconciler) auditKeeper(ctx context.Context, snap wire.TableRegistrySna
 		physical := ddl.CHTableName(inc.Key())
 		legacyIncs[physical] = append(legacyIncs[physical], inc)
 	}
-	var nodes []string
+	var pool []string
 	fetched := false
 	var out []keeperFindingOf
 	check := func(key string, s ddl.KeeperScope, incs []wire.TableIncarnation) error {
@@ -12068,12 +12153,15 @@ func (r *Reconciler) auditKeeper(ctx context.Context, snap wire.TableRegistrySna
 				continue
 			}
 			if !fetched {
-				if nodes, err = r.d.Arbiter.PurgeNodeSet(ctx); err != nil {
+				nodes, err := r.d.Arbiter.PurgeNodeSet(ctx)
+				if err != nil {
 					return fmt.Errorf("tableset: purge node set: %w", err)
 				}
-				fetched = true
+				// The purge node set lists every registered member too;
+				// only its network pool is known on every path.
+				pool, fetched = snap.NetworkPool(nodes), true
 			}
-			if slices.ContainsFunc(incs, func(inc wire.TableIncarnation) bool { return snap.KnownKeeperReplica(inc, nodes, replica) }) {
+			if slices.ContainsFunc(incs, func(inc wire.TableIncarnation) bool { return snap.KnownKeeperReplica(inc, pool, replica) }) {
 				continue
 			}
 			out = append(out, keeperFindingOf{
@@ -12295,7 +12383,7 @@ git log --format=%s "$(cat "$T61/base")"..HEAD
 git diff --stat "$(cat "$T61/base")" HEAD | tail -1
 ```
 
-Expected: `gofmt clean`; `0` (gazelle changes nothing); `boundary ok`; the five subjects, newest first: `feat(tableset): the owner's report-only Keeper audit`, `feat(tableset): act on each incarnation's own Keeper path`, `feat(wire): KnownKeeperReplica`, `feat(ddl): list both SI Keeper roots`, `feat(ddl): incarnation-scoped Keeper paths`; and the stat line ` 18 files changed, 2020 insertions(+), 94 deletions(-)`.
+Expected: `gofmt clean`; `0` (gazelle changes nothing); `boundary ok`; the five subjects, newest first: `feat(tableset): the owner's report-only Keeper audit`, `feat(tableset): act on each incarnation's own Keeper path`, `feat(wire): NetworkPool and KnownKeeperReplica`, `feat(ddl): list both SI Keeper roots`, `feat(ddl): incarnation-scoped Keeper paths`; and the stat line ` 18 files changed, 2100 insertions(+), 94 deletions(-)`.
 
 Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
 
@@ -17554,14 +17642,16 @@ Nothing here changes consensus state or devnet2: every step of the mode waits fo
 
 Notes:
 - **Base.** The URWT worktree `~/src/remotesrc/claude/arbiter-core/multi-source-s3e1` of Task 59, on `urwt/claude/multi-source-s3e1`, holding Tasks 59–62's commits on `CORE_TAG_P4` (Plan S3-D Task 50); this task adds its commits to the same branch and opens the branch's one PR (contract §43). Step 1 checks, by their contract signatures, every name this task consumes from Tasks 59–62. The line anchors of the hunks below are those of the scratch base described under Measured; S3-D and Tasks 59–62 move some of them, so each hunk anchors on text and applies the intent where a line moved (the hunk rule of the Global Constraints).
-- **One mode, one name beyond the contract.** Contract §42.3 lists the parts of the consensus mode but no type that runs them. `consensus.Mode` (`NewMode`, `ModeDeps`, `InstallView`, `(*Mode).Run`, `Status`, `Metrics`) is that runner: `member.Role` builds it in `New` with the member's own connections and runs it in startup step (9) beside the copyset, the feed and the serving server, handing it the feed's verified manifest store and the installer. The mode builds Task 62's `VerifyRole` itself (it needs the manifest store, which exists only from step 7). Names added beyond contract §42.3 (Appendix B): `Mode`, `NewMode`, `ModeDeps`, `InstallView`, `InstallStateOf`, `ReplicaPaths`, `ReadLocalReplicas`, `ReplicaSyncTimeout`, `(*CheckpointSigner).Address`, `OffStatus`, `ModeOff`, `ModeConsensus`, `ClassLeaving`, the label constants `EvidenceReplay`, `EvidenceScan`, `EvidenceSubmitted`, `EvidenceRefused`, `CheckpointAccepted`, `CheckpointSwitchOff`, `CheckpointRefused`, `ReconcilerMetrics` / `NewReconcilerMetrics` (the reconciler process's two series, for S3-E4 Task 79), `sources.SourceMemberUnsafeHardlink`, `serve.Deps.Consensus`; tests `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica`, `TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration`, `TestConsensusMetricsExportEveryLabelIncludingZeros`, `TestVerifyRoleCountsItsEvidence`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestServingViewCarriesTheConsensusStatus`.
+- **One mode, one name beyond the contract.** Contract §42.3 lists the parts of the consensus mode but no type that runs them. `consensus.Mode` (`NewMode`, `ModeDeps`, `InstallView`, `(*Mode).Run`, `Status`, `Metrics`) is that runner: `member.Role` builds it in `New` with the member's own connections and runs it in startup step (9) beside the copyset, the feed and the serving server, handing it the feed's verified manifest store, the installer and the boot nonce of startup step (7). The mode builds Task 62's `VerifyRole` itself (it needs the manifest store, which exists only from step 7). Names added beyond contract §42.3 (Appendix B): `Mode`, `NewMode`, `ModeDeps`, `InstallView`, `InstallStateOf`, `ReplicaPaths`, `ReadLocalReplicas`, `ReplicaSyncTimeout`, `(*CheckpointSigner).Address`, `OffStatus`, `ModeOff`, `ModeConsensus`, `ClassLeaving`, the label constants `EvidenceReplay`, `EvidenceScan`, `EvidenceSubmitted`, `EvidenceRefused`, `CheckpointAccepted`, `CheckpointSwitchOff`, `CheckpointRefused`, `ReconcilerMetrics` / `NewReconcilerMetrics` (the reconciler process's two series, for S3-E4 Task 79), `sources.SourceMemberUnsafeHardlink`, `serve.Deps.Consensus`; the unexported `parts.bootNonce`, `(*Role).nodeIDCheckSet` and `(*Role).checkGovernedHost` with the refusal `member: node id %q is served as a member of group %d/%s hosted by indexer %d, not by this host %d: %w` (wrapping `copyset.ErrNodeIDInUse`) and the info line `member: the node id is in the purge node set as this member's own verifier registration`; tests `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica`, `TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration`, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce`, `TestConsensusMetricsExportEveryLabelIncludingZeros`, `TestVerifyRoleCountsItsEvidence`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestServingViewCarriesTheConsensusStatus`.
 - **Every step waits for its switch and for the registration.** Readiness runs only while the registry's `stage3.placement` is on, checkpoints only while `stage3.checkpoints` is on, and both only once the member registered as a VERIFIER in this process (`Config.Register`, S3-F step 4): Apply refuses either from a node that is not a registered verifier (Plan S3-E3 §52.1 refusal 5, §52.3 refusal 4), so a member that has not registered sends nothing. Purge reports do not wait for the registration, so a member that registered in an earlier run never holds a purge.
 - **The switch refusal and the FSM's refusals arrive alike.** The arbiter answers a member command before its switch with FAILED_PRECONDITION and the K67 text, and also maps every Apply refusal of `MemberReady` and `MemberCheckpoint` to FAILED_PRECONDITION with the FSM's text (Plan S3-E3 §52.1 RPC step 5, §52.3 RPC step 5). `dataplane.ErrStage3SwitchOff` therefore wraps both, as contract §42.3 defines it (any leader precondition without a NotLeader detail); the mode reads the switch refusal by its K67 text, counts it `switch_off` and logs it at info, and counts any other refusal `refused` and logs it at warn. Neither pages; both are retried at the next interval, and a refused checkpoint is signed again under the next `checkpoint_seq`.
 - **Readiness covers the replicas the reconciler keeps.** `PlanReadiness` reports a group ready once the live incarnation of each table of its database owned by its owner that is Pending, Active or Retiring has a synced local replica at that incarnation's Keeper path. Contract §42.3 says "every physical incarnation"; a Purging one is left out, because the reconciler drops a Purging incarnation's replica once it is quiet and never creates one (contract §42.3), so including it would hold a joining member's readiness until the purge completed. Recorded in Appendix B as a refinement of §42.3.
 - **What a checkpoint excludes.** A group of the checkpoint lists, sorted by table id, every table of its database whose live incarnation is physical and owned by the owner and that the member has not installed at the checkpoint's manifest (Plan S3-E3 §52.3 refusal 10 accepts exactly such tables): a copy marked Foreign or Diverged as `foreign` or `diverged`; any other copy as `audit_pending` while the installer's audit is not clean (the global flag the serving view reads too, S3-C4); a copy behind the manifest as `disk_threshold` while installs are paused, else `not_installed`, which also names a Pending or Active table without a copy and a copy of an earlier incarnation of a re-created table; a Retiring or Purging table as `retiring`. Over-exclusion only lowers what the floor counts.
-- **Quiescence.** Task 62's verify role observes every job into `quiescence.json` and resolves the ledger every `Config.ResolveInterval` (contract §42.3 gives `Resolve` and its interval to Task 62's `Quiescence`); this task only reads it, through `ReadQuiescence`, as the reconciler process does. Open question for the orchestrator: if Task 62's `VerifyRole.Run` does not run `Resolve`, no block ever resolves and no purge is reported, which fails safe (no drop, no premature report) but holds every purge.
-- **The verify role's boot nonce.** Contract §42.3 puts the verify role's replay scratch under `install.ScratchPrefix(NodeID, bootNonce) + "v"` "with `member.Role`'s boot nonce", but neither `consensus.Config` nor `VerifyDeps` carries one, and `Role` draws its nonce only in startup step (7). This task assumes Task 62's `NewVerifyRole` draws its own with `install.NewBootNonce()`: the prefix is still under `install.NodePrefix(NodeID)`, so the role's startup drop removes its scratch, and a nonce other than the installer's never meets an install scratch name. Open question for the orchestrator: if Task 62 adds a field for it instead, `Mode.Run` gains the role's nonce as a parameter and `runParts` passes it.
+- **Quiescence.** Task 62's verify role observes every job into `quiescence.json` and resolves the ledger every `Config.ResolveInterval` (contract §42.3 gives `Resolve` and its interval to Task 62's `Quiescence`); this task only reads it, through `ReadQuiescence`, as the reconciler process does. Task 62's `VerifyRole.Run` does run it (`resolveLoop`, every `ResolveInterval`, with `Register` on or off; checked against Task 62's text in the review fixes of Appendix B), so the mode starts no resolve loop of its own; without one no block would resolve and every purge would be held, which fails safe (no drop, no premature report).
+- **The verify role's boot nonce.** Contract §42.3 puts the verify role's replay scratch under `install.ScratchPrefix(NodeID, bootNonce) + "v"` "with `member.Role`'s boot nonce", and Task 62 carries it as `VerifyDeps.BootNonce`, which `NewReplayMaterializer` refuses unless it is 8 lowercase hex characters (`install.NewBootNonce`'s shape), so a `VerifyDeps` without it fails every member with `Config.Consensus` in `Mode.prepare`, `Register` on or off. `member.Role` draws its nonce in startup step (7) and hands it to the installer and the shadow; `build` now keeps it in `parts.bootNonce` (one field of S3-C2's `parts`), `runParts` passes it to `(*Mode).Run(ctx, manifests, inst, bootNonce)`, and `prepare(manifests, bootNonce)` sets `VerifyDeps.BootNonce`, so the verify role's scratch shares the installer's nonce under `install.NodePrefix(NodeID)`, which the next start's `DropStaleScratch` removes, and is never an install scratch name (`…v` against `…<decimal>`). `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` builds Task 62's real verify role through `prepare` and `Run` (an empty or malformed nonce is refused with the constructor's text) and `TestConsensusConfigWiresTheModeIntoTheRole` checks that the role hands the mode the installer's nonce. (Review fix, AgentConnect round 1, finding 1: the draft assumed `NewVerifyRole` drew its own nonce.)
+- **The node id at a restart (S3-C2 K29).** S3-C2 Task 34's startup step (6) refuses, through `copyset.CheckNodeIDUnused`, a node id that is an `si_indexers` SNode's or in the arbiter's purge node set; once a consensus-mode member registered as a VERIFIER its own id is in that set (`GetPurgeNodeSet` is every registered, non-evicted SNode and verifier, and S3-E2 Task 69 keeps it so), so every later start, a pod replaced at S3-F step 6 included, would end with `ErrNodeIDInUse` before `runParts`. With `Config.Consensus` step (6) now leaves the member's own id out of the purge node set it checks (`nodeIDCheckSet`, logged at info): a VERIFIER registration under that id is signed with the key of the id's `verifiers` entry, which only this member holds, and S3-E2 Task 64's Apply refuses a member entry whose id any node record holds, so the id's presence there is the member's own registration. The SNode refusal stays, and a governed-identity check over what the registry serves is added: a group member with the member's id served with another `host_indexer_id` (D27) is another host's identity and is refused with `ErrNodeIDInUse` (`checkGovernedHost`; a member served without a host passes, as every reader of hosts skips it). Without `Config.Consensus` step (6) is S3-C2's, byte for byte. The registry view carries no `verifiers` parameter, so the start cannot compare the entry's key itself; the arbiter does at every `RegisterNode` the mode sends while `Register` is on. `TestConsensusModeAcceptsItsOwnRegistrationAtARestart` restarts a member whose registration is present and checks the three refusals. (Review fix, AgentConnect round 1, finding 2.)
 - **Evidence counts.** `sentio_node_si_member_evidence_total{kind,result}` needs the result of each dispatch the verify role handles. Step 10 edits Task 62's `member/consensus` sources with a short checked script: it adds the field `metrics *Metrics` to `VerifyRole` and wraps the role's one call of the evidence handler's `HandleReplayJob` and of its `HandleScanRequest` in `v.countEvidence(...)`, refusing to write anything unless each occurs exactly once.
+- **The source order.** In consensus mode `build` puts the hard-link source first: hard link, owner pull, peer unsafe pulls, restore (contract §42.3); Step 15's `[member_unsafe_hardlink owner_pull peer_unsafe_pull]` is that list in the role's test harness, which configures no restore. While an owner has no journaled entry, S3-C2's installer tries the restore right before the owner pull for the first fetch of each copy, once per copy and process (S3-C2 contract §22.3, the bootstrap restore probe, its review fix 245-4); its `restoreBeforeOwnerPull` keeps every source in front of the owner pull where it is, so the hard-link source stays first, and every other fetch keeps the role's order. This task changes nothing in the installer for it.
 - **The serving view.** `serve.ServingView` gains `Consensus consensus.Status` (`json:"consensus"`), filled from the new `serve.Deps.Consensus`; without it (and without `member.Config.Consensus`) the view says `{"mode":"off","registered":false,"groups":[]}`. The P3 view of a role without `Config.Serve` stays `serve.ServingView{}`.
 - **Two pre-existing pins learn something beyond contract §42.** S3-C2 Task 34's `TestLocalNodeFeaturesAreUnchangedThroughP2` (`member/role_test.go`) pins exactly three features; it learns `stage3_v1` with the two pins contract §42.3 names (Appendix B: a contract issue, the test is outside §42's list). `sources.SourceNames` (pinned by S3-C2's `source_test.go`) stays the P2 list; the hard-link source's name is its own constant, and `member.Stats().Installs` carries `member_unsafe_hardlink` at zero only in consensus mode, so the P2/P3 member's series are unchanged.
 - **CI.** CI's `data-plane integration` job (`.github/workflows/ci.yml`) gains `//member/consensus:consensus_test`, unless Task 62 added it, so `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` runs on its two-node pair with shared Keeper; `//member/sources:sources_test`, where the hard-link test lives, is in the job already.
@@ -17576,8 +17666,8 @@ Notes:
 - Modify: Task 62's `member/consensus/verify_role.go` (or whichever of its files holds them: the `VerifyRole` struct and its one `HandleReplayJob` and one `HandleScanRequest` call, Step 10's script); `member/consensus/BUILD.bazel` (gazelle)
 - Create: `member/sources/member_unsafe_hardlink.go`, `member/sources/member_unsafe_hardlink_ch_test.go` (ClickHouse and Keeper); Modify `member/sources/BUILD.bazel` (gazelle)
 - Create: `member/consensus_mode.go`, `member/consensus_mode_test.go`
-- Modify: `member/config.go` (imports `:16`; `Config` after `Serve`, `:101-104`), `member/role.go` (`Role` after `serving`, `:134`; `New`, `:156-164`; `build`'s source list, `:337-339`; `runParts`, `:417` and `:446`), `member/stats.go` (imports `:11`; the source zeros, `:94-96`), `member/serving.go` (`newServing`, `:37` and `:58`), `member/role_test.go` (`TestLocalNodeFeaturesAreUnchangedThroughP2`, `:372-378`), `member/BUILD.bazel` (gazelle)
-- Modify: `member/serve/conditions.go` (imports `:13`; `ServingView`, `:62-66`), `member/serve/serve.go` (imports `:24`; `Deps.NodeID`, `:176-178`; `Server`, `:249`; `New`, `:273` and `:286-288`; `Serving`, `:319-325`); Create `member/serve/consensus_status_test.go`; Modify `member/serve/BUILD.bazel` (gazelle)
+- Modify: `member/config.go` (imports `:16`; `Config` after `Serve`, `:101-104`), `member/role.go` (`parts`, the field `bootNonce`; `Role` after `serving`, `:136`; `New`, `:158-166`; `Run`'s startup step (6), the `copyset.CheckNodeIDUnused` call, `:239-241`; `build`'s source list, `:352-354`, and its `parts` literal, `:388`; `runParts`, `:426` and `:455`), `member/stats.go` (imports `:11`; the source zeros, `:94-96`), `member/serving.go` (`newServing`, `:37` and `:58`), `member/role_test.go` (`TestLocalNodeFeaturesAreUnchangedThroughP2`, `:405-411`), `member/BUILD.bazel` (gazelle)
+- Modify: `member/serve/conditions.go` (imports `:13`; `ServingView`, `:62-66`), `member/serve/serve.go` (imports `:25`; `Deps.NodeID`, `:182-184`; `Server`, `:255`; `New`, `:284` and `:298-300`; `Serving`, `:334-340`; lines of S3-C4 Task 45's file after its review round 1, which added `Deps.StateDir` before `NodeID`); Create `member/serve/consensus_status_test.go`; Modify `member/serve/BUILD.bazel` (gazelle)
 - Modify: `consensus.go` (`LocalNodeFeatures`, `:35-38`), `consensus_test.go` (`:46-47`), `snode/tracks_test.go` (`:659`) — the lines of `cfd4f42`, which S3-C1 through S3-D leave in place
 - Modify: `.github/workflows/ci.yml` (`data-plane integration`, before `//member/copyset:copyset_test`, `:113`)
 - Modify: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`, `README.md` (the Housegate pin, through `scripts/update-housegate.sh`)
@@ -17590,8 +17680,8 @@ Notes:
   - Task 59: `arbiter.MemberReadyBody`, `arbiter.MemberCheckpoint`, `arbiter.CheckpointGroup`, `arbiter.ExcludedTable`, `arbiter.CheckpointExclusionReason` with `ExclusionNotInstalled`, `ExclusionDiverged`, `ExclusionForeign`, `ExclusionDiskThreshold`, `ExclusionAuditPending`, `ExclusionRetiring`; `arbiter.Stage3Params` (`Placement`, `Checkpoints`); `authority.MemberReadyHash`, `SignMemberReady(priv ed25519.PrivateKey, ctx MessageContext, body arbiter.MemberReadyBody) (string, error)`, `VerifyMemberReady`, `MemberCheckpointHash(ctx MessageContext, cp arbiter.MemberCheckpoint) (string, error)`, `(*Signer).SignMemberCheckpoint`, `VerifyMemberCheckpoint(ctx MessageContext, cp arbiter.MemberCheckpoint, jws, replicaSigner string) error`; `authoritytest.MemberNodeIDB`, `MemberKeyB()`, `ReplicaKeyHexB`, `ReplicaAddrB` (contract §41).
   - Task 60: `wire.MemberReady` (`Body()`), `wire.MemberCheckpoint{Checkpoint, ReplicaJWS}`, `wire.MemberReadyToRequest`, `wire.MemberCheckpointToRequest`; `wire.TableRegistrySnapshot.Groups`, `MemberCheckpointSeqs`, `Stage3`, `Group`, `GroupsWithMember`, `PublishedCheckpointSeq`; `wire.DatabaseGroup`, `wire.GroupMember` (`Ready()`, `Class`, `Checkpoint *MemberCheckpointRecord`), `wire.LeavingMember`, `wire.MemberCheckpointSeq`, `wire.MemberClass` constants; `wire.TableIncarnation.ScopedKeeperPath`, `PurgeMembers` (contract §41).
   - Task 61: `ddl.KeeperScope`, `ddl.ZooKeeperPathFor(keeperShardID uint32, tableID string, s KeeperScope) string`, `ddl.KeeperReplicasAt`, `tableset.KeeperScopeOf` (contract §42.1).
-  - Task 62: `consensus.Config` (every field), `DefaultReadinessInterval`, `DefaultCheckpointInterval`, `DefaultResolveInterval`, `CheckpointSeqFile`, `QuiescenceFile`, `VerifyRole`, `NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`, `(*VerifyRole).Register`, `Run`, `VerifyDeps`, `QuiescentTable`, `OpenQuiescence`, `(*Quiescence).Observe`, `ReadQuiescence`, `(QuiescenceLedger).Quiet`, `ReconcilerStats{Replicas, ReplicaAlreadyExists, Failures}` (contract §42.3); its verify role resolves the quiescence ledger every `Config.ResolveInterval` (Notes).
-  - Plan S3-C2: `member.Role`, `member.Config`, `member.Deps`, `member.Stats`, the role's `seams`, `parts`, `installer` and `copySet`, `install.OwnerJournal`, `install.TableState`, `install.Stats{AuditClean, InstallsPaused}`, `sources.Source`, `Need`, `Scratch`, `Result`, the outcomes and `failure`/`checkScratch`/`scratchParts`, `ddl.MemberPinned`, `ddl.MemberUnsafeIntent`, `ddl.ScratchIntent`, `ddl.CHTableName`, `ddl.IncarnationComment`/`ParseIncarnationComment`, `chparts.QuotePartition`, `dataplane.PurgeReporter`, `dataplane.ErrTableNotPurging`, `leaderPrecondition`, `(*Client).WithLeaderRetry`; Plan S3-C4: `serve.ServingView`, `serve.Deps`, `serve.Server`; Plan S3-C1 contract §19: `s3-ledger.py`; Plan S3-A contract §6: the release commands.
+  - Task 62: `consensus.Config` (every field), `DefaultReadinessInterval`, `DefaultCheckpointInterval`, `DefaultResolveInterval`, `CheckpointSeqFile`, `QuiescenceFile`, `VerifyRole`, `NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`, `(*VerifyRole).Register`, `Run`, `VerifyDeps` (its `BootNonce` included), `QuiescentTable`, `OpenQuiescence`, `(*Quiescence).Observe`, `ReadQuiescence`, `(QuiescenceLedger).Quiet`, `ReconcilerStats{Replicas, ReplicaAlreadyExists, Failures}` (contract §42.3); its verify role resolves the quiescence ledger every `Config.ResolveInterval` (Notes); its test fixture `testBootNonce` (`member/consensus/fakes_test.go`).
+  - Plan S3-C2: `member.Role`, `member.Config`, `member.Deps`, `member.Stats`, the role's `seams`, `parts`, `installer` and `copySet`, `Run`'s startup step (6) and `build`'s boot nonce, `copyset.CheckNodeIDUnused`, `copyset.ErrNodeIDInUse`, the role test harness (`newHarness`, `testRegistry`, `newStaticRegistry`, `(*fakeArbiter).setPurge`, `runToError`, `hasPrefix`), `install.OwnerJournal`, `install.TableState`, `install.Stats{AuditClean, InstallsPaused}`, `sources.Source`, `Need`, `Scratch`, `Result`, the outcomes and `failure`/`checkScratch`/`scratchParts`, `ddl.MemberPinned`, `ddl.MemberUnsafeIntent`, `ddl.ScratchIntent`, `ddl.CHTableName`, `ddl.IncarnationComment`/`ParseIncarnationComment`, `chparts.QuotePartition`, `dataplane.PurgeReporter`, `dataplane.ErrTableNotPurging`, `leaderPrecondition`, `(*Client).WithLeaderRetry`; Plan S3-C4: `serve.ServingView`, `serve.Deps`, `serve.Server`; Plan S3-C1 contract §19: `s3-ledger.py`; Plan S3-A contract §6: the release commands.
   - Ledger: `PROTO_TAG_P5` (Task 57), `HG_TAG_P5` (Task 58), `CORE_TAG_P4` (Plan S3-D Task 50).
 - Produces (contract §42.3, verbatim):
   - `dataplane`: `var ErrStage3SwitchOff = errors.New("dataplane: the arbiter refuses this stage-3 command until its switch is on")`; `func (c *Client) SubmitMemberReady(ctx context.Context, cmd wire.MemberReady) error`; `func (c *Client) SubmitMemberCheckpoint(ctx context.Context, cmd wire.MemberCheckpoint) error`.
@@ -17664,11 +17754,14 @@ for check in \
   "dataplane/ddl|func KeeperReplicasAt(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32, tableID string, s KeeperScope) ([]string, error) {" \
   "dataplane/tableset|func KeeperScopeOf(inc wire.TableIncarnation) ddl.KeeperScope {" \
   "member/consensus|func NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error) {" \
+  "member/consensus|BootNonce string" \
   "member/consensus|type VerifyRole struct {" \
   "member/consensus|func OpenQuiescence(stateDir string) (*Quiescence, error) {" \
   "member/consensus|func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error {" \
   "member/consensus|func ReadQuiescence(stateDir string) (QuiescenceLedger, error) {" \
-  "member/consensus|func (l QuiescenceLedger) Quiet(tableID string, incarnationSeq uint64) bool {"; do
+  "member/consensus|func (l QuiescenceLedger) Quiet(tableID string, incarnationSeq uint64) bool {" \
+  "member|if err := copyset.CheckNodeIDUnused(snap, purge, r.cfg.NodeID); err != nil {" \
+  "member|p := &parts{copies: copies, installer: inst}"; do
   printf '%s %s\n' "$(cat "${check%%|*}"/*.go | grep -cF -- "${check#*|}")" "${check%%|*}"
 done
 printf '%s %s\n' "$(cat authority/authoritytest/*.go | grep -cE 'ReplicaKeyHexB[[:space:]]*=[[:space:]]*"0{61}d44"')" "authority/authoritytest ReplicaKeyHexB"
@@ -17679,7 +17772,7 @@ done
 echo "names checked"
 ```
 
-Expected: twenty lines starting `1 ` (one each for `authority`, `authority/authoritytest`, `wire`, `dataplane/ddl`, `dataplane/tableset` and `member/consensus` as listed), `1 authority/authoritytest ReplicaKeyHexB`, `0 Stage3Feature in consensus.go`, no `exists already` line, and `names checked`. A `0` on a consumed name: Task 59, 60, 61 or 62 spelled it otherwise; compare with contract §41–§42 and stop (a contract conflict to report, never a rename here).
+Expected: twenty-three lines starting `1 ` (one each for `authority`, `authority/authoritytest`, `wire`, `dataplane/ddl`, `dataplane/tableset`, `member/consensus` (Task 62's `VerifyDeps.BootNonce` among them) and `member` (S3-C2's startup step (6) and `build`'s `parts` literal, which Step 16 replaces) as listed), `1 authority/authoritytest ReplicaKeyHexB`, `0 Stage3Feature in consensus.go`, no `exists already` line, and `names checked`. A `0` on a consumed name: Task 59, 60, 61 or 62 spelled it otherwise; compare with contract §41–§42 and stop (a contract conflict to report, never a rename here).
 
 - [ ] **Step 2: Write the failing tests of the member gateway clients**
 
@@ -19393,6 +19486,10 @@ type modeHarness struct {
 	replicas    map[uint64][]string
 	reports     []uint64
 	reportErr   error
+
+	// realVerifyRole is the verify-role seam NewMode installed (Task 62's
+	// NewVerifyRole), kept for the tests that build the real role.
+	realVerifyRole func(Config, VerifyDeps, *Metrics) (verifyRunner, error)
 }
 
 func newModeHarness(t *testing.T, snap wire.TableRegistrySnapshot, register bool) *modeHarness {
@@ -19418,6 +19515,7 @@ func newModeHarnessIn(t *testing.T, stateDir string, snap wire.TableRegistrySnap
 	if err != nil {
 		t.Fatalf("NewMode: %v", err)
 	}
+	h.realVerifyRole = m.env.newVerifyRole
 	m.env.newVerifyRole = func(Config, VerifyDeps, *Metrics) (verifyRunner, error) { return h.verify, nil }
 	m.env.localReplicas = func(_ context.Context, paths map[string]string) (LocalReplicas, error) {
 		h.mu.Lock()
@@ -19466,10 +19564,10 @@ func (h *modeHarness) KeeperReplicas(_ context.Context, inc wire.TableIncarnatio
 }
 
 // prepare does what Run does before its loops, so a test drives the steps
-// itself.
+// itself; testBootNonce (Task 62's fixture) stands for member.Role's.
 func (h *modeHarness) prepare() {
 	h.t.Helper()
-	if _, err := h.mode.prepare(modeTestStore{}); err != nil {
+	if _, err := h.mode.prepare(modeTestStore{}, testBootNonce); err != nil {
 		h.t.Fatalf("prepare: %v", err)
 	}
 }
@@ -19592,7 +19690,7 @@ func TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration(t *testing.T
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- h.mode.Run(ctx, modeTestStore{}, h.inst) }()
+	go func() { done <- h.mode.Run(ctx, modeTestStore{}, h.inst, testBootNonce) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if ready, _, _ := h.sent(); len(ready) > 0 {
@@ -19620,7 +19718,7 @@ func TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration(t *testing.T
 	})
 	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := passive.mode.Run(ctx, modeTestStore{}, passive.inst); !errors.Is(err, context.DeadlineExceeded) {
+	if err := passive.mode.Run(ctx, modeTestStore{}, passive.inst, testBootNonce); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Run = %v, want the deadline", err)
 	}
 	if registers, runs := passive.verify.counts(); registers != 0 || runs != 1 {
@@ -19628,6 +19726,41 @@ func TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration(t *testing.T
 	}
 	if ready, _, _ := passive.sent(); len(ready) != 0 || metricValues(t, passive.mode.metrics)["sentio_node_si_member_consensus_registered"] != 0 {
 		t.Fatalf("without Register the mode sent %v", ready)
+	}
+}
+
+// TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce: prepare and Run hand
+// Task 62's real verify-role constructor the boot nonce member.Role drew, so a
+// member with Config.Consensus builds its verify role and runs with Register
+// off; a nonce that is not install.NewBootNonce's, the empty one included,
+// stops prepare with the constructor's refusal.
+func TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce(t *testing.T) {
+	h := newModeHarness(t, readinessSnapshot(), false)
+	var nonces []string
+	h.mode.env.newVerifyRole = func(cfg Config, d VerifyDeps, metrics *Metrics) (verifyRunner, error) {
+		nonces = append(nonces, d.BootNonce)
+		return h.realVerifyRole(cfg, d, metrics)
+	}
+	for _, bad := range []string{"", "nonce"} {
+		want := fmt.Sprintf("member consensus: verify role: member consensus: boot nonce %q must be 8 lowercase hex characters (install.NewBootNonce)", bad)
+		if _, err := h.mode.prepare(modeTestStore{}, bad); err == nil || err.Error() != want {
+			t.Fatalf("prepare with boot nonce %q = %v, want %q", bad, err, want)
+		}
+	}
+	vr, err := h.mode.prepare(modeTestStore{}, testBootNonce)
+	if err != nil {
+		t.Fatalf("prepare with the role's boot nonce: %v", err)
+	}
+	if _, ok := vr.(*VerifyRole); !ok {
+		t.Fatalf("prepare built %T, want Task 62's *VerifyRole", vr)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := h.mode.Run(ctx, modeTestStore{}, h.inst, testBootNonce); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run with the real verify role = %v, want the deadline", err)
+	}
+	if !slices.Equal(nonces, []string{"", "nonce", testBootNonce, testBootNonce}) {
+		t.Fatalf("the verify role was built with boot nonces %q, want each one prepare and Run were given", nonces)
 	}
 }
 
@@ -20121,14 +20254,17 @@ func (m *Mode) Status() Status {
 // the readiness step every ReadinessInterval, the checkpoint step every
 // CheckpointInterval and the purge step every ResolveInterval. manifests is
 // the member feed's verified manifest store and inst its installer; both
-// exist only once member.Role's startup reached step (9). Run returns ctx's
-// error, or the verify role's failure. A step's failure is logged and
-// retried at its next interval, and a switch refusal never pages.
-func (m *Mode) Run(ctx context.Context, manifests replay.SnapshotStore, inst InstallView) error {
+// exist only once member.Role's startup reached step (9). bootNonce is the
+// boot nonce member.Role drew in startup step (7) (install.NewBootNonce), which
+// the verify role's replay scratch prefix carries (VerifyDeps.BootNonce), so
+// the next start's drop of this node's stage tables removes that scratch too.
+// Run returns ctx's error, or the verify role's failure. A step's failure is
+// logged and retried at its next interval, and a switch refusal never pages.
+func (m *Mode) Run(ctx context.Context, manifests replay.SnapshotStore, inst InstallView, bootNonce string) error {
 	if manifests == nil || inst == nil {
 		return errors.New("member consensus: Run needs the manifest store and the installer")
 	}
-	vr, err := m.prepare(manifests)
+	vr, err := m.prepare(manifests, bootNonce)
 	if err != nil {
 		return err
 	}
@@ -20158,8 +20294,10 @@ func (m *Mode) Run(ctx context.Context, manifests replay.SnapshotStore, inst Ins
 }
 
 // prepare opens the checkpoint_seq journal, loads the checkpoint signer and
-// builds the verify role; it registers nothing.
-func (m *Mode) prepare(manifests replay.SnapshotStore) (verifyRunner, error) {
+// builds the verify role with the role's boot nonce, which Task 62's
+// NewVerifyRole refuses unless it is install.NewBootNonce's shape; it
+// registers nothing.
+func (m *Mode) prepare(manifests replay.SnapshotStore, bootNonce string) (verifyRunner, error) {
 	store, err := OpenCheckpointSeqStore(m.cfg.StateDir)
 	if err != nil {
 		return nil, err
@@ -20170,6 +20308,7 @@ func (m *Mode) prepare(manifests replay.SnapshotStore) (verifyRunner, error) {
 	}
 	vr, err := m.env.newVerifyRole(m.cfg, VerifyDeps{
 		Client: m.d.Client, Registry: m.d.Registry, Conn: m.d.Conn, Manifests: manifests, Payloads: m.d.Payloads, Logger: m.log, Now: m.now,
+		BootNonce: bootNonce,
 	}, m.metrics)
 	if err != nil {
 		return nil, fmt.Errorf("member consensus: verify role: %w", err)
@@ -20927,9 +21066,10 @@ git -C "$W" commit -q -m "feat(member/consensus): the consensus mode: registrati
 
 consensus.Mode runs the member consensus mode beside the member role
 (plan S3-E1 K66): with Register it registers as a VERIFIER and runs Task
-62's verify role, whose evidence it counts; once the registry's placement
-switch is on and the member registered it sends MemberReady signed with the
-member's ed25519 key; once the checkpoints switch is on it signs one
+62's verify role, built with member.Role's boot nonce, whose evidence it
+counts; once the registry's placement switch is on and the member
+registered it sends MemberReady signed with the member's ed25519 key;
+once the checkpoints switch is on it signs one
 checkpoint per owner whose journal moved; it reports, signed, every
 Purging incarnation of its purge set once its hg_member_unsafe table and
 Keeper replica are gone and the quiescence ledger shows the table quiet,
@@ -21311,6 +21451,7 @@ package member
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -21326,8 +21467,11 @@ import (
 	"github.com/sentioxyz/arbiter-core/authority/authoritytest"
 	"github.com/sentioxyz/arbiter-core/dataplane"
 	"github.com/sentioxyz/arbiter-core/member/consensus"
+	"github.com/sentioxyz/arbiter-core/member/copyset"
+	"github.com/sentioxyz/arbiter-core/member/install"
 	"github.com/sentioxyz/arbiter-core/member/manifestfeed"
 	"github.com/sentioxyz/arbiter-core/member/serve"
+	"github.com/sentioxyz/arbiter-core/wire"
 )
 
 // fakeMode is the consensus mode of the role tests: Run records what the
@@ -21339,12 +21483,13 @@ type fakeMode struct {
 	runs      int
 	manifests replay.SnapshotStore
 	inst      consensus.InstallView
+	bootNonce string
 }
 
-func (f *fakeMode) Run(ctx context.Context, manifests replay.SnapshotStore, inst consensus.InstallView) error {
+func (f *fakeMode) Run(ctx context.Context, manifests replay.SnapshotStore, inst consensus.InstallView, bootNonce string) error {
 	f.mu.Lock()
 	f.runs++
-	f.manifests, f.inst = manifests, inst
+	f.manifests, f.inst, f.bootNonce = manifests, inst, bootNonce
 	f.mu.Unlock()
 	<-ctx.Done()
 	return ctx.Err()
@@ -21356,10 +21501,10 @@ func (f *fakeMode) Status() consensus.Status {
 
 func (f *fakeMode) Metrics() *consensus.Metrics { return f.metrics }
 
-func (f *fakeMode) ran() (int, replay.SnapshotStore, consensus.InstallView) {
+func (f *fakeMode) ran() (int, replay.SnapshotStore, consensus.InstallView, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.runs, f.manifests, f.inst
+	return f.runs, f.manifests, f.inst, f.bootNonce
 }
 
 // consensusTestConfig is a valid consensus mode for cfg: its identity, the
@@ -21413,8 +21558,9 @@ func TestConsensusConfigNilKeepsTheP2Role(t *testing.T) {
 // TestConsensusConfigWiresTheModeIntoTheRole: with Config.Consensus the role
 // refuses a mode of another identity or without payloads, puts the
 // hg_member_unsafe hard-link source first, exports its label, hands the mode
-// the feed's manifest store and the installer in startup step (9), exposes
-// the mode's series, and serves its status.
+// the feed's manifest store, the installer and the boot nonce of startup
+// step (7) (the installer's) in startup step (9), exposes the mode's series,
+// and serves its status.
 func TestConsensusConfigWiresTheModeIntoTheRole(t *testing.T) {
 	t.Run("refusals", func(t *testing.T) {
 		h := newHarness(t)
@@ -21447,11 +21593,26 @@ func TestConsensusConfigWiresTheModeIntoTheRole(t *testing.T) {
 		}
 		fake := &fakeMode{metrics: consensus.NewMetrics()}
 		r.mode = fake
+		var nonceMu sync.Mutex
+		installNonce := ""
+		newInstaller := r.env.newInstaller
+		r.env.newInstaller = func(cfg install.Config, d install.Deps) (installer, error) {
+			nonceMu.Lock()
+			installNonce = cfg.BootNonce
+			nonceMu.Unlock()
+			return newInstaller(cfg, d)
+		}
 		h.start(r)
-		waitFor(t, "the consensus mode", func() bool { n, _, _ := fake.ran(); return n == 1 })
-		_, manifests, inst := fake.ran()
+		waitFor(t, "the consensus mode", func() bool { n, _, _, _ := fake.ran(); return n == 1 })
+		_, manifests, inst, nonce := fake.ran()
 		if _, ok := manifests.(*manifestfeed.Store); !ok || inst != consensus.InstallView(h.installer) {
 			t.Fatalf("the mode ran with manifests %T and installer %T, want the feed's store and the role's installer", manifests, inst)
+		}
+		nonceMu.Lock()
+		want := installNonce
+		nonceMu.Unlock()
+		if len(nonce) != 8 || nonce != want {
+			t.Fatalf("the mode ran with boot nonce %q, want the role's own, the installer's %q", nonce, want)
 		}
 		if !h.steps.has(installerStep("[[member_unsafe_hardlink owner_pull peer_unsafe_pull] [member_unsafe_hardlink owner_pull peer_unsafe_pull]]")) {
 			t.Fatalf("steps %v, want the hard-link source first for every owner", h.steps.list())
@@ -21484,6 +21645,63 @@ func TestConsensusConfigWiresTheModeIntoTheRole(t *testing.T) {
 		if got := r.Serving().Consensus; !reflect.DeepEqual(got, want) {
 			t.Fatalf("serving view consensus = %+v, want %+v", got, want)
 		}
+	})
+}
+
+// TestConsensusModeAcceptsItsOwnRegistrationAtARestart (plan S3-C2 K29, S3-E1
+// Task 63): once the member registered as a VERIFIER its id is in the purge
+// node set, and a consensus-mode member restarted with that registration
+// present, served by the registry as this host's group member, still starts
+// and runs its mode; a P2 member with the same purge node set, a
+// consensus-mode id that is an SNode's and one the registry serves as
+// another host's group member are refused before any part is built.
+func TestConsensusModeAcceptsItsOwnRegistrationAtARestart(t *testing.T) {
+	registered := []string{"member-b", "snode-1", "snode-2", "snode-3", "verifier-1"}
+	served := func(host uint64) dataplane.RegistryView {
+		snap := testRegistry(0, 1, 2)
+		snap.Groups = []wire.DatabaseGroup{{OwnerIndexerID: 0, DatabaseID: "dex", Generation: 1,
+			Members: []wire.GroupMember{{NodeID: "member-b", JoinedGeneration: 1, HostIndexerID: &host}}}}
+		return newStaticRegistry(snap)
+	}
+	t.Run("registered", func(t *testing.T) {
+		h := newHarness(t)
+		h.cfg.Consensus = consensusTestConfig(h.cfg)
+		h.arbiter.setPurge(registered...)
+		h.registry = served(h.cfg.HostIndexerID)
+		r := h.role()
+		fake := &fakeMode{metrics: consensus.NewMetrics()}
+		r.mode = fake
+		h.start(r)
+		waitFor(t, "the consensus mode", func() bool { n, _, _, _ := fake.ran(); return n == 1 })
+	})
+	refused := func(t *testing.T, h *harness, want string) {
+		t.Helper()
+		err := h.runToError(h.role())
+		if !errors.Is(err, copyset.ErrNodeIDInUse) || err.Error() != want {
+			t.Fatalf("Run = %v, want %q wrapping copyset.ErrNodeIDInUse", err, want)
+		}
+		if got := h.steps.list(); hasPrefix(got, "new ", "drop", "audit") {
+			t.Fatalf("a refused start built parts, dropped tables or audited: %v", got)
+		}
+	}
+	t.Run("a P2 member", func(t *testing.T) {
+		h := newHarness(t)
+		h.arbiter.setPurge(registered...)
+		refused(t, h, `copyset: node id "member-b" is already used by the purge node set (a registered SNode or verifier)`)
+	})
+	t.Run("an SNode's id", func(t *testing.T) {
+		h := newHarness(t)
+		h.cfg.NodeID = "snode-3"
+		h.cfg.Consensus = consensusTestConfig(h.cfg)
+		h.arbiter.setPurge(registered...)
+		refused(t, h, `copyset: node id "snode-3" is already used by si_indexers entry 2 (its SNode)`)
+	})
+	t.Run("another host's member", func(t *testing.T) {
+		h := newHarness(t)
+		h.cfg.Consensus = consensusTestConfig(h.cfg)
+		h.arbiter.setPurge(registered...)
+		h.registry = served(2)
+		refused(t, h, `member: node id "member-b" is served as a member of group 0/dex hosted by indexer 2, not by this host 1: copyset: node id already in use`)
 	})
 }
 ```
@@ -21520,6 +21738,7 @@ func TestServingViewCarriesTheConsensusStatus(t *testing.T) {
 		srv, err := New(testConfig(), Deps{
 			Registry: h.reg, Published: h.pub, Copies: h.copies, Dial: h.dialer.Dial,
 			Logger: slog.New(slog.DiscardHandler), NodeID: "member-b",
+			StateDir:  h.stateDir,
 			Consensus: func() consensus.Status { return status },
 		})
 		if err != nil {
@@ -21542,7 +21761,7 @@ func TestServingViewCarriesTheConsensusStatus(t *testing.T) {
 
 Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel run //:gazelle && bazel test //member:member_test //member/serve:serve_test --test_output=errors`
 
-Expected: both FAILED TO BUILD: `//member/serve:serve_test` with `member/serve/consensus_status_test.go:21:29: h.srv.Serving().Consensus undefined (type ServingView has no field or method Consensus)` and `unknown field Consensus in struct literal of type Deps`; `//member:member_test` with `member/consensus_mode_test.go:78:7: r.mode undefined (type *Role has no field or method mode)`, `r.ConsensusMetrics undefined (type *Role has no field or method ConsensusMetrics)`, `sr.Serving().Consensus undefined (type serve.ServingView has no field or method Consensus)` and `h.cfg.Consensus undefined (type Config has no field or method Consensus)`.
+Expected: both FAILED TO BUILD: `//member/serve:serve_test` with `member/serve/consensus_status_test.go:21:29: h.srv.Serving().Consensus undefined (type ServingView has no field or method Consensus)` and `unknown field Consensus in struct literal of type Deps`; `//member:member_test` with `member/consensus_mode_test.go:83:7: r.mode undefined (type *Role has no field or method mode)`, `r.ConsensusMetrics undefined (type *Role has no field or method ConsensusMetrics)`, `sr.Serving().Consensus undefined (type serve.ServingView has no field or method Consensus)` and `h.cfg.Consensus undefined (type Config has no field or method Consensus)`.
 
 - [ ] **Step 16: Run the mode in the role and serve its status, and commit**
 
@@ -21556,16 +21775,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/housegate/housegate/pkg/replay"
 
 	"github.com/sentioxyz/arbiter-core/member/consensus"
+	"github.com/sentioxyz/arbiter-core/member/copyset"
 )
 
 // consensusMode is what the role uses of *consensus.Mode (plan S3-E1 K66).
+// Run's bootNonce is the boot nonce of startup step (7).
 type consensusMode interface {
-	Run(ctx context.Context, manifests replay.SnapshotStore, inst consensus.InstallView) error
+	Run(ctx context.Context, manifests replay.SnapshotStore, inst consensus.InstallView, bootNonce string) error
 	Status() consensus.Status
 	Metrics() *consensus.Metrics
 }
@@ -21623,6 +21845,36 @@ func consensusStatus(mode consensusMode) func() consensus.Status {
 		return consensus.OffStatus
 	}
 	return mode.Status
+}
+
+// nodeIDCheckSet is the purge node set startup step (6) checks the node id
+// against (plan S3-C2 K29): all of it without Config.Consensus. In the
+// consensus mode the member registers as a VERIFIER under its own id, so
+// from its first registration its id is in the purge node set; that id is
+// the member's own registration (a VERIFIER registration is signed with the
+// key of the id's verifiers entry, which only this member holds, and the
+// arbiter refuses a member entry whose id any node record holds), so it is
+// left out, and copyset.CheckNodeIDUnused still refuses an SNode's id.
+func (r *Role) nodeIDCheckSet(purge []string) []string {
+	if r.mode == nil || !slices.Contains(purge, r.cfg.NodeID) {
+		return purge
+	}
+	r.log.Info("member: the node id is in the purge node set as this member's own verifier registration")
+	return slices.DeleteFunc(slices.Clone(purge), func(id string) bool { return id == r.cfg.NodeID })
+}
+
+// checkGovernedHost is the consensus mode's governed-identity check of
+// startup step (6): the registry serves each group member with the host of
+// its verifiers entry (plan S3-E1 D27), and a group member with this
+// member's node id served with another host is another host's identity, so
+// the start is refused. A member served without a host (delisted) and every
+// check without Config.Consensus pass.
+func (r *Role) checkGovernedHost(owner uint64, database, nodeID string, host *uint64) error {
+	if r.mode == nil || nodeID != r.cfg.NodeID || host == nil || *host == r.cfg.HostIndexerID {
+		return nil
+	}
+	return fmt.Errorf("member: node id %q is served as a member of group %d/%s hosted by indexer %d, not by this host %d: %w",
+		nodeID, owner, database, *host, r.cfg.HostIndexerID, copyset.ErrNodeIDInUse)
 }
 ```
 
@@ -21766,7 +22018,67 @@ with
 ```go
 	start("serving", r.runServing)
 	if r.mode != nil {
-		start("consensus", func(ctx context.Context) error { return r.mode.Run(ctx, store, p.installer) })
+		start("consensus", func(ctx context.Context) error { return r.mode.Run(ctx, store, p.installer, p.bootNonce) })
+	}
+```
+
+In `member/role.go`, replace (S3-C2's `parts`)
+
+```go
+type parts struct {
+	copies    copySet
+	installer installer
+	shadow    shadowVerifier // nil unless Config.Shadow
+	follower  *manifestfeed.Follower
+}
+```
+
+with
+
+```go
+type parts struct {
+	copies    copySet
+	installer installer
+	shadow    shadowVerifier // nil unless Config.Shadow
+	follower  *manifestfeed.Follower
+	// bootNonce is startup step (7)'s boot nonce; the consensus mode's
+	// verify role names its replay scratch with it (plan S3-E1 Task 63).
+	bootNonce string
+}
+```
+
+In `member/role.go`, replace (in `build`)
+
+```go
+	p := &parts{copies: copies, installer: inst}
+```
+
+with
+
+```go
+	p := &parts{copies: copies, installer: inst, bootNonce: bootNonce}
+```
+
+In `member/role.go`, replace (startup step (6) in `Run`)
+
+```go
+	if err := copyset.CheckNodeIDUnused(snap, purge, r.cfg.NodeID); err != nil {
+		return err
+	}
+```
+
+with
+
+```go
+	if err := copyset.CheckNodeIDUnused(snap, r.nodeIDCheckSet(purge), r.cfg.NodeID); err != nil {
+		return err
+	}
+	for _, g := range snap.Groups {
+		for _, m := range g.Members {
+			if err := r.checkGovernedHost(g.OwnerIndexerID, g.DatabaseID, m.NodeID, m.HostIndexerID); err != nil {
+				return err
+			}
+		}
 	}
 ```
 
@@ -21970,7 +22282,7 @@ with
 
 Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && gofmt -l member && bazel run //:gazelle && bazel test //member/... --test_output=errors && git diff -- member/BUILD.bazel member/serve/BUILD.bazel`
 
-Expected: no file listed; every `//member/...` target PASSED, among them `TestConsensusConfigNilKeepsTheP2Role`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestServingViewCarriesTheConsensusStatus`, S3-C2's `TestRoleCallsOnlyReadRPCs` (no selector the member package must not hold is added) and S3-C4's `TestRoleWiresServeIntoTheInstaller` (a role without `Config.Serve` still answers `serve.ServingView{}`); the BUILD diff:
+Expected: no file listed; every `//member/...` target PASSED, among them `TestConsensusConfigNilKeepsTheP2Role`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestServingViewCarriesTheConsensusStatus`, S3-C2's `TestRoleRefusesANodeIDInUse` (the P2 member's refusals unchanged), S3-C2's `TestRoleCallsOnlyReadRPCs` (no selector the member package must not hold is added) and S3-C4's `TestRoleWiresServeIntoTheInstaller` (a role without `Config.Serve` still answers `serve.ServingView{}`); the BUILD diff:
 
 ```diff
 diff --git a/member/BUILD.bazel b/member/BUILD.bazel
@@ -22052,7 +22364,10 @@ git -C "$W" commit -q -m "feat(member): run the consensus mode in the role and s
 
 member.Config.Consensus builds a consensus.Mode with the member's own
 identity, connections and peers; Role runs it in startup step (9) with the
-feed's verified manifest store and the installer, puts the hg_member_unsafe
+feed's verified manifest store, the installer and the boot nonce of step
+(7), accepts in step (6) its own id in the purge node set, which its
+VERIFIER registration puts there, while refusing an SNode's id and an id
+the registry serves as another host's group member, puts the hg_member_unsafe
 hard-link source first for every owner and exports its source label, and
 ConsensusMetrics exposes the mode's series. The serving view carries the
 mode's status (serve.Deps.Consensus), mode off without it. Without
@@ -22067,7 +22382,7 @@ Expected: `0`.
 
 - [ ] **Step 17: Teach the feature pins `stage3_v1`**
 
-The three pins of the feature list learn the fourth feature, and nothing else in their files changes: contract §42.3's `TestLocalNodeFeatures` (`consensus_test.go:44-53`) and the legacy expectation of `TestSNodeRegistrationAdvertisesTrackManifests` (`snode/tracks_test.go:659`), and S3-C2 Task 34's `TestLocalNodeFeaturesAreUnchangedThroughP2` (`member/role_test.go:372-378`, outside contract §42's list: Notes). Apply with the Edit tool:
+The three pins of the feature list learn the fourth feature, and nothing else in their files changes: contract §42.3's `TestLocalNodeFeatures` (`consensus_test.go:44-53`) and the legacy expectation of `TestSNodeRegistrationAdvertisesTrackManifests` (`snode/tracks_test.go:659`), and S3-C2 Task 34's `TestLocalNodeFeaturesAreUnchangedThroughP2` (`member/role_test.go:405-411`, outside contract §42's list: Notes). Apply with the Edit tool:
 
 In `consensus_test.go`, replace
 
@@ -22119,7 +22434,7 @@ with
 
 Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel test //:arbiter-core_test //snode:snode_test //member:member_test --test_output=errors`
 
-Expected: `//:arbiter-core_test` FAILED TO BUILD with `consensus_test.go:47:97: undefined: Stage3Feature`; `//snode:snode_test` FAILED TO BUILD with `snode/tracks_test.go:659:89: undefined: arbiter.Stage3Feature`; `//member:member_test` FAILED with `role_test.go:378: LocalNodeFeatures = [client_lanes_v1 signed_claims_v1 track_manifests_v1], want exactly [client_lanes_v1 signed_claims_v1 track_manifests_v1 stage3_v1] from CORE_TAG_P5`.
+Expected: `//:arbiter-core_test` FAILED TO BUILD with `consensus_test.go:47:97: undefined: Stage3Feature`; `//snode:snode_test` FAILED TO BUILD with `snode/tracks_test.go:659:89: undefined: arbiter.Stage3Feature`; `//member:member_test` FAILED with `role_test.go:411: LocalNodeFeatures = [client_lanes_v1 signed_claims_v1 track_manifests_v1], want exactly [client_lanes_v1 signed_claims_v1 track_manifests_v1 stage3_v1] from CORE_TAG_P5`.
 
 - [ ] **Step 18: Advertise `stage3_v1`, and commit**
 
@@ -22229,7 +22544,7 @@ with
 
 `member/consensus` is the member consensus mode (housegate spec 2026-10-14 §8.1–§8.3, §8.6, §8.8, §9.1). With `member.Config.Consensus` set, `member.Role` runs a `consensus.Mode` beside its other parts; without it the role is the P2/P3 member, byte for byte. The mode's node id, network, genesis snapshot and state directory must be the member's; its keys are the ed25519 seed of its `verifiers` entry and the secp256k1 key of the entry's `replica_signer`, which the caller passes in and the mode never logs. Each part waits for its switch, so a member deployed before them changes nothing:
 
-- with `Config.Register` it registers and marks itself active as a VERIFIER (a durable `registration_seq` in `<state dir>/registration.json`, as a verifier keeps it) and runs the verify role: replay jobs and byte-side scans over its own `hg_member_unsafe` replicas, replay scratch in `hg_rstage` under the member prefix `<node_id>_<boot_nonce>_v`, every job observed into `<state dir>/quiescence.json` before it replays. `sentio_node_si_member_evidence_total{kind,result}` counts them. Without `Register` it registers nothing and sends nothing;
+- with `Config.Register` it registers and marks itself active as a VERIFIER (a durable `registration_seq` in `<state dir>/registration.json`, as a verifier keeps it; at a later start the role accepts its own id in the arbiter's purge node set as that registration, and still refuses an SNode's id or one the registry serves as another host's group member) and runs the verify role: replay jobs and byte-side scans over its own `hg_member_unsafe` replicas, replay scratch in `hg_rstage` under the member prefix `<node_id>_<boot_nonce>_v`, every job observed into `<state dir>/quiescence.json` before it replays. `sentio_node_si_member_evidence_total{kind,result}` counts them. Without `Register` it registers nothing and sends nothing;
 - once the registry's `stage3.placement` is on, every `ReadinessInterval` (10 s) it reports `MemberReady`, signed with its ed25519 key, for every group that lists it and is not ready yet, once each Pending, Active or Retiring table of the group's database has an active replica at its incarnation's Keeper path after `SYSTEM SYNC REPLICA`;
 - once `stage3.checkpoints` is on, every `CheckpointInterval` (30 s) it signs, with its `replica_signer`, a `MemberCheckpoint` per owner whose install journal moved since the checkpoint the arbiter holds. Its `checkpoint_seq` is one above both `<state dir>/checkpoint_seq.json` and the value the registry publishes for the member under the same `replica_signer`, and is written to the file before the submit, so no seq is signed twice and a member that lost its state resumes; a new `replica_signer` starts again from the published value. A group excludes each table not installed at the checkpoint's manifest with one of `not_installed`, `diverged`, `foreign`, `disk_threshold`, `audit_pending` and `retiring`;
 - every `ResolveInterval` (5 s) it reports, signed with its ed25519 key, the purge of every Purging incarnation that lists it in `purge_members`, once its `hg_member_unsafe` table and its own Keeper replica are gone and no unresolved block names the table; an incarnation it never held is reported at once.
@@ -22238,7 +22553,7 @@ Before its switch the leader refuses each member command with FAILED_PRECONDITIO
 
 The member's second process runs `consensus.NewUnsafeReconciler` as `si_member_ddl`: only while `CreateReplicas` is set, the node is registered and not evicted, the registry's `stage3.purge` is on and the node is a member of the group (or an unreleased Leaving one), it creates `hg_member_unsafe.<db__table>` at the incarnation's Keeper path with the node id as replica name, keeps it through Retiring, and drops it at Purging once `quiescence.json` shows the table quiet; it never runs `SYSTEM DROP REPLICA` and stops for a table whose replica already exists. `consensus.NewReconcilerMetrics` serves `sentio_node_si_member_unsafe_replicas` and `sentio_node_si_member_replica_already_exists_total`. `TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles` and `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` run with the other ClickHouse-gated tests (`ARBITER_CH_INTEGRATION=1`, `ARBITER_CH_KEEPER=1`, `CH_ADDR`).
 
-Keeper roots. An incarnation the registry marks `scoped_keeper_path` (from the `purge` switch on) replicates at `/sentio/<shard>/unsafe_inc/<db__table>/<incarnation_seq>`, never under the legacy `/sentio/<shard>/unsafe/<db__table>`, whose last replica's drop removes every child of the path. `ddl.ZooKeeperPathFor` with `tableset.KeeperScopeOf(incarnation)` derives the path of either kind, and the table-set reconciler creates, purges and sweeps each incarnation on its own path. The owner SNode audits both roots every `KeeperAuditInterval` (10 min) and reports, never drops, a replica that is not the owner, a pool verifier or a current or past member, and a replicated-table root that is not an incarnation path (`tableset.Stats.KeeperFindings`).
+Keeper roots. An incarnation the registry marks `scoped_keeper_path` (from the `purge` switch on) replicates at `/sentio/<shard>/unsafe_inc/<db__table>/<incarnation_seq>`, never under the legacy `/sentio/<shard>/unsafe/<db__table>`, whose last replica's drop removes every child of the path. `ddl.ZooKeeperPathFor` with `tableset.KeeperScopeOf(incarnation)` derives the path of either kind, and the table-set reconciler creates, purges and sweeps each incarnation on its own path. The owner SNode audits both roots every `KeeperAuditInterval` (10 min) and reports, never drops, a replica that is not the owner, a pool verifier or a current or past member of the incarnation's group, and a replicated-table root that is not an incarnation path (`tableset.Stats.KeeperFindings`). The pool is the arbiter's purge node set without the SNodes and without every node the registry names as a member (`wire.TableRegistrySnapshot.NetworkPool`), so another owner's SNode and a registered member of another group are reported too.
 
 ## Releases
 ```
@@ -22329,8 +22644,8 @@ Stage 3, P5, of the multi-source storage-integrity network: everything the arbit
 
 - Canonical types and signing (Task 59): the host-bound `VerifierEntry` fields and `IsMember`, `Stage3Params` with `Validate` and its switches, the commands `RebalanceGroup`, `ReselectVerifiers`, `MarkMemberLagging`, `MemberReady` and `MemberCheckpoint`, admission codes 12 and 13; a `NormalizeConsensusParamsUpdate` that copies and checks every `VerifierEntry` field (a pool-only update hashes as before); the six purposes `arbiter-rebalance-group-v1`, `arbiter-reselect-verifiers-v1`, `arbiter-mark-member-lagging-v1`, `arbiter-group-member-v1`, `arbiter-member-ready-v1`, `arbiter-member-checkpoint-v1` with frozen `authoritytest` vectors.
 - Wire (Task 60): the `Stage3Params` and `VerifierEntry` converters, Raft tags 38–42 in `wire.Command`, the registry view of groups (each member with its served host), checkpoint sequences, scoped Keeper paths, purge members and `stage3`, and the `BlockVerification` selection record; frozen encoded-tag goldens.
-- Keeper paths (Task 61): `ddl.KeeperScope` and `ZooKeeperPathFor` (`/sentio/<shard>/unsafe_inc/<db__table>/<seq>` for an incarnation marked `scoped_keeper_path`, the legacy path byte-identical otherwise), both roots in every listing, drop and sweep, and a report-only owner Keeper audit.
-- Member consensus mode (Tasks 62–63): `dataplane/evidence`, which the verifier now delegates to byte for byte; the member's VERIFIER registration and verify role over `hg_member_unsafe`; the quiescence ledger; the `hg_member_unsafe` reconciler for `si_member_ddl`; `Client.SubmitMemberReady` / `SubmitMemberCheckpoint` (`ErrStage3SwitchOff` before a switch); readiness after `SYSTEM SYNC REPLICA`; checkpoints signed with the `replica_signer` under a durable `checkpoint_seq` above the journal and the published value; signed purge reports after the drop and the quiescence hook; the `member_unsafe_hardlink` byte source; `member.Config.Consensus`, `Role.ConsensusMetrics()` and the serving view's `consensus` status.
+- Keeper paths (Task 61): `ddl.KeeperScope` and `ZooKeeperPathFor` (`/sentio/<shard>/unsafe_inc/<db__table>/<seq>` for an incarnation marked `scoped_keeper_path`, the legacy path byte-identical otherwise), both roots in every listing, drop and sweep, and a report-only owner Keeper audit whose pool is the purge node set without the SNodes and without every node the registry names as a member (`wire.TableRegistrySnapshot.NetworkPool`), so a registered member of another group is reported.
+- Member consensus mode (Tasks 62–63): `dataplane/evidence`, which the verifier now delegates to byte for byte; the member's VERIFIER registration and verify role over `hg_member_unsafe`; the quiescence ledger; the `hg_member_unsafe` reconciler for `si_member_ddl`; `Client.SubmitMemberReady` / `SubmitMemberCheckpoint` (`ErrStage3SwitchOff` before a switch); readiness after `SYSTEM SYNC REPLICA`; checkpoints signed with the `replica_signer` under a durable `checkpoint_seq` above the journal and the published value; signed purge reports after the drop and the quiescence hook; the `member_unsafe_hardlink` byte source; `member.Config.Consensus` (the verify role built with the role's boot nonce; a registered member restarts with its own id in the purge node set, an SNode's id or another host's still refused), `Role.ConsensusMetrics()` and the serving view's `consensus` status.
 - `stage3_v1` joins `LocalNodeFeatures()`: arbiter pins this release only together with its v21 decoder (K65).
 
 Rollback: the previous release; no state file an earlier binary reads changes, and the member's new `checkpoint_seq.json` and `quiescence.json` are ignored by the P2/P3 member.
@@ -23325,7 +23640,7 @@ type KeeperFinding struct {
 	KeeperFindings  []KeeperFinding // the last audit's findings, sorted by path then replica
 	KeeperAuditRuns uint64
 ```
-A replica is known iff `wire.TableRegistrySnapshot.KnownKeeperReplica(inc wire.TableIncarnation, purgeNodeSet []string, replica string) bool` is true: the owner's SNode node id, a node of the purge node set, a member or past member of `G(owner(inc), inc.DatabaseID)`, or a node of `inc.PurgeMembers`. A scoped path whose seq is no `scoped_keeper_path` incarnation of that table, and every `KeeperRoots.NonIncarnation` path, is a `non_incarnation_root`. Warn logs verbatim: `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`). The audit drops nothing; the existing sweep's drops are unchanged. Series `sentio_node_storage_integrity_keeper_findings{reason}` (gauge, both reasons always exported) is reserved for sentio-node's export of `Stats.KeeperFindings` (S3-E4 Task 79).
+A replica is known iff `wire.TableRegistrySnapshot.KnownKeeperReplica(inc wire.TableIncarnation, pool []string, replica string) bool` is true, with `pool` = `wire.TableRegistrySnapshot.NetworkPool(purgeNodeSet []string) []string` of the arbiter's purge node set: the owner's SNode node id, a node of the network pool, a member, past member or Leaving member of `G(owner(inc), inc.DatabaseID)`, or a node of `inc.PurgeMembers` (spec §8.2: the owner, a pool verifier or a current or past member). `NetworkPool` is the purge node set, sorted and unique, without the SNode of every `si_indexers` entry and without every node the registry view names as a current, past or Leaving member of any group, a purge member of any incarnation or the node of a published `MemberCheckpointSeq`: the purge node set lists every registered member too, so another owner's SNode and a registered member of another group are unknown on the owner's paths. Before the signed-claims activation (no `si_indexers`, no groups) the pool is the whole purge node set. A scoped path whose seq is no `scoped_keeper_path` incarnation of that table, and every `KeeperRoots.NonIncarnation` path, is a `non_incarnation_root`. Warn logs verbatim: `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`). The audit drops nothing; the existing sweep's drops are unchanged. Series `sentio_node_storage_integrity_keeper_findings{reason}` (gauge, both reasons always exported) is reserved for sentio-node's export of `Stats.KeeperFindings` (S3-E4 Task 79).
 
 **Task 61 named tests:** `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestIncarnationIntentsForUsesTheIncarnationPath`, `TestListKeeperRootsSeparatesIncarnationPathsFromOtherRoots` (ClickHouse and Keeper), `TestReconcilerCreatesAScopedIncarnationOnItsIncarnationPath`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`, `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds` (ClickHouse and Keeper, §17), `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica` (ClickHouse and Keeper, §17: a stale last replica on `/sentio/0/unsafe/<t>` dropped after a scoped re-create leaves `/sentio/0/unsafe_inc/<t>/<seq>` and its writes intact). ClickHouse-gated tests use `dataplane/chtest` and the CI env `ARBITER_CH_INTEGRATION=1`, `ARBITER_CH_KEEPER=1`, `ARBITER_CH_REPLICA=1`, `CH_ADDR`, `CH_REPLICA_ADDR`.
 
@@ -23403,7 +23718,7 @@ type ReconcilerConfig struct {
 }
 ```
 Task 62:
-- `type VerifyRole`; `func NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`; `func (v *VerifyRole) Register(ctx context.Context) error` (RegisterNode then MarkActive as a VERIFIER through `evidence.VerifierRegistrationRequests` and `evidence.NewRegistrationSeq(cfg.StateDir)`, features `arbiter.LocalNodeFeatures()`; refused with `member consensus: Register is off` unless `cfg.Register`); `func (v *VerifyRole) Run(ctx context.Context) error` (`RunVerifierSubscription(ctx, cfg.NodeID, …)` into an `evidence.Handler` whose scanner is `evidence.NewCHScanner(networkID, tables, "hg_member_unsafe", conn, registry)`, whose replay core is `evidence.NewReplayCore` over `chexec.NewMaterializerIn(networkID, conn, "hg_rstage", prefix)` under the member prefix `install.ScratchPrefix(NodeID, bootNonce) + "v"` (S3-C2 §22.2, with `member.Role`'s boot nonce; distinct from `shadow.ReplayPrefix`'s `…r`, so a still-running shadow and the verify role never share a scratch name, and S3-C2's startup drop under `install.NodePrefix` removes both; as `si_member` the replay issues only `CREATE TABLE … ENGINE = MergeTree`, `INSERT`, `SELECT` and `DROP TABLE … IF EXISTS` on its scratch, all inside spec §8.2's explicit `hg_rstage` rights as amended (`SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE, OPTIMIZE`, never `ALL`: cross-plan decision D36) and `TABLE ENGINE ON MergeTree`, so the verify role needs no right beyond S3-C2's `SI_MEMBER_GRANTS`), whose `TablesReady` requires a local `hg_member_unsafe` replica of every job table (`NotReady: ErrMemberTableNotReady`), and whose `Observe` writes the quiescence ledger; without `cfg.Register` it subscribes to nothing and waits for `ctx`); `type VerifyDeps struct{ Client *dataplane.Client; Registry dataplane.RegistryView; Conn clickhouse.Conn /* si_member */; Manifests replay.SnapshotStore; Payloads replay.PayloadStore; Logger *slog.Logger; Now func() time.Time }`; `var ErrMemberTableNotReady = errors.New("member consensus: hg_member_unsafe table is not ready")`.
+- `type VerifyRole`; `func NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`; `func (v *VerifyRole) Register(ctx context.Context) error` (RegisterNode then MarkActive as a VERIFIER through `evidence.VerifierRegistrationRequests` and `evidence.NewRegistrationSeq(cfg.StateDir)`, features `arbiter.LocalNodeFeatures()`; refused with `member consensus: Register is off` unless `cfg.Register`); `func (v *VerifyRole) Run(ctx context.Context) error` (`RunVerifierSubscription(ctx, cfg.NodeID, …)` into an `evidence.Handler` whose scanner is `evidence.NewCHScanner(networkID, tables, "hg_member_unsafe", conn, registry)`, whose replay core is `evidence.NewReplayCore` over `chexec.NewMaterializerIn(networkID, conn, "hg_rstage", prefix)` under the member prefix `install.ScratchPrefix(NodeID, bootNonce) + "v"` (S3-C2 §22.2, with `member.Role`'s boot nonce; distinct from `shadow.ReplayPrefix`'s `…r`, so a still-running shadow and the verify role never share a scratch name, and S3-C2's startup drop under `install.NodePrefix` removes both; as `si_member` the replay issues only `CREATE TABLE … ENGINE = MergeTree`, `INSERT`, `SELECT` and `DROP TABLE … IF EXISTS` on its scratch, all inside spec §8.2's explicit `hg_rstage` rights as amended (`SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE, OPTIMIZE`, never `ALL`: cross-plan decision D36) and `TABLE ENGINE ON MergeTree`, so the verify role needs no right beyond S3-C2's `SI_MEMBER_GRANTS`), whose `TablesReady` requires a local `hg_member_unsafe` replica of every job table (`NotReady: ErrMemberTableNotReady`), and whose `Observe` writes the quiescence ledger; without `cfg.Register` it subscribes to nothing and waits for `ctx`); `type VerifyDeps struct{ Client *dataplane.Client; Registry dataplane.RegistryView; Conn clickhouse.Conn /* si_member */; Manifests replay.SnapshotStore; Payloads replay.PayloadStore; Logger *slog.Logger; Now func() time.Time; BootNonce string /* member.Role's, install.NewBootNonce's shape; NewVerifyRole refuses any other */ }`; `var ErrMemberTableNotReady = errors.New("member consensus: hg_member_unsafe table is not ready")`.
 - `type UnsafeReconciler`; `func NewUnsafeReconciler(cfg ReconcilerConfig, d ReconcilerDeps) (*UnsafeReconciler, error)`; `func (r *UnsafeReconciler) Run(ctx context.Context) error`; `func (r *UnsafeReconciler) Stats() ReconcilerStats` (`Replicas int`, `ReplicaAlreadyExists uint64`, `Failures map[string]uint64`); `type ReconcilerDeps struct{ DDLConn clickhouse.Conn /* si_member_ddl */; Registry dataplane.RegistryView; Arbiter tableset.Arbiter /* PurgeNodeSet only */; Logger *slog.Logger }`. It creates `hg_member_unsafe.<db__table>` with S3-C2's `ddl.MemberUnsafeIntent` at `ddl.ZooKeeperPathFor(cfg.KeeperShardID, tableID, tableset.KeeperScopeOf(inc))`, replica name `cfg.NodeID`, only while `cfg.CreateReplicas`, the node is in the purge node set (registered, not evicted), the registry's `Stage3.Purge` is on, and the node is in `G(owner, database).Members` or an unreleased `Leaving` record of it; it keeps a replica through Retiring and drops it (`DROP TABLE … SYNC` as `si_member_ddl`) at Purging once `ReadQuiescence(cfg.StateDir).Quiet(tableID, seq)`, and drops every replica of a group whose Leaving record for the node is `released`, each once its table is quiet; it never runs `SYSTEM DROP REPLICA`. On `REPLICA_ALREADY_EXISTS` it stops for that table with `var ErrReplicaAlreadyExists` and the text `member consensus: hg_member_unsafe.%s: replica %s already exists at %s; not dropping it (si_member_ddl holds no SYSTEM DROP REPLICA); the owner's sweep removes it after an eviction`.
 - Quiescence ledger (shared by both processes through the member state volume): `type QuiescentTable struct{ TableID string; IncarnationSeq uint64 }`; `type Quiescence`; `func OpenQuiescence(stateDir string) (*Quiescence, error)`; `func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error` (durable in `quiescence.json`, temp file, fsync and rename, before the job's replay); `func (q *Quiescence) Resolve(ctx context.Context, client *dataplane.Client, nodeID string) error` (run every `ResolveInterval`; a block resolves once `GetBlockVerification` shows `verdict_evaluated`, or `nodeID` is no longer in its `verifier_set`); `type QuiescenceLedger`; `func ReadQuiescence(stateDir string) (QuiescenceLedger, error)` (a missing file is an empty ledger); `func (l QuiescenceLedger) Quiet(tableID string, incarnationSeq uint64) bool` (no unresolved block names the table at that incarnation).
 
@@ -23411,7 +23726,8 @@ Task 63:
 - `dataplane` (new file `member_commands.go`): `var ErrStage3SwitchOff = errors.New("dataplane: the arbiter refuses this stage-3 command until its switch is on")`; `func (c *Client) SubmitMemberReady(ctx context.Context, cmd wire.MemberReady) error`; `func (c *Client) SubmitMemberCheckpoint(ctx context.Context, cmd wire.MemberCheckpoint) error` — nil on Ack, an error wrapping `ErrStage3SwitchOff` with the leader's message on a FAILED_PRECONDITION without NotLeader detail (`leaderPrecondition`), the gRPC error otherwise.
 - Readiness: `func PlanReadiness(snap wire.TableRegistrySnapshot, nodeID string, local LocalReplicas) []arbiter.MemberReadyBody` (one body per group where the node is a member with `!Ready()` and every physical incarnation of the group's database owned by its owner has an active, synced local replica, at the group's current generation); `type LocalReplicas map[string]bool` (physical table name → active and synced, read from `system.replicas` after `SYSTEM SYNC REPLICA` as `si_member`); signed with `authority.SignMemberReady`, sent every `ReadinessInterval` while the registry's `Stage3.Placement` is on.
 - Checkpoints: `type OwnerInstallState struct{ SnapshotID string; Entry replay.TrackFrontier; Tables []TableInstallState }`, `type TableInstallState struct{ TableID string; Excluded arbiter.CheckpointExclusionReason /* "" = installed */ }` (an adapter over S3-C2's per-owner `member/install` journal); `func PlanCheckpoint(snap wire.TableRegistrySnapshot, nodeID string, owner uint64, st OwnerInstallState) (arbiter.MemberCheckpoint, bool)` (every group of `owner` with the node as a current member, sorted; `CheckpointSeq` left 0); `type CheckpointSeqStore`; `func OpenCheckpointSeqStore(stateDir string) (*CheckpointSeqStore, error)`; `func (s *CheckpointSeqStore) Next(owner uint64, replicaSigner string, published uint64) (uint64, error)` (= max(the journal's value under the same signer, `published` when it names the same signer) + 1, written to `checkpoint_seq.json` before it returns; shape `{"owners":[{"owner_indexer_id":0,"replica_signer":"0x…","checkpoint_seq":7}]}`); `type CheckpointSigner`; `func NewCheckpointSigner(replicaSignerKeyHex string, ctx authority.MessageContext, store *CheckpointSeqStore) (*CheckpointSigner, error)`; `func (s *CheckpointSigner) Sign(cp arbiter.MemberCheckpoint, published uint64) (wire.MemberCheckpoint, error)`; the loop runs every `CheckpointInterval` while `Stage3.Checkpoints` is on, per owner whose entry differs from the last accepted checkpoint, `published` from `PublishedCheckpointSeq`.
-- Hardlink byte source: in S3-C2's `member/sources`, `type MemberUnsafeHardlink struct{ Conn clickhouse.Conn; MemberUnsafeDB string }` and `func NewMemberUnsafeHardlink(conn clickhouse.Conn, memberUnsafeDB string) *MemberUnsafeHardlink`, implementing `sources.Source` with `Name()` `member_unsafe_hardlink` (a new value of S3-C2's metric label `source`): `ATTACH PARTITION … FROM hg_member_unsafe.<t>` into the fresh scratch, drop the scratch parts no need names, then continue at gate step 4; in consensus mode the source order is hardlink, owner pull, peer unsafe pull, restore.
+- Hardlink byte source: in S3-C2's `member/sources`, `type MemberUnsafeHardlink struct{ Conn clickhouse.Conn; MemberUnsafeDB string }` and `func NewMemberUnsafeHardlink(conn clickhouse.Conn, memberUnsafeDB string) *MemberUnsafeHardlink`, implementing `sources.Source` with `Name()` `member_unsafe_hardlink` (a new value of S3-C2's metric label `source`): `ATTACH PARTITION … FROM hg_member_unsafe.<t>` into the fresh scratch, drop the scratch parts no need names, then continue at gate step 4; in consensus mode the source order is hardlink, owner pull, peer unsafe pull, restore (S3-C2 §22.3's bootstrap restore probe, for the first fetch of each copy while its owner has no journaled entry, moves the restore right before the owner pull and keeps the hardlink first).
+- Role wiring: `member.Role` runs the mode in startup step (9) with the feed's verified manifest store, its installer and the boot nonce it drew in startup step (7), which the verify role's replay scratch carries (`VerifyDeps.BootNonce`). With `Config.Consensus`, startup step (6) checks the node id with `copyset.CheckNodeIDUnused` against the purge node set without the member's own id, which its own VERIFIER registration puts there, so a registered member restarts (`TestConsensusModeAcceptsItsOwnRegistrationAtARestart`), and keeps S3-C2's SNode refusal; a group member with the member's id that the registry serves with another `host_indexer_id` is refused with `member: node id %q is served as a member of group %d/%s hosted by indexer %d, not by this host %d: %w` wrapping `copyset.ErrNodeIDInUse`. Without `Config.Consensus` step (6) is S3-C2's.
 - Purge reports: the main process reports a Purging incarnation in `PurgeMembers` through `dataplane.PurgeReporter` signed with the member key (`authority.VerifierMessageTablePurged`) once its `hg_member_unsafe` table and its own Keeper replica are gone and the table is quiet; one it never held is reported at once.
 - Status: S3-C4's `serve.ServingView` (contract §30.3, `GET /v1/serving`) gains the field `Consensus consensus.Status` with tag `json:"consensus"`; `Mode` is `off` without `member.Config.Consensus`, else `consensus`:
 ```go
@@ -23434,7 +23750,7 @@ type GroupStatus struct {
 
 **Task 62 named tests:** `TestEvidenceHandlerSubmitsWhatTheVerifierSubmitted`, `TestVerifierRoleDelegatesToTheEvidenceHandler`, `TestVerifierRegistrationFileKeepsItsShape`, `TestMemberVerifyRoleRegistersAsAVerifierWithARegistrationSeq`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`, `TestMemberVerifyRoleScansItsMemberUnsafeReplica`, `TestMemberReplayScratchLivesInRstageUnderTheMemberPrefix` (ClickHouse, run as `si_member` created by the S3-C2 Task 34 confinement harness from its grant list with D36's explicit `hg_rstage` rights: every scratch is `` `hg_rstage`.`<member prefix>replay_<n>` ``, created, filled, read back and dropped, and no statement is refused with 497), `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerUsesTheIncarnationKeeperPath`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestUnsafeReconcilerDropsAReleasedLeavingMembersReplicas`, `TestQuiescenceLedgerIsDurableBeforeTheJobRuns`, `TestQuiescenceResolvesALatchedOrReselectedBlock`, `TestMemberUnsafeReplicaAsSIMemberDDLReplicatesTheOwnersParts` (ClickHouse and Keeper, the S3-C2 Task 34 confinement harness with `table_engines_require_grant`).
 
-**Task 63 named tests:** `TestSubmitMemberReadyAcksAndMapsTheSwitchRefusal`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestPlanReadinessAnnouncesOnlySyncedGroups`, `TestReadinessLoopIdlesUntilThePlacementSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq` (§17), `TestPlanCheckpointListsOnlyTheMembersGroupsOfOneOwner`, `TestPlanCheckpointExcludesTablesWithClosedReasons`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles` (ClickHouse and Keeper), `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`, `TestMemberStatusCarriesReadinessAndCheckpointSeq`, `TestConsensusConfigNilKeepsTheP2Role`; the pre-existing `TestLocalNodeFeatures` (`consensus_test.go:44-53`, four features with `stage3_v1` last) and the legacy-feature expectation of `snode/tracks_test.go:659` (`client_lanes_v1`, `track_manifests_v1`, `stage3_v1`) learn the feature, and nothing else in those files changes.
+**Task 63 named tests:** `TestSubmitMemberReadyAcksAndMapsTheSwitchRefusal`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestPlanReadinessAnnouncesOnlySyncedGroups`, `TestReadinessLoopIdlesUntilThePlacementSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq` (§17), `TestPlanCheckpointListsOnlyTheMembersGroupsOfOneOwner`, `TestPlanCheckpointExcludesTablesWithClosedReasons`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles` (ClickHouse and Keeper), `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`, `TestMemberStatusCarriesReadinessAndCheckpointSeq`, `TestConsensusConfigNilKeepsTheP2Role`, and the review fixes' `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` and `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`; the pre-existing `TestLocalNodeFeatures` (`consensus_test.go:44-53`, four features with `stage3_v1` last) and the legacy-feature expectation of `snode/tracks_test.go:659` (`client_lanes_v1`, `track_manifests_v1`, `stage3_v1`) learn the feature, and nothing else in those files changes.
 
 ### 43. Release ledger, consumed names, repositories and commands (Tasks 57–63)
 
@@ -23486,7 +23802,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - arbiter-proto v0.11.0, v0.12.0 and origin/main require grpc v1.82.0 and protobuf v1.36.11, the same versions housegate has. Any other dependency moving in Step 2 is a stop condition.
 - SubmitOutcomeFromSequencedAck is at pkg/storageintegrity/arbiter_proto.go:404-429 (coded-reject cases :415-424, default :426-427). AdmissionCodeIndexerQuarantined is at :394-400. TestIndexerQuarantinedIsATerminalRejectWithItsCode is at admission_code_test.go:71-86, with the unknown-code example at :81-83.
 - In the ingress, the INDEXER_QUARANTINED branch is storage_integrity_ingress.go:852-866. Local back-pressure counts under sicore.PhysicalTableName (:630, :821). The counter is defined at storage_integrity_backpressure.go:23-26. OutcomeCategory.RequiresAbort is at intake.go:321-323.
-- isSessionPreservingIngressException is at pkg/proxy/relay.go:2297-2330 on origin/main, with the 252 rule at :2321-2322 and the 733 case at :2323-2324. In the HG_TAG_P3 stand-in, S3-C4 Task 44 moves it down by 22 lines (733 case at :2345-2346).
+- isSessionPreservingIngressException is at pkg/proxy/relay.go:2297-2330 on origin/main, with the 252 rule at :2321-2322 and the 733 case at :2323-2324. In the HG_TAG_P3 stand-in, S3-C4 Task 44 moves it down by 25 lines (733 case at :2348-2349; 22 before S3-C4's review round 1, whose `upstreamToClient` read hunk grew by three lines).
 - S3-C4 Task 44 adds TableRefusedMessage and IsIndexerQuarantinedReadMessage to client_error.go (isTableRefusalMessage moves to :145) and two tests to client_error_test.go (now 247 lines). S3-C4 Task 42 edits README.md:195 without touching Task 58's anchors. No S3-C1, C2, C3 or D task draft touches Task 58's files.
 - The agent's lane logic (pkg/plugins/sistatement/lanes.go:269-292) matches only the generic 'rejected by the arbiter: <CODE>' text, which codes 12 and 13 never produce once mapped. An agent older than HG_TAG_P5 closes its session on the 733 verifiers text, which fails closed.
 - Release: release.yml takes -f bump=auto (comment at :11-15). The 'Compute next tag' step prints 'Next tag: <tag> (<reason>)' (:124). CI jobs are 'Release tooling', 'Build' and 'Integration (ClickHouse)'. No CI job runs gofmt.
@@ -23541,6 +23857,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Docker containers from the earlier interrupted attempt (s3e1-t61-a/b and their network) were removed. No scratch containers or networks remain.
 - Names added while drafting: TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath (ddl, ClickHouse; beyond contract §42.1); TestListKeeperRootsClassifiesChildren (ddl unit); TestKeeperScopeOfFollowsTheRegistryMark (tableset unit); TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers (tableset unit); TestNewDefaultsTheKeeperAuditInterval (tableset unit); log text: keeper audit failed; the next pass retries it; unexported ddl: KeeperScope.validate, keeperRootPath, dropReplicaAtPath, canonicalIncarnationSeq; unexported tableset: target.scope, sweepRetiredPath, dropTables, leftoverScopes, auditKeeperIfDue, auditKeeper, keeperFindingOf; Reconciler fields keeperFindings, keeperAuditRuns, lastKeeperAudit; ddl test helpers: keeperFakeConn, nameRows, isolatedShard, strandReplicaAt, replicaState, createReplicatedAt; tableset test helpers: isolatedShard, isolatedPinned, scopedInc, fakeView.setSnap, peer, replicaOf, replicasAt, keeperRoots, hasScoped, insertUnsafe, unsafeRows, syncReplica, syncBuffer, auditedOwner, strayRoot; new test files: wire/known_keeper_replica_test.go, dataplane/ddl/{keeper_scope_test,keeper_scope_ch_test,keeper_roots_test,keeper_roots_ch_test}.go, dataplane/tableset/{keeper_scope_test,keeper_scope_ch_test,keeper_audit_test,keeper_audit_ch_test}.go; local cache dir $HOME/.cache/s3e1-task61/ (base, pair.env, targets); Docker names arbiter-core-s3e1-t61-ch-a/-b and network arbiter-core-s3e1-t61-ch
 - Verified while drafting: GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test (Go 1.27.1, plus Go 1.26.3 with -race) for ddl, tableset, wire, conformance: pass. go vet clean. gofmt clean. / The failing build at Steps 4, 9, 14, 19 and 24 reproduced exactly from the markdown text (diff of expected vs actual output). / ClickHouse-gated go test on the local 25.8.28.1 pair (CI topology, shared Keeper): ddl and tableset each pass with all 96 top-level tests and no skips. snode, verifier and chtest pass. Rerun on the same Keeper: pass. / Same suites on 26.3.51.7 (ddl, tableset, snode, verifier): pass. / bazel run //:gazelle after each step changed exactly the BUILD lines stated. bazel build //... passed. bazel test --build_tests_only race //... passed (17 of 17). / Bazel integration: all 5 ci.yml targets PASSED with --local_test_jobs=1 and -test.v; 0 FAIL/SKIP lines; 18 expected PASS lines matched. / Mutation checks: 17 of 17 fixes reverted, each caught. / All 23 bash blocks and 7 Run lines pass bash -n, zsh -n and shellcheck -s bash; fish lines pass fish -n; code fences balanced; no TBD or placeholder text. / The plan blocks for Steps 1–30 were run in zsh against a scratch worktree (stand-in branch, tag and $W.core-tag-p4) and printed the stated output. Step 29 used the local 26.3 image instead of 26.3.37.3.
+- Review fixes (AgentConnect round 1), finding 3 (network-pool identities, not the global purge node set): `KnownKeeperReplica` authorized the whole purge node set, which `GetPurgeNodeSet` fills with every registered, non-evicted SNode and verifier, so a registered member of an unrelated group, and another owner's SNode, passed as known on every owner path and the owner's audit never reported its replica, against spec §8.2; the negative fixtures had left those members out of the purge node set. Now `KnownKeeperReplica(inc, pool, replica)` takes the network pool, `NetworkPool(purgeNodeSet)` derives it (the purge node set without every `si_indexers` SNode and every node the registry view names as a current, past or Leaving member, a purge member or the node of a published checkpoint sequence), and the audit computes it once per audit; the unit test and `TestOwnerKeeperAuditReportsAnUnknownReplica` list every registered member in the purge node set and expect `member-x` (a registered member of another database's group), another owner's SNode, a purge member of another incarnation and a member known only by its checkpoint sequence to be unknown. Changed: Notes (what `KnownKeeperReplica` counts, the audit), Files, Interfaces, Steps 1, 13–17, 23–25 and 28, Review Focus 4, contract §42.1, Task 63's README paragraph. Residual, a user decision: the registry view does not serve the `verifiers` parameter, so a registered member that no group, purge list or checkpoint sequence names yet counts as a pool node; it holds no `hg_member_unsafe` replica before it is placed and `si_member_ddl` exists only from S3-F step 6, and serving the pool's node ids in the registry view (a new `TableRegistrySnapshot` field, filled when the view is served like `GroupMember.host_indexer_id`) would close it. Verified: this task applied mechanically from its text (every Create and replace block, in order) to a `git archive` of arbiter-core `origin/main` `cfd4f42` with a Task 60 stand-in (contract §41 fields); Steps 14 and 24 failed with exactly the outputs given; `gofmt`, `go vet` and `go test -race` of `ddl`, `tableset`, `wire` and `conformance` pass; on a local ClickHouse 25.8.28.1 pair in CI's topology the gated `ddl` and `tableset` suites pass, the four audit tests among them; the original code reproduced the defect (a registered `member-x` of `G(0, dex)` known on owner 1's path), and five `NetworkPool` mutations (the purge node set returned whole, or no exclusion of SNodes, current members, purge members or checkpoint sequences) and an audit that passes the whole purge node set each fail a test; Step 28's stat line is recomputed from the applied tree (80 insertions more than the drafted text).
 
 ### Task 62
 
@@ -23571,6 +23888,12 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - 114 code blocks: every bash block passes bash -n and shellcheck -S warning; fish lines pass fish -n; no hard-wrapped prose.
 - Names added while drafting: consensus.Mode, NewMode, ModeDeps, InstallView, (*Mode).Run/Status/Metrics; consensus.InstallStateOf(snap, owner, journal, tables, stats); consensus.ReplicaPaths, ReadLocalReplicas, ReplicaSyncTimeout; (*consensus.CheckpointSigner).Address; consensus.OffStatus, ModeOff, ModeConsensus, ClassLeaving; consensus label constants EvidenceReplay, EvidenceScan, EvidenceSubmitted, EvidenceRefused, CheckpointAccepted, CheckpointSwitchOff, CheckpointRefused; consensus.ReconcilerMetrics / NewReconcilerMetrics(stats func() ReconcilerStats) (the reconciler process's two series, for S3-E4 Task 79); VerifyRole.metrics field (unexported, added to Task 62's struct by a checked script); sources.SourceMemberUnsafeHardlink = "member_unsafe_hardlink" (kept out of SourceNames); serve.Deps.Consensus func() consensus.Status; member/consensus_mode.go: consensusMode interface, newConsensusMode, consensusStatus; tests TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica (ClickHouse+Keeper), TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration, TestConsensusMetricsExportEveryLabelIncludingZeros, TestVerifyRoleCountsItsEvidence, TestConsensusConfigWiresTheModeIntoTheRole, TestServingViewCarriesTheConsensusStatus; refusal texts: member: Config.Consensus.%s %q differs from the member's %q; member: the consensus mode's verify role needs Deps.Payloads; member consensus: the ed25519 seed must be 32 bytes; member consensus: the replica_signer key is not a secp256k1 private key in hex
 - Verified while drafting: Go replay of all code steps in a fresh clone (replay.sh), logs of each fail/pass run compared with the task text / python3 -I mutate.py: 37 of 37 mutations caught / Bazel per-step gazelle replay (bzreplay.sh) and bazel build //... / bazel test //... / race subset offline / ClickHouse-gated runs on 26.3.51.7 (Keeper, engine fence) and on a local 25.8.28.1 CI-shaped pair, via go test and via the task's own Step 14 and Step 21 Bazel blocks / update-housegate.sh offline simulation with a file GOPROXY and scratch module cache / ledger simulation of Steps 1 and 25 (R1, R2, R4) against a local bare origin / lint_blocks.py over the generated markdown: bash -n, shellcheck -S warning, fish -n, python compile, hard-wrap check
+- Review fixes (AgentConnect round 1), finding 1 (the boot nonce Task 62's constructor requires): the draft's `Mode.prepare` built `VerifyDeps` without `BootNonce`, assuming `NewVerifyRole` drew its own nonce, but Task 62 adds `VerifyDeps.BootNonce` and its `NewReplayMaterializer` refuses an empty value, so every member with `Config.Consensus` failed in `prepare`, `Register` on or off, and the mode tests never saw it because they replace the constructor seam. Now `member.Role` keeps startup step (7)'s nonce in `parts.bootNonce`, `runParts` calls `(*Mode).Run(ctx, manifests, inst, bootNonce)` and `prepare(manifests, bootNonce)` sets `VerifyDeps.BootNonce`; the `consensusMode` interface and the role tests' `fakeMode` take the nonce, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` (Step 8) builds the real verify role through `prepare` and `Run`, and `TestConsensusConfigWiresTheModeIntoTheRole` checks the role hands the mode the installer's nonce. Changed: Notes (one mode; the verify role's boot nonce), Files, Interfaces, Steps 8, 9, 11, 15 and 16, Review Focus 5, contract §42.3 (`VerifyDeps.BootNonce`, role wiring). Verified: Task 62's `bootNoncePattern`, `VerifyDeps`, `NewVerifyRole`, `ReplayScratchPrefix` and `NewReplayMaterializer` and this task's `prepare`, extracted verbatim from the plan into a scratch module with stubs for the rest (`chexec.NewMaterializerIn` with S3-C1's refusals): the drafted `prepare` fails with `member consensus: verify role: member consensus: boot nonce "" must be 8 lowercase hex characters (install.NewBootNonce)`, the fixed one builds the role with `testBootNonce` and refuses `""` and `nonce` with the texts the new test expects (`go test -race`); every changed Go block passes `gofmt`; Step 8's first error line (`mode_test.go:147:12`) is unchanged and Step 15's moves to `consensus_mode_test.go:83:7`. A full replay of the member package was not run (it needs S3-C2 Tasks 29–34, S3-C4 Task 45 and Tasks 57–62 with a regenerated arbiter-proto). Sibling: the Notes' other open question on Task 62 (whether `VerifyRole.Run` resolves the quiescence ledger) is closed against Task 62's text (`resolveLoop`, Register on or off), and Step 1 now also checks `VerifyDeps.BootNonce` and the two S3-C2 anchors Step 16 replaces.
+- Review fixes (AgentConnect round 1), finding 2 (the startup identity guard of a registered member): S3-C2 Task 34's startup step (6) refused any node id in `GetPurgeNodeSet`, which lists the member once it registered as a VERIFIER (S3-E2 Task 69 keeps the set unchanged), so every later start of a registered member, a pod replaced at S3-F step 6 included, ended with `ErrNodeIDInUse` before `runParts`. Now, with `Config.Consensus` only, step (6) checks the id against the purge node set without the member's own id (`nodeIDCheckSet`), keeps the SNode refusal, and refuses an id the registry serves as another host's group member (`checkGovernedHost`, wrapping `copyset.ErrNodeIDInUse`); S3-C2's code changes only through this task's `role.go` replacement, and `TestRoleRefusesANodeIDInUse` is unchanged. Changed: Notes (the node id at a restart), Files, Interfaces, Steps 15 and 16, the README's `Register` item, Review Focus 5, contract §42.3 (role wiring), a binding clarification. Residual, a user decision: the registry view does not carry the `verifiers` parameter, so the start cannot compare the id's entry key with the member's own; the arbiter checks it at every `RegisterNode`, and serving the entries' node ids and keys to members would let the start check it. Verified: S3-C2's `CheckNodeIDUnused` and `inUse`, and this task's `nodeIDCheckSet`, `checkGovernedHost` and step (6) replacement, extracted verbatim into a scratch module: the drafted step (6) refuses a registered consensus-mode restart (`copyset: node id "member-b" is already used by the purge node set (a registered SNode or verifier)`), the fixed one accepts it with or without a group and with a delisted member record, and refuses a P2 member with the same purge node set, an SNode's id and a member served by host 2 or host 0 with the texts `TestConsensusModeAcceptsItsOwnRegistrationAtARestart` expects, without changing the caller's purge node set (`go test -race`); the role-level test itself needs the S3-C2 harness and was not run.
+
+### Review fixes (AgentConnect round 1): cross-plan
+
+- (1) Plan S3-C4's review fix 3 made `serve.Deps.StateDir` required (`serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`), so Step 15's `TestServingViewCarriesTheConsensusStatus` gives its second `New` the S3-C4 harness's `StateDir: h.stateDir`, and the Files line cites the lines of S3-C4's fixed `serve.go`. Checked on S3-C4's fixed `member/serve` package with this task's eight `serve.go`/`conditions.go` hunks (each anchor once), a stub `member/consensus` holding this task's status types, and the test: without the field it fails with that refusal, with it `go test -race ./member/serve/` passes (every S3-C4 test too), gofmt and vet clean; this task's fifteen `member/` hunks each occur once on S3-C2's fixed Tasks 29–34 code with S3-C4's fixed Task 45 scripts and `member/serving.go` applied. (2) Plan S3-C2's review fix 245-4 (the bootstrap restore probe): a Notes bullet and contract §42.3's source-order sentence say the probe moves the restore right before the owner pull for the first fetch of each copy while its owner has no journaled entry, and keeps the hard-link source first; this task's code is unchanged. (3) Plan S3-E4's review finding 2: the Follow-ups line says Task 79's `replica_hosts` lists every current member, never filtered by `MemberReady`. (4) Plan S3-C4's review fix 4 grew Task 44's `upstreamToClient` read hunk of `pkg/proxy/relay.go` by three lines, so Task 58's `HG_TAG_P3` anchors of `isSessionPreservingIngressException` are now `:2326-2330` (doc) and `:2348-2349` (733 case), measured by replaying S3-C4's fixed relay hunks on housegate `862a7a8` (the result equals S3-C4's fixer's verified tree); both anchor texts still occur once, and no other file Task 58 edits changed line counts there (S3-C4's `CLAUDE.md` and `README.md` edits replace within one line). (5) Plan S3-C2's review fixes 245-1 and 245-2 moved lines of `member/role.go` (34 lines more in `member/role_test.go` before `TestLocalNodeFeaturesAreUnchangedThroughP2`), so the Files line's `member/role.go` and `member/role_test.go` numbers and Step 17's expected `role_test.go:411` are re-measured on S3-C2's fixed Tasks 29–34 text with S3-C4's fixed Task 45 applied (the run of Step 17's red test there prints exactly that line); every anchor text is unchanged.
 
 ## Appendix C: execution record
 
