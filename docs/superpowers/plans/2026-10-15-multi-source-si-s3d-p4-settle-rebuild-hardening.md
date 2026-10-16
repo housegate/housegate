@@ -9,7 +9,7 @@
 **Architecture:**
 - **Task 49 (arbiter-proto):** additive, non-Raft settle surface: `ConsensusAdmin.SettleTrack` and `GetTrackSettle` with `SettleTrackRequest`, `TrackSettleRef`, `TrackSettle` and enum `TrackSettleState`; `PromotionCommand.settle = 3` (the leader marks a settle-streamed promotion) and `SNodeHello.settle = 2` (an SNode that answers settles says so); `SettleTrack` and `GetTrackSettle` are `ConsensusAdmin` methods 14 and 15 (16 methods; Plan S3-E1's `RebalanceGroup` 16 and `MarkMemberLagging` 17 follow, decision D26); `conformance/p4_settle_test.go` pins every number and proves no new message is Raft-reachable, and the two method-count literals learn the two methods (`conformance/consensus_test.go` and S3-A's frozen `conformance/stage3_reads_test.go`, 14 → 16, the count-literal exception of decision D25); release `PROTO_TAG_P4`, produced unconditionally (D26) and the base of Plan S3-E1's `buf breaking`.
 - **Task 50 (arbiter-core):** pin `PROTO_TAG_P4`; root `arbiter.SettleTrackCommand`, the authority purpose `arbiter-settle-track-v1` with a frozen golden, wire converters and `wire.SettlePromotionCommandPB`; the SNode advertises settle in its hello and answers a settle command from its journal only (journaled ack, reconciled intent, or a journaled `Applied:false`), counting `SettleStats`; the owner audit's rebuilt-reference rule (an inventory marked `rebuilt` that equals the arbiter's `SafeParts` by row hash and `hash_of_all_files` is the reference); the new package `snode/rebuild` (Keeper fence, table creation, `hg_safe` restore through the S3-C1 gate from the own `hg_unsafe` replica and the object store, journal write) with `snode.RecordRebuiltSafeInventories` and `ddl.ReplicaIsActive`; mechanics M15 (RESTORE then ATTACH into a fresh table keeps every part hash) and M16 (interserver credentials in the mixed state), continuing S3-A's M0–M11 and S3-C1's M12–M14 (decision D32: S3-B's lockdown grant probe carries no M label), CI plus the manual deployed-image run (`P4_MECHANICS`); release `CORE_TAG_P4`.
-- **Task 51 (arbiter):** pin `PROTO_TAG_P4` and `CORE_TAG_P4`; the leader-local settle mode, the one exception to clarification C8: a read view `TrackSettleWork`, the leader registry `TrackSettles`, the two admin handlers, the orchestrator's `handleSettles` that re-signs and streams only the listed, still unacknowledged promotions with `settle` set and only to a settle-capable SNode, config `consensus_admin.max_track_settle`, three metrics, `arbiter-admin indexer settle`; integration proof and an offline devnet2 replay with identical digests; release `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4`.
+- **Task 51 (arbiter):** pin `PROTO_TAG_P4` and `CORE_TAG_P4`; the leader-local settle mode, the one exception to clarification C8: a read view `TrackSettleWork`, the leader registry `TrackSettles`, the two admin handlers, the orchestrator's `handleSettles` that re-signs and streams only the listed, still unacknowledged promotions with `settle` set and only to a settle-capable SNode (the registry's `SendSettle` checks the capability and enqueues on one subscription atomically), config `consensus_admin.max_track_settle`, three metrics, `arbiter-admin indexer settle`; integration proof and an offline devnet2 replay with identical digests; release `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4`.
 - **Task 52 (sentio-node):** pin `CORE_TAG_P4`; `sentio-node storage-integrity rebuild-safe --backup <name> [--dry-run]` over `snode/rebuild`; the settle collector `sentio_node_storage_integrity_settle_answers_total{outcome}`; no dedicated SI signer key (K51); release `SN_COMMIT_P4` / `SN_DIGEST_P4`.
 - **Task 53 (production):** `charts/storage-integrity` `clickhouse.interserver` (credentials from one shared Secret through `valueFrom`) and `clickhouse.nodePins` (per-cluster pod templates; the placement rule of K55 as decision D39 refines it, checked against the eligible nodes `DEVNET2_SI_ELIGIBLE_NODES`); `charts/sentio-node` `storageIntegrity.snode.rebuildSafe` (an init container running `rebuild-safe` before the SNode starts); `GRANT READ ON S3` for `si_snode`; the SI ingress policies `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-network-policy.yaml` and the Keeper policy `clickhouse-keeper-extra-ingress` in `k8s-sea/clickhouse/network-policy.yaml`, both shipped in observe mode; the probe matrix `si_network_probe.tsv`; the interserver staging pair; the user's interserver secret script; render tests, everything inert on merge.
 - **Task 54 (production):** runbooks `docs/storage-integrity-devnet2-stage3-p4-hardening.md` and `docs/storage-integrity-devnet2-stage3-p4-owner-rebuild.md` (settle rollout and operating rule, rebuild drill), the stage-2 runbook's pointer, and the P4 PR (`P4_PR`).
@@ -43,7 +43,7 @@ The spec and the earlier plans leave these P4 details open; each is resolved her
 
 - **K51 — The rebuild keeps the signer key (spec §16 P4, user decision; spec amended in `a815dd0`).** *Gap:* the P4 row first asked for a signer rotation in the same-identity rebuild, but the SI claim signer is the indexer's on-chain key (`sentio-node:standalone/storage_integrity_enrollment.go:36-47`, `storageIntegrityClaimSigner` over `PRIVATE_KEY`), a new key makes `EnsureRegistered` register a new indexer id (`sentio-node:common/env.go:402-430`), and the registry's update path takes no signer, so the host cannot keep its id with a new key, although the FSM would accept a rotation (`arbiter:fsm/signed_claims.go:132-176`). *Resolution:* option (a): the rebuilt host keeps its key, which lives in the Secret `sentio-node-devnet2-indexer-c-private-key` and survives the lost volume; P4 drills no rotation, makes no consensus update and adds no dedicated SI signer key (split's Task 52 item under K51(b) is dropped). *Why:* the user decided so and the spec now says so; a rotation that keeps the id needs a registry contract change outside stage 3 (follow-up).
 - **K52 — The rebuilt `hg_safe` meets the owner audit by hash, not by name; what the drill loses and what it restores from (spec §14 owner audit, §16 P4).** *Gap:* the owner audit keys twins and the reference on part names (S3-A contract §3; `ownerAuditReferenceFor` refuses equal seqs with different `(name, hash_of_all_files)` sets as `fsm_disagrees`), while `RESTORE` and `ATTACH PARTITION FROM` give parts new block numbers in the target table, so a rebuild cannot promise the acknowledged names; the arbiter itself keys a complete inventory by row hash and accepts new names (`arbiter:fsm/apply_safeparts.go:165-260`, `remappedSafeParts`). The spec does not say what the drill loses or where the rows come from. *Resolution:* (1) mechanic M15 pins that RESTORE into a scratch and `ATTACH PARTITION FROM` into a fresh table keep every part's row hash and `hash_of_all_files`, and records the names without asserting them; (2) `rebuild-safe` writes, per rebuilt partition, a local acknowledged inventory with the new names at the arbiter's `PublishSeq`, marked `rebuilt` (`snode.RecordRebuiltSafeInventories`); (3) the audit takes a `rebuilt` local inventory as the reference when its seq equals the arbiter's and its multiset of (row hash, `hash_of_all_files`) equals the arbiter's `SafeParts`, and answers `fsm_disagrees` otherwise; the first promotion after the release replaces it with an ordinary inventory and the arbiter's names catch up; (4) the drill loses the source ClickHouse only (pod, PVC, PV); the host keeps its PVC, so the SNode journal at `/data/storage-integrity/snode` (watermarks, last acks, base roots, unpromoted sums, the acknowledged inventories) survives and the rebuild refuses when the arbiter is ahead of it (`ErrRebuildJournalBehind`); (5) sources, in order: the re-cloned own `hg_unsafe` replica (a promoted part whose cleanup has not run, resolved by `hash_of_all_files`), then the P1 object store; the drill takes a backup after the quarantine and the settle, when `hg_safe` equals `SafeParts`, and proves coverage with `rebuild-safe --dry-run` before anything is destroyed; (6) `rebuild-safe` runs as an init container of the host pod (`storageIntegrity.snode.rebuildSafe`), so it is the journal's only writer, as `si_snode` with the added `GRANT READ ON S3` (restore scratch tables in `hg_promote`, `ATTACH PARTITION FROM` into `hg_safe`; no new user). *Why:* names cannot be reproduced by any byte source the gate accepts, while (row hash, `hash_of_all_files`) is what the gate and the arbiter verify; keeping the journal makes the rebuild a ClickHouse-only recovery and keeps the base CAS of the next promotion exact; a member-copy source for a loss between backups, and a journal rebuilt from the arbiter after a lost host PVC, are follow-ups.
-- **K53 — Settle is a leader-local RPC plus an SNode capability (spec §14 "Exits from the release refusals").** *Gap:* the spec calls settle a non-consensus orchestrator and SNode feature but fixes no shape; a quarantined track's issued promotion is never re-streamed (clarification C8, `arbiter:fsm/reads_work.go:300-305`; `orchestrator/promotion.go:34-38` streams only `IssuedUnacked`), so release refusal (iii) "is covered by unacknowledged promotion" never clears (`arbiter:fsm/rejected_cleanup.go:150-198`); a flag on the release path would be a Raft change, and an SNode built before this plan applies any promotion it receives (`arbiter-core:snode/promote.go:14-89`). *Resolution:* the RPC (Task 49, so `PROTO_TAG_P4` is produced, not optional; decision D26): `SettleTrack` is authority-signed (purpose `arbiter-settle-track-v1`) over `{indexer_id, expected_generation, promotion_seqs}`, where the list must equal the quarantined track's issued, unacknowledged promotions exactly; the leader then re-signs and streams those promotions with `PromotionCommand.settle` set, every orchestrator pass, only to the expected source and only while its current subscription advertised `SNodeHello.settle`; it never issues, re-bases or cleans anything; the settle ends `settled` when every listed promotion is acknowledged, `released` on a release or a generation change, `expired` at `consensus_admin.max_track_settle` (default 10m), `leadership_lost` on a leader change. The SNode answers a settle command only from durable state: the journaled acknowledgement (`journaled`), a published intent finished as `finishAppliedPromotion` does (`reconciled`), otherwise a journaled `Applied:false` with detail `settle: promotion <seq> was not applied on this SNode` (`not_applied`, which consumes the promotion, `arbiter:fsm/apply.go:833-840`), or nothing for a sequence below its watermark with no stored acknowledgement (`unanswerable`); it never builds a shadow, never runs `REPLACE` and never writes `hg_safe`. The CLI is `arbiter-admin indexer settle` (refining split's `track settle`: it shares `indexer quarantine|release`'s flags and generation). *Why:* the FSM already accepts late and `Applied:false` acknowledgements under quarantine, so this is exactly the "settle request" the spec describes, with no new consensus surface; the capability check is what keeps an older SNode from turning a settle into a promotion of rejected rows; `settle` is not covered by the promotion JWS, so an on-path attacker could clear it, a residual equal to today's unauthenticated stream (follow-up: TLS).
+- **K53 — Settle is a leader-local RPC plus an SNode capability (spec §14 "Exits from the release refusals").** *Gap:* the spec calls settle a non-consensus orchestrator and SNode feature but fixes no shape; a quarantined track's issued promotion is never re-streamed (clarification C8, `arbiter:fsm/reads_work.go:300-305`; `orchestrator/promotion.go:34-38` streams only `IssuedUnacked`), so release refusal (iii) "is covered by unacknowledged promotion" never clears (`arbiter:fsm/rejected_cleanup.go:150-198`); a flag on the release path would be a Raft change, and an SNode built before this plan applies any promotion it receives (`arbiter-core:snode/promote.go:14-89`). *Resolution:* the RPC (Task 49, so `PROTO_TAG_P4` is produced, not optional; decision D26): `SettleTrack` is authority-signed (purpose `arbiter-settle-track-v1`) over `{indexer_id, expected_generation, promotion_seqs}`, where the list must equal the quarantined track's issued, unacknowledged promotions exactly; the leader then re-signs and streams those promotions with `PromotionCommand.settle` set, every orchestrator pass, only to the expected source and only while its current subscription advertised `SNodeHello.settle`, the capability checked and the command enqueued on that one subscription under one lock (a reconnect without the flag never receives a settle); it never issues, re-bases or cleans anything; the settle ends `settled` when every listed promotion is acknowledged, `released` on a release or a generation change, `expired` at `consensus_admin.max_track_settle` (default 10m), `leadership_lost` on a leader change. The SNode answers a settle command only from durable state: the journaled acknowledgement (`journaled`), a published intent finished as `finishAppliedPromotion` does (`reconciled`), otherwise a journaled `Applied:false` with detail `settle: promotion <seq> was not applied on this SNode` (`not_applied`, which consumes the promotion, `arbiter:fsm/apply.go:833-840`), or nothing for a sequence below its watermark with no stored acknowledgement (`unanswerable`); it never builds a shadow, never runs `REPLACE` and never writes `hg_safe`. The CLI is `arbiter-admin indexer settle` (refining split's `track settle`: it shares `indexer quarantine|release`'s flags and generation). *Why:* the FSM already accepts late and `Applied:false` acknowledgements under quarantine, so this is exactly the "settle request" the spec describes, with no new consensus surface; the capability check is what keeps an older SNode from turning a settle into a promotion of rejected rows; `settle` is not covered by the promotion JWS, so an on-path attacker could clear it, a residual equal to today's unauthenticated stream (follow-up: TLS).
 - **K54 — The Keeper fence covers unscoped paths and runs before the new ClickHouse's first SNode start (spec §16 P4 "Keeper fence").** *Gap:* the spec names the fence ("old pod and PV destroyed or isolated, `SYSTEM DROP REPLICA` succeeding, `is_active` checked") but not where it runs, which paths it covers, or that arbiter-core already drops a stale replica of its own name on `REPLICA_ALREADY_EXISTS` (`arbiter-core:dataplane/ddl/table.go:62-128`, `dropStaleReplica`), which would bypass the explicit check. *Resolution:* the fence is phase `fence` of `rebuild-safe`, before phase `tables`: for every table the indexer owns (genesis tables by configuration, registry incarnations by `Owner`), it reads `<ddl.ZooKeeperPath>/replicas`, refuses with `ErrFenceReplicaActive` when the node's replica still has `is_active` (`ddl.ReplicaIsActive`), and otherwise runs `ddl.DropReplica` (`SYSTEM DROP REPLICA '<node>' FROM ZKPATH '<path>'`); the scoped root `/sentio/<shard>/unsafe_inc` (S3-C3, `UNSAFE_INC_ROOT`) must hold no replica of the node (`ErrFenceScopedReplica`), because the `purge` switch does not exist before P6 and every incarnation is on the unscoped path; the drill isolates the old volume first (PV reclaim policy patched to `Retain`, PVC deleted, PV labelled fenced) and waits out the Keeper session (`session_timeout_ms` 100000) before the fence. *Why:* only the unscoped path exists before P6; running the fence inside the rebuild makes its success a precondition of the new replica, and the explicit `is_active` check refuses a half-dead old server that `dropStaleReplica` would also refuse but without the operator-visible record.
 - **K55 — A failure domain is the node of the indexer's source ClickHouse, recorded as `DEVNET2_FAILURE_DOMAINS` (spec §6.1, §9.3, §14).** *Gap:* the spec asks P4 to establish anti-affinity and §9.3 to report `safe_copies` "per distinct Kubernetes node", but names neither the domain string nor the record. *Resolution:* each SI indexer's domain is `node:<hostname>` of its source ClickHouse pod (indexer-a: the network CHI's `source` cluster; indexer-b and indexer-c: their own CHIs), pinned by `nodeSelector` equal to the node its `local-path` volume already pins; the six SI ClickHouses (three sources, `verifier-1..3`) run on pairwise distinct nodes (`test_si_clickhouses_run_on_distinct_nodes`), except as decision D39 allows: when devnet2 has fewer than six eligible nodes (`DEVNET2_SI_ELIGIBLE_NODES`, the nodes carrying the SI ClickHouses' `nodeSelector` `sentio.xyz/general: "true"`, read read-only by Task 53 Step 1 and again by hardening runbook §2.4), the verifier ClickHouses may share a node with each other, never with a source, and the three sources stay pairwise distinct; a conflict found by the census moves a verifier ClickHouse, never a source (runbook §5.0: a verifier on a source's node always moves, to an eligible node that holds no source, preferring one that holds no SI ClickHouse; two verifiers on one node are a conflict, and one moves to an eligible node holding no SI ClickHouse, only when devnet2 has at least six eligible nodes); the runbook stops, and the plan is amended, when two sources share a node or every eligible node holds a source; the placement (shared verifier nodes included) is recorded in `placement.tsv` and the `hardening run` record; the ledger value is `<indexer_id>=node:<hostname>` joined by commas in ascending indexer id (for example `0=node:sea-g-1,1=node:sea-g-2,2=node:sea-g-5`), recorded by Task 55 and copied verbatim into `stage3.indexer_failure_domains` (S3-E4) and every member entry's `failure_domain` (S3-F). *Why:* copies and `hg_safe` live on the source ClickHouse's disk, so its node is the unit that fails together; a recorded value lets P5 and P6 consume it without re-deriving placement; two verifier ClickHouses on one node cost liveness when that node is lost (fewer verifiers to attest until it returns) but neither a source's data nor its failure domain, while a verifier beside a source would put an owner's data and one of its replicas on one node (D39).
 - **K56 — Interserver step 1 is ordered so no credentialed server fetches from an uncredentialed one (spec §14 "Interserver credentials in two rolling steps").** *Gap:* `allow_empty: true` lets a credentialed server accept an uncredentialed fetcher, but a server without credentials refuses a fetcher that sends them (ClickHouse's interserver handler: `Client requires HTTP Basic authentication, but server doesn't provide it`), so the spec's step 1 has a mixed state in which some fetches fail; a failed fetch leaves a verifier without the candidate part, which refuses to attest (`arbiter-core:verifier/verifier.go:413-421`), so it delays evidence and never produces a failing scan. *Resolution:* M16 pins both directions in CI and on the deployed image; the runbook proves them on two staging CHIs (`storage-integrity-si-v2-p4-staging-a`, `-b`); step 1 then rolls the sources first and the fetchers last — indexer-b's CHI, indexer-c's CHI, then the network CHI (indexer-a's source and `verifier-1..3`, the only `hg_unsafe` fetchers before P6) — one installation per window, with the node pins in the same restart; step 2 (`allow_empty: false`) follows on the same order once every installation records step 1; no hold is needed (no consensus update runs; each restart pauses its owner's track, the network CHI's every track's verification, as in P2). If the staging pair or M16 shows any other behaviour, the plan stops and is amended. *Why:* with sources first, every fetch in the mixed state is an uncredentialed verifier asking a credentialed `allow_empty` source, which succeeds; within the network CHI the window is one pod restart.
@@ -71,7 +71,7 @@ Every produced value is written into this plan's Appendix C by the task that mak
 
 ## Review Focus
 
-1. **A settle reaches an SNode that never applied the promotion, one that applied it but lost the acknowledgement, and one too old to know settles.** Expected: the leader streams only the signed list, only while the track is quarantined at the signed generation and only to a subscription whose hello carried `settle`; the first SNode answers a journaled `Applied:false` with `settle: promotion <seq> was not applied on this SNode` and never builds a shadow, runs `REPLACE` or writes `hg_safe`; the second resends its journaled acknowledgement or finishes its published intent; the old SNode receives nothing and `SettleTrack` refuses up front; release refusal (iii) then clears (or becomes (ii) when the promotion had applied); with no settle the loop is byte-identical and C8 holds. Tests: Task 50 `TestSettleAnswersNotAppliedAndJournalsIt`, `TestSettleResendsTheJournaledAck`, `TestSettleFinishesAPublishedIntent`, `TestSettleRollsBackAnUnpublishedIntentAndAnswersNotApplied`, `TestSettleNeverBuildsAShadowOrTouchesHgSafe`, `TestPromoteWithoutSettleIsUnchanged`; Task 51 `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestNoSettleKeepsClarificationC8`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered`.
+1. **A settle reaches an SNode that never applied the promotion, one that applied it but lost the acknowledgement, and one too old to know settles.** Expected: the leader streams only the signed list, only while the track is quarantined at the signed generation and only to a subscription whose hello carried `settle`, decided where the command is enqueued, so an SNode that reconnects without `settle` (a rollback) between the leader's check and the send receives nothing; the first SNode answers a journaled `Applied:false` with `settle: promotion <seq> was not applied on this SNode` and never builds a shadow, runs `REPLACE` or writes `hg_safe`; the second resends its journaled acknowledgement or finishes its published intent; the old SNode receives nothing and `SettleTrack` refuses up front; release refusal (iii) then clears (or becomes (ii) when the promotion had applied); with no settle the loop is byte-identical and C8 holds. Tests: Task 50 `TestSettleAnswersNotAppliedAndJournalsIt`, `TestSettleResendsTheJournaledAck`, `TestSettleFinishesAPublishedIntent`, `TestSettleRollsBackAnUnpublishedIntentAndAnswersNotApplied`, `TestSettleNeverBuildsAShadowOrTouchesHgSafe`, `TestPromoteWithoutSettleIsUnchanged`; Task 51 `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleIsNotDeliveredToAReconnectWithoutSettle`, `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt`, `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestNoSettleKeepsClarificationC8`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered`.
 2. **A rebuilt `hg_safe` whose part names differ from the acknowledged inventory.** Expected: the restored partitions equal the arbiter's `SafeParts` by row LtHash and `hash_of_all_files`, close arithmetically over `BasePartitionRoot`, and the journal marks them `rebuilt` at the arbiter's `PublishSeq`; the owner audit in repair mode is then clean, a hash difference is `fsm_disagrees`, an arbiter ahead of the journal is `fsm_ahead` and refused by the rebuild before any write, foreign local parts refuse the rebuild, a second run changes nothing, and the first promotion after the release replaces the rebuilt reference and is accepted by the arbiter with the new names. Tests: Task 50 `TestOwnerAuditAcceptsARebuiltInventoryThatMatchesTheArbiterByHash`, `TestOwnerAuditRefusesARebuiltInventoryWithAnotherHash`, `TestRecordRebuiltSafeInventoriesRefusesAJournalBehindTheArbiter`, `TestRebuildRefusesForeignSafeParts`, `TestRebuildIsIdempotent`, `TestRebuildThenOwnerAuditIsCleanAndTheNextPromotionSucceeds`, M15 `TestMechanics_RestoreAndAttachIntoAFreshTableKeepsEveryPartHash`; checks: rebuild runbook §5.3, §5.7, §5.8.
 3. **The Keeper fence against an old ClickHouse that is not quite dead.** Expected: the rebuild refuses while the old replica's `is_active` exists, refuses when the scoped root `/sentio/<shard>/unsafe_inc` has any child, drops the stale replica of every owned table with `SYSTEM DROP REPLICA ... FROM ZKPATH` only after that, and creates the new replica (which clones from the pool verifiers) afterwards; the old PV is `Released`, `Retain` and labelled fenced, never rebound; a rebuild of an unquarantined track or one with issued, unacknowledged promotions refuses before the fence. Tests: Task 50 `TestFenceRefusesAnActiveReplica`, `TestFenceRefusesAScopedReplicaOfThisNode`, `TestFenceDropsTheStaleReplicaOfEveryOwnedTable`, `TestRebuildRefusesALiveTrack`, `TestRebuildRefusesUnacknowledgedPromotions`; Task 52 `TestRebuildSafeNeverRegistersTheIndexer`; checks: rebuild runbook §5.4–§5.7.
 4. **Interserver credentials in the mixed state of step 1.** Expected: a credentialed server accepts an uncredentialed fetcher (`allow_empty` true) and an uncredentialed server refuses a credentialed one; step 1 therefore rolls indexer-b's CHI, indexer-c's CHI and then the network CHI, one installation per window, so the only fetchers (`verifier-1..3`) are credentialed last, and a refused fetch only delays evidence (a verifier without the part refuses to attest); step 2 is refused by the render tests until every installation records step 1; every installation names the one Secret and no literal password. Tests: Task 50 M16 `TestMechanics_InterserverAllowEmptyAcceptsAnUncredentialedFetcher`, `TestMechanics_InterserverUncredentialedServerRefusesACredentialedFetcher`; Task 53 `test_interserver_step_two_needs_step_one_everywhere`, `test_every_si_installation_names_the_same_interserver_secret`, `test_interserver_credentials_carry_no_literal_password`, `test_devnet2_interserver_follows_the_rollout`; checks: hardening runbook §3, §5, §6.
@@ -6530,8 +6530,8 @@ Worktree (contract §37.5): URWT `multi-source-s3d` of arbiter, branch `urwt/cla
 **Files:**
 - Modify (pin commit): `go.mod` (`:18` housegate, `:20` arbiter-core, `:21` arbiter-proto, as `ARBITER_PIN_P2` leaves them), `go.sum`, `MODULE.bazel` (the `arbiter_core` and `housegate` `bazel_dep`s `:9-16` and `git_override`s `:19-31`), `MODULE.bazel.lock`
 - Create: `fsm/reads_settle.go` (`TrackSettleWorkView`, `(*FSM).TrackSettleWork`), `fsm/reads_settle_test.go`; Modify: `fsm/BUILD.bazel` (gazelle: `:57-58`, `:187-188`)
-- Modify: `server/registry.go` (`snodeRegistry` `:124-133` becomes a struct with `registerHello` and `SettleCapable`), `server/gateway.go` (`SubscribePromotions` `:91`), `server/registry_test.go` (imports `:3-9`; `TestSNodeRegistryRecordsTheSettleHello` appended)
-- Create: `orchestrator/settle.go` (`(*Loop).handleSettles`, `(*Loop).settlePromotion`), `orchestrator/settle_test.go`; Modify: `orchestrator/deps.go` (`SNodeDirectory` `:28-31`, `SettleWork` and `SettleSource` after it, `Deps.Settles` after `Issuance` `:91-94`), `orchestrator/promotion.go` (the end of `handlePromotionRows` `:59-65`), `orchestrator/loop.go` (`(*Loop).Settles` after `IssuanceGate` `:65-67`), `orchestrator/orchestrator_fakes_test.go` (`fakeSNodes` `:160-166`, after `Connected` `:176-180`), `orchestrator/BUILD.bazel` (gazelle: `:15-16`, `:51-52`)
+- Modify: `server/registry.go` (`streamRegistry.Send` `:65-83` shares `enqueueLocked`; `snodeRegistry` `:124-133` becomes a struct with `registerHello`, `SettleCapable`, `SendSettle` and a `Send` that refuses a settle command), `server/gateway.go` (`SubscribePromotions` `:91`), `server/registry_test.go` (imports `:3-9`; `TestSNodeRegistryRecordsTheSettleHello`, `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt` and `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects` appended)
+- Create: `orchestrator/settle.go` (`(*Loop).handleSettles`, `(*Loop).settlePromotion`), `orchestrator/settle_test.go`; Modify: `orchestrator/deps.go` (`SNodeDirectory` `:28-31`, `SettleWork` and `SettleSource` after it, `Deps.Settles` after `Issuance` `:91-94`), `orchestrator/promotion.go` (the end of `handlePromotionRows` `:59-65`), `orchestrator/loop.go` (`(*Loop).Settles` after `IssuanceGate` `:65-67`), `orchestrator/orchestrator_fakes_test.go` (`fakeSNodes` and its `Send` `:160-174`, after `Connected` `:176-180`), `orchestrator/BUILD.bazel` (gazelle: `:15-16`, `:51-52`)
 - Create: `server/track_settle.go` (`TrackSettles`, `NewTrackSettles`, `TrackSettleRecord`, `TrackSettleMetrics`), `server/track_settle_rpc.go` (`(*consensusAdminService).SettleTrack`, `.GetTrackSettle`, `(*Server).TrackSettles`), `server/track_settle_test.go`; Modify: `server/server.go` (`Config` `:53-55`, `Deps` `:92-95`, `Server` `:134-137`, `New` `:150`, `OnLeadershipLost` `:188-189`), `server/signed_messages.go` (the comment on `consensusUpdatesDisabledMessage` `:80-85`), `server/BUILD.bazel` (gazelle: the two sources, `//orchestrator`, the test)
 - Modify: `config/config.go` (`ConsensusAdminConfig` after `MaxDrainMode` `:144-146`; `Validate` `:517`), `config/raw.go` (`rawConsensusAdminConfig` `:68-70`; `toConfig` `:144`), `config/config_test.go` (`TestLoadConsensusAdminMaxTrackSettle` appended), `configs/local.yaml` (`:12-20`), `metrics/metrics.go` (`Metrics` `:52-55`; `New` `:150-152`; after `PromotionIssuanceHeld` `:188`), `metrics/BUILD.bazel` (gazelle); Create: `metrics/track_settle_test.go`
 - Modify: `cmd/arbiter/services.go` (`serviceRuntime` `:43-44`, `serverConfig` `:89-91`, the `server.Deps` literal `:142-143`, the `orchestrator.Deps` literal `:162-163`), `cmd/arbiter/app.go` (`:82-83`, `:89`, `:107`), `cmd/arbiter/services_test.go` (`TestServerConfigCarriesTheIngressSettings` `:198`), `cmd/arbiter/main_test.go` (`applyTestDefaults` `:326`), `cmd/arbiter/BUILD.bazel` (gazelle); Create: `cmd/arbiter/track_settle_wiring_test.go` (`TestNewServerAndLoopWiresTheTrackSettles`, beside Plan S3-A's `consensus_hold_wiring_test.go`)
@@ -6550,19 +6550,19 @@ Worktree (contract §37.5): URWT `multi-source-s3d` of arbiter, branch `urwt/cla
   - Existing arbiter (`526a721`): `fsm.PendingPromotionInfo`, `(*FSM).indexerTrackLocked`, `tracksActiveLocked`, `promotionTrackLocked`, `clonePartRefs`, `(*FSM).PromotionSource`, `(*FSM).TracksActive`, `(*FSM).PromotionSeqView`; `server` `streamRegistry` (`register`, `unregister`, `streams`, `mu`), `(*consensusAdminService).quarantineAuthority` (`server/signed_messages.go`), `(*Server).consensusLeaderCheck`, `.consensusReadBarrier` (`server/consensus_admin.go`), `.raftTerm` (`server/features.go`), `carriesNotLeader` (`server/consensus_hold_rpc.go`), `strictlyAscending`, `consensusUpdatesDisabledMessage`; orchestrator `promotionTargets`, `authoritySignerReady`, `authoritySigningContext`, `handlePromotionRows`; arbiter-admin `rpcError`, `writeProtoJSON`, `dialAdmin`, `stderr`, `authorityPrivateKeyEnv`; test helpers fsm `suspendedWorkFSM`, `ownerFSMWithAuthority`, `admitQ`, `partQ`, `signedRCQ`, `promotionQ`, `quarantineQ`, `sourceAck`, `indexerSigner1`, `indexerSigner2`, `testAccount`, `lthashHex`, `mustSeal`, `mustApply`, `mustWorkSet`, `snapshotBytes`; server `newRecordingNode`, `recordingNode`, `fakeNode` (`verify`, `barrier`), `newServerTestFSM`, `startServerWithConfig`, `startServerConfig`, `activateServerTracks`, `activateServerSignedClaims`, `quarantineCommand`, `releaseCommand`, `quarantineRequest`, `serverTestAuthority`, `serverAuthorityContext`, `serverMessageContext`, `mustDirectApply`, `testAccount`, `signEnvelope`, `signStatementEnvelopeAt`, `isNotLeader`, `blockSnapshotSink`; orchestrator `tracksHarnessO`, `submitTrackStatementO`, `sealViaNode`, `drivePromotionsO`, `markReplayingViaNode`, `verifierSetOf`, `applyAttestationViaNode`, `applyScanViaNode`, `quarantineO`, `releaseO`, `postCommitmentForPromotion`, `statementIDFromFlatO`, `lthashHexO`, `messageContextO`, `authorityContextO`, `jwsPayloadO`, `sentLenO`, `sentSinceO`, `testAccountO`, `mustApplyViaNode`; cmd/arbiter `genesisTestConfig`, `applyTestDefaults`, `newFSM`, `newServerAndLoop`, `serverConfig`; cmd/arbiter-admin `fakeAdmin`, `serveAdminImpl`, `testConsensusState` (epoch 7, network `testnet`, genesis `genesis-committed`), `adminKey`, `decodeJWSPayload`; integration `startTracksCluster`, `tracksCluster.{submit, blockOf, waitIssuedUnacked, sendQuarantine, sendRelease, quarantineRequest, releaseRequest, waitTrack, waitPublished, trackState, leaderState, leaderConn, withLeaderRetry, authorityContext, proposeRegistry, failOnBackground}`, `signingSNode.{holdPromotions, start, stop, safeInventory, rejectedCleanupAcks, signer, msgCtx}`, `indexerTrack`, `indexerTrackOf`, `newAccount`, `waitFor`, `poll`, `partitionKey`, `testTable1`, `testPartition`; metrics `laneSnapshot`; Plan S3-A Task 11's throwaway tools `$HOME/si-devnet2-multisource-s3a-rehearsal/{statedigest,v20check,snapdump}/main.go` and its histories `sample14`, `sample19`, `devnet2` (with `out.new.cmp`, the `ARBITER_TAG` replay of Task 11 Step 13), and Plan S3-B Task 15's voter copies `$HOME/si-devnet2-stage3-p0/arbiter-{0,1,2}-raft.tgz`, `arbiter-{0,1,2}.yaml` with their `ARBITER_TAG` replays `digest-{0,1,2}-new.cmp` (runbook §3.3).
 - Produces:
   - fsm (contract §35.1, no Apply change): `type TrackSettleWorkView struct{ IndexerID uint64; Enrolled, Quarantined bool; QuarantineGeneration uint64; Unacked []PendingPromotionInfo }`, `func (f *FSM) TrackSettleWork(indexerID uint64) TrackSettleWorkView`.
-  - server (contract §35.2): `snodeRegistry` a struct embedding `*streamRegistry[*pb.PromotionCommand]` with `func (r *snodeRegistry) registerHello(hello *pb.SNodeHello) chan *pb.PromotionCommand` and `func (r *snodeRegistry) SettleCapable(nodeID string) bool`; `type TrackSettles struct`; `func NewTrackSettles(maxDuration time.Duration, now func() time.Time) *TrackSettles`; `(*TrackSettles).Begin(term uint64, work orchestrator.SettleWork, snodeNodeID string, timeout time.Duration) (TrackSettleRecord, error)`, `.Get(indexerID uint64) (TrackSettleRecord, bool)`, `.ActiveSettles() []orchestrator.SettleWork`, `.EndSettle(indexerID uint64, state pb.TrackSettleState)`, `.CountSend(indexerID uint64)`, `.OnLeadershipLost()`; `type TrackSettleRecord struct{ Work orchestrator.SettleWork; Term uint64; Expires time.Time; SNodeNodeID string; State pb.TrackSettleState; Sends uint64 }`; `(*consensusAdminService).SettleTrack`, `.GetTrackSettle` with contract §35.2's refusals verbatim. Added (Appendix B): `type TrackSettleMetrics interface{ TrackSettleActive(indexerID uint64, active bool); TrackSettleEnded(state string); TrackSettleSent() }`, `Config.ConsensusMaxTrackSettle time.Duration` (zero = 10m), `Deps.TrackSettleMetrics`, `func (s *Server) TrackSettles() *TrackSettles`, `defaultConsensusMaxTrackSettle = 10 * time.Minute`, `trackSettleBeforeTracksMessage`, the refusal FailedPrecondition `promotion %d of indexer %d has no expected source: %v` (between the active-settle and the capability refusals), the second leader check after `Begin` (a NotLeader answer ends the settle `LEADERSHIP_LOST`), `trackSettleToPB`, `settleUnackedSeqs`, `settleTimeout`, `trackSettleStateName`, `cloneTrackSettleRecord`, `TrackSettles.{term, metrics, refreshLocked, endLocked, currentTerm}`, `snodeRegistry.settle`.
-  - orchestrator (contract §35.3): `type SettleWork struct{ IndexerID, Generation uint64; PromotionSeqs []uint64 }`, `type SettleSource interface{ ActiveSettles() []SettleWork; EndSettle(indexerID uint64, state pb.TrackSettleState); CountSend(indexerID uint64) }`, `Deps.Settles SettleSource` (nil = no settle), `SNodeDirectory.SettleCapable(nodeID string) bool`, `func (o *Loop) handleSettles(ctx context.Context) error`; added `(*Loop).settlePromotion`, `func (o *Loop) Settles() SettleSource`.
+  - server (contract §35.2): `snodeRegistry` a struct embedding `*streamRegistry[*pb.PromotionCommand]` with `func (r *snodeRegistry) registerHello(hello *pb.SNodeHello) chan *pb.PromotionCommand`, `func (r *snodeRegistry) SettleCapable(nodeID string) bool`, `func (r *snodeRegistry) SendSettle(nodeID string, msg *pb.PromotionCommand) error` (the capability check and the enqueue on one captured subscription under one lock) and `func (r *snodeRegistry) Send(nodeID string, msg *pb.PromotionCommand) error` (refuses a settle command); `type TrackSettles struct`; `func NewTrackSettles(maxDuration time.Duration, now func() time.Time) *TrackSettles`; `(*TrackSettles).Begin(term uint64, work orchestrator.SettleWork, snodeNodeID string, timeout time.Duration) (TrackSettleRecord, error)`, `.Get(indexerID uint64) (TrackSettleRecord, bool)`, `.ActiveSettles() []orchestrator.SettleWork`, `.EndSettle(indexerID uint64, state pb.TrackSettleState)`, `.CountSend(indexerID uint64)`, `.OnLeadershipLost()`; `type TrackSettleRecord struct{ Work orchestrator.SettleWork; Term uint64; Expires time.Time; SNodeNodeID string; State pb.TrackSettleState; Sends uint64 }`; `(*consensusAdminService).SettleTrack`, `.GetTrackSettle` with contract §35.2's refusals verbatim. Added (Appendix B): `type TrackSettleMetrics interface{ TrackSettleActive(indexerID uint64, active bool); TrackSettleEnded(state string); TrackSettleSent() }`, `Config.ConsensusMaxTrackSettle time.Duration` (zero = 10m), `Deps.TrackSettleMetrics`, `func (s *Server) TrackSettles() *TrackSettles`, `defaultConsensusMaxTrackSettle = 10 * time.Minute`, `trackSettleBeforeTracksMessage`, the refusal FailedPrecondition `promotion %d of indexer %d has no expected source: %v` (between the active-settle and the capability refusals), the second leader check after `Begin` (a NotLeader answer ends the settle `LEADERSHIP_LOST`), `trackSettleToPB`, `settleUnackedSeqs`, `settleTimeout`, `trackSettleStateName`, `cloneTrackSettleRecord`, `TrackSettles.{term, metrics, refreshLocked, endLocked, currentTerm}`, `snodeRegistry.settle`, `(*streamRegistry[T]).enqueueLocked` (Appendix B, review fix 247-1).
+  - orchestrator (contract §35.3): `type SettleWork struct{ IndexerID, Generation uint64; PromotionSeqs []uint64 }`, `type SettleSource interface{ ActiveSettles() []SettleWork; EndSettle(indexerID uint64, state pb.TrackSettleState); CountSend(indexerID uint64) }`, `Deps.Settles SettleSource` (nil = no settle), `SNodeDirectory.SendSettle(nodeID string, msg *pb.PromotionCommand) error` (delivers only on a subscription that advertised settle, decided and enqueued under one lock), `func (o *Loop) handleSettles(ctx context.Context) error`; added `(*Loop).settlePromotion`, `func (o *Loop) Settles() SettleSource`.
   - config (contract §35.3): `consensus_admin.max_track_settle` (`ConsensusAdminConfig.MaxTrackSettle Duration`, default `10m`, refused unless positive: `consensus_admin.max_track_settle must be positive`).
   - metrics (contract §35.3): `arbiter_track_settle_active{indexer_id}` (gauge), `arbiter_track_settles_total{state}` (`settled|released|expired|leadership_lost`, all four exported at 0), `arbiter_track_settle_sends_total`; methods `(*Metrics).TrackSettleActive`, `.TrackSettleEnded`, `.TrackSettleSent`; `trackSettleEndStates`.
   - arbiter-admin (contract §35.4): `indexer settle --address L --indexer N --expected-generation G [--settle-timeout 10m] [--timeout 15m]`, `indexer settle-status --address L --indexer N [--timeout 10s]` (the `--timeout` flag is added, Appendix B); the refusals `indexer %d is not quarantined: nothing to settle`, `indexer %d has no issued, unacknowledged promotion: nothing to settle`, `leader does not support track settle (arbiter older than this arbiter-admin); upgrade the leader`; added `trackSettleUnsupportedMessage`, `settlePollInterval`, `runIndexerSettle`, `settleRPCError`, the exit error `track settle of indexer %d ended %s, not TRACK_SETTLE_STATE_SETTLED`, and after a `SettleTrack` answer of unknown outcome the hint `; the settle may be active on the leader: read it with indexer settle-status before retrying`.
-  - Tests (contract §35.5): fsm `TestTrackSettleWorkListsExactlyTheWithheldPromotions`; server `TestSNodeRegistryRecordsTheSettleHello`, `TestSettleTrackRefusesBeforeTheTracksActivation`, `TestSettleTrackRefusesAnUnquarantinedIndexer`, `TestSettleTrackRefusesAStaleGeneration`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesASecondSettleOfOneIndexer`, `TestSettleTrackAuthority`, `TestGetTrackSettlePreviewsTheWithheldPromotions`, `TestTrackSettleExpiresAfterItsTimeout`, `TestTrackSettleClearsOnLeadershipLoss`, `TestSettleTrackWritesNothingToTheLog`; orchestrator `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleSendsOnlyTheListedUnackedPromotionsMarkedSettle`, `TestSettleEndsSettledWhenEveryListedPromotionIsAcknowledged`, `TestSettleEndsReleasedWhenTheIndexerIsReleased`, `TestNoSettleKeepsClarificationC8`; arbiter-admin `TestIndexerSettleSignsTheLeadersPreview`, `TestIndexerSettleRefusesAnOlderLeader`, `TestIndexerSettleExitsNonZeroUnlessSettled`; integration `TestTrackSettleRecordsALostAcknowledgementFromTheJournal`, `TestTrackSettleConsumesANeverAppliedPromotionWithoutPromotingIt`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered`. Added (Appendix B): config `TestLoadConsensusAdminMaxTrackSettle`, metrics `TestTrackSettleMetrics`, cmd/arbiter `TestNewServerAndLoopWiresTheTrackSettles`. Test helpers: fsm `unackedSeqsS`, `issuedSeqsS`; server `settleClock`, `recordingSettleMetrics`, `termNode`, `settleServerPart`, `settleServerFixture`, `settleRequest`, `settleAdmin`, `serverSnapshotBytes`; orchestrator `recordingSettles`, `newRecordingSettles`, `verifyTrackBlockPartitionsS`, `settleFixtureS`, `ackWithheldPromotionS`, `settlePassS`, `fakeSNodes.settle`, `(*fakeSNodes).SettleCapable`, `.setSettleCapable`; arbiter-admin `settleLeader`, `newSettleLeader`, `settleArgs`, `fastSettlePolls`, `settleResultJSON`, `reflectEqualJSON`; integration `tracksCluster.{trackSettle, settleRequest, sendSettle, waitSettleEnded, statementStatus, settleTrackOne}`, `signingSNode.{settle, loseAcks, journal, applied, settleAnswers, applyPromotion, sendAck, answerSettle, restartWithSettle, journaledApplied, appliedCount, settleAnswerCount, safeInventoryLen}`.
+  - Tests (contract §35.5): fsm `TestTrackSettleWorkListsExactlyTheWithheldPromotions`; server `TestSNodeRegistryRecordsTheSettleHello`, `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt`, `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects`, `TestSettleTrackRefusesBeforeTheTracksActivation`, `TestSettleTrackRefusesAnUnquarantinedIndexer`, `TestSettleTrackRefusesAStaleGeneration`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesASecondSettleOfOneIndexer`, `TestSettleTrackAuthority`, `TestGetTrackSettlePreviewsTheWithheldPromotions`, `TestTrackSettleExpiresAfterItsTimeout`, `TestTrackSettleClearsOnLeadershipLoss`, `TestSettleTrackWritesNothingToTheLog`; orchestrator `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleIsNotDeliveredToAReconnectWithoutSettle`, `TestSettleSendsOnlyTheListedUnackedPromotionsMarkedSettle`, `TestSettleEndsSettledWhenEveryListedPromotionIsAcknowledged`, `TestSettleEndsReleasedWhenTheIndexerIsReleased`, `TestNoSettleKeepsClarificationC8`; arbiter-admin `TestIndexerSettleSignsTheLeadersPreview`, `TestIndexerSettleRefusesAnOlderLeader`, `TestIndexerSettleExitsNonZeroUnlessSettled`; integration `TestTrackSettleRecordsALostAcknowledgementFromTheJournal`, `TestTrackSettleConsumesANeverAppliedPromotionWithoutPromotingIt`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered`. Added (Appendix B): config `TestLoadConsensusAdminMaxTrackSettle`, metrics `TestTrackSettleMetrics`, cmd/arbiter `TestNewServerAndLoopWiresTheTrackSettles`. Test helpers: fsm `unackedSeqsS`, `issuedSeqsS`; server `settleClock`, `recordingSettleMetrics`, `termNode`, `settleServerPart`, `settleServerFixture`, `settleRequest`, `settleAdmin`, `serverSnapshotBytes`; orchestrator `recordingSettles`, `newRecordingSettles`, `verifyTrackBlockPartitionsS`, `settleFixtureS`, `ackWithheldPromotionS`, `settlePassS`, `fakeSNodes.{settle, misrouted, beforeSettleSend}`, `(*fakeSNodes).SendSettle`, `.setSettleCapable`, `.misroutedSettles`; arbiter-admin `settleLeader`, `newSettleLeader`, `settleArgs`, `fastSettlePolls`, `settleResultJSON`, `reflectEqualJSON`; integration `tracksCluster.{trackSettle, settleRequest, sendSettle, waitSettleEnded, statementStatus, settleTrackOne}`, `signingSNode.{settle, loseAcks, journal, applied, settleAnswers, applyPromotion, sendAck, answerSettle, restartWithSettle, journaledApplied, appliedCount, settleAnswerCount, safeInventoryLen}`.
   - Ledger (contract §37.2): `ARBITER_TAG_P4` (`vX.Y.Z`) and `ARBITER_DIGEST_P4` (`sha256:<64 hex>`), the run record `arbiter release (Task 51)`. Plan S3-E2 reads `ARBITER_TAG_P4`, Task 54's runbooks and Task 56 read both; the owner-rebuild runbook's §2.1 builds its own replay binaries in `$HOME/si-devnet2-stage3-p4-rehearsal` and reads nothing of `$R4`.
 
 Notes:
 - **How edits are written.** A change to an existing file shows the text to find at `526a721`, then `with:` and the text that replaces it; where a hunk only adds lines, the found text is its anchor and reappears in the replacement. New files are given whole. A `BUILD.bazel` hunk is what `bazel run //:gazelle` must produce, not a hand edit.
 - **Leader-local, never proposed (contract §33.1).** `SettleTrack` verifies leadership without a barrier (`quarantineAuthority`, the `QuarantineIndexer` precedent), decides the token age at the API (`AuthorizeSettleTrack`), checks the request against this leader's applied state and records the settle in `TrackSettles`, which lives beside Plan S3-A's `ConsensusHolds` and is never replicated; `GetTrackSettle` takes one read barrier and never mutates. The acknowledgements a settle produces are the SNode's ordinary `AckPromotion` commands, which the FSM already accepts under quarantine, `Applied:false` included (`fsm/apply.go`). `TestSettleTrackWritesNothingToTheLog` pins that no settle path proposes or changes replicated state, and Step 33 replays devnet2's log under `ARBITER_TAG` and this branch.
 - **Each pass reads the track afresh.** `handleSettles` runs at the end of `handlePromotionRows` and calls `FSM.TrackSettleWork` per active settle, so a release, a re-quarantine under another generation, an acknowledgement or a lost leadership between the RPC and the pass is seen by the pass itself; the RPC's list check (the list must be exactly the withheld promotions) only refuses a request signed against a stale preview. With no active settle, `handleSettles` returns at once and the loop sends byte for byte what it sends today (`TestNoSettleKeepsClarificationC8`). The view is defined by its rule, not by the quarantine: for a track that is not quarantined it lists the same set (its issued, unacknowledged promotions, which `WorkSet` then streams as `IssuedUnacked`), as contract §33.2 defines `unacked_promotion_seqs`; `SettleTrack` refuses such a track, and `GetTrackSettle` reports the list with `quarantined: false` (`TestTrackSettleWorkListsExactlyTheWithheldPromotions` pins both).
-- **The capability is per subscription.** `SNodeHello.settle` is recorded against the subscription's channel under the stream registry's own lock, and only while that channel is still the node's current stream, so a concurrent reconnect cannot leave a stale answer: the newer hello decides. A reconnect without the flag, the stream's end and `CloseStreams` (leadership loss) clear it (`TestSNodeRegistryRecordsTheSettleHello`). `SettleTrack` refuses unless the expected source (`FSM.PromotionSource` of the first listed promotion) currently advertises it, and the orchestrator re-checks before every send, so an SNode built before Task 50, which would apply the promotion, is never sent a settle; the integration fake records a background error if one ever arrives on a subscription that did not advertise it. An SNode or arbiter older than this plan ignores both stream fields (proto3), so a mixed rollout only means the leader never settles (contract §33.1).
+- **The capability is per subscription.** `SNodeHello.settle` is recorded against the subscription's channel under the stream registry's own lock, and only while that channel is still the node's current stream, so a concurrent reconnect cannot leave a stale answer: the newer hello decides. A reconnect without the flag, the stream's end and `CloseStreams` (leadership loss) clear it (`TestSNodeRegistryRecordsTheSettleHello`). `SettleTrack` refuses unless the expected source (`FSM.PromotionSource` of the first listed promotion) currently advertises it, and the orchestrator delivers every settle through `SendSettle`, which checks the capability and enqueues on the same captured subscription without releasing the registry's lock, so a reconnect with a hello without settle between any check and the delivery (an SNode rolled back to a release before Task 50, which would apply the promotion) never receives one; the registry's `Send` refuses a settle command, so no other path delivers one (`TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt`, `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects`, `TestSettleIsNotDeliveredToAReconnectWithoutSettle`; review fix 247-1, Appendix B); the integration fake records a background error if one ever arrives on a subscription that did not advertise it. An SNode or arbiter older than this plan ignores both stream fields (proto3), so a mixed rollout only means the leader never settles (contract §33.1).
 - **Refusal order and two additions.** `SettleTrack` refuses in contract §35.2's order. Between the active-settle check and the capability check it needs the expected source: when `PromotionSource` gives none (an error, or an unrouted answer, which cannot occur after the tracks activation) it refuses FailedPrecondition `promotion %d of indexer %d has no expected source: %v` (added, Appendix B). `Begin` checks the active settle again under its lock, so two concurrent requests cannot both begin. After `Begin` the handler checks leadership once more, as Plan S3-A's `PrepareConsensusUpdate` does after it installs a hold: a leader that stepped down within its term between the first check and `Begin` (its `OnLeadershipLost` ran before the settle existed) answers NotLeader and ends the settle `LEADERSHIP_LOST`; any other failure of that check leaves the settle running and returns the error, and the CLI then says to read it with `settle-status`. `GetTrackSettle` refuses before the tracks activation before its barrier and answers NotFound `indexer %d is not enrolled` after it, so a just-enrolled indexer is read from fresh state; its `snode_settle_capable` is the SNode's capability at the read, not at `Begin`.
 - **Ending.** `SETTLED` and `RELEASED` are the orchestrator's decisions; `EXPIRED` and `LEADERSHIP_LOST` are the registry's, checked on every access (`ActiveSettles` runs every orchestrator pass, `Get` on every read), so a deadline or a moved Raft term (`server.raftTerm`; a node without a term reader records 0, as the hold registry does) ends the settle no later than the next pass or read; `Server.OnLeadershipLost` ends every active one. `timeout_ms` 0 selects `consensus_admin.max_track_settle` and a larger value, including one no `time.Duration` holds, is capped to it. The last record per indexer stays readable until the next `Begin`.
 - **Hand-built configurations.** `Validate` now requires a positive `consensus_admin.max_track_settle`, so the three hand-built `config.Config` values (`integration/cluster_test.go`, `integration/chpipeline/cluster_test.go`, `cmd/arbiter/main_test.go`'s `applyTestDefaults`) carry `10m` beside Plan S3-A's two hold caps; `server.Config` built without it (every other construction site) gets the default. `integration/cluster_node_test.go` is the one test harness that wires `Deps.Settles`, as `cmd/arbiter` does; the chpipeline harness keeps a nil source (no settle).
@@ -6996,16 +6996,178 @@ func TestSNodeRegistryRecordsTheSettleHello(t *testing.T) {
 	s.OnLeadershipLost()
 	waitSettleCapable(false)
 }
+
+// TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt: plan
+// S3-D K53. The leader checks the capability and enqueues a settle on one
+// captured subscription under one lock: when the SNode reconnects with a hello
+// without settle (an older SNode after a rollback) after the check said
+// settle-capable and before the send, the settle is refused and neither the
+// replaced stream nor the new one holds it. The generic Send never delivers a
+// settle, and SendSettle never delivers an ordinary command.
+func TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt(t *testing.T) {
+	// Given: s1 subscribed advertising settle, and the capability check passed.
+	r := newSNodeRegistry(nil)
+	settle := &pb.PromotionCommand{Settle: true, AuthorityJws: "settle"}
+	plain := &pb.PromotionCommand{AuthorityJws: "plain"}
+	advertised := r.registerHello(&pb.SNodeHello{NodeId: "s1", Settle: true})
+	if !r.SettleCapable("s1") {
+		t.Fatal("a hello with settle did not make s1 settle-capable")
+	}
+
+	// When: s1 reconnects without settle between that check and the send.
+	reconnected := r.registerHello(&pb.SNodeHello{NodeId: "s1"})
+	err := r.SendSettle("s1", settle)
+
+	// Then: the settle is refused and reaches neither stream.
+	if err == nil || !strings.Contains(err.Error(), `subscriber "s1": its current subscription does not advertise settle`) {
+		t.Fatalf("SendSettle after a reconnect without settle = %v, want the capability refusal", err)
+	}
+	if len(reconnected) != 0 {
+		t.Fatalf("the reconnect without settle holds %d commands, want none", len(reconnected))
+	}
+	if msg, open := <-advertised; open {
+		t.Fatalf("the replaced stream is still open and holds %v", msg)
+	}
+	if err := r.Send("s1", settle); err == nil || !strings.Contains(err.Error(), `subscriber "s1": a settle command goes through SendSettle`) {
+		t.Fatalf("Send of a settle command = %v, want a refusal", err)
+	}
+	if len(reconnected) != 0 {
+		t.Fatal("Send delivered a settle command")
+	}
+	if err := r.Send("s1", plain); err != nil {
+		t.Fatalf("Send of an ordinary command: %v", err)
+	}
+	if got := <-reconnected; got != plain {
+		t.Fatalf("the reconnect received %v, want the ordinary command", got)
+	}
+
+	// When: s1 reconnects advertising settle again.
+	again := r.registerHello(&pb.SNodeHello{NodeId: "s1", Settle: true})
+
+	// Then: the settle lands on that subscription only, and SendSettle
+	// refuses what is not a settle and a node that is not connected.
+	if err := r.SendSettle("s1", settle); err != nil {
+		t.Fatalf("SendSettle to a settle-capable subscription: %v", err)
+	}
+	if got := <-again; got != settle {
+		t.Fatalf("the settle-capable subscription received %v, want the settle", got)
+	}
+	if err := r.SendSettle("s1", plain); err == nil || !strings.Contains(err.Error(), `subscriber "s1": SendSettle sends only settle commands`) {
+		t.Fatalf("SendSettle of an ordinary command = %v, want a refusal", err)
+	}
+	if err := r.SendSettle("s2", settle); err == nil || !strings.Contains(err.Error(), `subscriber "s2" not connected`) {
+		t.Fatalf("SendSettle to a node that never subscribed = %v, want not connected", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("the settle-capable subscription holds %d unexpected commands", len(again))
+	}
+}
+
+// TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects:
+// the same guarantee under concurrency. While s1 reconnects 2000 times,
+// alternating hellos with and without settle, the leader keeps sending
+// settles; afterwards no subscription whose hello lacked settle holds one,
+// which a SendSettle that released its lock between the check and the
+// enqueue would break.
+func TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects(t *testing.T) {
+	r := newSNodeRegistry(nil)
+	type opened struct {
+		ch     chan *pb.PromotionCommand
+		settle bool
+	}
+	var subs []opened
+	start, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		<-start
+		for i := 0; i < 2000; i++ {
+			settle := i%2 == 0
+			subs = append(subs, opened{ch: r.registerHello(&pb.SNodeHello{NodeId: "s1", Settle: settle}), settle: settle})
+		}
+	}()
+	close(start)
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+			_ = r.SendSettle("s1", &pb.PromotionCommand{Settle: true})
+		}
+	}
+	for i, sub := range subs {
+		if sub.settle {
+			continue
+		}
+		for n := len(sub.ch); n > 0; n-- {
+			if msg := <-sub.ch; msg.GetSettle() {
+				t.Fatalf("subscription %d, whose hello did not carry settle, holds a settle command", i)
+			}
+		}
+	}
+}
 ```
 
 - [ ] **Step 9: Run it and see it fail**
 
-Run: `W=<path>; cd "$W" && GOWORK=off go test ./server/ -run TestSNodeRegistryRecordsTheSettleHello -count=1`
-Expected: the test binary does not build: `server/registry_test.go:145:26: s.SNodeDirectory().SettleCapable undefined (type *snodeRegistry has no field or method SettleCapable)` and the same for the test's other four calls.
+Run: `W=<path>; cd "$W" && GOWORK=off go test ./server/ -run 'TestSNodeRegistry' -count=1`
+Expected: the test binary does not build: `server/registry_test.go:145:26: s.SNodeDirectory().SettleCapable undefined (type *snodeRegistry has no field or method SettleCapable)` and the same for the first test's other four calls, then `server/registry_test.go:207:18: r.registerHello undefined (type *snodeRegistry has no field or method registerHello)` and the second test's uses of `registerHello`, `SettleCapable` and `SendSettle`, until `too many errors`.
 
 - [ ] **Step 10: Record the settle hello**
 
-In `server/registry.go`, replace the two registry aliases and constructors (`:124-133`):
+In `server/registry.go`, let `Send` share its enqueue with the settle send below, replacing `Send` (`:65-83`):
+
+```go
+func (r *streamRegistry[T]) Send(id string, msg T) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	sub, ok := r.streams[id]
+	if !ok {
+		return fmt.Errorf("subscriber %q not connected", id)
+	}
+	select {
+	case sub.ch <- msg:
+		return nil
+	default:
+		if r.metrics != nil && r.kind != nil {
+			r.metrics.StreamSendDropped(r.name, r.kind(msg))
+		}
+		return fmt.Errorf("subscriber %q send buffer full", id)
+	}
+}
+```
+
+with:
+
+```go
+func (r *streamRegistry[T]) Send(id string, msg T) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	sub, ok := r.streams[id]
+	if !ok {
+		return fmt.Errorf("subscriber %q not connected", id)
+	}
+	return r.enqueueLocked(id, sub, msg)
+}
+
+// enqueueLocked queues msg on sub, id's current stream, without blocking: a
+// full buffer drops it. r.mu must be held from the lookup of sub on, so sub is
+// still current and its channel open.
+func (r *streamRegistry[T]) enqueueLocked(id string, sub subscription[T], msg T) error {
+	select {
+	case sub.ch <- msg:
+		return nil
+	default:
+		if r.metrics != nil && r.kind != nil {
+			r.metrics.StreamSendDropped(r.name, r.kind(msg))
+		}
+		return fmt.Errorf("subscriber %q send buffer full", id)
+	}
+}
+```
+
+and replace the two registry aliases and constructors (`:124-133`):
 
 ```go
 type verifierRegistry = streamRegistry[*pb.VerifierDispatch]
@@ -7031,7 +7193,8 @@ type verifierRegistry = streamRegistry[*pb.VerifierDispatch]
 // S3-D K53) marks an SNode that answers PromotionCommand.settle from its
 // journal. The flag belongs to one stream: a reconnect replaces it, and an
 // SNode built before settles existed never sends it, so the leader never
-// sends it a settle.
+// sends it a settle: SendSettle checks the flag and enqueues on the same
+// stream under one lock, and Send refuses a settle command.
 type snodeRegistry struct {
 	*streamRegistry[*pb.PromotionCommand]
 
@@ -7070,12 +7233,42 @@ func (r *snodeRegistry) registerHello(hello *pb.SNodeHello) chan *pb.PromotionCo
 
 // SettleCapable reports whether nodeID's current subscription advertised
 // settle. A subscription that ended, or one replaced by a reconnect whose
-// hello did not carry it, is not.
+// hello did not carry it, is not. It answers for this moment only: the
+// leader delivers a settle with SendSettle, never after this check.
 func (r *snodeRegistry) SettleCapable(nodeID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur, ok := r.streams[nodeID]
 	return ok && r.settle[nodeID] == cur.ch
+}
+
+// Send queues an ordinary promotion or cleanup command on nodeID's current
+// stream. It refuses a settle command: only SendSettle delivers one.
+func (r *snodeRegistry) Send(nodeID string, msg *pb.PromotionCommand) error {
+	if msg.GetSettle() {
+		return fmt.Errorf("subscriber %q: a settle command goes through SendSettle", nodeID)
+	}
+	return r.streamRegistry.Send(nodeID, msg)
+}
+
+// SendSettle queues a settle command on nodeID's current stream only if that
+// stream's hello advertised settle. The check and the enqueue hold one lock
+// over one captured subscription, so a reconnect without settle (an SNode
+// that would apply the promotion) can never receive it.
+func (r *snodeRegistry) SendSettle(nodeID string, msg *pb.PromotionCommand) error {
+	if !msg.GetSettle() {
+		return fmt.Errorf("subscriber %q: SendSettle sends only settle commands", nodeID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cur, ok := r.streams[nodeID]
+	if !ok {
+		return fmt.Errorf("subscriber %q not connected", nodeID)
+	}
+	if r.settle[nodeID] != cur.ch {
+		return fmt.Errorf("subscriber %q: its current subscription does not advertise settle", nodeID)
+	}
+	return r.enqueueLocked(nodeID, cur, msg)
 }
 
 ```
@@ -7094,12 +7287,12 @@ with:
 	defer svc.s.snodes.unregister(id, ch)
 ```
 
-The struct embeds the registry, so `Send`, `Connected`, `Subscriptions`, `register`, `unregister` and `closeAll` keep working everywhere (`cmd/arbiter` still hands `srv.SNodeDirectory()` to the orchestrator, which now also needs `SettleCapable`: Step 14). One mutex, the stream registry's, guards both maps, so no lock order can invert.
+The struct embeds the registry, so `Connected`, `Subscriptions`, `register`, `unregister` and `closeAll` keep working everywhere, and `Send` does for every ordinary command (`cmd/arbiter` still hands `srv.SNodeDirectory()` to the orchestrator, which now also needs `SendSettle`: Step 14). One mutex, the stream registry's, guards both maps, so no lock order can invert. The capability is decided where the settle is enqueued: `SendSettle` looks the node's current subscription up, compares its channel with the recorded settle hello and queues the command on that same channel without releasing the lock, so a reconnect without settle between the leader's decision and the delivery (an SNode rolled back to a release that would apply the promotion) receives nothing; `SettleCapable` is only a read for the RPC's up-front refusal and `GetTrackSettle`, and `Send` refuses a settle command, so no path delivers one after a separate check.
 
 - [ ] **Step 11: Run it and see it pass; commit**
 
-Run: `W=<path>; cd "$W" && test -z "$(gofmt -l server)" && GOWORK=off go test ./server/ -count=1 && GOWORK=off go build ./... && bazel test //server:server_test --test_output=errors`
-Expected: `TestSNodeRegistryRecordsTheSettleHello` and every server test PASS (`TestPromotionSubscribe_PushAndLeadershipTeardown`, `TestStreamRegistry_ReconnectGetsANewSubscription` and `TestStreamRegistry_LabelsPromotionCommandKinds` unchanged); the module builds; the Bazel target PASSes (no BUILD change).
+Run: `W=<path>; cd "$W" && test -z "$(gofmt -l server)" && GOWORK=off go test ./server/ -count=1 && GOWORK=off go test -race ./server/ -run 'TestSNodeRegistry' -count=3 && GOWORK=off go build ./... && bazel test //server:server_test --test_output=errors`
+Expected: `TestSNodeRegistryRecordsTheSettleHello`, `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt`, `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects` and every server test PASS (`TestPromotionSubscribe_PushAndLeadershipTeardown`, `TestStreamRegistry_ReconnectGetsANewSubscription`, `TestStreamRegistry_CountsDroppedSendsByStreamAndKind` and `TestStreamRegistry_LabelsPromotionCommandKinds` unchanged), the three registry tests three times under the race detector; the module builds; the Bazel target PASSes (no BUILD change).
 
 ```bash
 W=<path>
@@ -7110,14 +7303,18 @@ The SNode registry remembers, per subscription, whether its hello
 carried SNodeHello.settle, under the stream registry's own lock and
 only for the node's current stream, and SettleCapable reports it for
 that stream only: a reconnect without it, the stream's end and the
-leadership teardown clear it (plan S3-D K53, contract §35.2).
+leadership teardown clear it. SendSettle checks that flag and queues
+the settle on the same captured subscription under one lock, so a
+reconnect without settle between the check and the send never
+receives it, and Send refuses a settle command (plan S3-D K53,
+contract §35.2).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 12: Write the failing orchestrator tests**
 
-In `orchestrator/orchestrator_fakes_test.go`, replace `fakeSNodes` (`:160-166`):
+In `orchestrator/orchestrator_fakes_test.go`, replace `fakeSNodes` and its `Send` (`:160-174`):
 
 ```go
 type fakeSNodes struct {
@@ -7126,6 +7323,14 @@ type fakeSNodes struct {
 	sent      []*pb.PromotionCommand
 	// to[i] is the node sent[i] was addressed to.
 	to []string
+}
+
+func (s *fakeSNodes) Send(id string, msg *pb.PromotionCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sent = append(s.sent, msg)
+	s.to = append(s.to, id)
+	return nil
 }
 ```
 
@@ -7141,6 +7346,25 @@ type fakeSNodes struct {
 	// settle names the SNodes whose current subscription advertised
 	// SNodeHello.settle (plan S3-D K53); nil means none does.
 	settle map[string]bool
+	// misrouted holds every settle command that reached Send instead of
+	// SendSettle: the server's registry refuses those.
+	misrouted []*pb.PromotionCommand
+	// beforeSettleSend, when set, runs at the start of every SendSettle,
+	// outside the lock: a test reconnects the SNode there, after the
+	// orchestrator decided to send and before the delivery.
+	beforeSettleSend func(id string)
+}
+
+func (s *fakeSNodes) Send(id string, msg *pb.PromotionCommand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if msg.GetSettle() {
+		s.misrouted = append(s.misrouted, msg)
+		return fmt.Errorf("subscriber %q: a settle command goes through SendSettle", id)
+	}
+	s.sent = append(s.sent, msg)
+	s.to = append(s.to, id)
+	return nil
 }
 ```
 
@@ -7163,10 +7387,27 @@ func (s *fakeSNodes) Connected() []string {
 	return append([]string(nil), s.connected...)
 }
 
-func (s *fakeSNodes) SettleCapable(id string) bool {
+// SendSettle records a settle command as sent to id only while id's
+// subscription advertises settle, deciding and recording under one lock as
+// the server's registry does.
+func (s *fakeSNodes) SendSettle(id string, msg *pb.PromotionCommand) error {
+	s.mu.Lock()
+	hook := s.beforeSettleSend
+	s.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.settle[id]
+	if !msg.GetSettle() {
+		return fmt.Errorf("subscriber %q: SendSettle sends only settle commands", id)
+	}
+	if !s.settle[id] {
+		return fmt.Errorf("subscriber %q: its current subscription does not advertise settle", id)
+	}
+	s.sent = append(s.sent, msg)
+	s.to = append(s.to, id)
+	return nil
 }
 
 // setSettleCapable marks id's subscription as advertising settle or not.
@@ -7177,6 +7418,13 @@ func (s *fakeSNodes) setSettleCapable(id string, capable bool) {
 		s.settle = map[string]bool{}
 	}
 	s.settle[id] = capable
+}
+
+// misroutedSettles counts the settle commands that reached Send.
+func (s *fakeSNodes) misroutedSettles() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.misrouted)
 }
 ```
 
@@ -7386,6 +7634,40 @@ func TestSettleStreamsOnlyToASettleCapableSNode(t *testing.T) {
 	}
 }
 
+// TestSettleIsNotDeliveredToAReconnectWithoutSettle: plan S3-D K53. s1's
+// subscription advertised settle when the pass decided to settle promotions
+// 1 and 2, and s1 reconnects with a hello without settle (an older SNode
+// after a rollback) before each delivery: nothing is sent, nothing is
+// counted, and no settle goes through Send. The capability is decided by the
+// delivery itself, on the subscription that would receive the command. Once
+// s1 advertises settle again, the next pass delivers both.
+func TestSettleIsNotDeliveredToAReconnectWithoutSettle(t *testing.T) {
+	f, _, fsn, o, _ := settleFixtureS(t)
+	settles := newRecordingSettles(SettleWork{IndexerID: 1, Generation: 1, PromotionSeqs: []uint64{1, 2}})
+	o.d.Settles = settles
+	fsn.setSettleCapable("s1", true)
+	deliveries := 0
+	fsn.beforeSettleSend = func(id string) {
+		deliveries++
+		fsn.setSettleCapable(id, false)
+	}
+	if msgs, _ := settlePassS(t, o, f, fsn); len(msgs) != 0 || settles.sendCount(1) != 0 {
+		t.Fatalf("a settle reached s1's reconnect without settle: %v (counted %d)", msgs, settles.sendCount(1))
+	}
+	if deliveries != 2 || fsn.misroutedSettles() != 0 {
+		t.Fatalf("the pass tried %d settle deliveries and routed %d settles through Send; want 2 and 0", deliveries, fsn.misroutedSettles())
+	}
+	if _, ended := settles.endedAs(1); ended {
+		t.Fatal("the settle ended although nothing was delivered")
+	}
+	fsn.beforeSettleSend = nil
+	fsn.setSettleCapable("s1", true)
+	msgs, targets := settlePassS(t, o, f, fsn)
+	if len(msgs) != 2 || settles.sendCount(1) != 2 || targets[0] != "s1" || targets[1] != "s1" || fsn.misroutedSettles() != 0 {
+		t.Fatalf("after a settle hello the pass sent %v to %v (counted %d), want both promotions as settles to s1", msgs, targets, settles.sendCount(1))
+	}
+}
+
 // TestSettleSendsOnlyTheListedUnackedPromotionsMarkedSettle: each pass sends
 // exactly the listed promotions that are still unacknowledged, each the
 // issued command re-signed under the current authority context with settle
@@ -7548,10 +7830,13 @@ with:
 type SNodeDirectory interface {
 	Send(nodeID string, msg *pb.PromotionCommand) error
 	Connected() []string
-	// SettleCapable reports whether nodeID's current promotion subscription
-	// advertised SNodeHello.settle: only such an SNode answers a settle from
-	// its journal instead of applying the promotion (plan S3-D K53).
-	SettleCapable(nodeID string) bool
+	// SendSettle sends a settle command (PromotionCommand.settle set) to
+	// nodeID's current promotion subscription only if that subscription's
+	// hello advertised SNodeHello.settle, deciding and enqueueing under one
+	// lock, so a reconnect cannot slip between the check and the send: only
+	// such an SNode answers a settle from its journal instead of applying the
+	// promotion (plan S3-D K53). An error means nothing was sent.
+	SendSettle(nodeID string, msg *pb.PromotionCommand) error
 }
 
 // SettleWork is one active leader-local settle of a quarantined track
@@ -7663,9 +7948,10 @@ import (
 // release or a generation change ends the settle RELEASED, an acknowledgement
 // of every listed promotion ends it SETTLED; otherwise each listed promotion
 // that is still unacknowledged is re-signed under the current authority
-// context and sent, with settle set, only to its expected source and only
-// while that SNode's subscription advertised settle. It never issues,
-// re-bases or schedules anything, and with no active settle it sends nothing.
+// context and sent, with settle set, only to its expected source and only on
+// a subscription of that SNode that advertised settle (SNodes.SendSettle
+// decides that and enqueues under one lock). It never issues, re-bases or
+// schedules anything, and with no active settle it sends nothing.
 func (o *Loop) handleSettles(ctx context.Context) error {
 	if o.d.Settles == nil {
 		return nil
@@ -7707,8 +7993,8 @@ func (o *Loop) handleSettles(ctx context.Context) error {
 }
 
 // settlePromotion re-signs one listed promotion exactly as streamPromotion
-// does and sends it marked settle to its expected source, counting each send
-// the SNode's stream accepted.
+// does and sends it marked settle to its expected source through SendSettle,
+// counting each send the SNode's stream accepted.
 func (o *Loop) settlePromotion(ctx context.Context, indexerID uint64, cmd arbiter.PromoteSafePartition) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -7733,15 +8019,12 @@ func (o *Loop) settlePromotion(ctx context.Context, indexerID uint64, cmd arbite
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !o.d.SNodes.SettleCapable(id) {
-			// An SNode that does not advertise settle would apply the
-			// promotion: never send it one.
-			o.d.Logger.Warn("settle not sent: the SNode's subscription does not advertise settle", "snode", id,
-				"indexer_id", indexerID, "promotion_seq", cmd.PromotionSeq)
-			continue
-		}
-		if err := o.d.SNodes.Send(id, msg); err != nil {
-			o.d.Logger.Warn("settle send failed", "snode", id, "promotion_seq", cmd.PromotionSeq, "err", err)
+		// An SNode that does not advertise settle would apply the promotion:
+		// SendSettle checks the capability of the very subscription it
+		// enqueues on, so a reconnect without settle never receives one.
+		if err := o.d.SNodes.SendSettle(id, msg); err != nil {
+			o.d.Logger.Warn("settle not sent", "snode", id, "indexer_id", indexerID,
+				"promotion_seq", cmd.PromotionSeq, "err", err)
 			continue
 		}
 		o.d.Settles.CountSend(indexerID)
@@ -7783,7 +8066,7 @@ with:
 - [ ] **Step 15: Run them and see them pass; commit**
 
 Run: `W=<path>; cd "$W" && test -z "$(gofmt -l orchestrator)" && GOWORK=off go test ./orchestrator/ -count=1 && GOWORK=off go build ./... && bazel run //:gazelle && git -C "$W" status --short && bazel test //orchestrator:orchestrator_test --test_output=errors`
-Expected: the five settle tests and every other orchestrator test PASS, the C8 tests of `tracks_test.go` and `rejected_cleanup_test.go` and Plan S3-A's `issuance_gate_test.go` unchanged; the module builds (the server's SNode registry has `SettleCapable` since Step 10; `cmd/arbiter` and both integration harnesses leave `Deps.Settles` nil until Steps 22 and 30); `git status` lists the six orchestrator files and `orchestrator/BUILD.bazel`; the Bazel target PASSes.
+Expected: the six settle tests and every other orchestrator test PASS, the C8 tests of `tracks_test.go` and `rejected_cleanup_test.go` and Plan S3-A's `issuance_gate_test.go` unchanged; the module builds (the server's SNode registry has `SendSettle` since Step 10; `cmd/arbiter` and both integration harnesses leave `Deps.Settles` nil until Steps 22 and 30); `git status` lists the six orchestrator files and `orchestrator/BUILD.bazel`; the Bazel target PASSes.
 
 ```bash
 W=<path>
@@ -7794,8 +8077,9 @@ handleSettles, at the end of every promotion pass, reads each active
 settle's track afresh: a release or a generation change ends it
 RELEASED, an acknowledgement of every listed promotion ends it SETTLED,
 and otherwise each listed, still unacknowledged promotion is re-signed
-and sent marked settle to its expected source, only while that SNode's
-subscription advertises settle. It never issues, re-bases or schedules
+and sent marked settle to its expected source through SendSettle, which
+delivers only on a subscription that advertises settle, checked and
+enqueued under one lock. It never issues, re-bases or schedules
 anything; with no active settle the loop is unchanged (clarification
 C8; plan S3-D K53, contract §35.3).
 
@@ -10670,7 +10954,7 @@ with:
 
 Plan S3-D of housegate spec 2026-10-14 (stage 3, phase P4; §14 "Exits from the release refusals") changes no consensus format: no Raft command, field, snapshot byte or feature string moves, so a voter on this release replays today's log to the same state and writes the same snapshot, and every component can be rolled back. A quarantined track's issued, unacknowledged promotions are never streamed again until its release (clarification C8), so a promotion whose acknowledgement was lost stays unacknowledged for good, and a rejected statement it covers keeps the release refused (`release of indexer N refused: rejected statement S of block B is covered by unacknowledged promotion P`). A *track settle* is the one exception: the authority asks the leader to stream exactly those promotions to the track's SNode, marked `PromotionCommand.settle`, and the SNode answers each from its journal only, never applying it: it resends a journaled acknowledgement, finishes a promotion it had published, or answers `Applied:false` with detail `settle: promotion <seq> was not applied on this SNode`. The FSM accepts both under quarantine: an `Applied:false` answer consumes the promotion, which clears that release refusal (the orchestrator issues the parts again after the release), while an applied one records the acknowledgement that was lost, after which a rejected statement it covers is refused as `has promoted parts` instead, which never clears.
 
-**Leader-local.** Nothing on the settle path is proposed: `ConsensusAdmin.SettleTrack` and `GetTrackSettle` are not Raft commands, the settle registry lives on the leader beside the consensus hold and is never replicated, and the acknowledgements the SNode sends are the ordinary `AckPromotion` commands. An SNode advertises that it answers settles in its `SNodeHello.settle`; the flag belongs to its current subscription, and an SNode built before settles existed never sends it and is never sent a settle (it would apply the promotion).
+**Leader-local.** Nothing on the settle path is proposed: `ConsensusAdmin.SettleTrack` and `GetTrackSettle` are not Raft commands, the settle registry lives on the leader beside the consensus hold and is never replicated, and the acknowledgements the SNode sends are the ordinary `AckPromotion` commands. An SNode advertises that it answers settles in its `SNodeHello.settle`; the flag belongs to its current subscription, and an SNode built before settles existed never sends it and is never sent a settle (it would apply the promotion). The leader checks the flag and queues the settle on the same subscription under one lock, so an SNode that reconnects without the flag (a rollback) receives none, and an ordinary send refuses a settle command.
 
 **Request.** `SettleTrack{indexer_id, expected_generation, promotion_seqs, authority_jws, timeout_ms}` carries an ES256K JWS (purpose `arbiter-settle-track-v1`) by a current authority address over `{indexer_id, expected_generation, promotion_seqs}`, bound to the network id, genesis snapshot id and authority epoch, and no older than `consensus_admin.max_token_age`. The leader refuses, in this order: `consensus_updates_enabled` false (`consensus parameter updates are disabled; …`); before the tracks activation (`track settle requires the tracks activation`); a list that is empty or not strictly ascending; a token that is not a JWS; a follower (NotLeader); a token the authority check refuses (`track settle authority: …`); an indexer without a track (`indexer N is not enrolled`); an indexer that is not quarantined (`… its promotions are streamed without a settle`); another quarantine generation (`indexer N has quarantine generation G, not E`); a list that is not exactly the track's issued, unacknowledged promotions; a settle of the indexer already active; a promotion without an expected source; and an SNode whose current promotion subscription did not advertise `SNodeHello.settle` (`the SNode S of indexer N is not connected with settle support; run a release that answers settles`). After it records the settle the leader checks its leadership once more and ends the settle `LEADERSHIP_LOST` if it stepped down meanwhile.
 
@@ -10828,7 +11112,7 @@ Stage 3 P4 of the multi-source storage-integrity network, arbiter half of the tr
 
 - Pins arbiter-core `<CORE_TAG_P4>` (the settle authority, wire converters and the settle-answering SNode; it requires exactly the two pins below), housegate `<HG_TAG_P3>` and arbiter-proto `<PROTO_TAG_P4>` (`ConsensusAdmin.SettleTrack` / `GetTrackSettle`, `PromotionCommand.settle`, `SNodeHello.settle`, none reachable from a Raft command).
 - `fsm.TrackSettleWork`: a quarantined track's issued, unacknowledged promotions, exactly what clarification C8 withholds. A read only.
-- The SNode registry records whether each subscription's hello advertised settle; `SettleTrack` (authority-signed, `arbiter-settle-track-v1`, the list exactly the withheld promotions, at the signed quarantine generation, towards a settle-capable SNode) records a leader-local settle beside the consensus hold and checks leadership again; the orchestrator streams the listed promotions marked settle until each is acknowledged; a settle ends `settled`, `released`, `expired` (`consensus_admin.max_track_settle`, default 10m) or `leadership_lost`. `GetTrackSettle` reads it or the preview behind one barrier.
+- The SNode registry records whether each subscription's hello advertised settle; `SettleTrack` (authority-signed, `arbiter-settle-track-v1`, the list exactly the withheld promotions, at the signed quarantine generation, towards a settle-capable SNode) records a leader-local settle beside the consensus hold and checks leadership again; the orchestrator streams the listed promotions marked settle until each is acknowledged, through the registry's `SendSettle`, which checks the capability and enqueues on one subscription under one lock (a reconnect without `settle` never receives one); a settle ends `settled`, `released`, `expired` (`consensus_admin.max_track_settle`, default 10m) or `leadership_lost`. `GetTrackSettle` reads it or the preview behind one barrier.
 - Metrics `arbiter_track_settle_active{indexer_id}`, `arbiter_track_settles_total{state}`, `arbiter_track_settle_sends_total`.
 - `arbiter-admin indexer settle` (signs the leader's preview, polls, exits 0 only when settled) and `indexer settle-status`.
 - Integration: `TestTrackSettleRecordsALostAcknowledgementFromTheJournal`, `TestTrackSettleConsumesANeverAppliedPromotionWithoutPromotingIt`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered`.
@@ -17340,16 +17624,23 @@ si_keeper_state() { # one line per clickhouse-keeper-extra replica: server state
     printf 'keeper-%s %s\n' "$n" "$(si_keeper_at "$n" 'flwc mntr' | awk '$1 ~ /^zk_(server_state|synced_followers|num_alive_connections|outstanding_requests)$/ {printf "%s=%s ", $1, $2}')"
   done
 }
-si_keeper_client_errors() { # $1 RFC 3339 UTC start: every Keeper client ClickHouse pod (the clickhouse-extra pods and the six SI ClickHouses) whose log shows Keeper session errors since then, with their count
-  local ns sel p n
+si_keeper_client_errors() { # $1 RFC 3339 UTC start: every Keeper client ClickHouse pod (the clickhouse-extra pods and the six SI ClickHouses) whose log shows Keeper session errors since then, with their count; fails, naming what it could not read on stderr, when a pod list cannot be read or is empty or a pod's log cannot be read or searched, so §8.3's watch aborts instead of reading silence as health
+  local ns sel pods p n log err
+  log="$(mktemp)"
+  err="$(mktemp)"
   for ns in clickhouse sentio-network-devnet2; do
     sel=clickhouse.altinity.com/chi=clickhouse-extra
     [ "$ns" = clickhouse ] || sel='clickhouse.altinity.com/chi in (storage-integrity-si-v2,storage-integrity-si-v2-indexer-b,storage-integrity-si-v2-indexer-c)'
-    kubectl --context sentio-sea -n "$ns" get pods -l "$sel" -o name | while read -r p; do
-      n="$(kubectl --context sentio-sea -n "$ns" logs "$p" --all-containers=true --since-time="$1" 2>/dev/null | grep -cE 'ZSESSIONEXPIRED|Session expired|ZCONNECTIONLOSS|Connection loss' || true)"
-      [ "${n:-0}" = 0 ] || printf '%s/%s %s\n' "$ns" "${p#pod/}" "$n"
+    pods="$(kubectl --context sentio-sea -n "$ns" get pods -l "$sel" -o name 2> "$err")" || { echo "cannot list the Keeper client pods of $ns: $(head -n 1 "$err")" >&2; rm -f "$log" "$err"; return 1; }
+    [ -n "$pods" ] || { echo "no Keeper client pod in $ns matches $sel" >&2; rm -f "$log" "$err"; return 1; }
+    for p in $pods; do
+      kubectl --context sentio-sea -n "$ns" logs "$p" --all-containers=true --since-time="$1" > "$log" 2> "$err" || { echo "cannot read the log of $ns/${p#pod/}: $(head -n 1 "$err")" >&2; rm -f "$log" "$err"; return 1; }
+      # grep -c prints 0 and exits 1 when nothing matches: only that status, after a log read that succeeded, is a clean log
+      n="$(grep -cE 'ZSESSIONEXPIRED|Session expired|ZCONNECTIONLOSS|Connection loss' "$log")" || [ "$?" = 1 ] || { echo "cannot search the log of $ns/${p#pod/}" >&2; rm -f "$log" "$err"; return 1; }
+      [ "$n" = 0 ] || printf '%s/%s %s\n' "$ns" "${p#pod/}" "$n"
     done
   done
+  rm -f "$log" "$err"
 }
 si_placement() { # $1 optional file name under $si_backup (default placement.tsv): writes the placement of the six SI ClickHouses (installation, cluster, role, pod, node, data volume's node, pin) and prints the D39 verdict lines; fails on a stop
   local work out="$si_backup/${1:-placement.tsv}" sel='clickhouse.altinity.com/chi in (storage-integrity-si-v2,storage-integrity-si-v2-indexer-b,storage-integrity-si-v2-indexer-c)'
@@ -17403,11 +17694,14 @@ si_cnp_apply() { # $1 policy, $2 observe|enforce: a write, only in a confirmed b
   echo "$1 did not become valid in mode $2 within a minute: ${v:-unreadable}" >&2
   return 1
 }
-si_cnp_drops() { # $1 RFC 3339 UTC start: every flow Hubble dropped by policy since then towards an SI ClickHouse or clickhouse-keeper-extra pod, from the Cilium agent of each node that runs one; TSV time, source, destination, port, reason
+si_cnp_drops() { # $1 RFC 3339 UTC start: every flow Hubble dropped by policy since then towards an SI ClickHouse or clickhouse-keeper-extra pod, from the Cilium agent of each node that runs one; TSV time, source, destination, port, reason; fails when either pod list cannot be read or names no node, or an agent cannot be read
   local node agent work
   work="$(mktemp -d)"
-  { si_kubectl get pods -l 'clickhouse.altinity.com/chi in (storage-integrity-si-v2,storage-integrity-si-v2-indexer-b,storage-integrity-si-v2-indexer-c)' -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'
-    kubectl --context sentio-sea -n clickhouse get pods -l clickhouse-keeper.altinity.com/chk=clickhouse-keeper-extra -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}'; } | LC_ALL=C sort -u > "$work/nodes" || return 1
+  si_kubectl get pods -l 'clickhouse.altinity.com/chi in (storage-integrity-si-v2,storage-integrity-si-v2-indexer-b,storage-integrity-si-v2-indexer-c)' -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' > "$work/nodes-si" || return 1
+  kubectl --context sentio-sea -n clickhouse get pods -l clickhouse-keeper.altinity.com/chk=clickhouse-keeper-extra -o jsonpath='{range .items[*]}{.spec.nodeName}{"\n"}{end}' > "$work/nodes-keeper" || return 1
+  grep -q . "$work/nodes-si" || { echo "no node runs an SI ClickHouse pod: no Cilium agent to read" >&2; return 1; }
+  grep -q . "$work/nodes-keeper" || { echo "no node runs a clickhouse-keeper-extra pod: no Cilium agent to read" >&2; return 1; }
+  cat "$work/nodes-si" "$work/nodes-keeper" | sed '/^$/d' | LC_ALL=C sort -u > "$work/nodes"
   printf 'time\tsource\tdestination\tport\treason\n'
   while read -r node; do
     agent="$(si_kadmin -n kube-system get pods -l k8s-app=cilium --field-selector "spec.nodeName=$node" -o name | head -n 1)" || return 1
@@ -17514,7 +17808,7 @@ si_p4_manifest() { # $1 installation: the file its CHI lives in (indexer-b, inde
   esac
 }
 si_p4_roll() { # $1 installation, $2 evidence name under $si_backup: a write, only in a confirmed block. One restart window of the P2 runbook (§5 and §14.3 there) for HEAD, which must change exactly the installation's file and test_render.py: quiet point, render tests, push, apply (kubectl for indexer-b and indexer-c, the one-release sync for network), every ClickHouse pod of the installation replaced once and Ready, the engine-grant probe of the P2 window; writes <evidence> (HEAD), <evidence>.window and <evidence>.uids
-  local inst="$1" ev="$si_backup/$2" chi file hosts h pod n src out ok
+  local inst="$1" ev="$si_backup/$2" chi file hosts h pod n src out ok u
   chi="$(si_chi_of "$inst")" || return 2
   file="$(si_p4_manifest "$inst")" || return 2
   hosts="$(si_hosts_of "$inst")" || return 2
@@ -17546,7 +17840,10 @@ si_p4_roll() { # $1 installation, $2 evidence name under $si_backup: a write, on
   for n in $(seq 1 270); do
     ok=1
     while read -r pod uid; do
-      [ "$(si_kubectl get pod "$pod" -o jsonpath='{.metadata.uid}' 2>/dev/null)" != "$uid" ] || ok=""
+      # replaced means a pod of that name with another uid: an absent pod (between the old one's deletion and the
+      # new one's creation) and an unreadable one are not replaced yet
+      u="$(si_kubectl get pod "$pod" --ignore-not-found -o jsonpath='{.metadata.uid}')" || u=""
+      case "$u" in "" | "$uid") ok="" ;; esac
     done < "$ev.uids"
     [ -n "$ok" ] && break
     sleep 10
@@ -18637,7 +18934,8 @@ done
 for _ in $(seq 1 30); do
   si_kubectl delete pod "$pod" --wait --ignore-not-found
   sleep 10
-  left="$(sed -n '2,$p' "$ev" | while read -r pvc pv; do si_kubectl get pvc "$pvc" -o jsonpath='{.spec.volumeName}{"\n"}' 2>/dev/null | grep -x "$pv" || true; done)"
+  # an old claim is left while its name still binds its old volume; a claim that cannot be read counts as left
+  left="$(sed -n '2,$p' "$ev" | while read -r pvc pv; do v="$(si_kubectl get pvc "$pvc" --ignore-not-found -o jsonpath='{.spec.volumeName}')" || v="$pv"; [ "$v" != "$pv" ] || echo "$pvc"; done)"
   [ -z "$left" ] && break
 done
 [ -z "$left" ] || { echo "the old claims of verifier-$n are still there after 30 deletions of its pod: stop and ask"; exit 1; }
@@ -19130,7 +19428,7 @@ fi
 echo "keeper enforce held for 30 minutes" | tee -a "$si_backup/keeper-watch.txt"
 ```
 
-Expected: `clickhouse-keeper-extra-ingress enforce valid=True`, thirty minute lines with empty `errors` and `drops` and one `leader` with two synced followers, then `keeper enforce held for 30 minutes`. A watch that cannot read the logs, Hubble or the ensemble aborts as well: an enforce nobody can watch is reverted. After an `ABORT`, the policy is in observe mode again live and `main` still says enforce: open the revert PR of §12.4 at once. Then the probes, and one write per owner (every source and every verifier needs Keeper for it), in the user's terminal:
+Expected: `clickhouse-keeper-extra-ingress enforce valid=True`, thirty minute lines with empty `errors` and `drops` and one `leader` with two synced followers, then `keeper enforce held for 30 minutes`. A watch that cannot read the logs, Hubble or the ensemble aborts as well: an enforce nobody can watch is reverted (`si_keeper_client_errors` fails, naming the read on stderr, when a client pod list cannot be read or is empty or a client's log cannot be read, and `si_cnp_drops` when a pod list or a Cilium agent cannot be read, so the minute line shows `errors [the client logs could not be read]` or `drops [Hubble could not be read]` and the block reverts). After an `ABORT`, the policy is in observe mode again live and `main` still says enforce: open the revert PR of §12.4 at once. Then the probes, and one write per owner (every source and every verifier needs Keeper for it), in the user's terminal:
 
 Confirm before running.
 
@@ -20573,8 +20871,9 @@ and `$HOME/.cache/s3d-task54/selftest.bash`, with exactly this content:
 # usage: bash selftest.bash <checker directory> <chain file> <INDEXER_C_ID>, from the root of the production checkout.
 # The checker directory holds the blocks check_runbooks.py extracted; the chain file sources the earlier
 # runbooks' §0 blocks and then the two P4 helper blocks. It runs si_p4_py and si_rebuild_py against this
-# checkout's P4 files (Task 53) and against synthetic cluster answers, and the in-pod awk and the Keeper
-# cons parser against sample input. Nothing here reaches a cluster.
+# checkout's P4 files (Task 53) and against synthetic cluster answers, the in-pod awk and the Keeper
+# cons parser against sample input, and the §8.3 watch's readers against a stubbed kubectl. Nothing here
+# reaches a cluster.
 # shellcheck disable=SC2154 # si_interserver_awk and the helpers come from the sourced chain
 set -eo pipefail
 v="$1"
@@ -20840,7 +21139,53 @@ if si_p4_py placement "$t/pl-pods-stop.json" "$t/pl-pvcs.json" "$t/pl-pvs-stop.j
 grep -q '^verdict STOP two sources share a node' "$t/placement-stop.txt"
 ok "two sources on one node stop the placement"
 
-# 8. The owner-rebuild runbook's checks, when its helpers are in the chain.
+# 8. The §8.3 watch's readers fail closed. kc_stub stands in for kubectl (si_kubectl and si_kadmin call it too):
+# a Forbidden log read, a pod list that fails or is empty, and an unreadable SI pod list each make the reader
+# fail with nothing on stdout, so the watch's `|| e="the client logs could not be read"` (or `|| d=...`) aborts;
+# readable answers still report what they hold.
+kc_stub() { # $1 mode, then kubectl's arguments
+  local mode="$1"
+  shift
+  case " $* " in
+    *" -n sentio-network-devnet2 get pods "*)
+      case "$mode" in list-fails | si-list-fails) echo 'Error from server (Forbidden): pods is forbidden' >&2; return 1 ;; no-pods) return 0 ;; esac
+      case " $* " in *" -o name "*) printf 'pod/%s\n' storage-integrity-si-v2-source-0-0-0 storage-integrity-si-v2-indexer-b-source-0-0-0 ;; *) printf '%s\n' sea-g-1 sea-g-2 ;; esac ;;
+    *" -n clickhouse get pods "*)
+      case "$mode" in list-fails) echo 'Error from server (Forbidden): pods is forbidden' >&2; return 1 ;; no-pods) return 0 ;; esac
+      case " $* " in *" -o name "*) echo pod/chi-clickhouse-extra-usage-0-0-0 ;; *) echo sea-g-3 ;; esac ;;
+    *" -n kube-system get pods "*) echo pod/cilium-x ;;
+    *" -n kube-system exec "*) return 0 ;;
+    *" logs "*)
+      case "$mode" in
+        forbidden) echo 'Error from server (Forbidden): pods "x" is forbidden: User cannot get resource "pods/log"' >&2; return 1 ;;
+        errors) case " $* " in *indexer-b-source*) printf '%s\n' 'Coordination::Exception: Session expired (ZSESSIONEXPIRED)' 'Connection loss' 'ok' ;; *) echo ok ;; esac ;;
+        *) echo ok ;;
+      esac ;;
+    *) echo "kc_stub: unexpected kubectl $*" >&2; return 1 ;;
+  esac
+}
+kc_with() { # $1 mode, $2 helper, the rest its arguments: runs the helper in a subshell whose kubectl is kc_stub
+  local mode="$1"
+  shift
+  # shellcheck disable=SC2329 # the helper the subshell runs calls this kubectl
+  (kubectl() { kc_stub "$mode" "$@"; }; "$@")
+}
+for mode in forbidden list-fails no-pods; do
+  if out="$(kc_with "$mode" si_keeper_client_errors 2026-10-20T00:00:00Z 2> "$t/kce-$mode.err")"; then echo "si_keeper_client_errors succeeded with $mode: [$out]"; exit 1; fi
+  [ -z "$out" ]
+  [ -s "$t/kce-$mode.err" ]
+  e="$(kc_with "$mode" si_keeper_client_errors 2026-10-20T00:00:00Z 2> /dev/null)" || e="the client logs could not be read"
+  [ "$e" = "the client logs could not be read" ]
+done
+[ -z "$(kc_with clean si_keeper_client_errors 2026-10-20T00:00:00Z)" ]
+[ "$(kc_with errors si_keeper_client_errors 2026-10-20T00:00:00Z)" = "sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source-0-0-0 2" ]
+for mode in si-list-fails no-pods; do
+  if kc_with "$mode" si_cnp_drops 2026-10-20T00:00:00Z > /dev/null 2>&1; then echo "si_cnp_drops succeeded with $mode"; exit 1; fi
+done
+[ "$(kc_with clean si_cnp_drops 2026-10-20T00:00:00Z)" = "$(printf 'time\tsource\tdestination\tport\treason')" ]
+ok "the Keeper watch's readers fail closed: a Forbidden log, a failed or empty pod list abort; clean and erring logs, and an empty Hubble answer, read as they are"
+
+# 9. The owner-rebuild runbook's checks, when its helpers are in the chain.
 if declare -F si_rebuild_py > /dev/null; then
   printf '%s\n' '{"level":"info","msg":"rebuilding hg_safe from the arbiter'"'"'s acknowledged inventory","phase":"fence"}' \
     '{"phase":"plan","table_id":"db.t","partition_id":"p_a","publish_seq":7,"parts":2,"from_own_unsafe":1,"from_object_store":1,"missing":[],"root":"0xr"}' \
@@ -20882,7 +21227,7 @@ for sh in /bin/bash "$(command -v bash)"; do printf '%s: ' "$("$sh" -c 'echo "$B
 cat "$HOME/.cache/s3d-task54/selftest-bash.txt"
 ```
 
-Expected: `chain-hardening.bash: 10 helper blocks; chain-owner-rebuild.bash: 11 helper blocks; in <dir>`; `selftest.bash shellcheck clean`; `3.2.57(1)-release: selftest passed` and `<version>: selftest passed`; then the ten `ok …` lines: every `si_*` name the blocks use defined along the chain, the four policy documents, the staging variants, the probe matrix (`77 rows, 29 refused` on Task 53's matrix, or its row count if review changed it), the synthetic census (`10 flows admitted, the DinD pod and a stray Keeper client uncovered`), the parsers, the interserver awk, the D39 verdict on `DEVNET2_CLICKHOUSE_NODES` (as many `MOVE` lines as that placement has verifiers on a source's node or, with six eligible nodes or more, sharing a node, each to its own node) and the failure domains `DEVNET2_FAILURE_DOMAINS=0=node:…,1=node:…,<INDEXER_C_ID>=node:…` of that placement, the stop on two sources sharing a node, and the owner-rebuild checks. A failure names its check: a policy document that differs from contract §36.3, a staging example that differs beyond the interserver keys, an alias the helper does not know, a name a block calls that no runbook defines (an earlier runbook renamed a helper: follow its contract), or a parser that no longer reads Task 50's or Plan S3-C1's line shapes. Fix whichever departs from the contract before the commit.
+Expected: `chain-hardening.bash: 10 helper blocks; chain-owner-rebuild.bash: 11 helper blocks; in <dir>`; `selftest.bash shellcheck clean`; `3.2.57(1)-release: selftest passed` and `<version>: selftest passed`; then the eleven `ok …` lines: every `si_*` name the blocks use defined along the chain, the four policy documents, the staging variants, the probe matrix (`77 rows, 29 refused` on Task 53's matrix, or its row count if review changed it), the synthetic census (`10 flows admitted, the DinD pod and a stray Keeper client uncovered`), the parsers, the interserver awk, the D39 verdict on `DEVNET2_CLICKHOUSE_NODES` (as many `MOVE` lines as that placement has verifiers on a source's node or, with six eligible nodes or more, sharing a node, each to its own node) and the failure domains `DEVNET2_FAILURE_DOMAINS=0=node:…,1=node:…,<INDEXER_C_ID>=node:…` of that placement, the stop on two sources sharing a node, the §8.3 watch's readers failing closed (`si_keeper_client_errors` on a Forbidden log read, a failed or an empty pod list, and `si_cnp_drops` on an unreadable or empty SI pod list, each failing with nothing on stdout, while clean and erring logs and an empty Hubble answer read as they are), and the owner-rebuild checks. A failure names its check: a policy document that differs from contract §36.3, a staging example that differs beyond the interserver keys, an alias the helper does not know, a name a block calls that no runbook defines (an earlier runbook renamed a helper: follow its contract), or a parser that no longer reads Task 50's or Plan S3-C1's line shapes. Fix whichever departs from the contract before the commit.
 
 The repository's checks (contract §37.5):
 
@@ -22728,7 +23073,7 @@ gh pr checks "$pr" --repo sentioxyz/production --watch
 
 Expected: every check passes (the storage-integrity chart validation runs because Task 53 put `k8s-sea/clickhouse/network-policy.yaml` in its paths). The user reviews the PR. Then runbook §8.3's merge block needs explicit user confirmation in chat. Gate: "squash-merge sentioxyz/production#<pr> into main; nothing is applied yet". Expected: `MERGED <sha>` appended to `keeper-enforce-pr` and the checkout detached at `origin/main` again.
 
-Runbook §8.3's apply block needs explicit user confirmation in chat (`run_in_background: true`; it watches for 30 minutes). Gate: "apply clickhouse-keeper-extra-ingress in enforce mode on the shared production Keeper ensemble: from now on only the clickhouse-extra pods, the six SI ClickHouses and the replicas themselves reach it; the block watches 30 minutes and reverts it to observe on any Keeper session error or new ZSESSIONEXPIRED in a client's log, a Hubble POLICY_DENIED flow towards a replica, or a lost leader or follower". Expected: `clickhouse-keeper-extra-ingress enforce valid=True`, thirty minute lines with empty `errors` and `drops` and one `leader` with two synced followers, then `keeper enforce held for 30 minutes`. After an `ABORT`: the policy observes live while `main` says enforce; open the revert PR of runbook §12.4 at once (its own confirmations) and stop.
+Runbook §8.3's apply block needs explicit user confirmation in chat (`run_in_background: true`; it watches for 30 minutes). Gate: "apply clickhouse-keeper-extra-ingress in enforce mode on the shared production Keeper ensemble: from now on only the clickhouse-extra pods, the six SI ClickHouses and the replicas themselves reach it; the block watches 30 minutes and reverts it to observe on any Keeper session error or new ZSESSIONEXPIRED in a client's log, a Hubble POLICY_DENIED flow towards a replica, a lost leader or follower, or a client log, Hubble or the ensemble it cannot read". Expected: `clickhouse-keeper-extra-ingress enforce valid=True`, thirty minute lines with empty `errors` and `drops` and one `leader` with two synced followers, then `keeper enforce held for 30 minutes`. After an `ABORT`: the policy observes live while `main` says enforce; open the revert PR of runbook §12.4 at once (its own confirmations) and stop.
 
 Then the user block `keeper-enforce-accept` (probes and three promotions; explicit user confirmation in chat; Gate: "the whole probe matrix from every pod (ephemeral containers and throwaway backup-job pods), then, in the user's terminal, value 4204 into devnet101.swap_new2 through indexer-a's sidecar, row 4207 into devuser1.s3_p4 on indexer-b and into <db>.s3e_e2e on indexer-c"):
 
@@ -25254,13 +25599,13 @@ service `ConsensusAdmin`, appended after Plan S3-A's `ReleaseConsensusHold`, in 
 
 **35.1 arbiter pins and FSM read (Task 51).** Pins `PROTO_TAG_P4` (`GOWORK=off go get ...`), `CORE_TAG_P4` (`bash scripts/update-arbiter-core.sh $CORE_TAG_P4`) and the housegate tag `CORE_TAG_P4`'s `go.mod` requires (`bash scripts/update-housegate.sh <tag>`), on arbiter `main` (which carries S3-C2's `ARBITER_PIN_P2`). `fsm/reads_settle.go`: `type TrackSettleWorkView struct { IndexerID uint64; Enrolled, Quarantined bool; QuarantineGeneration uint64; Unacked []PendingPromotionInfo }`; `func (f *FSM) TrackSettleWork(indexerID uint64) TrackSettleWorkView` — under the read lock, `Unacked` is exactly the promotions `WorkSet` withholds for that track under clarification C8 (`fsm/reads_work.go:300-305`: `PendingPromotions` not `Acked` whose `promotionTrackLocked` is the indexer), ascending by promotion seq, each with cloned candidate parts. No Apply change.
 
-**35.2 arbiter server (Task 51).** `server/registry.go`: `snodeRegistry` becomes a struct embedding `*streamRegistry[*pb.PromotionCommand]`, with `func (r *snodeRegistry) registerHello(hello *pb.SNodeHello) chan *pb.PromotionCommand` and `func (r *snodeRegistry) SettleCapable(nodeID string) bool` (true only while the node's current subscription's hello carried `settle`); `SubscribePromotions` calls `registerHello`. `server/track_settle.go`: `type TrackSettles struct`; `func NewTrackSettles(maxDuration time.Duration, now func() time.Time) *TrackSettles`; `func (t *TrackSettles) Begin(term uint64, work orchestrator.SettleWork, snodeNodeID string, timeout time.Duration) (TrackSettleRecord, error)`; `func (t *TrackSettles) Get(indexerID uint64) (TrackSettleRecord, bool)`; `func (t *TrackSettles) ActiveSettles() []orchestrator.SettleWork`; `func (t *TrackSettles) EndSettle(indexerID uint64, state pb.TrackSettleState)`; `func (t *TrackSettles) CountSend(indexerID uint64)`; `func (t *TrackSettles) OnLeadershipLost()`; `type TrackSettleRecord struct { Work orchestrator.SettleWork; Term uint64; Expires time.Time; SNodeNodeID string; State pb.TrackSettleState; Sends uint64 }`. One active settle per indexer; the last record per indexer is kept until the next `Begin`; a record whose term differs from the current one is `LEADERSHIP_LOST`. `server/track_settle_rpc.go`: `func (svc *consensusAdminService) SettleTrack(ctx context.Context, req *pb.SettleTrackRequest) (*pb.TrackSettle, error)` and `func (svc *consensusAdminService) GetTrackSettle(ctx context.Context, req *pb.TrackSettleRef) (*pb.TrackSettle, error)`. `SettleTrack` refusals in this order (verbatim): FailedPrecondition `consensusUpdatesDisabledMessage` (the existing constant); FailedPrecondition `track settle requires the tracks activation`; InvalidArgument `promotion_seqs must be non-empty and strictly ascending`; InvalidArgument `authority_jws must be a JWS compact serialization with 3 dot-separated parts`; the leader check and context of `quarantineAuthority`; PermissionDenied `track settle authority: %v`; FailedPrecondition `indexer %d is not enrolled`; FailedPrecondition `indexer %d is not quarantined: its promotions are streamed without a settle`; FailedPrecondition `indexer %d has quarantine generation %d, not %d`; FailedPrecondition `promotion_seqs %v are not indexer %d's issued, unacknowledged promotions %v`; FailedPrecondition `a track settle of indexer %d is already active`; FailedPrecondition `the SNode %s of indexer %d is not connected with settle support; run a release that answers settles`. The expected source is `FSM.PromotionSource` of the first listed promotion. `timeout_ms` 0 selects `consensus_admin.max_track_settle` and a larger value is capped to it. `GetTrackSettle`: FailedPrecondition `track settle requires the tracks activation`; NotFound `indexer %d is not enrolled`; one leader read barrier; never mutates. Neither RPC writes to the log.
+**35.2 arbiter server (Task 51).** `server/registry.go`: `snodeRegistry` becomes a struct embedding `*streamRegistry[*pb.PromotionCommand]`, with `func (r *snodeRegistry) registerHello(hello *pb.SNodeHello) chan *pb.PromotionCommand`, `func (r *snodeRegistry) SettleCapable(nodeID string) bool` (true only while the node's current subscription's hello carried `settle`; a read for the RPC's refusal and `GetTrackSettle` only), `func (r *snodeRegistry) SendSettle(nodeID string, msg *pb.PromotionCommand) error` (refuses a command without `settle`, a node that is not connected and a current subscription whose hello did not carry `settle`, and otherwise enqueues on that same subscription, all under the registry's one lock: the only way a settle reaches an SNode) and `func (r *snodeRegistry) Send(nodeID string, msg *pb.PromotionCommand) error` (refuses a command with `settle`); `SubscribePromotions` calls `registerHello`. `server/track_settle.go`: `type TrackSettles struct`; `func NewTrackSettles(maxDuration time.Duration, now func() time.Time) *TrackSettles`; `func (t *TrackSettles) Begin(term uint64, work orchestrator.SettleWork, snodeNodeID string, timeout time.Duration) (TrackSettleRecord, error)`; `func (t *TrackSettles) Get(indexerID uint64) (TrackSettleRecord, bool)`; `func (t *TrackSettles) ActiveSettles() []orchestrator.SettleWork`; `func (t *TrackSettles) EndSettle(indexerID uint64, state pb.TrackSettleState)`; `func (t *TrackSettles) CountSend(indexerID uint64)`; `func (t *TrackSettles) OnLeadershipLost()`; `type TrackSettleRecord struct { Work orchestrator.SettleWork; Term uint64; Expires time.Time; SNodeNodeID string; State pb.TrackSettleState; Sends uint64 }`. One active settle per indexer; the last record per indexer is kept until the next `Begin`; a record whose term differs from the current one is `LEADERSHIP_LOST`. `server/track_settle_rpc.go`: `func (svc *consensusAdminService) SettleTrack(ctx context.Context, req *pb.SettleTrackRequest) (*pb.TrackSettle, error)` and `func (svc *consensusAdminService) GetTrackSettle(ctx context.Context, req *pb.TrackSettleRef) (*pb.TrackSettle, error)`. `SettleTrack` refusals in this order (verbatim): FailedPrecondition `consensusUpdatesDisabledMessage` (the existing constant); FailedPrecondition `track settle requires the tracks activation`; InvalidArgument `promotion_seqs must be non-empty and strictly ascending`; InvalidArgument `authority_jws must be a JWS compact serialization with 3 dot-separated parts`; the leader check and context of `quarantineAuthority`; PermissionDenied `track settle authority: %v`; FailedPrecondition `indexer %d is not enrolled`; FailedPrecondition `indexer %d is not quarantined: its promotions are streamed without a settle`; FailedPrecondition `indexer %d has quarantine generation %d, not %d`; FailedPrecondition `promotion_seqs %v are not indexer %d's issued, unacknowledged promotions %v`; FailedPrecondition `a track settle of indexer %d is already active`; FailedPrecondition `the SNode %s of indexer %d is not connected with settle support; run a release that answers settles`. The expected source is `FSM.PromotionSource` of the first listed promotion. `timeout_ms` 0 selects `consensus_admin.max_track_settle` and a larger value is capped to it. `GetTrackSettle`: FailedPrecondition `track settle requires the tracks activation`; NotFound `indexer %d is not enrolled`; one leader read barrier; never mutates. Neither RPC writes to the log.
 
-**35.3 arbiter orchestrator, config, metrics (Task 51).** `orchestrator/deps.go`: `type SettleWork struct { IndexerID, Generation uint64; PromotionSeqs []uint64 }`; `type SettleSource interface { ActiveSettles() []SettleWork; EndSettle(indexerID uint64, state pb.TrackSettleState); CountSend(indexerID uint64) }`; `Deps.Settles SettleSource` (nil = no settle); `SNodeDirectory` gains `SettleCapable(nodeID string) bool`. `orchestrator/settle.go`: `func (o *Loop) handleSettles(ctx context.Context) error`, called at the end of `handlePromotionRows`: per active settle it reads `FSM.TrackSettleWork`; not quarantined or another generation → `EndSettle(RELEASED)`; no listed promotion still unacknowledged → `EndSettle(SETTLED)`; otherwise, for each listed, still unacknowledged promotion, after `VerifyLeader` and `authoritySignerReady`, re-signs it (`SignPromotionWithContext`, as `streamPromotion`) and sends `wire.SettlePromotionCommandPB` to `promotionTargets(seq)` only when `SNodes.SettleCapable(node)`, counting each send; it never issues, re-bases or schedules anything, and with no active settle the loop is byte-identical to today (C8 holds). Expiry → `EXPIRED`; `OnLeadershipLost` → `LEADERSHIP_LOST`. Config `consensus_admin.max_track_settle` (default `10m`, refused unless positive: `consensus_admin.max_track_settle must be positive`). Metrics: `arbiter_track_settle_active{indexer_id}` (gauge, 1 while active), `arbiter_track_settles_total{state}` (`settled|released|expired|leadership_lost`), `arbiter_track_settle_sends_total`.
+**35.3 arbiter orchestrator, config, metrics (Task 51).** `orchestrator/deps.go`: `type SettleWork struct { IndexerID, Generation uint64; PromotionSeqs []uint64 }`; `type SettleSource interface { ActiveSettles() []SettleWork; EndSettle(indexerID uint64, state pb.TrackSettleState); CountSend(indexerID uint64) }`; `Deps.Settles SettleSource` (nil = no settle); `SNodeDirectory` gains `SendSettle(nodeID string, msg *pb.PromotionCommand) error` (`*server.snodeRegistry`'s, above; an error means nothing was sent). `orchestrator/settle.go`: `func (o *Loop) handleSettles(ctx context.Context) error`, called at the end of `handlePromotionRows`: per active settle it reads `FSM.TrackSettleWork`; not quarantined or another generation → `EndSettle(RELEASED)`; no listed promotion still unacknowledged → `EndSettle(SETTLED)`; otherwise, for each listed, still unacknowledged promotion, after `VerifyLeader` and `authoritySignerReady`, re-signs it (`SignPromotionWithContext`, as `streamPromotion`) and sends `wire.SettlePromotionCommandPB` to each of `promotionTargets(seq)` through `SNodes.SendSettle(node, msg)` (never `Send`), counting each send it accepted; it never issues, re-bases or schedules anything, and with no active settle the loop is byte-identical to today (C8 holds). Expiry → `EXPIRED`; `OnLeadershipLost` → `LEADERSHIP_LOST`. Config `consensus_admin.max_track_settle` (default `10m`, refused unless positive: `consensus_admin.max_track_settle must be positive`). Metrics: `arbiter_track_settle_active{indexer_id}` (gauge, 1 while active), `arbiter_track_settles_total{state}` (`settled|released|expired|leadership_lost`), `arbiter_track_settle_sends_total`.
 
 **35.4 arbiter-admin (Task 51).** `arbiter-admin indexer settle --address L --indexer N --expected-generation G [--settle-timeout 10m] [--timeout 15m]`: reads `GetConsensusParams` (context), then `GetTrackSettle` (preview; refuses locally `indexer %d is not quarantined: nothing to settle` and `indexer %d has no issued, unacknowledged promotion: nothing to settle`), signs `SettleTrackCommand{indexer, expected generation, preview's unacked_promotion_seqs}` with the key in `ARBITER_AUTHORITY_PRIVATE_KEY_HEX` (the existing `authorityPrivateKeyEnv`), calls `SettleTrack`, polls `GetTrackSettle` every 2 s until the state leaves `ACTIVE`, prints one JSON object `{"indexer_id","expected_generation","promotion_seqs","state","unacked_promotion_seqs","sends"}` and exits 0 only for `TRACK_SETTLE_STATE_SETTLED`. `arbiter-admin indexer settle-status --address L --indexer N` prints `GetTrackSettle` as protojson. On `codes.Unimplemented` both refuse with `leader does not support track settle (arbiter older than this arbiter-admin); upgrade the leader`. Usage text lists both under `indexer`.
 
-**35.5 arbiter tests and release (Task 51).** Named tests: `TestTrackSettleWorkListsExactlyTheWithheldPromotions` (fsm); `TestSNodeRegistryRecordsTheSettleHello`, `TestSettleTrackRefusesBeforeTheTracksActivation`, `TestSettleTrackRefusesAnUnquarantinedIndexer`, `TestSettleTrackRefusesAStaleGeneration`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesASecondSettleOfOneIndexer`, `TestSettleTrackAuthority`, `TestGetTrackSettlePreviewsTheWithheldPromotions`, `TestTrackSettleExpiresAfterItsTimeout`, `TestTrackSettleClearsOnLeadershipLoss`, `TestSettleTrackWritesNothingToTheLog` (server); `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleSendsOnlyTheListedUnackedPromotionsMarkedSettle`, `TestSettleEndsSettledWhenEveryListedPromotionIsAcknowledged`, `TestSettleEndsReleasedWhenTheIndexerIsReleased`, `TestNoSettleKeepsClarificationC8` (orchestrator); `TestIndexerSettleSignsTheLeadersPreview`, `TestIndexerSettleRefusesAnOlderLeader`, `TestIndexerSettleExitsNonZeroUnlessSettled` (arbiter-admin); integration `integration/stage3_p4_test.go`: `TestTrackSettleRecordsALostAcknowledgementFromTheJournal`, `TestTrackSettleConsumesANeverAppliedPromotionWithoutPromotingIt`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered` (the release refusal `... is covered by unacknowledged promotion %d` clears after the settle). Offline replay of a copy of the devnet2 voter logs under `ARBITER_TAG` and the candidate (S3-A Task 11's `$R` tools `statedigest`, `v20check`): identical digests and written version 20. Full verification `bazel build //... && bazel test //...`. Release `ARBITER_TAG_P4` with `gh workflow run cut-release.yml --repo sentioxyz/arbiter --ref main` (no dry run) from `main` before Plan S3-E2's pin merges; `ARBITER_DIGEST_P4` from `docker buildx imagetools inspect ghcr.io/sentioxyz/arbiter:$ARBITER_TAG_P4` with the `org.opencontainers.image.revision` label checked. PR title `feat(orchestrator): leader-local settle of a quarantined track (multi-source SI stage 3 P4)`.
+**35.5 arbiter tests and release (Task 51).** Named tests: `TestTrackSettleWorkListsExactlyTheWithheldPromotions` (fsm); `TestSNodeRegistryRecordsTheSettleHello`, `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt`, `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects`, `TestSettleTrackRefusesBeforeTheTracksActivation`, `TestSettleTrackRefusesAnUnquarantinedIndexer`, `TestSettleTrackRefusesAStaleGeneration`, `TestSettleTrackRefusesAListThatIsNotTheWithheldPromotions`, `TestSettleTrackRefusesAnSNodeWithoutSettleSupport`, `TestSettleTrackRefusesASecondSettleOfOneIndexer`, `TestSettleTrackAuthority`, `TestGetTrackSettlePreviewsTheWithheldPromotions`, `TestTrackSettleExpiresAfterItsTimeout`, `TestTrackSettleClearsOnLeadershipLoss`, `TestSettleTrackWritesNothingToTheLog` (server); `TestSettleStreamsOnlyToASettleCapableSNode`, `TestSettleIsNotDeliveredToAReconnectWithoutSettle`, `TestSettleSendsOnlyTheListedUnackedPromotionsMarkedSettle`, `TestSettleEndsSettledWhenEveryListedPromotionIsAcknowledged`, `TestSettleEndsReleasedWhenTheIndexerIsReleased`, `TestNoSettleKeepsClarificationC8` (orchestrator); `TestIndexerSettleSignsTheLeadersPreview`, `TestIndexerSettleRefusesAnOlderLeader`, `TestIndexerSettleExitsNonZeroUnlessSettled` (arbiter-admin); integration `integration/stage3_p4_test.go`: `TestTrackSettleRecordsALostAcknowledgementFromTheJournal`, `TestTrackSettleConsumesANeverAppliedPromotionWithoutPromotingIt`, `TestTrackSettleLetsARejectedBlockReleaseThatALostPromotionCovered` (the release refusal `... is covered by unacknowledged promotion %d` clears after the settle). Offline replay of a copy of the devnet2 voter logs under `ARBITER_TAG` and the candidate (S3-A Task 11's `$R` tools `statedigest`, `v20check`): identical digests and written version 20. Full verification `bazel build //... && bazel test //...`. Release `ARBITER_TAG_P4` with `gh workflow run cut-release.yml --repo sentioxyz/arbiter --ref main` (no dry run) from `main` before Plan S3-E2's pin merges; `ARBITER_DIGEST_P4` from `docker buildx imagetools inspect ghcr.io/sentioxyz/arbiter:$ARBITER_TAG_P4` with the `org.opencontainers.image.revision` label checked. PR title `feat(orchestrator): leader-local settle of a quarantined track (multi-source SI stage 3 P4)`.
 
 **35.6 sentio-node (Task 52).** Pins: arbiter-core `CORE_TAG_P4` three times (`go.mod` require; `MODULE.bazel` `bazel_dep` version without the leading `v`; `git_override` commit and its `# Resolved ...` comment, verified with `git -C <dep> rev-parse <TAG>^{commit}`), arbiter-proto `PROTO_TAG_P4` in `go.mod` only, housegate as `CORE_TAG_P4` requires (expected `HG_TAG_P3`, unchanged). Command `sentio-node storage-integrity rebuild-safe --backup <name> [--dry-run]` (`commands/storage_integrity.go` `newRebuildSafeCommand(configPath *string)`, beside `enrollment-statement`); `standalone/storage_integrity_rebuild_safe.go`: `type RebuildSafeOptions struct { Backup string; DryRun bool }`; `func RunStorageIntegrityRebuildSafe(ctx context.Context, cfg *config.Config, opts RebuildSafeOptions, out io.Writer) error` — it resolves the indexer id read-only (`GetIndexerBySigner`, never `EnsureRegistered`), opens the SI ClickHouse with `cfg.StorageIntegrity.ClickhouseOptions()`, reads the registry once (`dataplane.NewRegistryFollower`, `WaitReady`), `GetPartitionStates` per owned table and `GetPromotionOutcomes` for the track's unacknowledged promotions, builds `rebuild.NewObjectStore` from S3-C1's `storage_integrity.backup.bucket_url` (`objstore.ParseBucket`), the backup name and S3-C1's key environment `STORAGE_INTEGRITY_S3_ACCESS_KEY_ID` / `STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY` (`config.StorageIntegrityS3Credentials`), runs `rebuild.Rebuild`, and writes `Report.JSONLines()` to `out` (logs to stderr; no key in either). Refusals (verbatim): `rebuild-safe requires an indexer node config (node.node_type: indexer)`; `rebuild-safe requires storage_integrity.enabled`; `rebuild-safe requires --backup: the name of the backup taken after the quarantine`; `rebuild-safe requires storage_integrity.backup: the object store it restores from`. Settle collector `standalone/storage_integrity_settle_metrics.go`: series `sentio_node_storage_integrity_settle_answers_total{outcome}` (counter; `journaled`, `reconciled`, `not_applied`, `unanswerable` always exported), Go names `storageIntegritySettleStats` (interface `{ SettleStats() snode.SettleStats }`), `storageIntegritySettleCollector`, `newStorageIntegritySettleCollector`, the table-state deps field `settle`, wired `settle: siRole`, registered on the embedded HouseGate registry served on `:9091`. No signer change (K51). Named tests: `TestRebuildSafeCommandRefusesWithoutABackup`, `TestRebuildSafeRefusesANonIndexerConfig`, `TestRebuildSafeRefusesWithoutABackupDestination`, `TestRebuildSafeNeverRegistersTheIndexer`, `TestRebuildSafePassesTheConfigToTheLibrary`, `TestStorageIntegritySettleCollectorReportsEveryOutcomeIncludingZeros`, `TestRunExportsTheSettleStatsFromTheSNode`, `TestRebuildSafeDryRunReportsCoverageWithoutWriting` (ClickHouse-gated, `SENTIO_SI_CH_E2E=1`). Checks as S3-B §15 (`gofmt`, `bazel run //:gazelle`, `bazel build //...`, `bazel test //... --test_output=errors`). Release: `SN_COMMIT_P4` is the squash-merge commit on `main` (after `SN_COMMIT_P3`), `SN_DIGEST_P4` the index digest of `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P4>`, checked against its revision label. Worktree `multi-source-s3d`; PR title `feat(storage-integrity): rebuild-safe and settle metrics (multi-source SI stage 3 P4)`.
 
@@ -25358,7 +25703,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - The production devnet2 arbiter digest extraction in Step 33 works on production origin/main. It currently prints sha256:14ac6403… (v0.12.0, before S3-B's rollout), so Task 51 must run after S3-B rolls the voters to ARBITER_DIGEST.
 - The CI test job runs `bazel test --build_tests_only --@rules_go//go/config:race //...` plus the fsm gen/pb and time.Now red lines. Step 32 mirrors it.
 - Upstream stubs match the final Task 49 and Task 50 drafts: the proto messages, enum, two RPCs and two stream fields; SettleTrackCommand.Validate; authority/settle.go; wire/settle.go; SettlePromotionCommandPB; and the SNodeHello{NodeId, Settle: true} hello.
-- Names added while drafting: server.TrackSettleMetrics interface { TrackSettleActive(indexerID uint64, active bool); TrackSettleEnded(state string); TrackSettleSent() }; server.Config.ConsensusMaxTrackSettle time.Duration (zero means the default 10m); server.Deps.TrackSettleMetrics; func (s *Server) TrackSettles() *TrackSettles; server const defaultConsensusMaxTrackSettle = 10 * time.Minute; server const trackSettleBeforeTracksMessage = "track settle requires the tracks activation"; SettleTrack refusal FailedPrecondition `promotion %d of indexer %d has no expected source: %v` (between the active-settle and the capability refusals); SettleTrack second leader check after Begin (a NotLeader answer ends the settle LEADERSHIP_LOST; any other error leaves it running); server helpers trackSettleToPB, settleUnackedSeqs, settleTimeout, trackSettleStateName, cloneTrackSettleRecord, TrackSettles.{term, metrics, refreshLocked, endLocked, currentTerm}, snodeRegistry.settle (map[string]chan *pb.PromotionCommand); orchestrator (*Loop).settlePromotion(ctx, indexerID uint64, cmd arbiter.PromoteSafePartition) error; orchestrator func (o *Loop) Settles() SettleSource; config ConsensusAdminConfig.MaxTrackSettle Duration `yaml:"max_track_settle"`; rawConsensusAdminConfig.MaxTrackSettle *Duration; metrics (*Metrics).TrackSettleActive(indexerID uint64, active bool), .TrackSettleEnded(state string), .TrackSettleSent(); var trackSettleEndStates; cmd/arbiter serviceRuntime.settleMetrics server.TrackSettleMetrics; arbiter-admin indexer settle-status --timeout flag (default 10s); arbiter-admin const trackSettleUnsupportedMessage, var settlePollInterval = 2 * time.Second, runIndexerSettle, settleRPCError; arbiter-admin exit error `track settle of indexer %d ended %s, not TRACK_SETTLE_STATE_SETTLED`; unknown-outcome hint `; the settle may be active on the leader: read it with indexer settle-status before retrying`; timeout text `track settle of indexer %d still active when --timeout ended: read it with indexer settle-status`; tests TestLoadConsensusAdminMaxTrackSettle (config), TestTrackSettleMetrics (metrics), TestNewServerAndLoopWiresTheTrackSettles (cmd/arbiter); new files metrics/track_settle_test.go, cmd/arbiter/track_settle_wiring_test.go; test helpers: fsm unackedSeqsS, issuedSeqsS; server settleClock, recordingSettleMetrics, termNode, settleServerPart, settleServerFixture, settleRequest, settleAdmin, serverSnapshotBytes; orchestrator recordingSettles, newRecordingSettles, verifyTrackBlockPartitionsS, settleFixtureS, ackWithheldPromotionS, settlePassS, fakeSNodes.settle, (*fakeSNodes).SettleCapable, .setSettleCapable; arbiter-admin settleLeader, newSettleLeader, settleArgs, fastSettlePolls, settleResultJSON, reflectEqualJSON; integration tracksCluster.{trackSettle, settleRequest, sendSettle, waitSettleEnded, statementStatus, settleTrackOne}, signingSNode.{settle, loseAcks, journal, applied, settleAnswers, applyPromotion, sendAck, answerSettle, restartWithSettle, journaledApplied, appliedCount, settleAnswerCount, safeInventoryLen}; README section `## Stage-3 P4 track settle` (before `## Artifact disposition admission`) and a metrics paragraph; local only: R4=$HOME/si-devnet2-multisource-s3d-rehearsal with helpers.sh (export_build, digest_lines, replay), statedigest/v20check/snapdump copies, src/{old,main,new}, bin/{old,main,new}, sample14, sample19, devnet2, voter-0..2, old_tag.txt, merge-commit, cut-release.sh, arbiter-release; $W.ledger, $W.pr-body.md; $HOME/.cache/s3-ledger/record-s3d-51, record-s3d-51.md, record-s3d-51-pr.md, record-s3d-51-pr-url
+- Names added while drafting: server.TrackSettleMetrics interface { TrackSettleActive(indexerID uint64, active bool); TrackSettleEnded(state string); TrackSettleSent() }; server.Config.ConsensusMaxTrackSettle time.Duration (zero means the default 10m); server.Deps.TrackSettleMetrics; func (s *Server) TrackSettles() *TrackSettles; server const defaultConsensusMaxTrackSettle = 10 * time.Minute; server const trackSettleBeforeTracksMessage = "track settle requires the tracks activation"; SettleTrack refusal FailedPrecondition `promotion %d of indexer %d has no expected source: %v` (between the active-settle and the capability refusals); SettleTrack second leader check after Begin (a NotLeader answer ends the settle LEADERSHIP_LOST; any other error leaves it running); server helpers trackSettleToPB, settleUnackedSeqs, settleTimeout, trackSettleStateName, cloneTrackSettleRecord, TrackSettles.{term, metrics, refreshLocked, endLocked, currentTerm}, snodeRegistry.settle (map[string]chan *pb.PromotionCommand); orchestrator (*Loop).settlePromotion(ctx, indexerID uint64, cmd arbiter.PromoteSafePartition) error; orchestrator func (o *Loop) Settles() SettleSource; config ConsensusAdminConfig.MaxTrackSettle Duration `yaml:"max_track_settle"`; rawConsensusAdminConfig.MaxTrackSettle *Duration; metrics (*Metrics).TrackSettleActive(indexerID uint64, active bool), .TrackSettleEnded(state string), .TrackSettleSent(); var trackSettleEndStates; cmd/arbiter serviceRuntime.settleMetrics server.TrackSettleMetrics; arbiter-admin indexer settle-status --timeout flag (default 10s); arbiter-admin const trackSettleUnsupportedMessage, var settlePollInterval = 2 * time.Second, runIndexerSettle, settleRPCError; arbiter-admin exit error `track settle of indexer %d ended %s, not TRACK_SETTLE_STATE_SETTLED`; unknown-outcome hint `; the settle may be active on the leader: read it with indexer settle-status before retrying`; timeout text `track settle of indexer %d still active when --timeout ended: read it with indexer settle-status`; tests TestLoadConsensusAdminMaxTrackSettle (config), TestTrackSettleMetrics (metrics), TestNewServerAndLoopWiresTheTrackSettles (cmd/arbiter); new files metrics/track_settle_test.go, cmd/arbiter/track_settle_wiring_test.go; test helpers: fsm unackedSeqsS, issuedSeqsS; server settleClock, recordingSettleMetrics, termNode, settleServerPart, settleServerFixture, settleRequest, settleAdmin, serverSnapshotBytes; orchestrator recordingSettles, newRecordingSettles, verifyTrackBlockPartitionsS, settleFixtureS, ackWithheldPromotionS, settlePassS, fakeSNodes.{settle, misrouted, beforeSettleSend}, (*fakeSNodes).SendSettle, .setSettleCapable, .misroutedSettles (the last four from review fix 247-1, which replaced (*fakeSNodes).SettleCapable); arbiter-admin settleLeader, newSettleLeader, settleArgs, fastSettlePolls, settleResultJSON, reflectEqualJSON; integration tracksCluster.{trackSettle, settleRequest, sendSettle, waitSettleEnded, statementStatus, settleTrackOne}, signingSNode.{settle, loseAcks, journal, applied, settleAnswers, applyPromotion, sendAck, answerSettle, restartWithSettle, journaledApplied, appliedCount, settleAnswerCount, safeInventoryLen}; README section `## Stage-3 P4 track settle` (before `## Artifact disposition admission`) and a metrics paragraph; local only: R4=$HOME/si-devnet2-multisource-s3d-rehearsal with helpers.sh (export_build, digest_lines, replay), statedigest/v20check/snapdump copies, src/{old,main,new}, bin/{old,main,new}, sample14, sample19, devnet2, voter-0..2, old_tag.txt, merge-commit, cut-release.sh, arbiter-release; $W.ledger, $W.pr-body.md; $HOME/.cache/s3-ledger/record-s3d-51, record-s3d-51.md, record-s3d-51-pr.md, record-s3d-51-pr-url
 - Verified while drafting: Regenerated the markdown from the r3 verified scratch tree. The output is byte-identical to the r3 task-51.md, and the 42 simulated files equal the scratch end state. The final file was then regenerated with the edits. / Fresh git archive of origin/main for arbiter, arbiter-core, arbiter-proto and housegate under work/d/task-51-r4. Each is identical to r3's base. / Scratch arbiter-proto (Task 49's .proto changes): `buf generate` (protoc-gen-go v1.36.11, protoc-gen-go-grpc 1.5.1) reproduced the generated pb byte-identically, and `buf lint` passed. / Base arbiter with `replace` to both scratch upstreams: `go build ./...` and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... -count=1` passed, so the pin is neutral. / Applied every step's ops in order to a fresh copy and ran each step's commands (run_steps.py). Every red step failed with the stated messages: fsm reads_settle_test.go:12:24 / :42:16; server registry_test.go:145:26 and four more; orchestrator settle_test.go:24:10; server settles/TrackSettleMetrics/ConsensusMaxTrackSettle; config/metrics/cmd undefined MaxTrackSettle/TrackSettleActive; arbiter-admin settle_test.go:91:9; integration timeouts at stage3_p4_test.go:141, :180 and :245. Every green step passed and gofmt was clean. / End state: `go vet ./...` clean. `go test ./... -count=1` passed for all packages (integration 68.7 s). `go test -race ./integration/ -run 'TestTrackSettle|TestQuarantineAndReleaseOverTheWire|TestRejectedBlockQuarantinesAndReleaseCleansItsParts' -count=3` passed in about 85 s, and so did the server/orchestrator settle race runs (count 3). / Mutation check: 17 mutations, 16 killed by the named tests. The survivor (a registry keeping a stale settle entry after a plain hello) is equivalent, because SettleCapable compares the entry with the current stream's channel. / `bazel run //:gazelle -- -mode=diff` offline (--repository_disable_download) on the end state printed nothing and exited 0. A deliberately removed settle.go line was reported, with exit 1. / Offline Bazel with scratch MODULE.bazel overrides (local_path_override arbiter_core, go_deps.archive_override for arbiter-proto via --distdir): `bazel build //...` passed. CI's `bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors` passed for all 22 test targets. `deps(//fsm:fsm, 1)` has 0 arbiter-proto labels, `grep time.Now fsm/` is empty, and //server depends on //orchestrator. / The replay tools statedigest, v20check and snapdump built against ARBITER_TAG (526a721) and against the branch end state, with the local toolchain and with GOTOOLCHAIN=go1.26.3+auto (cached toolchain). / All 25 bash blocks and 17 inline Run commands pass `bash -n` (bashcheck.py), including the heredoc helpers.sh and cut-release.sh. shellcheck -S warning reports only SC1090 (non-constant source) and SC2034 (helpers used by sourcing scripts). / Every remote or live action has a confirmation line before it: fetches, module/Bazel downloads, push/PR, merge, the Cut Release dispatch, and ledger R1 to R4. There are 9 commits, each ending with the Co-Authored-By line, and the PR body ends with the Claude Code line. There are no TBD or 'similar to' placeholders.
 
 ### Task 52
@@ -25423,6 +25768,11 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Measured on clickhouse/clickhouse-server:26.3 (26.3.51.7) as a user holding exactly si_snode's S3-B grants: s3('http://127.0.0.1:1/si-p4-probe/p4.csv','CSV','a String') LIMIT 0 returns Code 497 without GRANT READ ON S3 and exits 0 with it. Contract §36.5's URL http://127.0.0.1:1/p4 returns Code 36 (bucket name length) with or without the grant.
 - Names added while drafting: $HOME/.cache/s3d-task56 (mode 700; live-path, ledger.env, helpers.sh, record.env, p4-mechanics-record.txt, p4-pr-state, tests-baseline.txt, msg-*.txt, blocks/, user/); p4r-runbook.py (chain, block, user); p4r-edit.py (arbiter-pin, host-pin, fresh-example, snode-grant, access-grant, rebuild-on, rebuild-off, image-constant, constant, preflight); p4r-check.py (rebuild-render, rebuild-render-off, initc, record); p4r-task.sh; p4r_fresh_main; p4r_edit; p4r_check; p4r_record; p4r_recorded; p4r_commit; p4r_render; p4r_s3_probe; p4r_host; p4r_initc; p4r_disk_c; record.env keys TESTS, REPLAY_DATE, PROBE_<B|C|A>_BEFORE, PROBE_<B|C|A>_AFTER, DRILL_START, SETTLES, BACKUP_NAME, DRY_RUN_PARTITIONS, LOSS_UTC, REBUILD_LINE, RELEASE_UTC, P4_REBUILD_RTO, P4_END; user scripts user/accept-b-4002.sh, user/accept-c-4003.sh, user/accept-c-4001.sh, user/drop-s3-p4.sh; evidence $si_backup/task56-* (baseline, render-v4, render-h-b/h-c/h-a, probe-<x>-before/after, probe-c-recreated, disk-c, dry-run-precheck, dry-run-check, rebuild-on.json, render-r-on.yaml/.txt, render-r-off.yaml/.txt, after-rebuild, tests-last); commit labels V4, H-b, H-c, H-a, G-indexer-b, G-indexer-c, G-network, R-on, R-off
 - Verified while drafting: Assembled task-56.md from the source plus four tools. All 90 fenced blocks extracted: bash -n passes on 76 bash blocks; ast.parse passes on 3 Python blocks. The tools are embedded verbatim, checked by diff against the tool files. / shellcheck 0.11.0 (-S warning, SC2154/SC1091 excluded): the only warning is SC2164 on the D24 two-line header 'cd "$P"' (the blocks run under bash -eo pipefail). The rest are info-level SC2016 on intentional single-quoted anchors and SC2018/SC2019. p4r-task.sh is fully clean. / Built a filled runbook tree: the final Task 54 runbooks with Task 54 Step 6's sed values, plus the p4tree chain runbooks. p4r-runbook.py chain yields exactly the eleven runbooks in D20 order. Step 1's helper type check passes against the real chain. All 57 'p4r-runbook.py block|user' commands of the task succeed, and every generated block and user file passes bash -n. Negative cases are refused: a leftover placeholder, a confirmed/read-only mismatch, a wrong anchor, a stale --replace line, and /path/to/. / End-to-end simulation (fresh git archive of production origin/main 206c42357 plus the r3 sim.py pre-Task-56 state, a bare origin, a fake HOME): the Step 2 preflight passes. The task's own blocks run in order: replay record, V4, H-b, H-c, H-a, probes before and after each grant, G-indexer-c, G-network, R-on with p4r_check rebuild-render on the simulated chart render, R-off byte-for-byte revert with rebuild-render-off, the four records and the run record. Each commit runs 86 render tests OK, and the render deltas are as stated. G-indexer-b's edit was run on a posture-C copy because the simulated indexer-b CHI stays at posture A. / s3-ledger.py, extracted verbatim from c1/contract.md §19, ran 'set' on a fresh Appendix C copy with the generated record: two rows and the run record with its sub-items were written. Step 1's Task 50 record grep passes on a sample shaped like Task 50's record and stops when the deployed rebuild line is missing. / Step 15's in-pod pre-check was run locally against the rendered indexer-c node config and printed 'config present storage_integrity 1 backup 0 two-space 1 binary ok tmp writable'. / The ClickHouse probe facts were measured in a throwaway docker container (t56-s3probe), which was removed afterwards. Prose has no hard wraps (heuristic check: 0 hits). There are 41 confirmation lines and 10 Co-Authored-By trailers.
+
+### Review fixes (AgentConnect round 1)
+
+- **247-1 (Task 51): settle capability and delivery bound to one subscription.** The draft's `settlePromotion` called `SNodes.SettleCapable(id)` and then the generic `SNodes.Send(id, msg)`, two acquisitions of the registry lock: an SNode that reconnected with `SNodeHello{Settle: false}` in between (a rollback to a release before Task 50, which applies any promotion it receives) got the settle on its new stream. Reproduced on a scratch replay of the draft: after `registerHello(settle)`, `SettleCapable` true, `registerHello(plain)`, `Send` delivered `settle:true` to the plain stream. Fix: `server/registry.go` gains `(*snodeRegistry).SendSettle`, which refuses a command without `settle`, a node that is not connected and a current subscription whose hello did not carry `settle`, and otherwise enqueues on that same captured subscription without releasing the lock (`streamRegistry.Send` and `SendSettle` share the new `enqueueLocked`); `(*snodeRegistry).Send` refuses a settle command; `orchestrator.SNodeDirectory` replaces `SettleCapable` with `SendSettle`, and `settlePromotion` delivers only through it (`SettleCapable` stays on the server registry for the RPC's up-front refusal and `GetTrackSettle`). Tests: `TestSNodeRegistrySendsASettleOnlyToTheSubscriptionThatAdvertisedIt` (deterministic: the plain reconnect lands after the check said capable and before the send), `TestSNodeRegistryNeverQueuesASettleOnAPlainSubscriptionDuringReconnects` (2000 alternating reconnects against concurrent settle sends), orchestrator `TestSettleIsNotDeliveredToAReconnectWithoutSettle` (the fake reconnects in a hook between the pass's decision and each delivery; the fake's `Send` records any settle as misrouted). Changed: Steps 8–15 (tests, the red outputs, implementation, run lines, commit messages), the Files and Interfaces of Task 51, its capability note, the README section and the PR body (Steps 31 and 34), K53, the Architecture line, Review Focus 1, contract §35.2, §35.3 and §35.5. Verified: a fresh `git archive origin/main` of arbiter `526a721` with scratch upstreams (arbiter-proto `7a73f25` plus Task 49's two `.proto` edits, regenerated with `buf generate`; arbiter-core `cfd4f42` plus Task 50 Steps 6 and 8) took every Go and YAML hunk of Steps 4–31 in order (59 operations); Step 9 and Step 13 failed with the messages they state, Steps 11 and 15 passed, `gofmt` and `go vet ./...` were clean, `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... -count=1` passed the whole module (integration 55 s), the registry and orchestrator settle tests passed three race runs and the three integration settle scenarios with the two stage-2 quarantine scenarios two race runs. Mutations each failed a named test: the orchestrator sending settles through `Send`, `SendSettle` without the capability check, `SendSettle` accepting an ordinary command, `Send` delivering a settle, and `SendSettle` releasing its lock between the check and the enqueue (the concurrent test failed 10 of 10 runs; the correct registry passed 20 of 20). Bazel and gazelle were not re-run (no BUILD change: the new tests live in existing files).
+- **247-2 (Task 54, hardening runbook §0 and §8.3): failed client-log reads reach the Keeper abort watcher.** The draft's `si_keeper_client_errors` piped `kubectl logs … 2>/dev/null` into `grep -c … || true`: a failed read gave `0` and the helper exited 0 with empty output, so §8.3's `e="$(si_keeper_client_errors "$t0")" || e="the client logs could not be read"` never aborted and could certify 30 minutes without seeing a client log; a failed pod list was masked too unless it was the last namespace's. Reproduced with the exact extracted helper under bash 5.3 and 3.2, both with a stub `kubectl` and with the real `kubectl` 1.33 against a local mock API server answering 403 for `pods/log`: exit 0, empty output, `errors []`. Fix: the helper reads each pod list and each log into files and fails (status 1, the unread pod list or log named on stderr) on a failed or empty pod list and on a failed log read; `grep -c`'s no-match status 1 counts as a clean log only after a read that succeeded, and its status 2 fails. Siblings of the class (a failed read taken as the healthy or finished state) fixed in the same runbook: `si_cnp_drops` read its two pod lists in one group whose status was only the second command's, so an unreadable SI pod list read as no drops (now each list is checked, and an empty one fails); `si_p4_roll` counted a pod whose uid it could not read (or that was momentarily absent) as replaced (now only a pod with another uid is, read with `--ignore-not-found`); §5.0's move block counted an old claim it could not read as gone (now an unreadable claim counts as left; a missing one, through `--ignore-not-found`, as gone). §8.3's Expected now names what fails the readers, and Task 55's apply gate says the watch also reverts on a log, Hubble or ensemble it cannot read. Failure-injection check: `selftest.bash` section 8 (Task 54 Step 7, eleven `ok` lines now) runs both readers against a stubbed `kubectl`: Forbidden logs, a failed and an empty pod list must fail with nothing on stdout and turn the watch's `e` into `the client logs could not be read`, an unreadable or empty SI pod list must fail `si_cnp_drops`, clean and erring logs and an empty Hubble answer must read as they are. Verified: section 8 passed under bash 5.3 and 3.2 against the fixed helpers and failed against the draft's (`si_keeper_client_errors succeeded with forbidden`, `si_cnp_drops succeeded with si-list-fails`); the real `kubectl` against the mock server gave exit 1 and `errors [the client logs could not be read]` for a 403 log, a 403 pod list and an empty pod list, and the right counts otherwise; `--ignore-not-found -o jsonpath` printed nothing with exit 0 for a missing pod or claim and exit 1 for a 403 on the same server; the `si_p4_roll` and §5.0 loop lines, run against stubs, count only a new uid as replaced and an unreadable claim as left; Step 2's conventions check on both extracted runbooks printed the counts Step 7 expects (68 and 52 bash blocks, 35 and 26 confirmed), `bash -n` (5.3 and 3.2) and `shellcheck -s bash -e SC2154` were clean on every block, and `shellcheck -s bash selftest.bash` was clean. The whole self-test chain (the earlier runbooks' §0 blocks and Task 53's files) was not replayed; only section 8 ran, in a harness that sources the hardening §0 block and `si_kubectl`.
 
 ## Appendix C: execution record
 
