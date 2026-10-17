@@ -10,7 +10,9 @@
 
 **Spec:** housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` (on `main` since housegate#236, `fb83a97`, the text of the reviewed commit `a815dd0` with every review fix; its §8.2 `hg_rstage` rights as amended on the plans branch `urwt/claude/ms-si-stage3-plans-cf` by the stage-3 plans PR, decision D36) — binding: §16 row P1 and its exit criterion; §2's ClickHouse mechanics bullet for `BACKUP … PARTITIONS` with `base_backup` and `RESTORE … AS <staging> PARTITIONS`; §8.2's `hg_rstage` rights as amended (explicit `SELECT`, `INSERT`, `ALTER`, `CREATE TABLE`, `DROP TABLE`, `TRUNCATE` and `OPTIMIZE`, never `ALL`), which the staging-only `si_restore` holds as a member's restore does (D36); §8.4's accept rule for a manifest (as the drill applies it); §8.5 steps 1–6 and its last paragraph (as a pure gate and a database-and-prefix materializer); §8.6's object-store restore bullet; §13.1's promotion budget for drills; §14's lockdown rules for every new ClickHouse user; §15's housegate `pkg/replay` helpers, arbiter-core install-gate share and production bucket and backup jobs; §17's data-plane cases for the gate and the restore source — as clarified by Plan S3-A's K1–K10, Plan S3-B's K11–K22, K23–K28 below and the cross-plan decisions D25–D40 where they touch this plan (D25, D26, D32, D34, D35 and D36, each stated where it applies; contract §19 lists all sixteen). **Prerequisites:** Plan S3-A (`2026-10-14-multi-source-si-s3a-p0-guards.md`, Tasks 1–11, contract §0–§6) and Plan S3-B (`2026-10-14-multi-source-si-s3b-p0-hosts-rollout.md`, Tasks 12–21, contract §7–§15): their Global Constraints, clarifications and Appendix A apply here unchanged, this plan's Appendix A continues them (§16–§19), and Tasks 22–28 consume their release ledger and records verbatim. The cross-plan conventions of Plans S3-C1 to S3-F (task, contract and clarification ranges, phase-suffixed ledger names, the activation model, worktrees, the budget rule) bind as stated in contract §19.
 
-**Base revisions.** Reviewed code bases: housegate `ed24705` (v0.20.0 and the merged S3-A changes), arbiter-core `cfd4f42` (v0.15.0 and the merged owner audit), sentio-node `0828f21` (`SN_COMMIT`, S3-B Task 12 merged), arbiter-proto `7a73f25` (v0.12.0) and arbiter `526a721` (v0.13.0; both read-only in this plan). The consistency pass refreshed housegate `origin/main` to `aa6912c`, which retains the Task 22 code anchors; its unrelated documentation updates are applied by heading. Production was refreshed to `36a680517`: S3-B Tasks 13–17 and the lockdown credentials through indexer-a and indexer-b's posture C are merged, while the remaining Task 18 lockdown and Tasks 19–21 enrolment/live state remain prerequisites. The production hunks target that eventual `E_END` state, never the currently partially locked-down deployment: apply only the still-pending S3-B changes, then Task 26 and Task 27 in order. `monitoring.enabled` must already be true (S3-B temporarily reverted its live enablement while Track A repairs delivery; a non-empty monitored-host list alone is insufficient). Line anchors in each reviewed task identify its measured review base; offsets from subsequent Track A edits do not change its named anchors. The consistency replay preserves the merged lockdown fixes and applies the outstanding S3-B state before the P1 edits. devnet2 when this plan starts (the state Plan S3-B's `E run and the steady state after E` record leaves; every value read from the ledger, never predicted): epoch `ENROLMENT_EPOCH`, tracks enabled with cutover 60/52, `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, `max_writers` 3, verifiers `verifier-1..3`, snapshot v20, voters at 2Gi memory and 2Gi PVC on `ARBITER_DIGEST`; hosts `sentio-node-devnet2-indexer-a`, `-b`, `-c` on `SN_DIGEST` with `owner_audit: repair`; every SI ClickHouse (`storage-integrity-si-v2`, `-indexer-b`, `-indexer-c`) in posture C (`default` locked to loopback; `si_snode`, `si_gateway`, `si_reader`, plus `si_verifier` on the network CHI), the operator pinned at `OPERATOR_CHART_VERSION` and frozen; monitoring enabled for the three hosts and the three installations; SI tables: indexer-a `devnet101.swap_new2` (genesis), indexer-b none (the P0 soak table `devuser1.s3_p0` was dropped; database `devuser1` stays assigned to indexer-b), indexer-c `s3eaccept<n>.s3e_e2e` (rows 1–3; `<n>` is the acceptance database Plan S3-B's indexer-c runbook assigned to `INDEXER_C_ID` and wrote to `$HOME/si-devnet2-stage3-indexer-c/acceptance-db`, read there, never predicted; S3-B D19's runbook names, which D35 restores in its Appendix B); no replica bucket, no backup user, no backup job; the lockdown staging installation deleted.
+**Base revisions.** Current fetched source bases (freshness reconciliation, 2026-10-17): housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, arbiter-core `cfd4f42` (v0.15.0 and the merged owner audit), sentio-node `0828f21` (`SN_COMMIT`, S3-B Task 12 merged), arbiter-proto `7a73f25` (v0.12.0) and arbiter `526a721` (v0.13.0; both read-only in this plan). Housegate's changes since the measured Task 22 code base `ed24705` are documentation-only and retain its implementation anchors; the earlier `aa6912c` refresh remains historical evidence. Production is `efe5c77859e98d0465838cb5763c7f1fcbd89ee3`, with S3-B Task 21 completed and its actual ledger record on housegate `origin/main`: `E_END` is recorded, indexer-c is already allocated `snode-3`, and its host placement is `sea-dg-6` while its source CHI remains on `sea-dg-3`. Read the actual rows and run record through `s3-ledger.py`; never replay a pending Task 21 producer or synthetic enrolment state over them. Apply only still-future P1 intent, Task 26 then Task 27, over that current source. The older production `36a680517` plus pending-S3-B reconstruction remains a historical consistency proof, not the current base. Line anchors in each reviewed task identify its measured review base; use named anchors and reconcile context on actual main rather than replacing merged source.
+
+Current source already lists all three monitored hosts and installations, but `DEVNET2_MONITORING_ENABLED` / `monitoring.enabled` remains false. The actual S3-B execution record does not waive P1's monitoring prerequisite: the live flow must stop until the user explicitly authorizes restoring monitoring and the required delivery proof is obtained; a non-empty list or recorded `E_END` is insufficient. The fresh source-only replay deliberately preserves that false flag, and its chart/render passes claim no live enablement, delivery or health. Required live baseline when this plan starts (verify afresh against Plan S3-B's `E run and the steady state after E` record and the live checks; a recorded `E_END` alone proves none of these current runtime conditions; every value read from the ledger, never predicted): epoch `ENROLMENT_EPOCH`, tracks enabled with cutover 60/52, `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, `max_writers` 3, verifiers `verifier-1..3`, snapshot v20, voters at 2Gi memory and 2Gi PVC on `ARBITER_DIGEST`; hosts `sentio-node-devnet2-indexer-a`, `-b`, `-c` on `SN_DIGEST` with `owner_audit: repair`; every SI ClickHouse (`storage-integrity-si-v2`, `-indexer-b`, `-indexer-c`) in posture C (`default` locked to loopback; `si_snode`, `si_gateway`, `si_reader`, plus `si_verifier` on the network CHI), the operator pinned at `OPERATOR_CHART_VERSION` and frozen; monitoring enabled for the three hosts and the three installations; SI tables: indexer-a `devnet101.swap_new2` (genesis), indexer-b none (the P0 soak table `devuser1.s3_p0` was dropped; database `devuser1` stays assigned to indexer-b), indexer-c `s3eaccept<n>.s3e_e2e` (rows 1–3; `<n>` is the acceptance database Plan S3-B's indexer-c runbook assigned to `INDEXER_C_ID` and wrote to `$HOME/si-devnet2-stage3-indexer-c/acceptance-db`, read there, never predicted; S3-B D19's runbook names, which D35 restores in its Appendix B); no replica bucket, no backup user, no backup job; the lockdown staging installation deleted.
 
 ## Global Constraints
 
@@ -30,7 +32,7 @@
 - **Never edit** any golden or vector file listed by Plans S2-A and S3-A, `pre_tracks_golden.json`, the `l3_track_golden_test.go` constants or `conformance/stage3_reads_test.go` (decision D25 lets only Plans S3-D and S3-E1 change that file's count literals; this plan does not touch it); this plan adds no frozen fixture.
 - **Repository commands, worktrees, commits, releases, the ledger:** contract §19 and Plan S3-A's contract §6; Plan S3-B's record procedure (D23) through `s3-ledger.py`; remote and live actions require explicit user confirmation in chat; commands handed to the user are fish.
 - **Ledger copy (decision D34):** the plans branch `urwt/claude/ms-si-stage3-plans-cf` is aligned with `main`, which holds Plans S3-A and S3-B since housegate#237; this plan's ledger copy is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, and Plans S3-A's and S3-B's is `origin/main`. A recording task whose `s3-ledger.py ref` finds no `s3c1` on origin (the plans branch not pushed yet) stops and asks; nothing is ever recorded into, or read from, a local checkout.
-- **Hunks are anchored on the base revisions.** Tasks were drafted in parallel; S3-A is merged and the remaining S3-B changes must land first: when a hunk overlaps an earlier task's edit, a Plan S3-A or S3-B change, or an earlier stage-3 plan's change (`snode/*.go` after S3-A Task 5, `clickhouse-mechanics.sh` after S3-A Task 6, `test_render.py`, `charts/sentio-node` and the devnet2 overlays after S3-B Tasks 13, 16 and 19), apply the later intent on top of the earlier change. The contract and the named tests are binding; line anchors are guidance.
+- **Hunks are anchored on the base revisions.** Tasks were drafted in parallel; S3-A and S3-B are now merged: when a hunk overlaps an earlier task's edit, a Plan S3-A or S3-B change, or an earlier stage-3 plan's change (`snode/*.go` after S3-A Task 5, `clickhouse-mechanics.sh` after S3-A Task 6, `test_render.py`, `charts/sentio-node` and the devnet2 overlays after S3-B Tasks 13, 16 and 19), apply the later intent on top of the earlier change. The contract and the named tests are binding; line anchors are guidance.
 - **References.** `contract §N` points to Appendix A of Plan S3-A for §0–§6, of Plan S3-B for §7–§15 and of this plan for §16–§19; a task's "Facts" point to Appendix B below; Appendix C records this plan's ledger values and run records as they are made.
 
 ## Plan clarifications (binding)
@@ -2145,9 +2147,36 @@ Expected (runs unchanged in fish): `Release tooling`, `Build` and `Integration (
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on it is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
 
 ```bash
+set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
-[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+gh api --paginate --slurp "repos/housegate/housegate/pulls/<n>/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
+mkdir -p "$(dirname "$merge_receipt")" || exit 1
+python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" housegate/housegate <n> "$expected_head" "$W" || exit 1
 ```
 
 Expected: `PR head is HEAD` and exactly `poetry <chen@sentio.xyz>`. Anything else: stop; nothing is merged.
@@ -2155,11 +2184,17 @@ Expected: `PR head is HEAD` and exactly `poetry <chen@sentio.xyz>`. Anything els
 Remote write (merge), then a remote read of the merge commit: needs explicit user confirmation in chat, after review, before running.
 
 ```bash
-gh pr merge <n> --repo housegate/housegate --squash
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
+expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" housegate/housegate <n> "$W")" || exit 1
+[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge <n> --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo housegate/housegate --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
 
-Expected (both run unchanged in fish): `MERGED`, the 40-hex squash-merge commit (`M` in Step 22) and the merge time; keep both for the run record.
+Expected: `MERGED`, the 40-hex squash-merge commit (`M` in Step 22) and the merge time; keep both for the run record.
 
 - [ ] **Step 22: Release `HG_TAG_P1` (requires explicit user confirmation)**
 
@@ -2266,7 +2301,41 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf` (the ledger copy until the stage-3 plans PR merges), or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 22's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf` (the ledger copy until the stage-3 plans PR merges), or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 22's ledger record"); after a yes, run the complete primary-author gate and bind the merge to its exact checked head:
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=22
+d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+pr=<number>
+[[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
+```
+
+ Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -8052,9 +8121,36 @@ Expected: `<n>` is the number `gh pr create` printed; `test`, `integration-click
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on the branch is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
 
 ```bash
+set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
-[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/<n>/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
+mkdir -p "$(dirname "$merge_receipt")" || exit 1
+python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/arbiter-core <n> "$expected_head" "$W" || exit 1
 ```
 
 Expected: `PR head is HEAD` and exactly `poetry <chen@sentio.xyz>` (Task 23's five commits and this task's four). Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
@@ -8062,7 +8158,13 @@ Expected: `PR head is HEAD` and exactly `poetry <chen@sentio.xyz>` (Task 23's fi
 Remote write (merge), then a remote read of the merge commit: needs explicit user confirmation in chat, after review, before running.
 
 ```bash
-gh pr merge <n> --repo sentioxyz/arbiter-core --squash
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
+expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/arbiter-core <n> "$W")" || exit 1
+[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge <n> --repo sentioxyz/arbiter-core --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo sentioxyz/arbiter-core --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
 
@@ -8173,7 +8275,41 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 24's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 24's ledger record"); after a yes, run the complete primary-author gate and bind the merge to its exact checked head:
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=24
+d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+pr=<number>
+[[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
+```
+
+ Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -10437,7 +10573,9 @@ Before the merge, check that the PR's head is the worktree's checked `HEAD` and 
 ```bash
 set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
-[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -c 'import json
@@ -10458,7 +10596,11 @@ for commit in [commit for page in pages for commit in page]:
     parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
     if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
         sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
+mkdir -p "$(dirname "$merge_receipt")" || exit 1
+python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/sentio-node <n> "$expected_head" "$W" || exit 1
 ```
 
 Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then `PR commit identities verified`. The REST commit record checks each primary author independently of GitHub’s coauthor list; no coauthor or exactly one `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). The task’s ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
@@ -10466,7 +10608,13 @@ Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then `PR c
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
 ```bash
-gh pr merge <n> --repo sentioxyz/sentio-node --squash
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
+expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/sentio-node <n> "$W")" || exit 1
+[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge <n> --repo sentioxyz/sentio-node --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo sentioxyz/sentio-node --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
 
@@ -10580,8 +10728,13 @@ fi
 Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 25's ledger record"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
 
 ```bash
+L="$HOME/.cache/s3-ledger"
+d="$(sed -n 1p "$L/record-s3c1-25")" || exit 1
 set -eo pipefail
 pr=<number>
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
 import re
 import subprocess
@@ -10600,8 +10753,9 @@ for commit in [commit for page in pages for commit in page]:
     parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
     if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
         sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo housegate/housegate --squash
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
@@ -10622,7 +10776,7 @@ Contract §18 (its production part: Terraform, keys and logins, ClickHouse users
 
 Worktree: production `multi-source-s3c1` on branch `urwt/codex/multi-source-s3c1`, created from `origin/main` after `E_PR` merged and `E_END` and `INDEXER_C_ID` are recorded (contract §19). Every command below runs in its own Bash call prefixed with `W=<the worktree path>; P="$HOME/si-devnet2-stage3-p1-prep";` (the path Step 1 prints; `$P` is this task's local directory).
 
-**Files** (line anchors are production at `E_END`: `origin/main` at review time, `36a680517` (Tasks 13–17 and the live lockdown through indexer-b posture C and indexer-a logins already merged), with the remaining Task 18 lockdown and Tasks 19–21 applied as prerequisite stand-ins; already-merged credential blocks are edited in place, never duplicated, as the plan header's hunk rule says; each diff below was re-anchored on that state as the review replayed it and applies with `git apply` without an offset, or by hand where Plan S3-B's execution moved a line; Notes, "Base (review)"):
+**Files** (current source is production `efe5c77859e98d0465838cb5763c7f1fcbd89ee3`, after actual S3-B Task 21 and its `E_END` record; no pending-S3-B prerequisite stand-ins are applied now. The diffs retain their historical reviewed line anchors, previously measured on `36a680517` plus the then-pending S3-B state. Fresh source replay applies the unchanged Task 26 hunks with three-way context reconciliation; already-merged credential blocks stay in place, never duplicated, and actual main's monitoring tuples retain their bytes. Use the named anchors below and the plan header's hunk rule; Notes, "Base (historical adversarial review)" and "Current source verification"):
 - Create: `terraform/storage_integrity_devnet2_si_v2_replica.tf`
 - Modify: `charts/storage-integrity/values.yaml` (`clickhouse.access` after `lockDefault` and `passwordSha256`; `monitoring` before `runbookURL`)
 - Modify: `charts/storage-integrity/values.schema.json` (`clickhouse.access`; `monitoring`)
@@ -10660,6 +10814,8 @@ Notes:
 - **Contract text adjusted (Appendix B).** The CI paths already hold `scripts/storage-integrity/**` since Plan S3-B Task 16, so Step 18 adds the other three paths only; `make-si-backup-keys.sh` passes `--project=sentio-352722` to `gcloud storage hmac create`, so the key belongs to the bucket's project whatever the user's gcloud default; the probe rows' `SETTINGS` (above); the drill's `hg_rstage` table in the corpus is `hg_rstage.si_grant_probe_restore (v Int64)`, the corpus's own naming, for the contract's `hg_rstage.probe (a UInt8)`.
 - **Verification while drafting** (2026-10-15, on `git archive` of production `origin/main` under the scratchpad, without the two `k8s-sea/clickhouse` files the security rule forbids, with Plan S3-B's Tasks 13, 16 and 19 applied from their text and the live states of its Tasks 15, 18 and 21 simulated): every step below replayed with stand-in ledger values (`INDEXER_C_ID` 2, `P1_BACKUP_DELETE` none) and stand-in staging hashes, each failing run printing what its step quotes and each implementation passing, `Ran 146 tests` / `OK` at the end (N = 127 at `E_END`); the three `helm lint --strict` profiles and `helm lint --strict charts/sentio-node` pass; `render-inertness.sh` prints eight `identical` lines; `terraform fmt -check` passes on the filled file for `INDEXER_C_ID` 2 and 13 and both delete rights; both scripts pass `bash -n` under bash 5.3 and 3.2, `shellcheck`, and their tests under both bashes; eleven mutations (a delete permission in the writer role, the writer role bound on the bucket instead of its managed folder (re-run for the managed-folder layout, Appendix B "Review fixes"), `objectAdmin` for the readers, `siBackup` inside the host checksum, a fourth env var, a `SELECT` grant for `si_backup`, the key script printing the secret, `ALL ON hg_rstage.*` for `si_restore`, an alert selecting `job`, a refused probe row marked ok, the logins script printing a password) each fail the named test; the grant probe corpus as above.
 - **Base (historical adversarial review, 2026-10-17).** production `origin/main` is `e21190b06`, `7e08b6ea5` plus three commits outside every SI path: Plan S3-B's P0 PR #743 (Tasks 13–14) and all of Task 15's devnet2 commits (arbiter v0.13.0, both SNodes on `0828f21` in report mode, monitoring on, then indexer-b's and indexer-a's owner audits in repair mode) are merged; Tasks 16–21 are not. The review replayed Plan S3-B's Tasks 16, 19 and 20 from their text and the live states of its Tasks 18 and 21 as stand-ins on that base (the `E_END` state this task starts from), then this task verbatim. Every hunk applied, at the offsets PR #743's extra test and Plan S3-B's execution introduce (`test_render.py` +10 or +11 near the top and +31 near the end, `_helpers.tpl` −1, two host overlays +1, `monitoring.yaml` +3, the network overlay +2, `MONITORING_ALERTS` +2); the diffs below carry the measured line numbers. `origin/main` runs 103 tests, one more than Plan S3-B Task 13's text, so N at `E_END` is 128, not 127. The host checksum line is `charts/sentio-node/templates/node.yaml:503` at `origin/main` and `:555` after Plan S3-B's Tasks 16 and 19 (the original draft header's `:486` was the old base's); it still hashes `node.config`, `housegate`, `storageIntegrity` and `housegateSidecar` only.
+- **Current source verification (freshness follow-up, 2026-10-17).** On production `efe5c77859e98d0465838cb5763c7f1fcbd89ee3` and the actual S3-B Task 21 record on housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, the safe source replay ran 129 baseline tests and 148 after future P1 intent; both passed. Task 26 hunks required no implementation change and applied with three-way context reconciliation. The sole conflict in the broader future P1 fixture was historical Task 28's redundant monitoring-tuple formatting; actual-main tuple bytes were retained. P1 pins, login hashes and future Task 28 state in that replay are synthetic fixtures, not released values or a live run. The separate audited local direct-Helm proof rendered eight releases at each of future P1/37/38/39 (32 renders, 24 byte-identical adjacent-stage comparisons); it did not execute the canonical helmfile wrapper, P1 deployment, permission mechanics or the Task 36 soak. Source monitoring is still false despite complete host/installation lists: Step 1's existing enabled check must stop, and subsequent live execution still requires explicitly approved enablement and delivery proof. Do not enable monitoring or inherit S3-B's historical waiver to make a source test fit. Preserve the actual 100 GiB keep-free and 10 GiB member-PVC inputs; no live state follows from these source checks.
+
 - **Commit identity (user rule).** The global git identity is `uranuswch@gmail.com`, which must never author or co-author a commit on GitHub (a squash merge by `poetry <chen@sentio.xyz>` of a commit with another author adds it as a co-author). Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` before the first commit, every commit block prints the author, Step 18 checks every commit of the branch, and Task 27 checks them again before the P1 PR's squash merge. Commit messages carry only the Claude `Co-Authored-By` line.
 - **Open questions settled in review (status §4.2).** (1) The grant probe is measured on CI's `26.3.37.3` and on the deployed image: 143 rows and 0 mismatches on each, `si_backup` 7 and `si_restore` 13 `system.grants` rows. (2) `timeZone: Etc/UTC` needs Kubernetes 1.27 or later; sea runs 1.33.5 (`k8s-sea/_cluster/kubespray.sh:5`, upgrade runbook to 1.34.3), so no live check is needed. (3) The backup rules read `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_status_failed` and `kube_job_owner` from the kube-state-metrics of sea's `victoria-metrics-k8s-stack` (chart 0.68.0, whose default rules already read its `kube_job_failed`, `k8s-sea/monitoring/vm_rules_values.yaml`); runbook §11 (Task 27) checks each series per CronJob before the monitoring commit. (4) K24 and K25 stay the user's: Step 1 stops for `lock` without the user's confirmed spec amendment (on `main` or the plans branch) and asks the user to confirm K25's layout before Step 4. (5) Task 28's `si_render_diff` expectations hold: enabling a job adds exactly its ConfigMap and CronJob, `backupUser` changes only the network CHI, and listing the CronJobs changes only the VMRule.
 - **Verified (adversarial review, 2026-10-17).** On a `git archive` of production `origin/main` `7e08b6ea5` (SI paths as `e21190b06`), without the two `k8s-sea/clickhouse` files the security rule forbids, with Plan S3-B's Tasks 16, 19 and 20 applied from their text and the live states of Tasks 18 and 21 simulated, every block of this task was replayed verbatim by a script, with stand-in ledger values (`INDEXER_C_ID` 2, `P1_BACKUP_DELETE` none) and stand-in hashes files: Step 1's baseline printed `1 1 1 1 1 1 1 `, `1`, `1`, `Ran 128 tests` / `OK`; every failing run printed exactly what its step quotes (with N = 128) and every implementation passed, `Ran 147 tests` / `OK` at the end; the four `helm lint --strict` runs passed; `render-inertness.sh` printed eight `identical` lines; no token was left; `terraform fmt -check` passed, and `terraform validate` passed offline (`init -backend=false` with the locally cached google provider 4.77.0, the two managed-folder resources left out because that provider predates them; their arguments checked against provider 7.3.0's documentation) for `none`, `lock` and a bad value (the precondition then refuses at plan time), with `terraform console` giving four writers, four readers and a lock-remover map empty for `none` and equal to the writers for `lock`; the grant probe corpus as above on both images; `bash -n` (bash 5.3 and 3.2) and `shellcheck` 0.11 on both scripts and every bash block (placeholders filled; one SC2016 info on Step 11's intended single-quoted go-template), `fish -n` on Step 11's fish block; Step 11's hashes check against stand-in hashes files printed `hashes ok: 9 distinct, in 4 files`. Task 28's seven single-service commits (U-b, U-c, U-n, J-b, J-c, J-a, M), made with Task 28's own `p1-edit.py` on a clone of the result, kept `Ran 147 tests` / `OK` at every commit. Fifteen mutations each failed their named test: a delete permission in the writer role, the writer role bound on the bucket, `objectAdmin` for the readers, the lock remover without its gate, `siBackup` in the host checksum, a fourth env var, a Secret name in the job config, a `SELECT` on `hg_safe` for `si_backup`, `ALL ON hg_rstage.*` for `si_restore`, a backup rule selecting `job`, a refused probe row marked ok, the key script printing the secret, `--add-user` printing a password, a backup job retried in place, and `backupUser` rendered without `users`.
@@ -10741,7 +10897,7 @@ Expected: `INDEXER_C_ID E_END SN_COMMIT_P1 SN_DIGEST_P1 HG_TAG_P1 CORE_TAG_P1 P1
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && git log --oneline -1 && for name in STAGE3_HOST_IMAGES MONITORING_ALERTS SI_CLICKHOUSE_GRANTS SI_MEMBER_DATABASES INDEXER_C_CHI DEVNET2_SI_RELEASES LOCKDOWN_STAGING_CHI; do grep -c "^$name = " charts/storage-integrity/tests/test_render.py; done | tr '\n' ' ' && echo && grep -c '^def probe_atoms(statement):$' charts/storage-integrity/tests/test_render.py && grep -c '^  monitoring:\|^monitoring:' k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml && test -x scripts/storage-integrity/make-clickhouse-logins.sh && test -f scripts/storage-integrity/render-inertness.sh && test ! -e terraform/storage_integrity_devnet2_si_v2_replica.tf && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 ```
 
-Expected: HEAD is `origin/main` as fetched, `1 1 1 1 1 1 1 `, `1`, `1`, then `Ran N tests` / `OK`. Record N: 129 in the refreshed consistency replay (production `36a680517` plus the remaining S3-B E_END state, including the newly merged staging-name test). Later steps expect N+2, N+4, N+7, N+9, N+17 and N+19; the quoted outputs below use N = 129. Anything else: stop and reconcile with Plan S3-B before applying a hunk.
+Expected: HEAD is `origin/main` as fetched, `1 1 1 1 1 1 1 `, `1`, `1`, then `Ran N tests` / `OK`. Record N: 129 on actual production `efe5c77859e98d0465838cb5763c7f1fcbd89ee3` in the fresh source-only replay; future P1 reaches N+19 = 148. This replay uses actual recorded S3-B state and explicitly synthetic future P1 release pins/hashes and Task 28 edit fixtures, never actual P1 ledger values or deployment evidence. The earlier 129-test replay on `36a680517` plus pending S3-B state remains historical evidence. Later steps expect N+2, N+4, N+7, N+9, N+17 and N+19; the quoted outputs below use N = 129. Anything else: stop and reconcile with Plan S3-B before applying a hunk.
 
 - [ ] **Step 2: The fill tool (local only, never committed)**
 
@@ -16966,7 +17122,9 @@ Before the merge, check that the PR's head is the worktree's checked `HEAD` and 
 set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
 import re
@@ -16986,7 +17144,11 @@ for commit in [commit for page in pages for commit in page]:
     parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
     if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
         sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
+mkdir -p "$(dirname "$merge_receipt")" || exit 1
+python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/production "$pr" "$expected_head" "$W" || exit 1
 ```
 
 Expected: `PR head is HEAD`, then `PR commit identities verified`. Each REST commit record must have primary author `poetry <chen@sentio.xyz>`, independently of GitHub’s coauthor list, and no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer (merge commits can have none); the ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
@@ -16994,9 +17156,14 @@ Expected: `PR head is HEAD`, then `PR commit identities verified`. Each REST com
 The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
 
 ```bash
+set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
-cd "$W" && gh pr merge "$pr" --repo sentioxyz/production --squash
+merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
+expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/production "$pr" "$W")" || exit 1
+[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 ```
 
@@ -17072,7 +17239,41 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 27's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 27's ledger record"); after a yes, run the complete primary-author gate and bind the merge to its exact checked head:
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=27
+d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+pr=<number>
+[[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
+```
+
+ Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -19781,8 +19982,12 @@ printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup
 Expected: the PR URL. Requires explicit user confirmation in chat. Gate: "squash-merge the record PR #<RECORD_PR> into production main (docs only)", asked only after the user has reviewed the PR. After a yes:
 
 ```bash
+d="$P"
 set -eo pipefail
 pr="$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)"
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
 import re
 import subprocess
@@ -19801,8 +20006,9 @@ for commit in [commit for page in pages for commit in page]:
     parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
     if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
         sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo sentioxyz/production --squash
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 git fetch -q origin main
 git switch -q --detach origin/main
 git log --oneline -1 | cat
@@ -19891,8 +20097,13 @@ fi
 Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 28's ledger record"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
 
 ```bash
+L="$HOME/.cache/s3-ledger"
+d="$(sed -n 1p "$L/record-s3c1-28")" || exit 1
 set -eo pipefail
 pr=<number>
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
 import re
 import subprocess
@@ -19911,8 +20122,9 @@ for commit in [commit for page in pages for commit in page]:
     parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
     if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
         sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo housegate/housegate --squash
+print("PR commit identities verified")' || exit 1
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only):
@@ -20056,7 +20268,7 @@ devnet2 (Task 28; runbook of §18, one stage per window, every mutating block co
 Ledger (Appendix C of this plan file; S3-B decision D23's shape and procedure, through `s3-ledger.py`):
 - Consumed: from Plan S3-A `HG_TAG`, `PROTO_TAG`, `CORE_TAG`, `ARBITER_TAG`, `ARBITER_DIGEST` and its deployed-image mechanics record; from Plan S3-B `SN_COMMIT`, `SN_DIGEST`, `L_END`, `E_END`, `INDEXER_C_ID`.
 - Produced, in this order: `HG_TAG_P1` (Task 22); `CORE_TAG_P1`, `P1_BACKUP_DELETE` (`none` | `lock`) (Task 24); `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25); `P1_PR` (Task 27); `P1_MECHANICS` (the date of the passing §5 run, `YYYY-MM-DD`), `P1_END` (the end date of runbook §12, `YYYY-MM-DD`) (Task 28). Appendix C: one heading `## Appendix C: execution record`; one table `| Name | Value | Recorded by |` with these eight rows in this order (`| \`NAME\` |  | Task N |` until recorded); then "Run records" with one item per recording task: `housegate release and the ledger tool (Task 22)`, `arbiter-core release and the S3 mechanics (Task 24)`, `sentio-node release (Task 25)`, `P1 PR (Task 27)`, `P1 run (Task 28)`.
-- Record procedure (D23, run once per recording task 22, 24, 25, 27, 28): R1 (local): `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`; `ref="$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3c1)"`; a URWT worktree `multi-source-s3c1-ledger-<N>` of housegate (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate codex multi-source-s3c1-ledger-<N> urwt/codex/multi-source-s3c1-ledger-<N> "$ref"`), its path and `$ref` kept in `$HOME/.cache/s3-ledger/record-s3c1-<N>` and its complete raw URWT JSON retained exclusively in `$HOME/.cache/s3-ledger/record-s3c1-<N>.urwt.json` (later calls require the exact same path, expected local branch and common repository); the run record in `$HOME/.cache/s3-ledger/record-s3c1-<N>.md`; `s3-ledger.py set <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md <N> <record file> NAME=VALUE...`; one commit of the plan file only, `docs(plan): record <names> of Plan S3-C1 (Task <N>)`. R2 (explicit user confirmation in chat): when `$ref` is a plans branch, `git push origin HEAD:<that branch>` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-s3c1-<N>-pr.md`. R3 (`origin/main` only; confirmed): `gh pr merge <number> --repo housegate/housegate --squash`. R4 (read-only): fetch again; `s3-ledger.py get` the task's names must print the values just written, else stop and ask. A task ends only after R4. Readers take values only through `s3-ledger.py get`, never from a local checkout (the plans worktrees `~/src/remotesrc/claude/housegate/ms-si-stage3-plans*` are never read for a value or written) or a pending PR. Plan S3-B's own tasks keep `s3b-ledger.py`. Ledger copies (decision D34): Plans S3-A's and S3-B's are `origin/main` (housegate#237 merged them); this plan's, like that of every plan of S3-C1 to S3-F, is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, so R2 pushes to that branch before the merge and goes through a docs PR after it. When R1's `ref` stops with `no plan 's3c1'` (the plans branch is not on origin yet), the task stops and asks the user to push it; it never records into a local checkout.
+- Record procedure (D23, run once per recording task 22, 24, 25, 27, 28): R1 (local): `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`; `ref="$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3c1)"`; a URWT worktree `multi-source-s3c1-ledger-<N>` of housegate (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate codex multi-source-s3c1-ledger-<N> urwt/codex/multi-source-s3c1-ledger-<N> "$ref"`), its path and `$ref` kept in `$HOME/.cache/s3-ledger/record-s3c1-<N>` and its complete raw URWT JSON retained exclusively in `$HOME/.cache/s3-ledger/record-s3c1-<N>.urwt.json` (later calls require the exact same path, expected local branch and common repository); the run record in `$HOME/.cache/s3-ledger/record-s3c1-<N>.md`; `s3-ledger.py set <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md <N> <record file> NAME=VALUE...`; one commit of the plan file only, `docs(plan): record <names> of Plan S3-C1 (Task <N>)`. R2 (explicit user confirmation in chat): when `$ref` is a plans branch, `git push origin HEAD:<that branch>` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-s3c1-<N>-pr.md`. R3 (`origin/main` only; its own explicit user confirmation in chat, after current-head CI and review): run the recording task's complete paginated REST primary-author/trailer gate against the exact local record commit, with remote-head equality checked before and after that gate; retain that exact checked SHA as `expected_head`, then execute `gh pr merge <number> --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1`. Never recapture an unchecked local or remote head as the merge argument, and never continue to a later `gh pr view` after merge failure. If checking and confirmed merging happen in separate Bash invocations, carry their repository/PR/worktree/head binding through the task-local checked-head receipt described below; a changed head requires repeating review, author validation and the separate merge confirmation. R4 (read-only): fetch again; `s3-ledger.py get` the task's names must print the values just written, else stop and ask. A task ends only after R4. Readers take values only through `s3-ledger.py get`, never from a local checkout (the plans worktrees `~/src/remotesrc/claude/housegate/ms-si-stage3-plans*` are never read for a value or written) or a pending PR. Plan S3-B's own tasks keep `s3b-ledger.py`. Ledger copies (decision D34): Plans S3-A's and S3-B's are `origin/main` (housegate#237 merged them); this plan's, like that of every plan of S3-C1 to S3-F, is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, so R2 pushes to that branch before the merge and goes through a docs PR after it. When R1's `ref` stops with `no plan 's3c1'` (the plans branch is not on origin yet), the task stops and asks the user to push it; it never records into a local checkout.
 - Ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py`: the text at the end of this section, verbatim, written with the Write tool by the first ledger step of Task 22 and of every later recording task of any stage-3 plan (an earlier copy is the same text and is overwritten); it is the only reader and writer of the Appendix C of Plans S3-C1 to S3-F and reads Plans S3-A's and S3-B's. A plan file is a `docs/superpowers/plans/*-multi-source-si-s3*-*.md` whose word after `multi-source-si-` is a plan key (`s3`, one letter, optional digits: `s3a`, `s3b`, `s3c1` … `s3c4`, `s3d`, `s3e1` … `s3e4`, `s3f`); the `s3cf` status, scoping and names-index files beside the plans match the glob but are not plans. A plan's ledger copy is the first of `origin/main`, `origin/urwt/claude/ms-si-stage3-plans`, `origin/urwt/claude/ms-si-stage3-plans-cf` that holds its file (so Plans S3-A's and S3-B's values are read on `origin/main`, where `s3b-ledger.py` writes them since housegate#237, never from the copy on the `-cf` branch; the new plans' values are read on the `-cf` branch until their PR merges, D34). A value is well formed when it matches its name's pattern: `OPERATOR_CHART_VERSION` semver, `ARBITER_PIN_P2` a commit, else by the suffix of the name without `_P1`…`_P6`: `_TAG` `vX.Y.Z`, `_DIGEST` `sha256:<64 hex>`, `_COMMIT` 40 hex, `_PR` a positive integer, `_END` `YYYY-MM-DD`, `_EPOCH`, `_ID` and `_BLOCK` an unsigned integer, `_NODE` a node name, `_SIGNER` an address; any other name a token `[A-Za-z0-9/][A-Za-z0-9._:/=,+@-]{0,199}`. Later plans choose their names under these rules.
 
 Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
@@ -20065,7 +20277,7 @@ Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
 - Activation model: Plans S3-C1 to S3-D change no consensus format and leave `LocalNodeFeatures` unchanged through `CORE_TAG_P4`; the only exception is Plan S3-D's additive, non-Raft settle surface, released unconditionally as `PROTO_TAG_P4`: `SettleTrack` (with its read `GetTrackSettle`) and the `SNodeHello.settle` / `PromotionCommand.settle` stream fields (D26); every component stays rollback-able until the P5 activation.
 - Never edit: every golden or vector file listed by Plans S2-A and S3-A, `pre_tracks_golden.json`, the `l3_track_golden_test.go` constants and `conformance/stage3_reads_test.go`, whose count literals alone Plans S3-D and S3-E1 may change (D25); the new frozen fixtures are those the conventions list (`pre_stage3_golden.json`, the L3 `group_key` vectors, the v21 plain and interned containers, the placement and group-key digests, the authority, consent, member-ready and checkpoint vectors, the tag 38–42 encodings, `conformance/stage3_test.go`).
 - Mechanics labels: the suite is Plan S3-A's M0–M11, this plan's M12–M14 and Plan S3-D's from M15; Plan S3-B's lockdown grant probe is not a mechanics test (D32).
-- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry`, `user.email=chen@sentio.xyz` and `commit.gpgsign=true` before its first real commit. Every commit explicitly stops on staging or commit failure, must create a new HEAD, and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records; new local Codex worktrees use their retained actual JSON paths, while D34 and existing stack branches stay unchanged.
+- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry`, `user.email=chen@sentio.xyz` and `commit.gpgsign=true` before its first real commit. Every commit explicitly stops on staging or commit failure, must create a new HEAD, and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). The complete paginated REST validator from Task 25 fails closed on missing/malformed/truncated responses, the 250-commit limit, unexpected primary authors and duplicate/noncanonical trailers; its Python body is preserved verbatim. Ordinary and ledger merges submit the exact validated 40-hex head through `--match-head-commit` and explicitly stop on failure, even when a later command would succeed or Bash errexit is suppressed by a surrounding conditional. Tasks 22/24/25/27 persist separated ordinary-check/merge state in `$HOME/.cache/s3-worktrees/task-<N>-merge-check.json`, atomically binding the exact repository, PR number, retained worktree path spelling and checked SHA. A later confirmed merge requires the exact receipt key set and binding, unchanged local HEAD and matching remote head; missing/malformed or mismatched receipts stop rather than silently checking a new head. Same-block checks and merges keep one captured SHA without recomputing it after validation. These receipts are local review state only: they never supply release values, change R1–R4, replace actual URWT JSON or populate Appendix C. URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records; new local Codex worktrees use their retained actual JSON paths, while D34 and existing stack branches stay unchanged.
 - Every runbook from P1 on computes its promotion budget with Plan S3-B's P0 runbook §13.4 (K28).
 - Execution order: S3-B → S3-C1 code → S3-C1 live → S3-C2 → S3-C3 → S3-C4 → S3-D live (S3-D code after S3-C2); S3-E1 → S3-E2 → S3-E3 → S3-E4 code, its live activation after `P4_END`; S3-E4 → S3-F (S3-F also needs `DEVNET2_FAILURE_DOMAINS` from S3-D). Release order per repository: housegate `HG_TAG` → `HG_TAG_P1` → `HG_TAG_P3` → `HG_TAG_P5`; arbiter-proto `PROTO_TAG` → `PROTO_TAG_P4` → `PROTO_TAG_P5` (D26); arbiter-core `CORE_TAG` → `CORE_TAG_P1` → `_P2` → `_P3` → `_P4` → `_P5`; arbiter `ARBITER_TAG` → `ARBITER_PIN_P2` (a commit) → `ARBITER_TAG_P4` → `ARBITER_TAG_P5`; sentio-node `SN_COMMIT` → `SN_COMMIT_P1` … `_P5`.
 - Decisions D25–D40 (taken for Plans S3-C1 to S3-F after Plan S3-B's D1–D24; binding; each plan cites those that touch it):
@@ -20708,6 +20920,21 @@ Drafting facts below preserve the original measurements and extra names at their
 - All38real commit points in these seven tasks retain the accepted explicit failure/new-HEAD/poetry-G/verify-commit gates. The independent workflow audit's1706inert cases and375complete shell-fence syntax results remain scoped workflow evidence, not a new implementation, real GPG, GitHub or deployment proof. This follow-up verifies unchanged guard bodies and documentation interfaces rather than repeating implementation or cluster checks.
 - Task27's first §0 Bash body has SHA256 `95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7`. Task28's actual `section_zero` extractor returns exactly those bytes. Only the three existing P1 commit helpers changed in the reconciliation; their names/callable interfaces and the six preceding runbook dependencies remain unchanged. Task28's local `p1_commit` separately enforces the same new-HEAD/signature rule.
 - The eight Appendix C rows and five run-record items remain byte-identical and empty. No release, ledger value, live result, implementation fence or pending user decision changed. Existing implementation verification remains at its historical bases; this bounded workflow follow-up does not refresh those bases or claim new Go/ClickHouse/render execution.
+
+### Current-source freshness follow-up (Track B, 2026-10-17)
+
+- Refreshed current-source prose to housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` and production `efe5c77859e98d0465838cb5763c7f1fcbd89ee3`. Actual S3-B Task 21 and its `E_END`/indexer-c rows are recorded; the host is `sea-dg-6`, its source CHI remains `sea-dg-3`, and `snode-3` is already allocated. Old `36a680517`/pending-S3-B proofs and measured task anchors remain explicitly historical. No synthetic prerequisite record is replayed over actual rows.
+- The fresh safe source replay excludes both prohibited credential-bearing production files before archive access. It measured 129 baseline and 148 future P1 chart tests, then 169 after Task 37 and 185 after Task 38; all passed. Unchanged Task 26 hunks applied with three-way context reconciliation. Only the historical Task 28 fixture's redundant monitoring-tuple formatting conflicted; actual-main tuple bytes were retained. All future P1 pins/hashes and live-edit states in this replay remain synthetic, not releases or actual ledger values.
+- The separate unchanged audited direct-Helm renderer completed 32 local renders over future P1/37/38/39 and 24 exact adjacent-stage byte/object-identity comparisons. This is qualified local replacement evidence; the canonical helmfile wrapper and live tail were not executed. Historical render claims retain their original scope; no new ClickHouse grant, deployment, monitoring delivery or 500-block acceptance result is inferred.
+- Actual source monitoring lists include all three hosts/installations while enabled remains false. Existing Task 26/28 enabled gates remain intact, and P1 still stops for explicitly approved enablement and delivery proof; the actual E_END record and historical S3-B waiver do not satisfy that live prerequisite. The 100 GiB keep-free and 10 GiB member-PVC inputs remain unchanged.
+- Only this front's source/baseline prose, Task 26's Files/verification prose and this entry changed. Every implementation/workflow fence, Task 27 helper body, protected fixture, other task and Appendix C cell/run record is byte-identical. This bounded metadata follow-up repeats no unchanged implementation tests and does not add another plan consistency pass or authorize execution.
+
+
+### Bounded exact-head merge consistency follow-up (Track B, 2026-10-17)
+
+- Contract §19 now matches the bounded Tasks 22/24/25/27/28 workflow proposals: ordinary and ledger merges bind the exact validated 40-hex head through `--match-head-commit`, with explicit failure stops. Separated author-check/confirmation/merge calls in Tasks 22/24/25/27 preserve repository/PR/worktree/head receipts; malformed, missing or changed bindings require a fresh review and confirmation. Same-block gates retain one captured head rather than recomputing a new merge argument. The complete paginated REST primary-author/trailer validator remains byte-identical, with its existing fail-closed response/identity rules.
+- Verified contract/task agreement using the actual C1 proposal commands and receipts, while retaining the current-source freshness prose in the canonical front and Task 26. The earlier bounded multi-plan workflow evidence remains precisely scoped: 584 extracted fake-CLI cases, six original unsafe-flow reproductions, six conditional/local-head race controls and 54 Bash 3.2/5 syntax checks; none is a real GitHub merge, GPG, source implementation or live deployment proof. This prose-only consistency follow-up introduces no executable helper or new fixture claim.
+- All 11 C1 parts were snapshotted; only Appendix A §19 prose and this Appendix B entry change in this follow-up. The ledger Python bytes, D34 lookup order, eight empty Appendix C rows and five empty run-record items are unchanged. Task 27's first §0 helper body remains SHA256 `95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7`; the task proposals change only later workflow blocks. Pending user choices and every explicit action confirmation remain unchanged. Formal review/consistency counts do not increase, and execution remains gated by the unfinished whole-stage checks.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
