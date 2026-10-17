@@ -6035,7 +6035,7 @@ Remote reads (fetches, module downloads, the image pull of Step 18, GitHub and t
   - Plan S3-C2 (§23–§24) and S3-C4 (§31): `SI_MEMBER_GRANTS`, `SI_MEMBER_DDL_GRANTS` and the `si_member_ddl` profile constraint, `member.New`, `member.Role`, `member.Peer`, `serve.ServingView`, `serve.DatabaseView`; Plan S3-C3 K41's by-name engine grants of the protocol users; `MEMBER_IDS`'s member ids (K29).
   - Plan S3-A (§6) and earlier: the rehearsal sources `$HOME/si-devnet2-multisource-s3a-rehearsal/{statedigest,v20check,snapdump}/main.go` (checksums `c5168a19…` and `fccc6a87…`), the stage-2 samples `$HOME/si-devnet2-multisource-s2-rehearsal/sample{14,19}`, Plan S3-A's devnet2 copy `$HOME/si-devnet2-multisource-tracks/arbiter-0-raft-after.tgz`, Plan S3-B's P0 copies `$HOME/si-devnet2-stage3-p0/arbiter-{0,1,2}-raft.tgz` and `.yaml`, and, when Plan S3-D's owner-rebuild runbook ran, its copies `$HOME/si-devnet2-stage3-p4-rebuild/arbiter-{0,1,2}-raft.tgz` and `.yaml`; the integration harness (`startTracksCluster`, `signUpdate`, `update`, `waitUpdate`, `updateOnce`, `prepareHold`, `submitHeld`, `assertHoldGone`, `consensusStateNow`, `workSet`, `waitPublished`, `leaderState`, `poll`, `legacyGolden`, `snodeSigner`, `snapshotBytes`, `testParams`); the chpipeline helpers of Plan S3-C2 Task 36.
 - Produces (contract §55, verbatim): `const preStage3GoldenPath = "testdata/pre_stage3_golden.json"`, `func runPreStage3History(t *testing.T) legacyGolden`, `TestPreActivationHistoryIsByteIdenticalAcrossStage3`, env `ARBITER_CAPTURE_PRE_STAGE3_GOLDEN`, the refusals `%s exists; it is captured once from the release before stage 3 and never rewritten` and `pre-activation history replays differently from the release before stage 3:\n%s`; `TestStage3ActivationWithEverySwitchOffChangesNothingButTheEncoding`, `TestStage3ActivationExemptsAQuarantinedTracksSNode`, `TestStage3ActivationRefusesAnUnupgradedDataPlaneNode`, `TestStage3VotersRestartFromV21Snapshots`, `TestStage3ForcedPlainBodyAfterActivation`, `TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup`, env `ARBITER_WRITE_V21_FIXTURE`; `type stage3Harness struct`, `func startStage3Harness(t *testing.T) *stage3Harness`, `func (h *stage3Harness) startConsensusMember(t *testing.T, ownerIndex int, nodeID string)`, `func (h *stage3Harness) update(t *testing.T, mutate func(*arbiter.Stage3Params))`, `func (h *stage3Harness) switchOn(t *testing.T, step string)`, the steps `activation`, `purge`, `eviction_voiding`, `owner_aware_selection`, `members_listed`, `placement`, `members_ready`, `reselection`, `checkpoints`, `narrowed_drain`, `raise_k`, `chMemberA = "member-a"`, `chMemberB = "member-b"`, `chMemberC = "member-c"`, the seven `TestPipeline_Stage3*` tests, env `ARBITER_CH_STAGE3`, `CH_STAGE3_ADDRS`, `CH_STAGE3_KEEPER`; CI job `integration-clickhouse-stage3` and `scripts/ci/stage3-pipeline.sh`, `stage3-clickhouse-config.xml`, `stage3-clickhouse-users.xml`, `stage3-keeper.xml`; `$R5` with `old_tag.txt`, `new_tag.txt`, `bin/old/{statedigest,v20check,snapdump}`, `bin/new/{statedigest,v21check,snapdump,p5rehearsal}`, `p5rehearsal/p5rehearsal_test.go`, `v21-fixture.container`, `merge-commit`, `arbiter-release`, `cut-release.sh`, `p5-files.sha256`; the PR; `ARBITER_TAG_P5`, `ARBITER_DIGEST_P5` and the run record `arbiter P5 release`. Plan S3-E2 contract §44's `TestNoStage3ProtoFieldIsPending`.
-- Produces (this task's own names, recorded in Appendix B): `preStage3Signer`; integration `stage3DomainIndexer0`, `stage3DomainIndexer1`, `stage3UpdateTimeout`, `stage3ActivationParams`, `withStage3Switch`, `withoutStage3`, `registerSNodeAdvertising`, `registerVerifierAdvertising`, the `tracksCluster` methods `activateStage3`, `switchOn`, `waitStage3Update`, `writeOn`, `writeBothAndSettle`, `waitDrained`, `app`, `snapshotVoter`, `newestContainer`, `restartVoter`, `waitQuiet`, `group`, `memorySink`, `stateDigest`, `containerDigest`, `plainContainer`, `requireContainer`, `fakeMember` (`newFakeMember`, `entry`, `register`, `checkpoint`), `memberOf`, the `cluster.cfgs` field; chpipeline `stage3IntegrationEnv`, `stage3AddrsEnv`, `stage3KeeperEnv`, `stage3Steps`, `stage3SIDatabases`, `stage3Host`, `stage3Member`, `requireStage3CH`, `requireKeeperOK`, `stage3Conn`, `stage3Schema`, `writeEveryOwner`, `requireStepEffect`, `runStepsThrough`, `floorHeld`, `quarantine`, `release`, `servedDatabase`, the pool verifiers' databases `hg_unsafe_pool`, `hg_safe_pool`, `hg_promote_pool`, `hg_pool_replay` and the docker network aliases `stage3-ch-a`, `stage3-ch-b`, `stage3-ch-c`, `stage3-keeper`; the CI config's `allow_zookeeper_write`; `$R5/helpers.sh` with `rehearsal_build old|new`, `digest_lines`, `rehearsal_replay`, `rehearsal_inputs`, `rehearsal_v21`, `rehearsal_p5 linux|host`; the evidence `$W.replay-e4.txt`, `$W.ledger-e4`; the PR body file.
+- Produces (this task's own names, recorded in Appendix B): `preStage3Signer`; integration `stage3DomainIndexer0`, `stage3DomainIndexer1`, `stage3UpdateTimeout`, `stage3ActivationParams`, `withStage3Switch`, `withoutStage3`, `registerSNodeAdvertising`, `registerVerifierAdvertising`, the `tracksCluster` methods `activateStage3`, `switchOn`, `waitStage3Update`, `writeOn`, `writeBothAndSettle`, `waitDrained`, `app`, `snapshotVoter`, `newestContainer`, `restartVoter`, `waitQuiet`, `group`, `memorySink`, `stateDigest`, `containerDigest`, `plainContainer`, `requireContainer`, `fakeMember` (`newFakeMember`, `entry`, `register`, `checkpoint`), `memberOf`, the `cluster.cfgs` field; chpipeline `stage3IntegrationEnv`, `stage3AddrsEnv`, `stage3KeeperEnv`, `stage3Steps`, `stage3SIDatabases`, `stage3Host`, `stage3Member`, `(*stage3Member).reconcilerConfig`, `TestStage3MemberReconcilerConfigMatchesRole`, `requireStage3CH`, `requireKeeperOK`, `stage3Conn`, `stage3Schema`, `writeEveryOwner`, `requireStepEffect`, `runStepsThrough`, `floorHeld`, `quarantine`, `release`, `servedDatabase`, the pool verifiers' databases `hg_unsafe_pool`, `hg_safe_pool`, `hg_promote_pool`, `hg_pool_replay` and the docker network aliases `stage3-ch-a`, `stage3-ch-b`, `stage3-ch-c`, `stage3-keeper`; the CI config's `allow_zookeeper_write`; `$R5/helpers.sh` with `rehearsal_build old|new`, `digest_lines`, `rehearsal_replay`, `rehearsal_inputs`, `rehearsal_v21`, `rehearsal_p5 linux|host`; the evidence `$W.replay-e4.txt`, `$W.ledger-e4`; the PR body file.
 
 Notes:
 - **The frozen history (contract §55).** `runPreStage3History` founds the pre-tracks network of `pre_tracks_golden_test.go` (indexer 1 on s1 owns `db.t`, indexer 0 on s0 owns `db0.x`, verifiers v1..v3), activates tracks, enrols a third indexer (2 on s2, owning `db2.z`, with `authoritytest`'s stranger key as its enrolment key), writes, verifies, promotes, acknowledges, publishes and cleans one statement on every track, quarantines and releases track 1, rejects a block of track 0 and cleans its rejected part after the release, and lists a fourth verifier, first refused and then admitted by the stage-2 drain gate. It carries no stage-3 field. Every signature is fixed (`authoritytest.Iat`, deterministic ECDSA and ed25519) and the history uses its own helpers rather than the fsm fixtures that read the wall clock, so the answers, chain hashes and v20 container are a pure function of the binary: two captures while drafting were byte-identical. The test asserts the counts of the capture, 106 answers, seven sealed blocks and `snapshotVersionV20` (Appendix B). The file compiles against `ARBITER_TAG_P4` (it uses only names that exist there) and against the branch.
@@ -8237,6 +8237,36 @@ func (h *stage3Harness) release(t *testing.T, indexer, generation uint64) {
 	}
 	waitFor(t, fmt.Sprintf("track %d released", indexer), stage3Patience, func() bool { return !h.track(t, indexer).Quarantined })
 }
+
+// TestStage3MemberReconcilerConfigMatchesRole runs without Docker: a missing
+// network fails Task 62's constructor, missing genesis schemas fail its schema
+// resolver, and a different policy places replicas outside the member disk.
+func TestStage3MemberReconcilerConfigMatchesRole(t *testing.T) {
+	h := &stage3Harness{schema: stage3Schema(0)}
+	for i, id := range []string{chMemberA, chMemberB, chMemberC} {
+		host := &stage3Host{indexer: uint64(i)}
+		h.hosts = append(h.hosts, host)
+		m := &stage3Member{h: h, host: host, id: id, stateDir: t.TempDir()}
+		role, got := m.config(), m.reconcilerConfig()
+		if got.NetworkID == "" || got.NetworkID != role.NetworkID || got.StoragePolicy != role.Pinned.StoragePolicy || got.StoragePolicy != "member" {
+			t.Fatalf("%s reconciler network/policy = %q/%q, role = %q/%q", id, got.NetworkID, got.StoragePolicy, role.NetworkID, role.Pinned.StoragePolicy)
+		}
+		gotTables, err := json.Marshal(got.Tables)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantTables, err := json.Marshal(role.Genesis)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Tables) != 1 || string(gotTables) != string(wantTables) {
+			t.Fatalf("%s reconciler tables = %s, role genesis = %s", id, gotTables, wantTables)
+		}
+		if got.NodeID != role.NodeID || got.StateDir != role.StateDir || got.KeeperShardID != role.Pinned.KeeperShardID || !got.CreateReplicas || got.Interval != time.Second {
+			t.Fatalf("%s reconciler identity/lifecycle differs from the role: %+v", id, got)
+		}
+	}
+}
 ```
 
 - [ ] **Step 14: Run them and see them fail to build**
@@ -9300,14 +9330,22 @@ func (m *stage3Member) start(t *testing.T) {
 	}()
 }
 
+// reconcilerConfig uses the same network, genesis schemas and storage policy
+// as the member role. Restarts and the step-6 startup share this path.
+func (m *stage3Member) reconcilerConfig() consensus.ReconcilerConfig {
+	cfg := m.config()
+	return consensus.ReconcilerConfig{NodeID: cfg.NodeID, StateDir: cfg.StateDir, KeeperShardID: cfg.Pinned.KeeperShardID,
+		CreateReplicas: true, Interval: time.Second, NetworkID: cfg.NetworkID, Tables: cfg.Genesis, StoragePolicy: cfg.Pinned.StoragePolicy}
+}
+
 // startReconciler starts the member's UnsafeReconciler as si_member_ddl
 // with create_replicas on (step 6 of §10.4).
 func (m *stage3Member) startReconciler(t *testing.T) {
 	t.Helper()
 	client := newDataPlaneClient(t, m.h.cluster)
 	registry := dataplane.NewRegistryFollower(client, stage3Logger())
-	rec, err := consensus.NewUnsafeReconciler(consensus.ReconcilerConfig{NodeID: m.id, StateDir: m.stateDir, KeeperShardID: stage3Shard,
-		CreateReplicas: true, Interval: time.Second}, consensus.ReconcilerDeps{DDLConn: m.ddlConn, Registry: registry, Arbiter: client, Logger: stage3Logger()})
+	rec, err := consensus.NewUnsafeReconciler(m.reconcilerConfig(),
+		consensus.ReconcilerDeps{DDLConn: m.ddlConn, Registry: registry, Arbiter: client, Logger: stage3Logger()})
 	if err != nil {
 		t.Fatalf("reconciler %s: %v", m.id, err)
 	}
@@ -9613,6 +9651,9 @@ func (h *stage3Harness) advanceCursor(t *testing.T, n uint64) {
 ```
 
 - [ ] **Step 16: Run them and see them skip, and fail when opted in without servers**
+
+Run the configuration regression without Docker first: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/chpipeline/ -run '^TestStage3MemberReconcilerConfigMatchesRole$' -count=1 -v`
+Expected: `--- PASS: TestStage3MemberReconcilerConfigMatchesRole` and `ok`. This checks every member and the shared startup/restart path against the role's network id, genesis tables and pinned member storage policy; the integration run below must use the actual `CORE_TAG_P5` implementation of Task 62. A permissive reconciler stand-in cannot validate the switch-on tests.
 
 Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l integration/chpipeline)" && go vet ./integration/chpipeline/ && go test ./integration/chpipeline/ -run '^TestPipeline_Stage3' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'; ARBITER_CH_STAGE3=1 go test ./integration/chpipeline/ -run '^TestPipeline_Stage3SwitchOnInOrder$' -count=1 2>&1 | grep -E '^(--- |FAIL)|needs '`
 Expected: gofmt and vet are silent; seven `--- SKIP:` lines (`TestPipeline_Stage3SwitchOnInOrder`, `TestPipeline_Stage3FloorAtKTwoHoldsCleanupUntilAMemberCheckpoints`, `TestPipeline_Stage3ReselectionOnAQuietTrack`, `TestPipeline_Stage3EvictionVoidingKeepsALatchedVerdict`, `TestPipeline_Stage3KillOneMemberMidStream`, `TestPipeline_Stage3OneIndexerDownStallsOnlyItsTrack`, `TestPipeline_Stage3QuarantinedOwnersCopiesStayServed`), each after `set ARBITER_CH_STAGE3=1, CH_STAGE3_ADDRS and CH_STAGE3_KEEPER to run (scripts/ci/stage3-pipeline.sh)`, and `ok`; then `--- FAIL: TestPipeline_Stage3SwitchOnInOrder` with `stage3_test.go:36: ARBITER_CH_STAGE3=1 needs CH_STAGE3_ADDRS: three host:port addresses, comma-separated (servers a, b, c), got ""` and `FAIL` (an opted-in run never turns into a skip). Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/chpipeline/ -count=1 2>&1 | tail -1`
@@ -10931,8 +10972,35 @@ Expected checks: `test` (the Bazel build, the fsm `gen/pb` and `time.Now` red li
 
 - [ ] **Step 28: Check the authors and merge (requires explicit user confirmation)**
 
-Run (read-only): `gh pr view <n> --repo sentioxyz/arbiter --json commits --jq '.commits[].authors[] | "\(.name) <\(.email)>"' | sort | uniq -c`
-Expected: exactly one line, `<count> poetry <chen@sentio.xyz>`, `<count>` the branch's commit count. Any other author: do not merge; rewrite that commit's author as in Step 1 (with its confirmation) and push again (Step 27).
+Check every PR commit's primary author and its complete message (read-only). The canonical Claude coauthor is allowed; any other coauthor is refused. Historical merge commits may have no coauthor.
+
+```bash
+set -eo pipefail
+pr=<n>
+gh api --paginate --slurp "repos/sentioxyz/arbiter/pulls/$pr/commits" | python3 -c '
+import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")
+'
+```
+
+Expected: `PR commit identities verified`. Any other author or coauthor: do not merge; rewrite that commit's identity as in Step 1 (with its confirmation), remove the disallowed trailer and push again (Step 27).
 
 Remote write (merge): needs explicit user confirmation in chat, after review, before running. Gate: "squash-merge sentioxyz/arbiter PR <n> (Tasks 64–78, every switch off) into main". After a yes:
 
@@ -14885,10 +14953,29 @@ Expected: `build` and `integration-clickhouse` pass; the drift step, the accepta
 Before the merge, every commit of the PR must be authored by `chen@sentio.xyz` (remote read: needs explicit user confirmation in chat before running):
 
 ```bash
-gh pr view <n> --repo sentioxyz/sentio-node --json commits --jq '.commits[] | .authors[] | .email' | sort -u
+set -eo pipefail
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
 ```
 
-Expected: exactly `chen@sentio.xyz`. Anything else: stop; rewrite the authors on the branch (`git -C "$W" rebase --exec 'git commit --amend --no-edit --reset-author' <base>` with the worktree identity of Step 1) and ask again before force-pushing the branch.
+Expected: `PR commit identities verified`. The REST commit record checks each primary author as `poetry <chen@sentio.xyz>` independently of GitHub’s coauthor list; no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). Ordinary task commits still require that trailer. Anything else: stop; rewrite the authors on the branch (`git -C "$W" rebase --exec 'git commit --amend --no-edit --reset-author' <base>` with the worktree identity of Step 1) and ask again before force-pushing the branch.
 
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
@@ -14974,7 +15061,34 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 79's ledger record"); before it, `gh pr view <number> --repo housegate/housegate --json commits --jq '.commits[] | .authors[] | .email' | sort -u` (remote read, confirmed with the gate) must print exactly `chen@sentio.xyz`; after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 79's ledger record"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
+
+```bash
+set -eo pipefail
+pr=<number>
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -20700,16 +20814,34 @@ p5_record RECORD_PR "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/tas
 Expected: `author and committer: poetry <chen@sentio.xyz>`, the push, the PR URL and `recorded RECORD_PR=<n>`. Then, only after the user has reviewed it, the merge. Requires explicit user confirmation in chat. Gate: "squash-merge the record PR #<RECORD_PR> into production main (docs only), after checking that every commit of it is authored by chen@sentio.xyz". After a yes:
 
 ```bash
+set -eo pipefail
 pr="$(p5_recorded RECORD_PR)"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json commits --jq '[.commits[].authors[].email] | unique | join(" ")')" = chen@sentio.xyz ] ||
-  { echo "a commit of PR #$pr is not authored by chen@sentio.xyz: rewrite its author before merging; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
 gh pr merge "$pr" --repo sentioxyz/production --squash
 git -C "$P" fetch -q origin main
 git -C "$P" switch -q --detach origin/main
 echo "live checkout back at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached)"
 ```
 
-Expected: the merge, then `live checkout back at origin/main <9 hex> (detached)`.
+Expected: `PR commit identities verified`, the merge, then `live checkout back at origin/main <9 hex> (detached)`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the ordinary record commit above still requires its Claude trailer.
 
 - [ ] **Step 20: Appendix C record (local commit; the push, or the docs PR and its merge, require explicit user confirmation)**
 
@@ -20765,7 +20897,34 @@ case "$ref" in
 esac
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 82's ledger record, after checking that its one commit is authored by chen@sentio.xyz"); after a yes, check `gh pr view <number> --repo housegate/housegate --json commits --jq '[.commits[].authors[].email] | unique | join(" ")'` prints `chen@sentio.xyz`, then `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; its fetch reads a remote and needs explicit user confirmation in chat; Gate: "git fetch of housegate's origin and s3-ledger.py get of P5_REHEARSAL, ACTIVATION_EPOCH and P5_END, reads"). After a yes:
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 82's ledger record, after checking that its one commit is authored by chen@sentio.xyz"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
+
+```bash
+set -eo pipefail
+pr=<number>
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; its fetch reads a remote and needs explicit user confirmation in chat; Gate: "git fetch of housegate's origin and s3-ledger.py get of P5_REHEARSAL, ACTIVATION_EPOCH and P5_END, reads"). After a yes:
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -20807,7 +20966,7 @@ Plan S3-A's §0–§6, Plan S3-B's §7–§15 and the contracts of S3-C1 (§16�
   - **Proto:** `Stage3Params` fields 1–18 (`group_size` … `narrowed_drain`), `stage3` = 14 on `ConsensusParamsUpdate` and 9 on `ConsensusMutableParams`, `ConsensusParamsState.stage3_state` = 9, `ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12`, `ADMISSION_CODE_COPIES_BACKPRESSURE = 13`, `TableRegistrySnapshot.groups = 10`, `stage3 = 12`.
   - **Canonical Go types:** `arbiter.Stage3Params{GroupSize, NetworkFillDefault, MinSafeCopies, StrictCopies, IndexerFailureDomains, MaxLagPublications, LagLow, EvidenceTimeoutL2Blocks, MaxUncleanedPartsPerPartition, MaxUncleanedPartsPerTable, ExcludeQuarantinedHosts, Purge, EvictionVoiding, OwnerAwareSelection, Placement, Reselection, Checkpoints, NarrowedDrain}`, `arbiter.IndexerFailureDomain{IndexerID, FailureDomain}`, `arbiter.VerifierEntry{NodeID, Ed25519Pubkey, HostIndexerID *uint64, ReplicaSigner, ConsentJWS, Weight, FailureDomain, Verify, Replicate, Counts, SharedRMT}`, `arbiter.ExcludedTable`, `arbiter.AdmissionCodeVerifiersUnavailable`, `arbiter.AdmissionCodeCopiesBackpressure`, `arbiter.Stage3Feature = "stage3_v1"`.
   - **Consent:** `authority.GroupMemberConsentStatement{NetworkID, GenesisSnapshotID, HostIndexerID, NodeID, Ed25519Pubkey, ReplicaSigner}`, `(*authority.Signer).SignGroupMemberConsent`, `authority.VerifyGroupMemberConsent(stmt, jws, signer)`, purpose `arbiter-group-member-v1`.
-  - **Wire and member mode:** `wire.TableRegistrySnapshot.Groups []wire.DatabaseGroup`, `wire.DatabaseGroup{OwnerIndexerID, DatabaseID, Members []GroupMember, NetworkFill, Generation, PastMembers, Leaving []LeavingMember, GroupKey, PlacementSalt}`, `wire.GroupMember{NodeID, JoinedGeneration, ReadyGeneration, Class, Checkpoint, ObservedEntry, LagAdvances, HostIndexerID}` with `Ready()`. Its `HostIndexerID uint64` is the registry-view field `GroupMember.host_indexer_id`, which S3-E1 adds and fills at serve time from the member's `VerifierEntry.HostIndexerID` (decision D27). That value is fixed for the entry's life (K68), is not FSM state and is not Raft-reachable. `LagAdvances` saturates at `max_lag_publications + 1` (decision D31). Also `wire.LeavingMember{NodeID, RemovedGeneration, ReleaseEntry, FrozenMembers, FrozenDomains, Released}`; `member.Config.Consensus *consensus.Config` with `consensus.Config{NodeID, NetworkID, GenesisSnapshotID, StateDir, Ed25519Seed []byte, ReplicaSignerKeyHex string, KeeperShardID, Tables, Register bool, ReadinessInterval, CheckpointInterval, ResolveInterval}`, `consensus.ReconcilerConfig{NodeID, StateDir, KeeperShardID, CreateReplicas bool, Interval}`, `consensus.NewUnsafeReconciler`, `consensus.Metrics`, `tableset.Stats.KeeperFindings` and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`.
+  - **Wire and member mode:** `wire.TableRegistrySnapshot.Groups []wire.DatabaseGroup`, `wire.DatabaseGroup{OwnerIndexerID, DatabaseID, Members []GroupMember, NetworkFill, Generation, PastMembers, Leaving []LeavingMember, GroupKey, PlacementSalt}`, `wire.GroupMember{NodeID, JoinedGeneration, ReadyGeneration, Class, Checkpoint, ObservedEntry, LagAdvances, HostIndexerID}` with `Ready()`. Its `HostIndexerID uint64` is the registry-view field `GroupMember.host_indexer_id`, which S3-E1 adds and fills at serve time from the member's `VerifierEntry.HostIndexerID` (decision D27). That value is fixed for the entry's life (K68), is not FSM state and is not Raft-reachable. `LagAdvances` saturates at `max_lag_publications + 1` (decision D31). Also `wire.LeavingMember{NodeID, RemovedGeneration, ReleaseEntry, FrozenMembers, FrozenDomains, Released}`; `member.Config.Consensus *consensus.Config` with `consensus.Config{NodeID, NetworkID, GenesisSnapshotID, StateDir, Ed25519Seed []byte, ReplicaSignerKeyHex string, KeeperShardID, Tables, Register bool, ReadinessInterval, CheckpointInterval, ResolveInterval}`, `consensus.ReconcilerConfig{NodeID, StateDir, KeeperShardID, NetworkID string, Tables []payloadexec.TableSchema, StoragePolicy string, CreateReplicas bool, Interval}`, `consensus.NewUnsafeReconciler`, `consensus.Metrics`, `tableset.Stats.KeeperFindings` and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`.
   - **Releases:** `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5`.
 - S3-E2 §44–§48:
   - **FSM state:** `fsm.Params.Stage3 *arbiter.Stage3Params`, `fsm.State.Stage3 *Stage3State`, `Stage3SwitchCheckpoints`, `Stage3SwitchNarrowedDrain`, `stage3SwitchOnLocked(name)`, `onStage3SwitchOnLocked(name)` (this plan adds `narrowed_drain`), `verifierEntryLocked(nodeID) (arbiter.VerifierEntry, bool)`, `stage3PendingProtoFields` (Task 78 asserts it empty).
@@ -21337,6 +21496,17 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: task tools `$HOME/.cache/s3e4-task82/{live-path, p5-runbook.py, p5-edit.py, p5-record.py, p5-task.sh, helpers.sh, ledger.env, record.env, p5-pr-state, tests-baseline.txt, tests-last.txt, msg-v.txt, msg-h-{b,c,a}.txt, msg-m-{b,c,a}.txt, msg-mon.txt, msg-record.txt, record-pr-body.md, blocks/, user/accept-b-5401.sh, user/accept-c-5402.sh}`; `p5-runbook.py` (`chain`, `block`, `user`); `p5-edit.py` (`arbiter-pin`, `host-pin`, `fresh-example`, `member-image`, `monitoring-on`, `image-constant`, `constant`, `preflight`; templates `ARBITER_PIN`, `HOST_FEATURES`, `HOST_HEADERS`, `EXAMPLE_HEADER`, `MEMBER_COMMENT`, `MONITORING_BLOCK`); `p5-record.py` (`end`, `runbook-record`, `ledger-record`); shell helpers `p5_fresh_main`, `p5_edit`, `p5_rec`, `p5_record`, `p5_recorded`, `p5_author_ok`, `p5_commit`, `p5_host`, `p5_chi_pods`, `p5_arbiter_pods`, `p5_files`, `p5_window`; `record.env` keys `TESTS`, `START_UTC`, `ARBITER_COMMIT_P5`, `BUDGET`, `REPLAY_DATE`, `P5_REHEARSAL`, `LEADER_71`, `ACTIVATION_UTC`, `ACTIVATION_EPOCH`, `V21_UTC`, `P5_END`, `END_UTC`, `RECORD_PR`; commit labels V, H-b, H-c, H-a, M-b, M-c, M-a, MON (Task 80's rollout labels); evidence `task82-baseline.txt`, `task82-chi-before.txt`, `task82-chi-now.txt`, `task82-window-<label>.txt` (labels V, H-b, H-c, H-a, M-b, M-c, M-a, voters, reregistered, pre-activation, activated, monitoring, end), `task82-render-{v,h-b,h-c,h-a,m-b,m-c,m-a,mon}.txt`, `task82-ledger-recheck.txt`, `task82-activation-precheck.txt`, `task82-features-precheck.json`, `task82-end-values.txt`, `task82-record-pr.txt`; the moved-aside names `rehearsal-failed-<stamp>.txt` and `activate-refused-<stamp>.{out,err}` (runbook §3.6/§7.2 prose); ledger files `$HOME/.cache/s3-ledger/record-s3e4-82{,.md,-pr.md,-pr-url}`; worktrees `multi-source-s3e4-live` (production) and `multi-source-s3e4-ledger-82` (housegate).
 - Verified while drafting: see this agent's result §4 (scratch export of production febc6c4ac + S3-B pending hunks + chart chain 26/37/38/47/53/80 (draft-83 310bd72) + stand-in live states of S3-C3 40-41, S3-C4 48 (its own si_p3_edit) and S3-D 56 (its own p4r-edit.py): the eight commit blocks run verbatim, 237 tests OK at each with the named render deltas; 64/64 runbook block/user extractions resolve on Task 81 runbook filled by its own fill_runbook.py, anchors unique; the twelve-runbook §0 chain assembles in order; p5-record.py and s3-ledger.py set on fabricated evidence; bash -n, /bin/bash -n, fish -n, shellcheck -S warning clean).
 
+
+
+### Review fixes (AgentConnect round 3; sibling identity checks)
+
+- **PR primary authors and Claude coauthors (Tasks 79 and 82; sibling of 244-3).** Four pre-merge and ledger checks used GraphQL's primary-plus-coauthor collection while expecting poetry alone. They now use the same fail-closed REST primary-author / canonical Claude-trailer validation as C1's round-3 fix, accepting no trailer on merge commits while retaining the ordinary commit blocks' required Claude trailer. The 19-case regression corpus, malformed JSON, mocked merge gates on Bash 3.2/5.3, actual #244 response and syntax checks pass. This bounded sibling fix does not complete Tasks 79/82's adversarial reviews or E4's consistency pass.
+
+
+### Review fixes (AgentConnect round 3)
+
+- **Task 78, reconciler configuration (P2).** The stage-3 harness passed no `NetworkID`, genesis `Tables` or member `StoragePolicy` to `NewUnsafeReconciler`. Actual S3-E1 Task 62 refuses the first omission at construction; merely supplying the network id still fails genesis schema resolution, while omitting the policy loses the member-disk placement. `stage3Member.reconcilerConfig()` now derives all three from the same member role configuration, including the pinned Keeper shard, and both startup and restart use it. `TestStage3MemberReconcilerConfigMatchesRole` runs without Docker across all three member identities, with its own Step 16 command. Verified against byte-identical current Task 62 constructor/reconciler/schema code and real upstream producing-task code: original constructor refusal reproduced, missing genesis resolution reproduced, corrected configuration produced the genesis replica's actual CREATE SQL with `storage_policy = 'member'`; the reconciler suite and new harness regression pass normally and under `-race`, and three independent field-omission mutations fail. The available arbiter scratch still uses explicit Task 64–77 compile stubs; no full activation/switch/ClickHouse integration result is claimed. Step 18 remains required against the real implementation chain.
+- **Task 78, primary author gate (sibling of PR #244 round 3).** Step 28 now reads REST primary author separately from complete commit messages and checks coauthor trailers, permitting only `poetry <chen@sentio.xyz>` plus the canonical Claude trailer (historical merges may omit it). It refuses empty/truncated results and disallowed identities; seven fixture cases pass and the embedded validator matches the shared fix-pr244-r3 implementation.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
