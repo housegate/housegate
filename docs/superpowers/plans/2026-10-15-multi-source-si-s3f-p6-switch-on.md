@@ -6116,8 +6116,10 @@ for ref in ('origin/main','origin/urwt/claude/ms-si-stage3-plans-cf'):
 else:
     raise SystemExit('no remote C1 ledger copy: stop and ask')
 marker='The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:'
-assert text.splitlines().count(marker)==1
-tail=text.split(marker,1)[1]
+lines=text.splitlines(keepends=True)
+headings=[i for i,line in enumerate(lines) if line.rstrip('\n')==marker]
+assert len(headings)==1, 'C1 ledger source heading missing or duplicated'
+tail=''.join(lines[headings[0]+1:])
 match=re.match(r'\s*```python\n(.*?)^```\s*$',tail,re.S|re.M)
 assert match, 'C1 ledger source fence missing'
 source=match[1]; compile(source,'s3-ledger.py','exec')
@@ -10479,6 +10481,8 @@ Task84 Keeper follow-up: actual isolated26.3.37.3 proof established ls empty/mis
 - **Bounded final-84 consumer refresh, Tasks 85–88.** Independently bound Task 84 `412c472a…` and extracted runbook `5632ddd7…`; the actual Task 85 C1 bootstrap and thirteen-section helper setup pass against the final Keeper/path/daily/restart helper source. All 107 final exact-marker bodies extract byte-identically with frozen-hash/reused-label refusal; all consumer selector and named-helper references resolve; all 174 executable consumer fences parse/compile. Actual Task 87/88 dispatch wrappers preserve host/stdin and refuse repeated writes or later restart markers when child Bash is an inert local capture only. Private keyed wrappers were inspected and never executed. No consumer text change or live action was needed. This refresh is not the formal F adversarial review or consistency pass; the Task 87 repeated end-of-hour read stanzas remain a reviewer note.
 
 **Review fixes (AgentConnect round5), Tasks84/89:** reproduced current-head P2 with the exact old tail-review helper and Task89 DROP logging stanza in a real local controlling PTY: parent stderr TTY, child stderr pipe, direct old call passes but documented tee call refuses. The shared helper now opens/validates fixed `/dev/tty` on a function-local descriptor for the actual user's prompt/input, preserving automated tee/pipefail logs and caller descriptors. No controlling terminal, piped/prefilled or empty approval, stale/wrong audit and ambiguous query still refuse before a positive guard; actual user/action gates remain, and agents never synthesize operational approval. All P6PY and Task89 executable fences are byte-identical;50 helpers remain and only0-helpers marker changes. Removed two outside-runbook trailing spaces. Verification:12 actual PTY/logging/audit/guard cases,52 embedded selftests,107 actual Task85 exact-marker checks,79 Task89 consumer cases and78 fences/24 exact markers/13 helper sections pass; full Bash/fish/shellcheck/Markdown/diff-whitespace checks pass. No endpoint, key, DDL body, live operation or new container was exercised.
+
+**Review fixes (AgentConnect round 6):** Task85 bootstraps C1's ledger source only after locating its unique complete heading line. Reuse that verified line index rather than splitting at an earlier substring inside a verification script. Preserve exact source bytes and compile/installed-tool equality gates. Execute ten isolated actual-bootstrap cases against the current pushed C1 document, including the original failure, matching/mismatched installed tools, missing/duplicate headings, malformed/missing source, remote fallback and unavailable refs. No live operation or ledger value is produced.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
