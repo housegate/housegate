@@ -9914,13 +9914,33 @@ Expected: `build` and `integration-clickhouse` pass (the acceptance step's PASS 
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on it is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
 
 ```bash
+set -eo pipefail
 W=<worktree path>
-[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
-gh pr view <n> --repo sentioxyz/sentio-node --json commits --jq '.commits[].authors[].email' | sort -u
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
 ```
 
-Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then exactly `chen@sentio.xyz`. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
+Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then `PR commit identities verified`. The REST commit record checks each primary author independently of GitHub’s coauthor list; no coauthor or exactly one `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). The task’s ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
 
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
@@ -10005,7 +10025,34 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 25's ledger record"); before it, `gh pr view <number> --repo housegate/housegate --json commits --jq '.commits[].authors[].email' | sort -u` must print exactly `chen@sentio.xyz`; after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 25's ledger record"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
+
+```bash
+set -eo pipefail
+pr=<number>
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -16223,14 +16270,33 @@ Expected: `Storage-integrity chart validation` passes (its paths cover `charts/s
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit of the PR is the worktree's identity with no co-author but Claude's (a remote read: it needs explicit user confirmation in chat before it runs):
 
 ```bash
+set -eo pipefail
 W=<worktree path>; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
-gh pr view "$pr" --repo sentioxyz/production --json commits --jq '.commits[].authors[] | "\(.name) <\(.email)>"' | sort -u
-git -C "$W" log --format=%B origin/main..HEAD | grep -i '^co-authored-by:' | sort -u
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+echo "PR head is HEAD"
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
 ```
 
-Expected: `PR head is HEAD`, exactly `poetry <chen@sentio.xyz>` (Task 26's commits and this task's), and at most `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
+Expected: `PR head is HEAD`, then `PR commit identities verified`. Each REST commit record must have primary author `poetry <chen@sentio.xyz>`, independently of GitHub’s coauthor list, and no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer (merge commits can have none); the ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
 
 The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
 
@@ -18963,15 +19029,34 @@ printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup
 Expected: the PR URL. Requires explicit user confirmation in chat. Gate: "squash-merge the record PR #<RECORD_PR> into production main (docs only)", asked only after the user has reviewed the PR. After a yes:
 
 ```bash
+set -eo pipefail
 pr="$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json commits --jq '[.commits[].authors[].email] | unique | join(" ")')" = chen@sentio.xyz ] || { echo "a commit of the record PR #$pr is not authored by chen@sentio.xyz alone: rewrite its authors first (user rule); stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
 gh pr merge "$pr" --repo sentioxyz/production --squash
 git fetch -q origin main
 git switch -q --detach origin/main
 git log --oneline -1 | cat
 ```
 
-Expected: no author message, the merge, and the live checkout detached at the new `origin/main`.
+Expected: `PR commit identities verified`, the merge, and the live checkout detached at the new `origin/main`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the record commit above still requires its Claude trailer.
 
 - [ ] **Step 20: Appendix C record of `P1_MECHANICS` and `P1_END` (local commit; the push, or the docs PR and its merge, require explicit user confirmation)**
 
@@ -19020,7 +19105,34 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 28's ledger record"); after a yes, first `gh pr view <number> --repo housegate/housegate --json commits --jq '[.commits[].authors[].email] | unique'` must print `["chen@sentio.xyz"]` (else stop: the authors are rewritten first, user rule), then `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 28's ledger record"); after a yes, check every primary author and allow only the Claude coauthor (the read and merge are under that confirmation):
+
+```bash
+set -eo pipefail
+pr=<number>
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -19755,6 +19867,11 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
   - Task 26's S3-B test extensions pass all seven commits.
   - Commit subjects stay Task 28's; Task 27's helpers should adopt them.
 
+
+
+### Review fixes (AgentConnect round 3)
+
+- **244-3 — PR commit primary authors and Claude coauthors (Tasks 25, 27 and 28).** GitHub's GraphQL `commits[].authors` includes coauthors, so five PR/ledger pre-merge checks rejected the required Claude trailer. Each now independently validates the REST commit's primary author as `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer (merge commits can have none; ordinary task commits still require it). Empty/malformed responses, other identities, duplicate trailers and a listing reaching REST's 250-commit limit fail closed before the merge. Tasks 25/27's existing remote-head comparison now explicitly exits on mismatch (`set -e` alone did not make its `&&` comparison fatal). Verified against #244's actual seven-commit response at `e625683`, including its no-coauthor merge commit; 19 structured fixture cases plus malformed JSON; mocked merge gates and matching/mismatched heads under Bash 3.2 and 5.3; all five complete C1 identity blocks parse. Task 24's local primary-author-only check is already correct. This is a bounded fix; plan consistency remains pending.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
