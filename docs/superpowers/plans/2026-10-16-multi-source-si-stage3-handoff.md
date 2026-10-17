@@ -54,7 +54,7 @@ Merge them in order, 1 first. The repository squash-merges and deletes the merge
 
 58 of 68 tasks were drafted on 2026-10-16 (the ten of the table below were missing). Every drafted task was verified only by its drafter, in scratch exports. No task had had its adversarial review, and no plan its consistency or cross-plan pass. Every plan file says so in a status banner.
 
-**Track B progress (2026-10-17):** see `2026-10-15-multi-source-si-s3cf-status.md` §5 — Tasks 78, 79, 82 and 83 drafted; S3-C1 Tasks 22–28 and S3-C2 Tasks 29–31 reviewed and fixed; the ledger tool's `KEY` fixed; new binding conventions (commit identity, the MinIO image); the notes waiting for the remaining reviews; how to resume.
+**Track B progress (2026-10-17):** see `2026-10-15-multi-source-si-s3cf-status.md` §5.6 — five missing tasks drafted (78, 79, 82, 83, 84); Tasks 22–35 reviewed; C1 plan consistency passed, cross-plan pass pending; actual Task 36 soak in progress. Round-3 CI findings are fixed and the six recorded heads passed. The policy-aware replay producer and C2 consumer are corrected; E1 Task 62 remains a required follow-up. No plan execution is authorized by this progress update.
 
 | Plan | Phase | Tasks | Drafted | Missing |
 |---|---|---|---|---|
