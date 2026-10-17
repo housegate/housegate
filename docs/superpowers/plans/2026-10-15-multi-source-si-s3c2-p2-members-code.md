@@ -8713,17 +8713,19 @@ Expected: no boundary violation, no unformatted file, no BUILD change left after
 
 Spec §8.5–§8.7 and §8.1's free-space stop, as clarifications K35 and K36 resolve them, with contract §22.2–§22.3's names: the si-member brings every ready copy of every owner in its scope to the validated manifest the feed accepted, only with parts that manifest lists, through Plan S3-C1's pure `member/gate`. Each needed part is fetched into its own fresh scratch table `<node_id>_<boot_nonce>_<n>` of `hg_rstage` from the owner's byte sources in order (while the owner bootstraps, each copy's first part tries the restore first: the P1 backups are the bootstrap source), scanned and classified (kept, rename race, split, doubled, Foreign), checked arithmetically (Σ(L) + Σ(kept) = R and the partition set) and installed with `ATTACH PARTITION … FROM`; a Diverged partition is rebuilt with `DROP PARTITION` followed by `ATTACH PARTITION … FROM`, never with the replacing statement. The installer journals what every copy holds per owner, recovers a part attached before the journal write, audits the copies at startup, after every ClickHouse restart and on a slow self-audit cadence (equal-hash twins dropped with a local `DROP PART`), drops the node's stale scratch tables at startup, pauses installs above the member disk budget, and quarantines a table whose scratch held a foreign part until an operator clears it offline. The package is consumed by Task 33's shadow (`ScratchPrefix`, the startup drop of its `…r` tables), Task 34's `member.Role` (startup steps 7–9: `DropStaleScratch`, `Audit`, `Apply`, the restart watcher and the self-audit ticker), Task 35's `si-member clear-foreign` and metrics, Task 36's kill-mid-stream test (`Deps.AfterAttach`), Plan S3-C4's serving lease (`Deps.BeforeInstall`, `Tables`) and Plan S3-E1's hardlink source (another `sources.Source` in front of the owner pull).
 
+**Base revisions.** Line anchors refer to arbiter-core `origin/main` `cfd4f42` (`v0.15.0` = `CORE_TAG`, Plan S3-A merged) and housegate `ed24705` (`v0.20.0` = `HG_TAG`). At execution the branch is Tasks 29–31's on top of `CORE_TAG_P1` (`cfd4f42` plus Plan S3-C1 Tasks 23–24: the `HG_TAG_P1` pin, `dataplane/chparts`, `member/gate`, `dataplane/objstore`, the S3 part of the mechanics runner), and this task creates `member/install` and edits only `ci.yml`'s target list and the mechanics runner, both through anchors on lines that every earlier task keeps; if `origin/main` moved further, the hunk rule applies (Global Constraints). The plan header's older base `8f0bc43` (v0.14.1) is named below only where a hunk differs there.
+
 **Files:**
 - Create: `member/install/installer.go` (contract §22.3's constants and types, `New`, `Apply` with the owner pass: reconcile, plan, fetch, classify, verify, commit, journal; the deferral, the disk budget, `Entry`, `Tables`, `Stats`), `member/install/journal.go` (`JournalFile`, the journal types of §22.2, the atomic write), `member/install/audit.go` (`Audit`, the reconciliation with `system.parts` shared with `Apply`, the self-audit's full scan), `member/install/scratch.go` (`NewBootNonce`, `NodePrefix`, `ScratchPrefix`, `ScratchName`, the scratch tables, `DropStaleScratch`), `member/install/foreign.go` (`ClearForeign`, `LockFile`, the quarantine reads)
 - Create: `member/install/BUILD.bazel` (gazelle's output plus one `data` line on the `go_test`, Step 12)
 - Test: `member/install/fixture_ch_test.go` (the ClickHouse fixture: an owner database standing in for `hg_safe`, scripted sources, a recording connection, a clock), `member/install/installer_ch_test.go` (the fourteen install tests), `member/install/audit_ch_test.go` (the seven audit tests), `member/install/restart_ch_test.go` (the restart test), `member/install/scratch_test.go`, `member/install/foreign_test.go`, `member/install/installer_test.go` (no ClickHouse)
-- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, its `bazel test` target list, base `8f0bc43` `:97-102`: `//member/install:install_test` inserted in sorted position, at the base right after `//dataplane/tableset:tableset_test \` `:99`, at Plan S3-A's merge `cfd4f42` right after the same line at `:111`; Tasks 30, 31 and 33 insert their targets into the same list, hunk rule)
+- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, its `bazel test` target list, base `8f0bc43` `:97-102`: `//member/install:install_test` inserted in sorted position, at the base right after `//dataplane/tableset:tableset_test \` `:99`, at Plan S3-A's merge `cfd4f42` right after the same line at `:111`; on this branch, after Tasks 30 and 31 inserted theirs, between `//member/copyset:copyset_test \` and `//member/sources:sources_test \`; Task 33 inserts its target into the same list later, hunk rule)
 - Modify: `scripts/ci/clickhouse-mechanics.sh` (Plan S3-A Task 6's runner, absent at the base, on `main` since Plan S3-A's merge `cfd4f42` with that line at `:181`, extended by Plan S3-C1 Task 24): the restart test runs inside its unfiltered block, right after the SNode restart test's line `echo "snode: ${snode_test} passed on ${image}"`
 
 **Interfaces:**
 - Consumes (Task 29, same branch): `manifestfeed.Update{SnapshotID, ParentSnapshotID string; SafeBlockSeq uint64; Manifest replay.SafeSnapshotManifest; Entries map[uint64]replay.TrackFrontier; Changed []uint64; FullFetch bool; Walked int}` (the installer reads `SnapshotID`, `Manifest` and `Entries`).
 - Consumes (Task 30): `ddl.MemberPinned{MemberUnsafeDB, ReplicaDB, StageDB, NodeID, StoragePolicy string; KeeperShardID uint32}`, `ddl.ScratchIntent(m ddl.MemberPinned, t payloadexec.TableSchema, name string) (ddl.TableIntent, error)`, `ddl.ListStageTables(ctx context.Context, conn clickhouse.Conn, m ddl.MemberPinned, prefix string) ([]string, error)`; tests: `ddl.DefaultMemberPinned`, `ddl.EnsureMemberDatabases`, `ddl.EnsureCopy`, `ddl.CopyTableName`; `copyset.Copy{Owner uint64; TableKey string; IncarnationSeq uint64; Table string; Status wire.TableIncarnationStatus; Schema payloadexec.TableSchema; Ready bool}` and `*copyset.Reconciler`'s `Copies() []copyset.Copy` (ready copies, sorted by `TableKey`) and `Copy(tableKey string) (copyset.Copy, bool)`, which `CopySet` names.
-- Consumes (Task 31): `sources.Source` (`Name() string`; `Fetch(ctx context.Context, need sources.Need, schema payloadexec.TableSchema, scratch sources.Scratch) sources.Result`), `sources.Need{TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64}`, `sources.Scratch{Database, Table string}`, `sources.Result{Source string; Outcome sources.Outcome; Parts []string; Err error}`, `sources.OutcomeFetched`, `sources.OutcomeMissed`, `sources.OutcomeRefused`, `sources.OutcomeUnreachable`, and the source names `owner_pull`, `peer_unsafe_pull`, `restore` (contract §22.1; `sources.SourceOwnerPull` names the owner pull for the bootstrap probe's order); the caller creates the scratch before `Fetch`, and a restore copies the needed part into it from its own `<scratch>_r`, which it drops.
+- Consumes (Task 31): `sources.Source` (`Name() string`; `Fetch(ctx context.Context, need sources.Need, schema payloadexec.TableSchema, scratch sources.Scratch) sources.Result`), `sources.Need{TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64}`, `sources.Scratch{Database, Table string}`, `sources.Result{Source string; Outcome sources.Outcome; Parts []string; Err error}`, `sources.OutcomeFetched`, `sources.OutcomeMissed`, `sources.OutcomeRefused`, `sources.OutcomeUnreachable`, and the source names `owner_pull`, `peer_unsafe_pull`, `restore` as Task 31's constants `sources.SourceOwnerPull`, `sources.SourcePeerUnsafePull`, `sources.SourceRestore` (contract §22.1; the installer uses the constants, never copies of their values, so a rename fails the build instead of turning a restore scratch into a pull classified Foreign; `SourceOwnerPull` places the bootstrap probe, `SourceRestore` selects restore-mode classification); the caller creates the scratch before `Fetch`, and a restore copies the needed part into it from its own `<scratch>_r`, which it drops.
 - Consumes (Plan S3-C1 contract §17, Task 23, released in `CORE_TAG_P1`): `chparts.Part{Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64}`, `chparts.ActiveParts`, `chparts.LogicalPartitionID`, `chparts.PartsInLogicalPartition`, `chparts.QuotePartition`, `chparts.PartitionContentScan`; `gate.PlanPartition(manifest []string, root string, local []string) (gate.Plan, error)` with `gate.Plan{Diverged bool; Need []string; Root string}`, `gate.Classify(f gate.Fetch, scratch []gate.ScratchPart) (gate.Classification, error)` with `gate.Fetch{Need []string; Single *gate.Expected}`, `gate.Expected{RowLtHash string; Rows uint64}`, `gate.ScratchPart{Name, RowLtHash string; Rows uint64}`, `gate.Classification{Outcome gate.Outcome; Keep, Drop, Kept []string}` and `gate.OutcomeKept`, `gate.OutcomeRenameRace`, `gate.OutcomeSplit`, `gate.OutcomeDoubled`, `gate.OutcomeForeign`, `gate.Closure(root string, local, kept []string) error`, `gate.PartitionSet(manifest, local []string) error`.
 - Consumes (Plan S3-C1 contract §16, housegate `HG_TAG_P1`, pinned since `CORE_TAG_P1`): `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]chexec.PartScanResult, error)`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)`; existing `chexec.ScanParts`, `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `payloadexec.TableSchemaHash`, `payloadexec.TableSchema`, `replay.TableManifest`, `replay.PartManifestEntry`, `replay.PartitionCommitment`, `replay.TrackFrontier`.
 - Consumes (Plan S3-A contract §3): `chtest.Open(t testing.TB, addr string) clickhouse.Conn`; tests: `chrestart.Watcher{Interval, Skew time.Duration; Now func() time.Time; OnRestart func(ctx context.Context, previous, current time.Time); Baseline time.Time}`, `(*chrestart.Watcher).Run`, `chrestart.StartedAt` (its probe is `SELECT toUInt64(uptime())`), `chrestart.DefaultRestartSkew`; the restart gate `ARBITER_CH_RESTART=1` with `CH_RESTART_ADDR` and the runner `scripts/ci/clickhouse-mechanics.sh` (node B with `--restart always`, `env_flags`, the block that runs only without `ARBITER_CH_MECHANICS_FILTER`).
@@ -8734,7 +8736,7 @@ Spec §8.5–§8.7 and §8.1's free-space stop, as clarifications K35 and K36 re
 Notes:
 - **One owner pass (spec §8.5 steps 1–7, contract §22.3).** `Apply` serves the owners of the ready copies and the owners the journal already holds (an owner without a copy is never journaled, which is what Task 34's readiness expects), ascending. It skips an owner whose journaled entry is ahead of its entry in `u` (next-but-one note, review fix 245-5), and an owner whose journal is at `u.SnapshotID` with every ready copy journaled at its incarnation, without a Diverged partition, an unjournaled part or a quarantine. Otherwise, per ready copy in table-key order: reconcile the copy with `system.parts` (next note), plan every partition the manifest, the journal or the copy knows with `gate.PlanPartition` over (M, R, L), L the journal's row hashes for the partition, fetch each needed part (one fresh scratch per fetch, `ddl.ScratchIntent`) through `Deps.Sources(owner)` in order (the bootstrap probe below aside) and classify it; then verify every copy (closure, placement, partition set); then commit every copy (`BeforeInstall` once per database before its first change, a repair's `DROP PARTITION`, one `ATTACH PARTITION … FROM` per scratch, `AfterAttach` after each); then one journal write holds every copy's parts and the owner's new entry (`u.SnapshotID`, `u.Entries[owner]`). A partition the manifest does not list has the zero root (`SumPartRowLtHashes(nil)`), so a journaled part there makes it Diverged and its repair is a `DROP PARTITION` alone; the manifest's partition set is the set of partitions it lists parts in. A copy whose table the manifest does not list (an incarnation not yet in a table set) must stay empty; one it lists must carry the manifest's `schema_hash` (`TableSchemaHash(NetworkID, copy.Schema)`), else the owner's pass fails with the schema-hash refusal.
 - **An owner's copies move together (refines contract §22.3, Appendix B).** The journal holds one (snapshot, entry) per owner and no snapshot per table (§22.2 fixes the shape), and Plan S3-C4 serves a database only while every table of it equals the owner's entry, so a table committed alone would be ahead of the entry `TableState` reports for it. Nothing of an owner therefore changes before every ready copy of it verified, and one deferred part delays the owner's other tables; this is the contract's "an owner's journal entry advances only once every ready copy of that owner closes", applied to the parts as well. A failure after the first change (an `ATTACH` error, `AfterAttach`, a crash) leaves parts the journal does not list; `TableState.Diverged` and `Stats.AuditClean` report them until a pass adopts them.
-- **A journal entry never goes back (review fix 245-5).** Owners move independently: each owner's pass commits and journals on its own, so a pass toward `u` that fails for one owner (its repair has no source, say) leaves the others at `u`, and `Apply` returns the joined error while they stay committed. An update offered after that may be older than an owner's journal (before the fix, Task 34's copy watch re-applied the last update whose `Apply` had succeeded); planned against it, the owner's newer parts would be outside the older manifest, so its partitions would be marked Diverged and rebuilt with `DROP PARTITION`, dropping valid newer parts and taking its journal back. So, before it reads, marks or drops anything for an owner, `Apply` compares the owner's entry in `u` with the journaled entry by Task 29's rule for an entry that goes back (either `SafeBlockSeq` or `AppliedPromotionSeq` lower): an owner whose journaled entry is ahead is skipped (`ownerAhead`; warn `install: the update is behind the owner's journal; the owner keeps its copies`), with no Diverged mark, no statement on its copies and no journal write, and the other owners' passes run as usual. An equal entry is not ahead: an owner's tables change only with its entry (`replay.TrackFrontier`), so a pass between two manifests of one entry changes no part. Task 34's copy watch re-applies the newest update the feed offered, so this check only guards against an update that is behind; the K36 adoption of parts a failed pass attached needs that newest target too, because only it still needs their row hashes. `TestApplyNeverTakesAnOwnerBackAfterAPartialPass` runs the case: owner 0 committed at s2 while owner 2's repair failed, then s1 offered again leaves owner 0's parts and entry as they are, and s2 offered again repairs owner 2.
+- **A journal entry never goes back (review fix 245-5).** Owners move independently: each owner's pass commits and journals on its own, so a pass toward `u` that fails for one owner (its repair has no source, say) leaves the others at `u`, and `Apply` returns the joined error while they stay committed. An update offered after that may be older than an owner's journal (before the fix, Task 34's copy watch re-applied the last update whose `Apply` had succeeded); planned against it, the owner's newer parts would be outside the older manifest, so its partitions would be marked Diverged and rebuilt with `DROP PARTITION`, dropping valid newer parts and taking its journal back. So, before it reads, marks or drops anything for an owner, `Apply` compares the owner's entry in `u` with the journaled entry by Task 29's rule for an entry that goes back (either `SafeBlockSeq` or `AppliedPromotionSeq` lower): an owner whose journaled entry is ahead is skipped (`ownerAhead`; warn `install: the update is behind the owner's journal; the owner keeps its copies`), with no Diverged mark, no statement on its copies and no journal write, and the other owners' passes run as usual. An equal entry is not ahead: an owner's tables change only with its entry (`replay.TrackFrontier`), so a pass between two manifests of one entry changes no part. Task 34's copy watch re-applies the newest update the feed offered, so this check only guards against an update that is behind; the K36 adoption of parts a failed pass attached needs that newest target too, because only it still needs their row hashes. `TestApplyNeverTakesAnOwnerBackAfterAPartialPass` runs the case: owner 0 committed at s2 while owner 2's repair failed, then s1 offered again leaves owner 0's parts and entry as they are, and s2 offered again repairs owner 2. With Task 34's target the skip never fires on the arbiter's chain: an owner's journal entry is only ever set from an update the feed offered, the target is the newest offered one, and entries never go back along the chain (Task 29's rule), so no owner is ahead of it, and a role restart starts from a manifest every peer's journal names or from the watermark. Were an older update offered to an owner that is ahead and has a Diverged partition or an unjournaled part, that owner keeps them and `NeedsPass` keeps holding: each re-apply of the same update skips it again (one warn line per pass, no statement on its copies) until an update at or past its entry arrives, so the repair waits for the newest update and never runs against an older one.
 - **Reconciliation and recovery (spec §8.7, K36).** Per copy, a journaled part whose name is gone or whose `hash_of_all_files` or rows changed marks its partition Diverged; the parts the journal does not list are scanned by name (`chexec.ScanParts`, one query, never a full scan), one equal in (row hash, `hash_of_all_files`) to a present journaled part is a twin and is dropped with `ALTER TABLE <ReplicaDB>.<copy> DROP PART '<name>'` (after `BeforeInstall`), of unjournaled twins the smallest name stays, and what remains is a candidate. The journal names no in-flight target, so K36's "journaled target manifest" is the manifest of the next `Apply`: an audit only counts the candidates (the copy is unclean), and `Apply` adopts each candidate whose row hash the target still needs (M − L, once per occurrence) or marks its partition Diverged. `Apply` reconciles each copy it touches too (one `system.parts` read per copy and pass), so a journal behind its copy never makes a pass attach a part twice; adoptions are journaled only with the pass, Diverged marks at once.
 - **Diverged repair.** A Diverged partition is rebuilt from every part the manifest lists for it, each in its own scratch; after the verification, `ALTER TABLE <ReplicaDB>.<copy> DROP PARTITION <p>` (only when the copy has a part in p) and one `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>` per scratch; the other partitions keep their parts. The replacing statement is never issued: `TestInstallNeverIssuesReplacePartition` reads the package's sources (the `go_test` carries them as `data`), and every ClickHouse-gated test's `recordingConn` fails the test on it and on any `OPTIMIZE`, `TRUNCATE` or `SYSTEM` statement (Global Constraints). Measured while drafting on `clickhouse/clickhouse-server:26.3` (26.3.51.7): a MergeTree table of two good parts and one foreign part, repaired by the replacing statement from a two-part scratch, held 5 rows after `SYSTEM KILL` and the restart, and the same repair with `DROP PARTITION` and `ATTACH PARTITION … FROM` kept 2 (Appendix B, mechanics M3 and M4); `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow` measures the member's own path, on 26.3.37.3 in CI.
 - **Bootstrap restore probe (spec §8.6: the P1 backups are the bootstrap source; review fix 245-4).** While an owner's journal holds no entry for it (`SnapshotID` empty: its copies are filled for the first time), the first fetch of each of its copies tries the source named `restore` right before the one named `owner_pull` (`restoreBeforeOwnerPull`: any source in front of the owner pull, such as Plan S3-E1's hard-link source, stays in front; without a restore source nothing changes), once per copy and process, also when the pass fails after it and runs again; every other part, and every part once the owner is journaled, keeps the P2 order. The probe installs that part from the newest backup that lists it and proves the member's restore path (its key, `READ ON S3`, the bucket) on every bootstrap, so Plan S3-C3's bootstrap shows installs from the backups beside the owner pull's; it costs one partition restore per copy, because Task 31's restore copies one needed part per `RESTORE` and restoring every part of a bootstrap would restore each partition once per part. A probe that misses, is refused or unreachable is counted and moves to the next source like any fetch.
@@ -8742,12 +8744,14 @@ Notes:
 - **The closure is over what the scratches hold.** `verify` lists every scratch again; a scratch that no longer holds exactly its kept parts (name, `hash_of_all_files`, rows) is scanned again and the closure is computed over its content, so a scratch changed after its classification fails Σ(L) + Σ(kept) = R and nothing is attached (`TestInstallClosureFailureInstallsNothing` changes one through the unexported `beforeVerify` seam; with a correct gate the arithmetic cannot fail otherwise). A kept part that ClickHouse placed in another partition than the manifest lists fails the partition-set check, because `ATTACH PARTITION` of the listed partition would attach nothing.
 - **Foreign (K36).** A Foreign classification journals the table `foreign` with its `foreign_scratch` (the `StageDB` table name, kept for forensics; `DropStaleScratch` keeps it) and fails the pass with §22.3's text. The quarantine belongs to the table key whatever its incarnation: every later pass of that owner refuses at once with the clear-foreign hint and fetches nothing, the audits skip the table, and the owner's entry stays where it is (every ready copy must close) until an operator runs `sentio-node si-member clear-foreign --table <db.table>` with the si-member stopped. `ClearForeign` takes the state directory's `LOCK` with a non-blocking `flock` (the running role holds it, contract §23.1), clears the mark and the scratch name, and marks every partition the table's journal lists Diverged: the next start drops the scratch, and the next pass rebuilds those partitions through the gate, trusting none of the copy's parts.
 - **Audits (spec §8.7).** `Audit` with `startup` or `clickhouse_restart` makes `Stats.AuditClean` false until it completes; it reconciles every ready copy (quarantined tables skipped) without adopting. `self_audit` also scans every journaled, non-Diverged partition in full with `chparts.PartitionContentScan` and marks one whose journaled part's row hash changed; it runs at most once per half `SelfAuditInterval` (Task 34 ticks at the interval, so every tick runs, and a caller cannot loop the full scan). A startup or restart audit that failed leaves installs waiting: `Apply` runs it first. An audit covers the copies that are ready when it runs; the copyset may make a copy ready later (its first pass after the audit, a copy it could not create at first, a new incarnation), and such a copy is unaudited until `Apply` audits it under the same trigger before its pass (`auditUncovered`, review fix 245-1), so a copy the copyset created again empty while the journal still lists its parts is compared with its journal, marked Diverged and rebuilt instead of being skipped as current. `NeedsPass` reports what a pass of the newest update would do without a new manifest (a pending audit, an unaudited copy, a Diverged partition, an unjournaled part, outside an owner with a quarantined table); Task 34's copy watch re-applies the newest update the feed offered while it holds (review fixes 245-2 and 245-5). Task 34 drives `clickhouse_restart` from its `chrestart.Watcher`'s `OnRestart` and `self_audit` from its ticker; `TestAuditRerunsWhenClickHouseUptimeRegresses` wires a real `Watcher` to an uptime the test moves. `AuditClean` is true once an audit completed since the start or the last restart, every ready copy was audited since then, and no ready copy has a Diverged partition or an unjournaled part; a quarantine is reported apart (`TableState.Foreign`).
-- **Disk budget (K35).** Before each pass's first fetch `Apply` reads `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')` (every part, active or not, the shadow's and other nodes' scratch included); at or above `StopInstallsRatio × DiskBudgetBytes` it returns `ErrInstallsPaused` with §22.3's text and changes nothing, while `Audit` and the shadow continue. `Stats.DiskUsedBytes` and `InstallsPaused` keep the last reading. The code default stays 0.8; Plan S3-C3 configures 0.5 over the member disk's total on devnet2 (D28).
+- **Disk budget (K35).** Before each pass's first fetch `Apply` reads `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')` (every part, active or not, the shadow's and other nodes' scratch included); at or above `StopInstallsRatio × DiskBudgetBytes` it returns `ErrInstallsPaused` with §22.3's text and changes nothing, while `Audit` and the shadow continue. `Stats.DiskUsedBytes` and `InstallsPaused` keep the last reading. The code default stays 0.8; Plan S3-C3 configures 0.5 over the member disk's total on devnet2 (D28), and `TestInstallsPauseAboveTheDiskBudget` runs exactly that ratio with the use at the threshold (installs pause at it) and the same budget at the default (installs run), so a pause that ignored the configured ratio, or paused only above it, fails.
 - **Startup drop and names (spec §8.5 last paragraph).** `DropStaleScratch` drops every `StageDB` table that starts with `NodePrefix(NodeID)` except a journaled `foreign_scratch`: the install scratch of every earlier boot, Task 31's restore (`…_r`) and fallback tables, and Task 33's `…_r…` replay and candidate scratch. The role calls it at startup step (7), before the audit and before anything of this boot creates a scratch. A node id holds no underscore (K29), so `member-a_` never matches `member-ab_…`. A boot nonce is 8 lowercase hex characters from `crypto/rand`; the install scratch counter starts at 1 per process.
 - **Reach and grants.** ClickHouse only, as `si_member`, within contract §23.2: `CREATE TABLE`, `DROP TABLE`, `ALTER … DROP PART` and `SELECT` on `hg_rstage` (the sources `INSERT` there); `ATTACH PARTITION … FROM` (`SELECT` on the scratch, `ALTER DELETE` and `INSERT` on the copy), `DROP PARTITION` and `DROP PART` (`ALTER DELETE`) and `SELECT` on `hg_replica`; `SELECT` on `system.parts` and `system.tables`. It never names `hg_safe`, `hg_unsafe`, `hg_promote` or `hg_member_unsafe`, and makes no RPC: no consensus format, no Raft-reachable call (contract §20.1).
-- **State directory.** The journal is written atomically after each change (temp file, `Sync`, rename, directory `Sync`: the `arbiter-core:snode/state.go:583-635` pattern); `New` reads it, refuses one of another node, and needs `StateDir` to exist (Task 34 creates it and holds `LOCK`). The journal keeps the entry of a copy the copyset dropped and ignores it (`Tables`, `Stats` and `ownerCurrent` read only entries that match a ready copy's incarnation and name), so `copyset.Deps.Dropped` needs nothing from the installer; a later incarnation's copy starts a fresh entry under the same key unless the key is quarantined.
+- **State directory.** The journal is written atomically after each change (temp file, `Sync`, rename, directory `Sync`: the `arbiter-core:snode/state.go:674-721` pattern, `persistLocked` and `persistStateLocked` at `cfd4f42`; `:583-635` at `8f0bc43`); `New` reads it, refuses one of another node, and needs `StateDir` to exist (Task 34 creates it and holds `LOCK`). The journal keeps the entry of a copy the copyset dropped and ignores it (`Tables`, `Stats` and `ownerCurrent` read only entries that match a ready copy's incarnation and name), so `copyset.Deps.Dropped` needs nothing from the installer; a later incarnation's copy starts a fresh entry under the same key unless the key is quarantined.
 - **CI.** The ClickHouse-gated tests join the existing `integration-clickhouse` job (ClickHouse 25.8 and, from Plan S3-A Task 4, `CH_USER` / `CH_PASSWORD` through `chtest.Open`); each test works in its own databases `t32_<8 hex>_replica`, `_rstage` and `_owner` (the owner database stands in for the owner's `hg_safe`, so the scripted sources pull with a local `INSERT … SELECT … WHERE _part`), so they share the server with the other targets safely. The restart test restarts its server, so it runs only in Plan S3-A's runner, against node B, after the SNode restart test and gated on its own `--- PASS:` line: in CI's `clickhouse-mechanics` job and Cut Release's `validate ClickHouse mechanics` step on `26.3.37.3`. Steps 13 and 14 run all of them locally on both versions.
 - **No PR here.** Tasks 29–34 share the branch `urwt/claude/multi-source-s3c2`; Task 34 opens the one PR and releases `CORE_TAG_P2`. This task records nothing in the ledger.
+- **Commit identity (user rule).** Task 29 Step 1 gave the worktree its own identity `poetry <chen@sentio.xyz>` (the global `uranuswch@gmail.com` must never author or co-author a commit: GitHub would add it as a co-author of the squash merge); Step 1 checks it before anything is written, every commit block prints the new commit's author, and Step 18 checks every commit of the branch. The commit messages carry only the Claude `Co-Authored-By` line.
+- **Verified** (adversarial review, 2026-10-17) on a `git archive` of arbiter-core `origin/main` `cfd4f42` with Plan S3-C1 Tasks 23–24's reviewed text (the `CORE_TAG_P1` stand-in), against housegate `ed24705` with Plan S3-C1 Task 22's reviewed text (the `HG_TAG_P1` stand-in, through `replace` for `go test` and `--override_module` for offline Bazel 9.1.0), then Tasks 29–31 as written and this task's hunks verbatim: Step 6's red (`undefined: Config`, `undefined: Installer`); Step 12's BUILD kept by gazelle, 5 PASS and 22 SKIP; Step 13 with the race detector on `clickhouse/clickhouse-server:26.3.37.3` and `:25.8` (25.8.33.6), 26 PASS and the one restart-test SKIP each under `go test -race`, and the same under Bazel's race build on 26.3.37.3; Step 14 on a `--restart always` 26.3.37.3 server (`survived a restart 4s after it`); Step 17's runner on 26.3.37.3, `exit 0` with its six lines in Step 17's order; Step 18's `bazel test //...` 24 of 24 with and without the race detector; mutations of `ownerAhead`, `auditUncovered`, the bootstrap probe, the twin drop, the K36 adoption, `NeedsPass`, the foreign-scratch keep, the `AfterAttach` stop and the configured ratio each fail their named test; the task text re-extracted into a fresh export is byte-identical to the verified package.
 
 - [ ] **Step 1: Base check**
 
@@ -8779,6 +8783,8 @@ W=<worktree path>; cd "$W" && grep 'github.com/housegate/housegate v' go.mod && 
   GOWORK=off go doc "github.com/housegate/housegate/pkg/replay/${sym%%.*}" "${sym#*.}" | grep '^func '
 done
 W=<worktree path>; cd "$W" && grep -cF 'echo "snode: ${snode_test} passed on ${image}"' scripts/ci/clickhouse-mechanics.sh
+W=<worktree path>; cd "$W" && grep -cE '^[[:space:]]+(SourceOwnerPull|SourcePeerUnsafePull|SourceRestore)[[:space:]]+= "(owner_pull|peer_unsafe_pull|restore)"$' member/sources/source.go
+W=<worktree path>; git -C "$W" config --worktree user.name && git -C "$W" config --worktree user.email && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
 Expected: a clean tree whose last commit is Task 31's; `member/install is absent`; fifteen lines each starting with `1 ` (each consumed name defined once, outside tests); the housegate requirement at `HG_TAG_P1`'s version; then exactly:
@@ -8789,7 +8795,7 @@ func ScanParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string,
 func SumPartRowLtHashes(hashes []string) (string, error)
 ```
 
-and `1` (Plan S3-A's runner with its SNode restart test). A `0` or a missing signature means an earlier task's or plan's contract name is not on this branch: stop and ask; never stub it here.
+`1` (Plan S3-A's runner with its SNode restart test); `3` (Task 31's three P2 source names); then `poetry`, `chen@sentio.xyz` and the one line `poetry <chen@sentio.xyz>` (the worktree identity Task 29 Step 1 set, and the author of every commit of the branch so far). A `0` or a missing signature means an earlier task's or plan's contract name is not on this branch: stop and ask; never stub it here. Another identity or author: stop, set Task 29 Step 1's worktree identity (`git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz`) and ask the user before rewriting any commit's author.
 
 - [ ] **Step 2: Write the ClickHouse test fixture**
 
@@ -9340,6 +9346,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9963,38 +9970,46 @@ func TestInstallRecoversAPartAttachedBeforeTheJournalWrite(t *testing.T) {
 	}
 }
 
-// TestInstallsPauseAboveTheDiskBudget: at or above stop_installs_ratio of the
-// disk budget, summed over every part of ReplicaDB and StageDB, Apply attaches
-// nothing while audits continue (K35).
+// TestInstallsPauseAboveTheDiskBudget: at or above the configured
+// stop_installs_ratio of the disk budget, summed over every part of ReplicaDB
+// and StageDB, Apply attaches nothing while audits continue (K35). The ratio is
+// devnet2's 0.5 (decision D28), with the use exactly at the threshold; the same
+// budget at the default 0.8 is not reached, and the pass installs.
 func TestInstallsPauseAboveTheDiskBudget(t *testing.T) {
 	f := newFixture(t, requireCH(t))
 	c := f.table(0, "dex.swaps", 3, false)
 	f.setSources(0, f.source("owner_pull", f.pull(1)))
 	f.exec("CREATE TABLE " + qualified(f.pinned.StageDB, "member-b_0123abcd_1") + " (x UInt64) ENGINE = MergeTree ORDER BY x")
 	f.exec("INSERT INTO " + qualified(f.pinned.StageDB, "member-b_0123abcd_1") + " VALUES (1)")
-	inst := f.newInstaller(func(cfg *Config, _ *Deps) { cfg.DiskBudgetBytes = 100 })
+	var used uint64
+	query := "SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN (" + quoteLiteral(f.pinned.ReplicaDB) + ", " + quoteLiteral(f.pinned.StageDB) + ")"
+	if err := f.raw.QueryRow(context.Background(), query).Scan(&used); err != nil || used == 0 {
+		t.Fatalf("member disk use = %d (%v), want the other node's scratch part", used, err)
+	}
+	budget := 2 * used
+	inst := f.newInstaller(func(cfg *Config, _ *Deps) { cfg.DiskBudgetBytes, cfg.StopInstallsRatio = budget, 0.5 })
 	f.start(inst)
 	f.promote(c, row{"", 1})
 	s1 := f.update("s1", 10, c)
 	f.conn.reset()
 	err := inst.Apply(context.Background(), s1)
-	requireRefusal(t, err, ErrInstallsPaused, " of 100 bytes); installs paused")
+	requireRefusal(t, err, ErrInstallsPaused, fmt.Sprintf("install: member disk budget exceeded (%d of %d bytes); installs paused", used, budget))
 	if alters := f.conn.alters(); len(alters) != 0 {
 		t.Fatalf("ALTER statements while paused = %q", alters)
 	}
 	s := inst.Stats()
-	if !s.InstallsPaused || s.DiskUsedBytes < 80 || s.DiskBudgetBytes != 100 {
-		t.Fatalf("stats = %+v, want installs paused at %d of 100 bytes", s, s.DiskUsedBytes)
+	if !s.InstallsPaused || s.DiskUsedBytes != used || s.DiskBudgetBytes != budget {
+		t.Fatalf("stats = %+v, want installs paused at %d of %d bytes", s, used, budget)
 	}
 	if err := inst.Audit(context.Background(), TriggerStartup); err != nil {
 		t.Fatalf("an audit while installs are paused: %v", err)
 	}
-	inst = f.newInstaller(nil)
+	inst = f.newInstaller(func(cfg *Config, _ *Deps) { cfg.DiskBudgetBytes = budget })
 	f.start(inst)
 	f.mustApply(inst, s1)
 	f.requireCopyEqualsManifest(c, s1)
-	if inst.Stats().InstallsPaused {
-		t.Fatal("installs still paused under a large budget")
+	if s := inst.Stats(); s.InstallsPaused || s.DiskUsedBytes != used {
+		t.Fatalf("stats = %+v, want installs running at %d of %d bytes under the default ratio", s, used, budget)
 	}
 }
 ```
@@ -11319,14 +11334,14 @@ const (
 	TriggerSelfAudit         = "self_audit"
 )
 
-// restoreSource is the object-store restore's source name (contract §22.1).
-// Its scratch is classified in restore mode: the needed parts are kept, every
-// other part is dropped, nothing is Foreign (a backup may be ahead of
-// publication).
-const restoreSource = "restore"
+// restoreSource is the object-store restore's source name (contract §22.1,
+// Task 31's sources.SourceRestore). Its scratch is classified in restore mode:
+// the needed parts are kept, every other part is dropped, nothing is Foreign (a
+// backup may be ahead of publication).
+const restoreSource = sources.SourceRestore
 
 // sourceLabels are the P2 sources, exported with zeros (contract §22.1).
-var sourceLabels = []string{"owner_pull", "peer_unsafe_pull", restoreSource}
+var sourceLabels = []string{sources.SourceOwnerPull, sources.SourcePeerUnsafePull, restoreSource}
 
 var triggers = []string{TriggerStartup, TriggerClickHouseRestart, TriggerSelfAudit}
 
@@ -13190,7 +13205,10 @@ disk budget (K35); ClearForeign releases a quarantine offline (housegate
 spec 2026-10-14 §8.5-§8.7, Plan S3-C2 contract §22.2-§22.3).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Task 29 Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 16: Run the ClickHouse-gated tests in CI**
 
@@ -13216,13 +13234,14 @@ EOF
 W=<worktree path>; cd "$W" && git diff --stat -- .github/workflows/ci.yml && grep -c 'member/install:install_test' .github/workflows/ci.yml && if command -v actionlint >/dev/null; then actionlint .github/workflows/ci.yml && echo 'actionlint: clean'; fi
 ```
 
-Expected: `inserted at line <n>` (100 at the base `8f0bc43`, 112 at Plan S3-A's merge `cfd4f42`, `CORE_TAG` v0.15.0, whose list starts with `//dataplane/chtest:chtest_test`; later when Plan S3-C1's or Task 30's targets that sort before it, such as `//member/copyset`, are in the list); `1 file changed, 1 insertion(+)`; `1`; `actionlint: clean` where actionlint is installed. At the base, and at `cfd4f42` with its own line numbers, the hunk is:
+Expected: `inserted at line <n>` (`116` on this branch after Tasks 30 and 31, whose `//member/copyset:copyset_test` and `//member/sources:sources_test` bracket it; `112` at Plan S3-A's merge `cfd4f42` alone and `100` at the plan header's base `8f0bc43`, both without those targets); `1 file changed, 1 insertion(+)`; `1`; `actionlint: clean` where actionlint is installed. On this branch the hunk is exactly:
 
 ```diff
-           bazel test \
              //dataplane/ddl:ddl_test \
              //dataplane/tableset:tableset_test \
+             //member/copyset:copyset_test \
 +            //member/install:install_test \
+             //member/sources:sources_test \
              //snode:snode_test \
              //verifier:verifier_test \
 ```
@@ -13233,7 +13252,10 @@ git -C "$W" add .github/workflows/ci.yml
 git -C "$W" commit -m "ci: run the member installer's ClickHouse tests in integration-clickhouse
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>` (any other author: as in Step 15).
 
 - [ ] **Step 17: Run the restart test in the mechanics runner**
 
@@ -13270,13 +13292,12 @@ EOF
 W=<worktree path>; cd "$W" && git diff -- scripts/ci/clickhouse-mechanics.sh && bash -n scripts/ci/clickhouse-mechanics.sh && echo 'bash -n: ok' && if command -v shellcheck >/dev/null; then shellcheck scripts/ci/clickhouse-mechanics.sh && echo 'shellcheck: clean'; fi
 ```
 
-Expected: `inserted the member install restart test after the SNode restart test`; the diff is exactly:
+Expected: `inserted the member install restart test after the SNode restart test`; at `CORE_TAG_P1` (Plan S3-C1 Task 24 put the object-store tests right after the SNode test, inside the same block) the diff is exactly:
 
 ```diff
-     fi
    done
    echo "snode: ${snode_test} passed on ${image}"
-+
+ 
 +  # The member installer's Diverged repair across a ClickHouse-only restart
 +  # (Plan S3-C2 Task 32). It restarts node B as well, so it runs here, on its
 +  # own, after the SNode test, gated on its PASS line in the same way.
@@ -13289,10 +13310,13 @@ Expected: `inserted the member install restart test after the SNode restart test
 +    exit 1
 +  fi
 +  echo "install: ${install_test} passed on ${image}"
- fi
++
+   # The object-store library against the same MinIO (plan S3-C1 contract
+   # §17): every TestS3_ function must report PASS.
+   bazel test //dataplane/objstore:objstore_test "${env_flags[@]}" \
 ```
 
-(only its line numbers depend on what Plan S3-C1 Task 24 added above); `bash -n: ok`; `shellcheck: clean` where shellcheck is installed.
+(its line numbers depend on what Plan S3-C1 Task 24 added above the anchor; without Task 24's block the trailing context is the block's closing `fi`); `bash -n: ok`; `shellcheck: clean` where shellcheck is installed.
 
 Image pull (remote read): the runner pulls `clickhouse/clickhouse-server:26.3.37.3` and Plan S3-C1's MinIO image when they are not local; this needs explicit user confirmation in chat before running.
 
@@ -13300,7 +13324,7 @@ Image pull (remote read): the runner pulls `clickhouse/clickhouse-server:26.3.37
 W=<worktree path>; cd "$W" && log="$(mktemp)" && bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3 >"$log" 2>&1; echo "exit $?"; grep -E '^(mechanics|objstore|snode|install): ' "$log"; rm -f "$log"
 ```
 
-Expected: `exit 0`, then the lines of Plan S3-A's and Plan S3-C1's gates unchanged (`mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `objstore: <n> S3 test(s) passed on …`, `mechanics: S3 backup delete right: <none|lock>`, `snode: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart passed on …`), then `install: TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow passed on clickhouse/clickhouse-server:26.3.37.3`. CI's `clickhouse-mechanics` job and Cut Release's `validate ClickHouse mechanics` step run the same script, so the restart test gates `CORE_TAG_P2` without a workflow change.
+Expected: `exit 0`, then, in this order, the lines of Plan S3-A's and Plan S3-C1's gates unchanged with this task's line after the SNode test's: `mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `mechanics: S3 backup delete right: <none|lock>`, `snode: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart passed on clickhouse/clickhouse-server:26.3.37.3`, `install: TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow passed on clickhouse/clickhouse-server:26.3.37.3`, `objstore: <n> S3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` (7 at `CORE_TAG_P1`), `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`. CI's `clickhouse-mechanics` job and Cut Release's `validate ClickHouse mechanics` step run the same script, so the restart test gates `CORE_TAG_P2` without a workflow change.
 
 ```bash
 W=<worktree path>
@@ -13312,7 +13336,10 @@ and restarts its ClickHouse, so it runs against node B after the SNode
 restart test, gated on its PASS line (housegate spec 2026-10-14 §17).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>` (any other author: as in Step 15).
 
 - [ ] **Step 18: Full verification**
 
@@ -13321,10 +13348,10 @@ W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run
   && test -z "$(gofmt -l $(git ls-files '*.go'))" \
   && bazel build //... && bazel test //... --test_output=errors \
   && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
-W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline -4
+W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline -4 && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: no boundary violation, no BUILD change after gazelle, no unformatted file, every target PASSES with and without the race detector (the ClickHouse-gated tests SKIP); a clean tree; this task's three commits on top of Task 31's last. No push: Task 34 opens the one PR of Tasks 29–34, and its push needs the user's explicit confirmation in chat.
+Expected: no boundary violation, no BUILD change after gazelle, no unformatted file, every target PASSES with and without the race detector (the ClickHouse-gated tests SKIP); a clean tree; this task's three commits on top of Task 31's last; exactly one author line, `poetry <chen@sentio.xyz>` (any other: stop and ask the user before rewriting a commit's author). No push: Task 34 opens the one PR of Tasks 29–34, and its push needs the user's explicit confirmation in chat.
 
 ---
 
@@ -13332,11 +13359,13 @@ Expected: no boundary violation, no BUILD change after gazelle, no unformatted f
 
 Spec §16 row P2 ("shadow verification that replays from DA and scans each candidate part after pulling it from the owner's `hg_unsafe`") as clarification K34 resolves it, with contract §22.4's names: for every sealed block of a peer owner the si-member pulls each candidate part of the block from the owner's `hg_unsafe` into its own scratch table of `hg_rstage` and scans it, replays the block's `ReplayJob` from DA in `hg_rstage` under `shadow.ReplayPrefix` with a signer drawn for this boot, waits for the block's final verdict, and compares its own receipt hash and scans with every recorded attestation and byte-side scan (kinds `receipt`, `scan`, `claim`). A candidate it cannot scan is a missed scan, a block without a final verdict after `VerdictWait` is counted `unverdicted`, the cursor survives restarts, and nothing is ever submitted. The package is consumed by Task 34's `member.Role` (`shadow.New` with the feed's `*manifestfeed.Store`, the DA client, `sources.NewOwnerUnsafePull` per peer), Task 35's metrics (`sentio_node_si_member_shadow_*`), Task 36's soak, and Plan S3-E1's verify role (its `…v` prefix sits next to this task's `…r`).
 
+**Base revisions.** Anchored on arbiter-core `cfd4f42` (v0.15.0), arbiter `526a721` and housegate `ed24705` (v0.20.0). Plan S3-A has executed on these bases; at execution use `CORE_TAG_P1` with Tasks 29–32 applied and `HG_TAG_P1` (Plan S3-C1 Task 22). The hunk rule applies.
+
 **Files:**
 - Create: `member/shadow/shadow.go` (types and constants of contract §22.4, `New`, the replay core, `Run`, `Step`, the per-block order, the candidate pulls, the counters), `member/shadow/compare.go` (K34's comparison, pure), `member/shadow/cursor.go` (`CursorFile`, atomic write)
 - Create: `member/shadow/BUILD.bazel` (gazelle's output plus one `data` line on the `go_test`, Step 10)
 - Test: `member/shadow/fixture_test.go` (the replayable fixture and the fakes), `member/shadow/shadow_test.go` (the twelve contract tests without ClickHouse), `member/shadow/new_test.go` (construction and the edges beyond the contract), `member/shadow/shadow_ch_test.go` (the ClickHouse-gated contract test)
-- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, its `bazel test` target list, base `8f0bc43` `:97-102`: `//member/shadow:shadow_test` inserted in sorted position, at the base right after `//dataplane/tableset:tableset_test \` `:99`; at `cfd4f42`, arbiter-core `origin/main` once Plan S3-A's arbiter-core PR merged, the list is `:108-113`, led by `//dataplane/chtest:chtest_test \`, and the insertion follows `:111`; Plan S3-C1 Task 23 and Tasks 30–32 insert their targets into the same list, hunk rule)
+- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, its `bazel test` target list, base `8f0bc43` `:97-102`: `//member/shadow:shadow_test` inserted in sorted position, at the old base right after `//dataplane/tableset:tableset_test \` `:99`; at `cfd4f42`, arbiter-core `origin/main` once Plan S3-A's arbiter-core PR merged, the list is `:108-113`, led by `//dataplane/chtest:chtest_test \`, and the insertion follows `:111`; on this branch Plan S3-C1 Task 23 and Tasks 30–32 have already inserted their targets; this target lands at line 117 between `//member/install:install_test` and `//member/sources:sources_test`, hunk rule)
 
 **Interfaces:**
 - Consumes (Task 29, same branch): `wire.BlockVerification{Header, ChainHash, ReplayJob, Statements, ScanParts, SourceNodes, VerifierSet, Evidence, VerdictEvaluated, Quorum, Anchor, Finality, LastMergeable}`, `wire.BlockHeaderView{L3BlockSeq, StatementSeqStart, StatementCount, PrevSafeSnapshotID, PrevStateRoot, IsTableSetTransition bool, TrackIndexerID *uint64}`, `wire.StatementCandidates{StatementSeq, StatementID, Status, SourceNode, RCBound bool, SourceClaimRoot, CandidateParts []arbiter.CandidatePart, PartitionNewPartSums, UnpromotedPartRowLtHashes}`, `wire.VerifierEvidence{ReplicaID, Attestation *replay.ReplayAttestation, ByteSideScan *arbiter.ByteSideScanMsg, Evaluated, Check1RootMatch, Check2PartitionMatch, Check3ByteSideMatch, Pass}`; `dataplane.ErrBlockNotSealed` (wrapped by `GetBlockVerification` on NotFound); `(*dataplane.Client).GetBlockVerification(ctx context.Context, blockSeq uint64) (wire.BlockVerification, error)` and `(*dataplane.Client).GetSafeWatermark(ctx context.Context) (arbiter.SafeWatermark, error)`, which satisfy `BlockReader` and `WatermarkReader` (Task 34 passes the client; the package never names it, and `new_test.go` asserts both at compile time, so a drift in Task 29's signatures fails here rather than in Task 34).
@@ -13344,10 +13373,10 @@ Spec §16 row P2 ("shadow verification that replays from DA and scans each candi
 - Consumes (Task 31): `sources.Source` (`Name() string`; `Fetch(ctx context.Context, need sources.Need, schema payloadexec.TableSchema, scratch sources.Scratch) sources.Result`), `sources.Need{TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64}`, `sources.Scratch{Database, Table string}`, `sources.Result{Source string; Outcome sources.Outcome; Parts []string; Err error}`, `sources.OutcomeFetched`, `sources.OutcomeMissed`, `sources.OutcomeRefused` (the fakes); the caller creates the scratch before `Fetch` (contract §22.3 "one fresh scratch per needed part (`ScratchIntent`)").
 - Consumes (Task 32): `install.ScratchPrefix(nodeID, bootNonce string) string` (`<node_id>_<boot_nonce>_`); tests also `install.NodePrefix` and `install.ScratchName`.
 - Consumes (Plan S3-A): `arbiter.SafeWatermark{SnapshotID string; SafeBlockSeq uint64; ManifestRoot string}`, `chtest.Open(t testing.TB, addr string) clickhouse.Conn`.
-- Consumes (Plan S3-C1 §16, housegate `HG_TAG_P1`, already pinned at this branch's base): `chexec.NewMaterializerIn(networkID string, conn clickhouse.Conn, database, prefix string) (*chexec.Materializer, error)` (scratch `` `<database>`.`<prefix>replay_<n>` ``), `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]chexec.PartScanResult, error)`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)`.
+- Consumes (Plan S3-C1 §16, housegate `HG_TAG_P1`, already pinned at this branch's base): `chexec.NewMaterializerInWithStoragePolicy(networkID string, conn clickhouse.Conn, database, prefix, storagePolicy string) (*chexec.Materializer, error)` (scratch `` `<database>`.`<prefix>replay_<n>` ``), `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]chexec.PartScanResult, error)`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)`.
 - Consumes (existing): the replay core of `arbiter-core:verifier/backends.go:21-41` (`replay.Verifier{Snapshots, Payloads, Executor, Signer, SchemaHashes}`, `payloadexec.NewEd25519Signer`, `payloadexec.NewDynamic`, `snapshotquery.NewCompositeExecutor(payload, nil)`, `payloadexec.SchemaHashes{NetworkID, Tables}`); `payloadexec.ResolveJobSchemas(static []payloadexec.TableSchema, job replay.ReplayJob) (map[string]payloadexec.TableSchema, error)`; `ddl.CHTableName`, `ddl.ValidatePhysicalTableNames`, `ddl.Intents`, `ddl.Pinned`; `arbiter.CandidatePart`, `arbiter.ByteSideScanMsg`, `arbiter.PartScan`, `arbiter.PartRef`, `arbiter.PartitionLtHashSum`, `arbiter.StatementIDString`; tests: `nativepayload.Materializer{NetworkID, Revision}`, `nativepayload.EncodeClientDataPacket`, `payloadexec.NewMemSnapshotStore`, `payloadexec.NewMemPayloadStore`, `payloadexec.RowID`, `replay.DigestString`, `replay.DigestBytes`, ch-go `proto.ColStr` / `proto.ColUInt64` / `proto.InputColumn`, clickhouse-go `lib/driver`.
 - Produces (contract §22.4, verbatim): `type MismatchKind string` with `MismatchReceipt = "receipt"`, `MismatchScan = "scan"`, `MismatchClaim = "claim"`; `type BlockReader interface { GetBlockVerification(ctx context.Context, blockSeq uint64) (wire.BlockVerification, error) }`; `type WatermarkReader interface { GetSafeWatermark(ctx context.Context) (arbiter.SafeWatermark, error) }`; `const CursorFile = "shadow-cursor.json"` (`{"version":1,"next_block_seq":<n>}`); `const DefaultPollMin = time.Second`, `DefaultPollMax = 30 * time.Second`, `DefaultVerdictWait = 10 * time.Minute`; `func ReplayPrefix(nodeID, bootNonce string) string` = `install.ScratchPrefix(nodeID, bootNonce) + "r"`; `type Config struct { NodeID, BootNonce, NetworkID, StateDir string; Pinned ddl.MemberPinned; Genesis []payloadexec.TableSchema; Owners []uint64; HostIndexerID uint64; PollMin, PollMax, VerdictWait time.Duration }`; `type Deps struct { Blocks BlockReader; Watermark WatermarkReader; Snapshots replay.SnapshotStore; Payloads replay.PayloadStore; Conn clickhouse.Conn; UnsafePull func(owner uint64) sources.Source; Logger *slog.Logger; Now func() time.Time }`; `type Stats struct { Blocks, MissedScans, Unverdicted map[uint64]uint64; Mismatches map[uint64]map[MismatchKind]uint64; NextBlockSeq uint64 }`; `func New(cfg Config, d Deps) (*Verifier, error)`; `func (v *Verifier) Run(ctx context.Context) error`; `func (v *Verifier) Step(ctx context.Context) (bool, error)`; `func (v *Verifier) Stats() Stats`; the tests `TestShadowComparesItsReceiptWithEveryRecordedAttestation`, `TestShadowComparesItsScansWithEveryRecordedByteSideScan`, `TestShadowComparesEvidenceRecordedAfterTheLatchAsRecorded`, `TestShadowReproducesARejectedBlocksReceipts`, `TestShadowClaimMismatchOnlyForAQuorumPassBlock`, `TestShadowCountsACleanedCandidateAsAMissedScan`, `TestShadowSkipsBlocksOfItsHostOtherOwnersAndTransitions`, `TestShadowCountsAnUnverdictedBlockAfterVerdictWait`, `TestShadowCursorSurvivesARestart`, `TestShadowStartsAfterTheWatermark`, `TestShadowBacksOffOnAnUnsealedBlock`, `TestShadowNeverSubmitsAnything`, and ClickHouse-gated `TestShadowReplaysInTheStageDatabaseUnderItsPrefix`.
-- Produces (beyond the contract; Appendix B, Task 33): `func MismatchKinds() []MismatchKind` (`receipt`, `scan`, `claim`, in export order, for Tasks 34–35's zero-filled series when the shadow is off); the candidate scratch name `<ReplayPrefix>scan_<n>` (`n` counts this boot's pulls from 1; unexported `scanScratchName`); `New`'s refusals (verbatim) `shadow: NodeID, BootNonce, NetworkID and StateDir are required`, `shadow: Pinned.StageDB is required`, `shadow: Blocks, Watermark, Snapshots, Payloads, Conn and UnsafePull are required`, `shadow: owner %d is the host's own indexer`, `shadow: owners %v must be ascending and unique`, `shadow: PollMax %s is below PollMin %s`, `shadow: %w` (around `ddl.ValidatePhysicalTableNames` and `chexec.NewMaterializerIn`), `shadow: draw the signer seed: %w`, `shadow: signer: %w`, `shadow: executor: %w`; cursor refusals `shadow: read cursor %s: %w`, `shadow: cursor %s: %w`, `shadow: cursor %s has version %d, want 1`, `shadow: cursor %s has next_block_seq 0`, `shadow: encode cursor: %w`, `shadow: write cursor %s: %w`; step errors `shadow: read the safe watermark: %w`, `shadow: read block %d: %w`, `shadow: replay block %d: %w`, `shadow: block %d: %w`, `shadow: block %d: no schema for table %s of candidate part %s`, `shadow: block %d: scratch for %s: %w`, `shadow: create scratch %s.%s: %w`, `shadow: scan scratch %s.%s: %w`, `shadow: no unsafe pull for owner %d`; log lines (slog messages) error `shadow verification mismatch` (fields `block`, `owner`, `kind`, `replica`, `table`, `partition`, `part`, `own`, `recorded`; an LtHash accumulator is logged as `digest:` + `replay.DigestString` of its hex), error `shadow verification of a block failed; it is retried after the back-off` (`block`, `retry_in`, `err`), warn `shadow: candidate part not scanned (missed scan)` (`block`, `owner`, `table`, `partition`, `part`, `source`, `outcome`, `err`), warn `shadow: candidate part arrived empty (missed scan)`, warn `shadow: block has no final verdict after the verdict wait; compared against the evidence recorded so far` (`block`, `owner`, `verdict_wait`), warn `shadow: re-reading a block failed; keeping the previous read`, warn `shadow: dropping a scratch failed; the next startup drops it`, info `shadow verified a block` (`block`, `owner`, `quorum`, `final`, `mismatches`, `missed_scans`), info `shadow: starting after the safe watermark` (`safe_block_seq`, `next_block_seq`), info `shadow: skipping a snapshot-query block, which has no INSERT verification`, debug `shadow: skipping a block` (`block`, `reason` ∈ `table_set_transition`, `no_track`, `host`, `other_owner`); unexported seams `Verifier.replay` (interface `replayer`, `*replay.Verifier` in production) and `Verifier.scan` (`scanFunc`, `chexec.ScanAllParts` in production), which the unit tests replace; extension tests `TestShadowWaitsUntilTheBlockIsDispatched`, `TestShadowSkipsASnapshotQueryBlock`, `TestShadowHoldsTheCursorWhenTheReplayFails`, `TestNewRefusesAnInvalidConfig`, `TestNewBuildsTheReplayCoreWithAThrowawaySigner`, `TestReplayPrefixNeverCollidesWithInstallScratch`, `TestStatsExportEveryOwnerAndKindWithZeros`; test helpers `newFixture`, `fixture.replayCore`, `fixture.statement`, `fixture.block`, `testBlock`, `nativeRow`, `evilHash`, `fakeArbiter`, `newFakeArbiter`, `fakePull`, `newFakePull`, `fakeConn`, `testConfig`, `newTestShadow`, `stepAll`, `wantCounts`, `countOf`, `requireCH`, `recordingConn`, `localPull`, `mustExec`.
+- Produces (beyond the contract; Appendix B, Task 33): `func MismatchKinds() []MismatchKind` (`receipt`, `scan`, `claim`, in export order, for Tasks 34–35's zero-filled series when the shadow is off); the candidate scratch name `<ReplayPrefix>scan_<n>` (`n` counts this boot's pulls from 1; unexported `scanScratchName`); `New`'s refusals (verbatim) `shadow: NodeID, BootNonce, NetworkID and StateDir are required`, `shadow: Pinned.StageDB is required`, `shadow: Blocks, Watermark, Snapshots, Payloads, Conn and UnsafePull are required`, `shadow: owner %d is the host's own indexer`, `shadow: owners %v must be ascending and unique`, `shadow: PollMax %s is below PollMin %s`, `shadow: %w` (around `ddl.ValidatePhysicalTableNames` and `chexec.NewMaterializerInWithStoragePolicy`), `shadow: draw the signer seed: %w`, `shadow: signer: %w`, `shadow: executor: %w`; cursor refusals `shadow: read cursor %s: %w`, `shadow: cursor %s: %w`, `shadow: cursor %s has version %d, want 1`, `shadow: cursor %s has next_block_seq 0`, `shadow: encode cursor: %w`, `shadow: write cursor %s: %w`; step errors `shadow: read the safe watermark: %w`, `shadow: read block %d: %w`, `shadow: replay block %d: %w`, `shadow: block %d: %w`, `shadow: block %d: no schema for table %s of candidate part %s`, `shadow: block %d: scratch for %s: %w`, `shadow: create scratch %s.%s: %w`, `shadow: scan scratch %s.%s: %w`, `shadow: no unsafe pull for owner %d`; log lines (slog messages) error `shadow verification mismatch` (fields `block`, `owner`, `kind`, `replica`, `table`, `partition`, `part`, `own`, `recorded`; an LtHash accumulator is logged as `digest:` + `replay.DigestString` of its hex), error `shadow verification of a block failed; it is retried after the back-off` (`block`, `retry_in`, `err`), error `shadow: the cursor could not be persisted; a restart repeats the block` (`next_block_seq`, `pause`, `err`), warn `shadow: candidate part not scanned (missed scan)` (`block`, `owner`, `table`, `partition`, `part`, `source`, `outcome`, `err`), warn `shadow: candidate part arrived empty (missed scan)`, warn `shadow: block has no final verdict after the verdict wait; compared against the evidence recorded so far` (`block`, `owner`, `verdict_wait`), warn `shadow: re-reading a block failed; keeping the previous read`, warn `shadow: dropping a scratch failed; the next startup drops it`, info `shadow verified a block` (`block`, `owner`, `quorum`, `final`, `mismatches`, `missed_scans`), info `shadow: starting after the safe watermark` (`safe_block_seq`, `next_block_seq`), info `shadow: skipping a snapshot-query block, which has no INSERT verification`, debug `shadow: skipping a block` (`block`, `reason` ∈ `table_set_transition`, `no_track`, `host`, `other_owner`); unexported seams `Verifier.replay` (interface `replayer`, `*replay.Verifier` in production) and `Verifier.scan` (`scanFunc`, `chexec.ScanAllParts` in production), which the unit tests replace; extension tests `TestShadowWaitsUntilTheBlockIsDispatched`, `TestShadowSkipsASnapshotQueryBlock`, `TestShadowHoldsTheCursorWhenTheReplayFails`, `TestShadowNeverCountsABlockTwiceWhenTheCursorCannotBePersisted`, `TestNewRefusesAnInvalidConfig`, `TestNewBuildsTheReplayCoreWithAThrowawaySigner`, `TestReplayPrefixNeverCollidesWithInstallScratch`, `TestStatsExportEveryOwnerAndKindWithZeros`; test helpers `newFixture`, `fixture.replayCore`, `fixture.statement`, `fixture.block`, `testBlock`, `nativeRow`, `evilHash`, `fakeArbiter`, `newFakeArbiter`, `fakePull`, `newFakePull`, `fakeConn`, `testConfig`, `newTestShadow`, `stepAll`, `wantCounts`, `countOf`, `requireCH`, `recordingConn`, `localPull`, `mustExec`.
 
 Notes:
 - **What is compared (K34).** Bodies only, never a check flag or the verdict (those stay the FSM's, `arbiter:fsm/threeway.go:35-179`). `receipt`: each recorded attestation's `receipt_hash` against the shadow's own `ReceiptHash` (= `ExecutionReceipt.Hash()`, replica-independent, `housegate:pkg/replay/types.go:335-353`), one mismatch per disagreeing attestation. `scan`: for every candidate part the shadow scanned, each recorded byte-side scan's `scanned_part_row_lthash` for the entry whose `claimed_part_row_lthash` is the candidate's claim (the key check 3 uses, `arbiter:fsm/threeway.go:165-179`), compared case-insensitively as check 3 does; a recorded scan that does not report the part is a disagreement too. One mismatch per disagreeing (scan, part). `claim`: only when the last read has `VerdictEvaluated && Quorum`, each scanned candidate whose own row LtHash differs from its claim. Evidence the verdict evaluated and evidence recorded after the quorum latched (`Evaluated` false) are compared alike. A QuorumFailed or Rejected block therefore counts nothing when the shadow reproduces the honest verifiers, which the two fraud classes of `arbiter:integration/chpipeline/fraud_test.go:57-89` show in `TestShadowReproducesARejectedBlocksReceipts` (the lying candidate's `PartPhysHash` and name are honest, so the pull fetches the true bytes, which scan as every honest verifier scanned them).
@@ -13355,10 +13384,10 @@ Notes:
 - **Missed scans.** A candidate the pull does not fetch (outcome `missed`, the owner already cleaned it; `refused` or `unreachable`, K35's outcomes, which the shadow does not retry) or that arrives with no rows (the part vanished between resolve and pull) is a missed scan, counted per part in `MissedScans` and logged with the pull's outcome; it is never a mismatch, and the block's receipt is still compared. A fetched candidate's own row LtHash is `payloadexec.SumPartRowLtHashes` over every part of its scratch, so a split pull (none on 26.3, mechanics M6) still scans to the candidate's content hash.
 - **A block the shadow cannot replay holds the cursor.** A failed block read, scratch statement, scan or replay is returned by `Step` with the cursor unchanged and nothing counted; `Run` logs it at error level and retries the same block after the back-off (`PollMin` doubling to `PollMax`). A shadow error is not a mismatch (a mismatch is a recorded body that disagrees). A permanent local refusal therefore stalls the shadow, visible as `sentio_node_si_member_shadow_next_block_seq` standing while the arbiter's watermark moves (Plan S3-C3's soak reads it). The scratch is dropped on every path.
 - **Skips.** A table-set transition block (`IsTableSetTransition`), a block without a track (`TrackIndexerID` nil, before the tracks activation), the host's own track and an owner outside `Owners` are skipped and the cursor advances. A snapshot-query block is refused by `GetBlockVerification` with Internal `l3 block %d: l3 block %d is a snapshot-query block and has no INSERT verification` (Plan S3-A Task 7, its Appendix B); the shadow recognises that refusal (`status.FromError`, code Internal, the message fragment `is a snapshot-query block`) and skips the block instead of stalling on it (beyond the contract, Appendix B). Every other refusal holds the cursor.
-- **Replay core.** It is the network verifier's (`arbiter-core:verifier/backends.go:21-41`) with two differences: the materializer is `chexec.NewMaterializerIn(NetworkID, Conn, Pinned.StageDB, ReplayPrefix(NodeID, BootNonce))`, and the signer is `payloadexec.NewEd25519Signer(NodeID+"-shadow", seed)` with a 32-byte seed from `crypto/rand` per `New`, so a shadow attestation is never a network verifier's and its key exists only in memory. `Snapshots` is the feed's verifying `*manifestfeed.Store` (Task 29), so every base manifest the shadow replays against passed `manifestfeed.Verify`. The materializer's scratch (`<prefix>replay_<n>`, `ENGINE = MergeTree ORDER BY tuple()`) holds one statement's rows and is dropped by the materializer itself; `chexec` gives it no `storage_policy`, so it is the one shadow table on the server's default policy rather than the member policy (spec §8.1 puts member tables on the member disk; it is bounded by one statement and counts towards Task 32's `hg_rstage` budget sum all the same).
+- **Replay core.** It is the network verifier's (`arbiter-core:verifier/backends.go:21-41`) with two differences: the materializer is `chexec.NewMaterializerInWithStoragePolicy(NetworkID, Conn, Pinned.StageDB, ReplayPrefix(NodeID, BootNonce), Pinned.StoragePolicy)`, and the signer is `payloadexec.NewEd25519Signer(NodeID+"-shadow", seed)` with a 32-byte seed from `crypto/rand` per `New`, so a shadow attestation is never a network verifier's and its key exists only in memory. `Snapshots` is the feed's verifying `*manifestfeed.Store` (Task 29), so every base manifest the shadow replays against passed `manifestfeed.Verify`. The materializer's scratch (`<prefix>replay_<n>`) holds one statement's rows and is dropped by the materializer itself. Its CREATE explicitly sets `storage_policy` from `Pinned.StoragePolicy`, as candidate scratch does, so replay stays on the configured member disk (spec §8.1). Empty or invalid policy names are refused at construction; a policy absent from ClickHouse fails CREATE without a default-policy retry. The generic ClickHouse fixture explicitly selects its existing `default` policy; devnet2 selects its provisioned member policy.
 - **Scratch names.** Candidate scratch tables are `<node_id>_<boot_nonce>_rscan_<n>` in `StageDB`, created with `ddl.ScratchIntent` (the copy's structure, settings and storage policy), one per candidate, dropped with `DROP TABLE IF EXISTS … SYNC` once the block is counted. Everything the shadow creates starts with `ReplayPrefix` and so with `install.NodePrefix(NodeID)`: Task 32's startup drop removes what a crashed boot left, and since the prefix ends in `r` no shadow table is ever an `install.ScratchName` (decimal suffix) nor Plan S3-E1's verify-role scratch (`…_v`). The shadow's scratch counts towards Task 32's disk budget (it sums `hg_rstage`), which pauses installs only, never the shadow.
-- **Cursor.** `shadow-cursor.json` in `StateDir`, written atomically (temp file, `Sync`, rename, directory `Sync`: the `arbiter-core:snode/state.go:583-635` pattern). Without a file the first `Step` reads `GetSafeWatermark().SafeBlockSeq + 1` and persists it at once, so a restart before the first block keeps that start. `advance` moves the in-memory cursor before it persists, so one process never counts a block twice; a crash between counting and persisting re-verifies that block after the restart (the counters restart at zero with the process). `New` refuses a cursor file it cannot read. `StateDir` must exist (Task 34's role creates it and holds its `LOCK`).
-- **No submission.** `Deps` holds only read interfaces; the package imports no `google.golang.org/grpc` client, no `arbiter-proto/gen/pb`, no `net`; of `dataplane` it uses only `ErrBlockNotSealed`. `TestShadowNeverSubmitsAnything` parses the package's non-test sources (the `go_test` carries them as `data`) and runs an honest, a fraud and an unverdicted block, asserting that every ClickHouse statement the shadow itself issues is its own scratch DDL in `hg_rstage`.
+- **Cursor.** `shadow-cursor.json` in `StateDir`, written atomically (temp file, `Sync`, rename, directory `Sync`: the `arbiter-core:snode/state.go:674-721` pattern at `cfd4f42` (`:583-635` at `8f0bc43`)). Without a file the first `Step` reads `GetSafeWatermark().SafeBlockSeq + 1` and persists it at once, so a restart before the first block keeps that start. `advance` moves the in-memory cursor before it persists, so one process never counts a block twice; a crash between counting and persisting re-verifies that block after the restart (the counters restart at zero with the process). A failed cursor write is logged separately from a verification failure: the in-memory cursor has already advanced, so this process continues with the next block after the back-off, while a restart resumes from the last persisted cursor (`TestShadowNeverCountsABlockTwiceWhenTheCursorCannotBePersisted`). `New` refuses a cursor file it cannot read. `StateDir` must exist (Task 34's role creates it and holds its `LOCK`).
+- **No submission.** `Deps` holds only read interfaces; the package imports no `google.golang.org/grpc` client, no `arbiter-proto/gen/pb`, no `net`; of `dataplane` it uses only `ErrBlockNotSealed`. `TestShadowNeverSubmitsAnything` enforces a closed import allowlist (including no indirect import of the network verifier or SNode package), restricts `install` uses to `ScratchPrefix`, and parses the package's non-test sources (the `go_test` carries them as `data`) and runs an honest, a fraud and an unverdicted block, asserting that every ClickHouse statement the shadow itself issues is its own scratch DDL in `hg_rstage`.
 - **Reach and grants.** Arbiter: `GetBlockVerification`, `GetSafeWatermark` (contract §20.1), `GetManifest` through the feed's store; DA: `FetchPayloads` through `Payloads`. ClickHouse as `si_member`: `CREATE TABLE` and `DROP TABLE` of its scratch in `hg_rstage` (with `TABLE ENGINE ON MergeTree`), the pull's `INSERT … SELECT … FROM remote(<owner collection>, …)` into it (Task 31; `READ ON REMOTE`, `NAMED COLLECTION`), `SELECT` for the scans and the materializer's statements, all in `hg_rstage`, within contract §23.2. Steady state: one block read per `PollMin` while a block waits, back-off to one per `PollMax` while nothing is sealed.
 - **Clocks and tests.** `Deps.Now` sets the per-block deadline; the waits use runtime timers, so the time-dependent tests run in `testing/synctest` bubbles (Go 1.26). The unit tests replace the unexported `replay` and `scan` seams by an in-process replay core (`nativepayload.Materializer`, the same executor) and the fake pull's read-back; `TestShadowReplaysInTheStageDatabaseUnderItsPrefix` runs the real ones against ClickHouse and proves that the ClickHouse materializer's receipt equals the in-process one and the real scan equals the owner's part.
 - **CI.** The ClickHouse-gated test joins the existing `integration-clickhouse` job (ClickHouse 25.8 and, from Plan S3-A Task 4, `CH_USER` / `CH_PASSWORD`, which `chtest.Open` reads); it needs neither Keeper nor a second server. Step 11 also runs it locally on `clickhouse/clickhouse-server:26.3.37.3`, the member's server version.
@@ -13369,6 +13398,7 @@ Notes:
 The worktree is Tasks 29–32's (`~/src/remotesrc/claude/arbiter-core/multi-source-s3c2`, branch `urwt/claude/multi-source-s3c2`). Every check below is local and read-only; `GOPROXY=off` keeps `go doc` from downloading anything (Task 29 Step 3 already brought every pinned module into the module cache).
 
 ```bash
+W=<worktree path>; cd "$W" && git config --worktree user.name && git config --worktree user.email && git log --format='%an <%ae>' origin/main..HEAD | sort -u
 W=<worktree path>; cd "$W" && git status --short && git log --oneline -1 && test ! -e member/shadow && echo 'member/shadow is absent'
 W=<worktree path>; cd "$W" && while IFS='|' read -r pkg sym want; do
   if GOWORK=off GOPROXY=off go doc "./$pkg" "$sym" 2>/dev/null | grep -qF -- "$want"; then echo "ok $pkg $sym"; else echo "MISSING $pkg $sym: $want"; fi
@@ -13392,15 +13422,15 @@ member/install|NodePrefix|func NodePrefix(nodeID string) string
 member/install|ScratchPrefix|func ScratchPrefix(nodeID, bootNonce string) string
 member/install|ScratchName|func ScratchName(nodeID, bootNonce string, n uint64) string
 EOF
-W=<worktree path>; cd "$W" && GOWORK=off GOPROXY=off go list -m -f '{{.Path}} {{.Version}}' github.com/housegate/housegate && for sym in chexec.NewMaterializerIn chexec.ScanAllParts payloadexec.SumPartRowLtHashes; do
+W=<worktree path>; cd "$W" && GOWORK=off GOPROXY=off go list -m -f '{{.Path}} {{.Version}}' github.com/housegate/housegate && for sym in chexec.NewMaterializerInWithStoragePolicy chexec.ScanAllParts payloadexec.SumPartRowLtHashes; do
   GOWORK=off GOPROXY=off go doc "github.com/housegate/housegate/pkg/replay/${sym%%.*}" "${sym#*.}" | grep '^func '
 done
 ```
 
-Expected: a clean tree whose last commit is Task 32's last commit; `member/shadow is absent`; eighteen lines starting with `ok ` (one per consumed name: Plan S3-A's `SafeWatermark` and `chtest.Open`, Task 29's reads and wire types, Task 30's member DDL, Task 31's source types, Task 32's scratch names) and no `MISSING` line; `github.com/housegate/housegate v<x.y.z>`, the version Task 29 Step 3 checked against the ledger's `HG_TAG_P1` (pinned since `CORE_TAG_P1`, unchanged by Tasks 29–32); then exactly:
+Expected first: `poetry`, `chen@sentio.xyz`, and exactly one author line `poetry <chen@sentio.xyz>`. Otherwise stop, restore Task 29 Step 1's worktree identity, and ask before rewriting an existing author. Then a clean tree whose last commit is Task 32's last commit; `member/shadow is absent`; eighteen lines starting with `ok ` (one per consumed name: Plan S3-A's `SafeWatermark` and `chtest.Open`, Task 29's reads and wire types, Task 30's member DDL, Task 31's source types, Task 32's scratch names) and no `MISSING` line; `github.com/housegate/housegate v<x.y.z>`, the version Task 29 Step 3 checked against the ledger's `HG_TAG_P1` (pinned since `CORE_TAG_P1`, unchanged by Tasks 29–32); then exactly:
 
 ```text
-func NewMaterializerIn(networkID string, conn clickhouse.Conn, database, prefix string) (*Materializer, error)
+func NewMaterializerInWithStoragePolicy(networkID string, conn clickhouse.Conn, database, prefix, storagePolicy string) (*Materializer, error)
 func ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]PartScanResult, error)
 func SumPartRowLtHashes(hashes []string) (string, error)
 ```
@@ -13785,7 +13815,7 @@ func testConfig(stateDir string) Config {
 		BootNonce:     testBootNonce,
 		NetworkID:     testNetwork,
 		StateDir:      stateDir,
-		Pinned:        ddl.DefaultMemberPinned(testNodeID, 0, ""),
+		Pinned:        ddl.DefaultMemberPinned(testNodeID, 0, "default"),
 		Genesis:       []payloadexec.TableSchema{testSchema()},
 		Owners:        []uint64{ownerA, ownerB},
 		HostIndexerID: hostIndexer,
@@ -14217,11 +14247,32 @@ func TestShadowBacksOffOnAnUnsealedBlock(t *testing.T) {
 }
 
 // TestShadowNeverSubmitsAnything: the package has no way to submit (it
-// imports no arbiter gRPC client and uses nothing of dataplane but its
-// not-sealed sentinel), and a run over an honest, a fraud and an unverdicted
-// block issues nothing but scratch DDL in the stage database.
+// imports nothing outside its list, so no gRPC client, no arbiter-proto, no
+// network verifier or SNode package and no net; of dataplane it uses only the
+// not-sealed sentinel and of install only the scratch prefix), and a run over
+// an honest, a fraud and an unverdicted block issues nothing but scratch DDL
+// in the stage database.
 func TestShadowNeverSubmitsAnything(t *testing.T) {
 	t.Run("sources", func(t *testing.T) {
+		allowed := map[string]bool{
+			"context": true, "crypto/ed25519": true, "crypto/rand": true, "encoding/json": true, "errors": true,
+			"fmt": true, "io/fs": true, "log/slog": true, "os": true, "path/filepath": true, "strconv": true,
+			"strings": true, "sync": true, "time": true,
+			"github.com/ClickHouse/clickhouse-go/v2":                  true,
+			"google.golang.org/grpc/codes":                            true,
+			"google.golang.org/grpc/status":                           true,
+			"github.com/housegate/housegate/pkg/replay":               true,
+			"github.com/housegate/housegate/pkg/replay/chexec":        true,
+			"github.com/housegate/housegate/pkg/replay/payloadexec":   true,
+			"github.com/housegate/housegate/pkg/replay/snapshotquery": true,
+			"github.com/sentioxyz/arbiter-core":                       true,
+			"github.com/sentioxyz/arbiter-core/dataplane":             true,
+			"github.com/sentioxyz/arbiter-core/dataplane/ddl":         true,
+			"github.com/sentioxyz/arbiter-core/member/install":        true,
+			"github.com/sentioxyz/arbiter-core/member/sources":        true,
+			"github.com/sentioxyz/arbiter-core/wire":                  true,
+		}
+		onlyUses := map[string]string{"dataplane": "ErrBlockNotSealed", "install": "ScratchPrefix"}
 		files, err := filepath.Glob("*.go")
 		if err != nil {
 			t.Fatal(err)
@@ -14238,9 +14289,8 @@ func TestShadowNeverSubmitsAnything(t *testing.T) {
 			checked++
 			for _, imp := range f.Imports {
 				path, _ := strconv.Unquote(imp.Path.Value)
-				switch path {
-				case "google.golang.org/grpc", "github.com/sentioxyz/arbiter-proto/gen/pb", "net", "net/http":
-					t.Errorf("%s imports %s", name, path)
+				if !allowed[path] {
+					t.Errorf("%s imports %s, which is not on the shadow's import list", name, path)
 				}
 			}
 			ast.Inspect(f, func(n ast.Node) bool {
@@ -14248,8 +14298,10 @@ func TestShadowNeverSubmitsAnything(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if x, ok := sel.X.(*ast.Ident); ok && x.Name == "dataplane" && sel.Sel.Name != "ErrBlockNotSealed" {
-					t.Errorf("%s uses dataplane.%s", name, sel.Sel.Name)
+				if x, ok := sel.X.(*ast.Ident); ok {
+					if want, ok := onlyUses[x.Name]; ok && sel.Sel.Name != want {
+						t.Errorf("%s uses %s.%s", name, x.Name, sel.Sel.Name)
+					}
 				}
 				return true
 			})
@@ -14293,8 +14345,10 @@ Create `member/shadow/new_test.go`:
 package shadow
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14407,6 +14461,55 @@ func TestShadowHoldsTheCursorWhenTheReplayFails(t *testing.T) {
 	}
 }
 
+// TestShadowNeverCountsABlockTwiceWhenTheCursorCannotBePersisted: a block
+// whose cursor write fails is counted once, the cursor moves past it in
+// memory and Run goes on with the next block after the back-off; the file
+// keeps the last cursor that was written, so only a restart repeats the
+// blocks after it.
+func TestShadowNeverCountsABlockTwiceWhenTheCursorCannotBePersisted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fx := newFixture(t)
+		b7, b8 := fx.block(7, ownerA, "p0", 1), fx.block(8, ownerA, "p0", 2)
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, CursorFile), []byte(`{"version":1,"next_block_seq":7}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		arb := newFakeArbiter(6, b7.BV, b8.BV)
+		v, _ := newTestShadow(t, fx, arb, newFakePull(b7.Part, b8.Part), testConfig(dir))
+		var logs bytes.Buffer
+		v.d.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		v.cfg.StateDir = filepath.Join(dir, "gone") // every cursor write from now on fails
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- v.Run(ctx) }()
+
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		cancel()
+		if err := <-done; err != context.Canceled {
+			t.Fatalf("Run returned %v, want context.Canceled", err)
+		}
+
+		reads, _ := arb.readLog()
+		if countOf(reads, 7) != 1 || countOf(reads, 8) != 1 || countOf(reads, 9) == 0 {
+			t.Fatalf("reads %v, want 7 and 8 once each, then 9", reads)
+		}
+		wantCounts(t, v.Stats(), ownerA, 2, 0, 0, 0, 0, 0)
+		if got := v.Stats().NextBlockSeq; got != 9 {
+			t.Fatalf("NextBlockSeq = %d, want 9", got)
+		}
+		if raw, err := os.ReadFile(filepath.Join(dir, CursorFile)); err != nil || string(raw) != `{"version":1,"next_block_seq":7}` {
+			t.Fatalf("cursor file = %s (%v), want the last cursor written", raw, err)
+		}
+		if n := strings.Count(logs.String(), `msg="shadow: the cursor could not be persisted; a restart repeats the block"`); n != 2 {
+			t.Fatalf("%d persist failures logged, want 2:\n%s", n, logs.String())
+		}
+		if strings.Contains(logs.String(), "it is retried after the back-off") {
+			t.Fatalf("a block that advanced was logged as retried:\n%s", logs.String())
+		}
+	})
+}
+
 // TestNewRefusesAnInvalidConfig: New's refusals.
 func TestNewRefusesAnInvalidConfig(t *testing.T) {
 	fx := newFixture(t)
@@ -14429,6 +14532,8 @@ func TestNewRefusesAnInvalidConfig(t *testing.T) {
 		{"unsorted owners", func(c *Config, _ *Deps) { c.Owners = []uint64{ownerB, ownerA} }, "shadow: owners [2 0] must be ascending and unique"},
 		{"poll max below poll min", func(c *Config, _ *Deps) { c.PollMin, c.PollMax = time.Minute, time.Second }, "shadow: PollMax 1s is below PollMin 1m0s"},
 		{"bad stage database", func(c *Config, _ *Deps) { c.Pinned.StageDB = "hg-rstage" }, `shadow: chexec: materializer database "hg-rstage" must match [a-z_][a-z0-9_]*`},
+		{"no storage policy", func(c *Config, _ *Deps) { c.Pinned.StoragePolicy = "" }, `shadow: chexec: materializer storage policy "" must match`},
+		{"invalid storage policy", func(c *Config, _ *Deps) { c.Pinned.StoragePolicy = "member's" }, `shadow: chexec: materializer storage policy`},
 		{"bad cursor", func(c *Config, _ *Deps) { c.StateDir = badCursor }, "has version 2, want 1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -14706,6 +14811,9 @@ func TestShadowReplaysInTheStageDatabaseUnderItsPrefix(t *testing.T) {
 			}
 		}
 		if strings.HasPrefix(head, "CREATE") {
+			if strings.Contains(q, ours+"replay_") && !strings.Contains(q, "SETTINGS storage_policy = '"+cfg.Pinned.StoragePolicy+"'") {
+				t.Fatalf("replay scratch omitted the configured storage policy: %q", q)
+			}
 			creates = append(creates, q[:strings.Index(q, "(")])
 		}
 	}
@@ -15177,7 +15285,7 @@ func newReplayCore(cfg Config, d Deps) (*replay.Verifier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("shadow: signer: %w", err)
 	}
-	materializer, err := chexec.NewMaterializerIn(cfg.NetworkID, d.Conn, cfg.Pinned.StageDB, ReplayPrefix(cfg.NodeID, cfg.BootNonce))
+	materializer, err := chexec.NewMaterializerInWithStoragePolicy(cfg.NetworkID, d.Conn, cfg.Pinned.StageDB, ReplayPrefix(cfg.NodeID, cfg.BootNonce), cfg.Pinned.StoragePolicy)
 	if err != nil {
 		return nil, fmt.Errorf("shadow: %w", err)
 	}
@@ -15226,7 +15334,9 @@ func (v *Verifier) Stats() Stats {
 // Run shadow-verifies block after block until ctx ends, and returns ctx's
 // error. An unsealed next block and a failed step back off from PollMin,
 // doubling to PollMax; a block that advanced resets the back-off. A failed
-// step keeps the cursor, so the same block is tried again.
+// step keeps the cursor, so the same block is tried again; a block whose
+// cursor advanced in memory but could not be persisted is not repeated (a
+// restart repeats it), and the next block follows after the back-off.
 func (v *Verifier) Run(ctx context.Context) error {
 	wait := v.cfg.PollMin
 	for {
@@ -15238,7 +15348,11 @@ func (v *Verifier) Run(ctx context.Context) error {
 			wait = v.cfg.PollMin
 			continue
 		}
-		if err != nil {
+		switch {
+		case err != nil && advanced:
+			v.d.Logger.Error("shadow: the cursor could not be persisted; a restart repeats the block",
+				"next_block_seq", v.nextSeq(), "pause", wait, "err", err)
+		case err != nil:
 			v.d.Logger.Error("shadow verification of a block failed; it is retried after the back-off",
 				"block", v.nextSeq(), "retry_in", wait, "err", err)
 		}
@@ -15647,7 +15761,7 @@ W=<worktree path>; cd "$W" && test -z "$(gofmt -l member/shadow)" && bazel test 
   && bazel test --build_tests_only --@rules_go//go/config:race //member/shadow:shadow_test --test_output=errors
 ```
 
-Expected: `gazelle keeps member/shadow/BUILD.bazel`; `//member/shadow:shadow_test PASSED`; `19` (the twelve contract tests without ClickHouse and the seven of `new_test.go`); one line `--- SKIP: TestShadowReplaysInTheStageDatabaseUnderItsPrefix (0.00s)`; PASSED again under the race detector. A receipt mismatch count of 3 per block in the first test means the shadow did not replay what the fixture's verifiers replayed: compare `fixture.block`'s job with `bv.ReplayJob` before changing the comparison.
+Expected: `gazelle keeps member/shadow/BUILD.bazel`; `//member/shadow:shadow_test PASSED`; `20` (the twelve contract tests without ClickHouse and the eight of `new_test.go`); one line `--- SKIP: TestShadowReplaysInTheStageDatabaseUnderItsPrefix (0.00s)`; PASSED again under the race detector. A receipt mismatch count of 3 per block in the first test means the shadow did not replay what the fixture's verifiers replayed: compare `fixture.block`'s job with `bv.ReplayJob` before changing the comparison.
 
 - [ ] **Step 11: Run the ClickHouse-gated test on 25.8 and 26.3.37.3**
 
@@ -15675,7 +15789,7 @@ for image in clickhouse/clickhouse-server:25.8 clickhouse/clickhouse-server:26.3
 done
 ```
 
-Expected: the two image tags (an `Error: No such image` line instead means the pull above was not confirmed or not done: ask first); then, per image, the server version (`25.8.…`, then `26.3.37.3`), `//member/shadow:shadow_test PASSED`, `1` (Go prints the PASS line only under `-test.v`, and a filter that matches nothing passes silently, hence the grep) and the log line `INFO shadow verified a block block=7 owner=0 quorum=true final=true mismatches=0 missed_scans=0`. A failure naming `the owner's part scans to` means the row identity of the materializer and the scan diverged on that server: stop and ask before changing anything. In drafting this test passed through `go test` and through Bazel on `25.8.28.1` and on `26.3.51.7` (the floating `26.3` tag; `26.3.37.3` was not pulled for the draft), so the 26.3.37.3 run here is its first on the pinned patch.
+Expected: the two image tags (an `Error: No such image` line instead means the pull above was not confirmed or not done: ask first); then, per image, the server version (`25.8.…`, then `26.3.37.3`), `//member/shadow:shadow_test PASSED`, `1` (Go prints the PASS line only under `-test.v`, and a filter that matches nothing passes silently, hence the grep) and the log line `INFO shadow verified a block block=7 owner=0 quorum=true final=true mismatches=0 missed_scans=0`. A failure naming `the owner's part scans to` means the row identity of the materializer and the scan diverged on that server: stop and ask before changing anything. Review (2026-10-17) also ran the fixed test successfully on the pinned `26.3.37.3` and on `25.8.33.6` with `-race`; that settles the earlier pinned-image open question. In drafting this test passed through `go test` and through Bazel on `25.8.28.1` and on `26.3.51.7` (the floating `26.3` tag; `26.3.37.3` was not pulled for the draft), the execution run still rechecks the pinned patch.
 
 - [ ] **Step 12: Commit the package**
 
@@ -15694,7 +15808,10 @@ apart, a durable cursor, and no submission of any kind (housegate spec
 2026-10-14 §16 row P2, Plan S3-C2 contract §22.4).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected commit author: `poetry <chen@sentio.xyz>`. Stop if it differs; fix the worktree identity before any further commit.
 
 - [ ] **Step 13: Run the ClickHouse-gated test in CI**
 
@@ -15720,13 +15837,14 @@ EOF
 W=<worktree path>; cd "$W" && git diff --stat -- .github/workflows/ci.yml && grep -c 'member/shadow:shadow_test' .github/workflows/ci.yml && if command -v actionlint >/dev/null; then actionlint .github/workflows/ci.yml && echo 'actionlint: clean'; fi
 ```
 
-Expected: `inserted at line <n>` (100 at the base `8f0bc43`, 112 at `cfd4f42` after Plan S3-A's merge, later when Plan S3-C1 Task 23's `//dataplane/chparts:chparts_test` and Tasks 30–32's `//member/...` targets precede it); `1 file changed, 1 insertion(+)`; `1`; `actionlint: clean` where actionlint is installed. At the base the hunk is (at `cfd4f42` the same, with `//dataplane/chtest:chtest_test \` as the first target):
+Expected: `inserted at line 117` on this branch (100 at bare `8f0bc43`, 112 at bare `cfd4f42`; Plan S3-C1 Task 23 and Tasks 30–32 add the five earlier targets); `1 file changed, 1 insertion(+)`; `1`; `actionlint: clean` where actionlint is installed. On this branch the hunk is:
 
 ```diff
-           bazel test \
-             //dataplane/ddl:ddl_test \
              //dataplane/tableset:tableset_test \
+             //member/copyset:copyset_test \
+             //member/install:install_test \
 +            //member/shadow:shadow_test \
+             //member/sources:sources_test \
              //snode:snode_test \
              //verifier:verifier_test \
 ```
@@ -15737,7 +15855,10 @@ git -C "$W" add .github/workflows/ci.yml
 git -C "$W" commit -m "ci: run the shadow verifier's ClickHouse test in integration-clickhouse
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected commit author: `poetry <chen@sentio.xyz>`. Stop if it differs.
 
 - [ ] **Step 14: Full verification**
 
@@ -15746,12 +15867,10 @@ W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run
   && test -z "$(gofmt -l $(git ls-files '*.go'))" \
   && bazel build //... && bazel test //... --test_output=errors \
   && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
-W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline -3
+W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline -3 && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: no boundary violation, no BUILD change after gazelle, no unformatted file, every target PASSES with and without the race detector (the ClickHouse-gated tests SKIP); a clean tree; the two commits of this task on top of Task 32's last. No push: Task 34 opens the one PR of Tasks 29–34, and its push needs the user's explicit confirmation in chat.
-
----
+Expected: no boundary violation, no BUILD change after gazelle, no unformatted file, every target PASSES with and without the race detector (the ClickHouse-gated tests SKIP); a clean tree; exactly one author line `poetry <chen@sentio.xyz>`; the two commits of this task on top of Task 32's last. No push: Task 34 opens the one PR of Tasks 29–34, and its push needs the user's explicit confirmation in chat.
 
 ---
 
@@ -15763,14 +15882,14 @@ Spec §8.1 (the si-member, separate from the SNode, with its own users and datab
 - Create: `member/config.go` (the constants, `Peer`, `Config`, `Deps`, defaults and validation), `member/lock.go` (the state-directory flock), `member/role.go` (package doc, `Role`, `New`, `Run`, `Ready`, the composition), `member/stats.go` (`OwnerStats`, `Stats`, `Role.Stats`), `member/BUILD.bazel` (gazelle's output plus one `data` line on the `go_test`, Step 8)
 - Test: `member/fake_arbiter_test.go` (a fake data-plane listener and DA data address that fails on any method outside contract §20.1, and the fixtures), `member/role_test.go` (the eleven tests of contract §23.1 and fourteen beyond it)
 - Create: `member/confinement/doc.go` (package doc only), `member/confinement/confinement_test.go` (the fourteen tests: the thirteen of contract §23.3 and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`), `member/confinement/BUILD.bazel` (gazelle's output)
-- Create: `scripts/ci/clickhouse-member-access-control.xml` (contract §23.4, verbatim), `scripts/ci/clickhouse-member-confinement.sh`. Reused unchanged: `scripts/ci/clickhouse-keeper.xml` (the single-node embedded Keeper, base `8f0bc43` `:1-25`) and `scripts/ci/clickhouse-mechanics-users.xml` (Plan S3-A Task 6: `default` with `access_management` and `named_collection_control`)
-- Modify: `.github/workflows/ci.yml` (append the job `member-confinement` after Plan S3-A Task 6's `clickhouse-mechanics`, the last job of the file on this branch); `.github/workflows/cut-release.yml` (two steps after Plan S3-A Task 6's `stop the mechanics pair`, before `compute next version`, base `:121`)
-- Modify: `README.md` (seven package rows after Plan S3-C1 Task 23's `member/gate` row; a `### Member role (stage 3 P2)` subsection before `## Releases`, base `:117`, so after Plan S3-A Task 6's `### ClickHouse mechanics`; one paragraph appended to § Compatibility, the last section of the file)
+- Create: `scripts/ci/clickhouse-member-access-control.xml` (contract §23.4, verbatim), `scripts/ci/clickhouse-member-confinement.sh`. Reused unchanged: `scripts/ci/clickhouse-keeper.xml` (the single-node embedded Keeper, base `cfd4f42` `:1-25`) and `scripts/ci/clickhouse-mechanics-users.xml` (Plan S3-A Task 6: `default` with `access_management` and `named_collection_control`)
+- Modify: `.github/workflows/ci.yml` (append the job `member-confinement` after Plan S3-A Task 6's `clickhouse-mechanics`, the last job of the file on this branch); `.github/workflows/cut-release.yml` (two steps after Plan S3-A Task 6's `stop the mechanics pair`, before `compute next version`, base `cfd4f42` `:128`)
+- Modify: `README.md` (seven package rows after Plan S3-C1 Task 23's `member/gate` row; a `### Member role (stage 3 P2)` subsection before `## Releases`, base `cfd4f42` `:134`, so after Plan S3-A Task 6's `### ClickHouse mechanics`; one paragraph appended to § Compatibility, the last section of the file)
 - Evidence, never committed: `$HOME/si-stage3-p2-code/` (contract §20.4; created fresh here, mode 700, and reused by Tasks 35–36): `confinement-ci.log` (Step 13), `confinement-deployed.log`, `confinement-deployed.head`, `confinement-deployed.date` (Step 17)
 - Ledger: Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3c2-p2-members-code.md` on the ledger copy (housegate), one record commit (Step 20)
 - Never touch: every file of Tasks 29–33 (this task only reads their names), `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (gazelle adds no dependency: every external repository the new BUILD files name is already in `go.mod` and `use_repo`), `conformance/stage3_reads_test.go` (decision D25: this plan changes nothing in it) and every golden or vector file Plans S2-A and S3-A list.
 
-Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The worktree is Tasks 29–33's, on top of `origin/main` at or after `CORE_TAG_P1`, which carries Plan S3-A Tasks 4–6 (`dataplane/chtest`, `dataplane/chrestart`, `arbiter.SafeWatermark`, the mechanics suite, its CI job, Cut Release steps and README section) and Plan S3-C1 Tasks 23–24 (`dataplane/chparts`, `member/gate`, `dataplane/objstore`, the README rows); every hunk here applies on top of theirs (Global Constraints, the hunk rule).
+**Base revisions.** Line anchors refer to arbiter-core `cfd4f42` (v0.15.0), with housegate `ed24705` plus the reviewed Plan S3-C1 Task 22 as `HG_TAG_P1` (the current housegate code is unchanged at `aa6912c`). The worktree is Tasks 29–33's, on top of `origin/main` at or after `CORE_TAG_P1`, which carries Plan S3-A Tasks 4–6 (`dataplane/chtest`, `dataplane/chrestart`, `arbiter.SafeWatermark`, the mechanics suite, its CI job, Cut Release steps and README section) and Plan S3-C1 Tasks 23–24 (`dataplane/chparts`, `member/gate`, `dataplane/objstore`, the README rows); every hunk here applies on top of theirs (Global Constraints, the hunk rule).
 
 **Interfaces:**
 - Consumes (Task 29): `(*dataplane.Client).GetSafeWatermark(ctx context.Context) (arbiter.SafeWatermark, error)`, `(*dataplane.Client).GetManifest(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error)`, `(*dataplane.Client).GetBlockVerification(ctx context.Context, blockSeq uint64) (wire.BlockVerification, error)`, `dataplane.ErrBlockNotSealed`; `manifestfeed.NewStore(src Source, entries int) *Store`, `(*manifestfeed.Store).GetSafeSnapshot(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error)`, `manifestfeed.Config{MaxWalk int; CacheEntries int; PollInterval time.Duration}`, `manifestfeed.Update{SnapshotID, ParentSnapshotID string; SafeBlockSeq uint64; Manifest replay.SafeSnapshotManifest; Entries map[uint64]replay.TrackFrontier; Changed []uint64; FullFetch bool; Walked int}`, `manifestfeed.NewFollower(cfg Config, src Source, store *Store, last string, lastEntries map[uint64]replay.TrackFrontier) (*Follower, error)`, `(*manifestfeed.Follower).Run(ctx context.Context, onUpdate func(context.Context, Update) error) error` (an update is accepted only after `onUpdate` returns nil, contract §21.4), `manifestfeed.ErrManifestRefused`; beyond contract §21.4 (Task 29's Appendix B), `manifestfeed.FollowerStats{Accepted, Refused, FullFetches, UpdateFailures uint64; Last string}` and `(*manifestfeed.Follower).Stats() FollowerStats`, the counters behind `member.Stats.FeedAccepted`, `FeedRefused` and `FeedFullFetches`.
@@ -15781,11 +15900,11 @@ Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The worktree is Tasks 29
 - Consumes (Plan S3-A, Plan S3-C1 and the base): `chrestart.StartedAt(ctx context.Context, conn clickhouse.Conn, now time.Time) (time.Time, error)`, `chrestart.Watcher{Interval, Skew time.Duration; Now func() time.Time; OnRestart func(ctx context.Context, previous, current time.Time); Baseline time.Time}`, `(*chrestart.Watcher).Run(ctx context.Context, conn clickhouse.Conn)`, `chrestart.DefaultRestartSkew`; `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn`; `dataplane.RegistryView`, `dataplane.WaitReady`, `dataplane.DefaultRegistryStartupTimeout`, `dataplane.NewRegistryFollower`, `dataplane.TableRegistryDisabledMessage`, `(*dataplane.Client).PurgeNodeSet` (`dataplane/registry_follower.go:23-121`, `dataplane/table_purge.go:76-89`), `dastore.New(dastore.Config{DataAddr})` and `(*dastore.Client).GetPayload` (`dataplane/dastore/fetch.go:17-40`); `wire.TableRegistrySnapshot.SIIndexer` (`wire/table_registry_snapshot.go:169`), `wire.TableRegistrySnapshotToPB`, `wire.ManifestToPB`; `arbiter.LocalNodeFeatures()` (`consensus.go:35-38`); housegate `replay.OwnerEntry`, `payloadexec.TableSchemaHash`, `payloadexec.New(...).GenesisSnapshot`, `chexec.ScanParts`; the scripts `scripts/ci/clickhouse-keeper.xml`, `scripts/ci/clickhouse-mechanics-users.xml`, the mechanics job and Cut Release steps of Plan S3-A Task 6.
 - Produces (contract §23.1, verbatim): `const DefaultPollInterval = 5 * time.Second`, `MinPollInterval = time.Second`, `LockFile = "LOCK"` (defined as `install.LockFile`); `type Peer struct { IndexerID uint64; Collection, SafeDatabase, UnsafeDatabase string }`; `type Config struct { NodeID string; HostIndexerID uint64; NetworkID, GenesisSnapshotID string; Genesis []payloadexec.TableSchema; Pinned ddl.MemberPinned; Protocol ddl.Pinned; StateDir string; Peers []Peer; PoolCollections []string; Restore *sources.RestoreConfig; Shadow bool; PollInterval time.Duration; DiskBudgetBytes uint64; StopInstallsRatio float64; SelfAuditInterval time.Duration; FeedMaxWalk, FeedCacheEntries int }`; `type Deps struct { Client *dataplane.Client; Conn clickhouse.Conn; Registry dataplane.RegistryView; Payloads replay.PayloadStore; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }`; `type OwnerStats struct { Copies int; Entry, PublishedEntry replay.TrackFrontier; BehindSince time.Time; DivergedPartitions uint64; DivergedTables, ForeignTables int; ShadowBlocks, ShadowMissedScans, ShadowUnverdicted uint64; ShadowMismatches map[shadow.MismatchKind]uint64 }`; `type Stats struct { NodeID string; HostIndexerID uint64; Ready bool; Owners map[uint64]OwnerStats; InstallOutcomes map[install.Outcome]uint64; Installs map[string]uint64; FeedAccepted, FeedRefused, FeedFullFetches uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused, GrantsUnreadable bool; DiskUsedBytes, DiskBudgetBytes uint64; UnconfiguredOwners []uint64; ShadowNextBlockSeq uint64 }`; `func New(cfg Config, d Deps) (*Role, error)`; `func (r *Role) Run(ctx context.Context) error`; `func (r *Role) Ready() bool`; `func (r *Role) Stats() Stats`; the refusals `member: state dir %s is locked by a running si-member`, `member: %d is the host's own indexer; a member never copies its host`, `member: peer indexer %d is not enrolled in si_indexers`, `member: node id %q must match ^[a-z][a-z0-9-]{0,30}[a-z0-9]$`, `member: poll interval %s is below 1s`, `member: stop_installs_ratio must satisfy 0 < ratio < 1, got %v`, `member: disk budget is required`, `member: genesis table %s schema hashes to %s, the genesis manifest records %s`, `member: genesis tables %v differ from the genesis manifest's %v`; the engine probe table `install.NodePrefix(NodeID) + "engine_probe"` in `StageDB`; the tests `TestRoleRefusesToStartWithoutTheEngineFence`, `TestRoleRefusesAWritableRemote`, `TestRoleRefusesANodeIDInUse`, `TestRoleRefusesAPeerThatIsNotEnrolled`, `TestRoleRefusesGenesisTablesThatDifferFromTheGenesisManifest`, `TestRoleRefusesASecondProcessOnTheStateDir`, `TestRoleCallsOnlyReadRPCs`, `TestRoleStatsExportEveryKeyIncludingZeros`, `TestRoleListsUnconfiguredOwners`, `TestRoleIsReadyOnlyAfterACleanAuditAndAManifest`, `TestLocalNodeFeaturesAreUnchangedThroughP2`.
 - Produces (contract §23.2–§23.4, verbatim): the suite's grant lists `siMemberGrants` (`SI_MEMBER_GRANTS`, with this suite's two collection grants `GRANT NAMED COLLECTION ON si_owner_0` and `… ON si_peer_verifier_1` in their place) and `siMemberDDLGrants` (`SI_MEMBER_DDL_GRANTS`) with the profile setting `merge_tree_max_bytes_to_merge_at_max_space_in_pool = 0 CONST`; the test target `//member/confinement:confinement_test` with `TestConfinement_ServerIsTheExpectedImage`, `TestConfinement_SIMemberCreatesNoReplicatedEngine`, `TestConfinement_SIMemberCreatesNoBufferDistributedMergeOrAlias`, `TestConfinement_SIMemberCreatesNoReplicatedDatabase`, `TestConfinement_SIMemberCannotMoveDataIntoMemberUnsafe`, `TestConfinement_SIMemberCannotWriteThroughRemote`, `TestConfinement_SIMemberCannotOverrideACollection`, `TestConfinement_SIMemberCannotDropAReplica`, `TestConfinement_SIMemberHasNoDictionarySystemOrDefinerRight`, `TestConfinement_SIMemberHoldsEveryRightItsRoleNeeds`, `TestConfinement_SIMemberRestoreNeedsReadOnS3`, `TestConfinement_SIMemberDDLProfileRefusesAMergesAllowedReplica`, `TestConfinement_SIMemberDDLCannotWriteAlterOrOptimize`, opt-in with `ARBITER_CH_MEMBER_CONFINEMENT=1` and failing with `ARBITER_CH_MEMBER_CONFINEMENT=1 requires <the missing ones of CH_ADDR, CH_PEER_ADDR, CH_PEER_ADDR_FROM_SERVER, ARBITER_CH_EXPECT_VERSION_PREFIX, ARBITER_CH_IMAGE, S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET>`; `scripts/ci/clickhouse-member-access-control.xml`; `bash scripts/ci/clickhouse-member-confinement.sh <image> <version-prefix>`, which prints `confinement: <n> test(s) passed on <image>`; the CI job `member-confinement` and the Cut Release step, both on `clickhouse/clickhouse-server:26.3.37.3 26.3.37.3`; README § Member role (stage 3 P2); the release `CORE_TAG_P2` and the ledger value `P2_CONFINEMENT`.
-- Produces (beyond the contract; Appendix B, Task 34): the refusals `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; the wrapped errors `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, and `member: <part>: %w` for a part that fails while running (`copyset`, `feed`, `copy watch`, `restart watcher`, `self-audit`, `shadow`); the slog lines (logger attributes `role=si-member`, `node_id`) info `member: started` (`host_indexer_id`, `peers`, `shadow`, `boot_nonce`), warn `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, warn `member: first copyset pass failed; the copyset retries`, warn `member: the journaled manifest is not readable; the feed starts from the watermark` (`snapshot_id`, `err`), warn `member: install pass for changed copies or outstanding repairs failed; the next check retries` (`snapshot_id`, `err`), warn `member: ClickHouse restarted; auditing the copies` (`previous_start`, `current_start`), warn `member: restart audit failed; the next restart or self-audit reruns it`, warn `member: self-audit failed; the next interval reruns it`; the unexported seams (`seams`: `ensureDatabases`, `checkEngineFence`, `checkRemoteIsReadOnly`, `readOwnGrants`, `startedAt`, `watchRestarts`, `newCopySet`, `newInstaller`, `newShadow`) and part interfaces (`copySet`, `installer`, `shadowVerifier`) the unit tests replace; the tests `TestNewRefusesAnInvalidConfig`, `TestRoleRunsTheStartupStepsInOrder`, `TestClearForeignRefusesWhileTheRoleHoldsTheStateDir`, `TestRoleRefusesTheHostAsAPeer`, `TestRoleToleratesUnreadableGrants`, `TestRoleRefusesUnreadableGrantsForAnyOtherReason`, `TestRoleOffersAFailedUpdateAgain`, `TestRoleReappliesTheLastUpdateWhenCopiesChange`, `TestRoleResumesFromTheJournaledManifest`, `TestRoleCountsRefusedManifests`, `TestRoleAuditsAfterAClickHouseRestart`, `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady` (review fix 245-1), `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest` (review fix 245-2), `TestRoleRetriesTheNewestOfferedUpdateAfterAPartialPass` (review fix 245-5) and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`; the suite's log lines for the run record `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s` and `confinement: <what>: accepted` / `confinement: <what>: refused (<code>)` (measured: `CREATE DATABASE <db> ENGINE = Memory as si_member`, `remote() with an explicit address and login as si_member`, `CREATE VIEW in <db> as si_member`, `RESTORE FROM S3 without READ ON S3`) and `confinement: system.grants as si_member: unreadable` / `readable (<n> rows)`; the runner's `--cleanup` mode, its environment `ARBITER_CH_MEMBER_CONFINEMENT_FILTER` and `ARBITER_CH_PLATFORM`, its containers `arbiter-core-member-{confined,peer,minio}-<run id>-<attempt>` (network aliases `si-confined`, `si-peer`, `si-minio`) on the network `arbiter-core-member-<run id>-<attempt>`, the MinIO image `minio/minio:RELEASE.2024-12-18T13-15-44Z` (Plan S3-C1's pin), the bucket `si-confinement`, and its second gate line `sources: <n> ClickHouse test(s) passed on <image>`; the CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`, the Cut Release step names `validate member confinement` and `stop the confinement servers`.
+- Produces (beyond the contract; Appendix B, Task 34): the refusals `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; the wrapped errors `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, and `member: <part>: %w` for a part that fails while running (`copyset`, `feed`, `copy watch`, `restart watcher`, `self-audit`, `shadow`); the slog lines (logger attributes `role=si-member`, `node_id`) info `member: started` (`host_indexer_id`, `peers`, `shadow`, `boot_nonce`), warn `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, warn `member: first copyset pass failed; the copyset retries`, warn `member: the journaled manifest is not readable; the feed starts from the watermark` (`snapshot_id`, `err`), warn `member: install pass for changed copies or outstanding repairs failed; the next check retries` (`snapshot_id`, `err`), warn `member: ClickHouse restarted; auditing the copies` (`previous_start`, `current_start`), warn `member: restart audit failed; the next restart or self-audit reruns it`, warn `member: self-audit failed; the next interval reruns it`; the unexported seams (`seams`: `ensureDatabases`, `checkEngineFence`, `checkRemoteIsReadOnly`, `readOwnGrants`, `startedAt`, `watchRestarts`, `newCopySet`, `newInstaller`, `newShadow`) and part interfaces (`copySet`, `installer`, `shadowVerifier`) the unit tests replace; the tests `TestNewRefusesAnInvalidConfig`, `TestRoleRunsTheStartupStepsInOrder`, `TestClearForeignRefusesWhileTheRoleHoldsTheStateDir`, `TestRoleRefusesTheHostAsAPeer`, `TestRoleToleratesUnreadableGrants`, `TestRoleRefusesUnreadableGrantsForAnyOtherReason`, `TestRoleOffersAFailedUpdateAgain`, `TestRoleReappliesTheLastUpdateWhenCopiesChange`, `TestRoleResumesFromTheJournaledManifest`, `TestRoleCountsRefusedManifests`, `TestRoleAuditsAfterAClickHouseRestart`, `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady` (review fix 245-1), `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest` (review fix 245-2), `TestRoleRetriesTheNewestOfferedUpdateAfterAPartialPass` (review fix 245-5) and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`; the suite's log lines for the run record `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s` and `confinement: <what>: accepted` / `confinement: <what>: refused (<code>)` (measured: `CREATE DATABASE <db> ENGINE = Memory as si_member`, `remote() with an explicit address and login as si_member`, `CREATE VIEW in <db> as si_member`, `RESTORE FROM S3 without READ ON S3`) and `confinement: system.grants as si_member: unreadable` / `readable (<n> rows)`; the runner's `--cleanup` mode, its environment `ARBITER_CH_MEMBER_CONFINEMENT_FILTER` and `ARBITER_CH_PLATFORM`, its containers `arbiter-core-member-{confined,peer,minio}-<run id>-<attempt>` (network aliases `si-confined`, `si-peer`, `si-minio`) on the network `arbiter-core-member-<run id>-<attempt>`, the MinIO image `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` (Plan S3-C1's pin), the bucket `si-confinement`, and its second gate line `sources: <n> ClickHouse test(s) passed on <image>`; the CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`, the Cut Release step names `validate member confinement` and `stop the confinement servers`.
 
 Notes:
 - **Startup, in the binding order of contract §23.1.** (1) `lockStateDir` creates `StateDir` (mode 700) and takes `LOCK` with a non-blocking exclusive `flock`, held until `Run` returns or the process dies, so a crashed member leaves no lock and `install.ClearForeign` fails while a member runs (K36). (2) `ddl.ValidateMemberPinned` against the host SNode's `Protocol`, then the peers: never the host, never twice. (3) `ddl.EnsureMemberDatabases` (no `ENGINE`, K32). (4) `sources.CheckEngineFence` with the probe table `<node_id>_engine_probe` in `hg_rstage`. (5) `sources.CheckRemoteIsReadOnly` through every peer collection, then every pool collection, then `ReadOwnGrants`: `ErrGrantsUnreadable` is tolerated and exported as `Stats.GrantsUnreadable`, any other error stops the start, and readable rows must pass `CheckRemoteGrants`. (6) `dataplane.WaitReady` (two minutes), `copyset.CheckNodeIDUnused` against the registry snapshot and `Client.PurgeNodeSet`, every peer in `si_indexers`, and the genesis set against the genesis manifest read through the feed's `Store` (so it passes `manifestfeed.Verify` first). (7) The boot nonce, the copyset, the installer and the shadow (constructors write nothing), then `DropStaleScratch`. (8) `chrestart.StartedAt` as the watcher's baseline, the first `copyset.Reconcile`, then `Audit(ctx, "startup")` over the copies that pass made ready (review fix 245-1: a fresh reconciler reports no copy before its first pass, so an audit ahead of it covered nothing, and a copy the pass created again empty while the journal was at the watermark was skipped as current; `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady`). (9) Concurrently, the copyset's `Run`, the feed, the copy watch, the restart watcher, the self-audit ticker and, with `Shadow`, the shadow. A refusal in (1)–(6) touches no table (`TestRoleRunsTheStartupStepsInOrder` and the refusal tests check the recorded steps), and nothing before (9) installs a part (step (8)'s pass only creates and drops copy tables).
-- **The feed and the installer.** The role runs Task 29's `Follower.Run`, whose callback calls `Installer.Apply` under one install mutex shared with every `Audit`, so an install pass and an audit never overlap. A failed `Apply` returns its error to the follower, which keeps its last accepted manifest and offers the update again at the next poll (`TestRoleOffersAFailedUpdateAgain`). The role keeps a target: the newest update the follower offered (by `SafeBlockSeq`; Task 29 verified it before offering it: id and root, ledger, descent, no owner entry going back), set before its pass runs and kept whether or not the pass succeeded, or, on a resume, the journaled manifest. The copy watch ticks every `PollInterval` and, once a pass succeeded or the journal named the target (before that the follower retries its failed update itself), re-applies the target whenever the set of ready copies differs from the one the last successful pass saw or `Installer.NeedsPass` holds (contract §22.3: `Apply` is idempotent), so a copy that becomes ready between publications is filled without waiting for the next manifest (`TestRoleReappliesTheLastUpdateWhenCopiesChange`), and the Diverged partitions and unjournaled parts a startup, restart or self-audit records are repaired while the watermark stands still (review fix 245-2: before it, a repair waited for the next publication, which a quiet network never sends; `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest`); a pass that fails is retried at the next tick, as the follower retries a failed update at its next poll. The copy watch never re-applies an update older than the target (review fix 245-5): `Installer.Apply` commits and journals each owner on its own, so a pass that fails for one owner (a Diverged partition whose repair has no source) may have brought the others to the offered manifest, and the update before it, re-applied while `NeedsPass` holds, would rebuild their newer partitions with `DROP PARTITION` and take their journal back, again at every tick while the failing owner stays unavailable; parts a failed pass attached but did not journal are adopted only against the manifest that still needs them (K36), which is the target too. Task 32's `Apply` also skips an owner whose journaled entry is ahead of the update it is given, so even an older update cannot take an owner back (`TestRoleRetriesTheNewestOfferedUpdateAfterAPartialPass`; Task 32's `TestApplyNeverTakesAnOwnerBackAfterAPartialPass` measures the parts on ClickHouse). Task 30 also offers `copyset.Reconciler.Changed()`; the role polls instead, which costs nothing (it compares in memory) and needs no name beyond the contract.
+- **The feed and the installer.** The role runs Task 29's `Follower.Run`, whose callback calls `Installer.Apply` under one install mutex shared with every `Audit`, so an install pass and an audit never overlap. A failed `Apply` returns its error to the follower, which keeps its last accepted manifest and offers the update again at the next poll (`TestRoleOffersAFailedUpdateAgain`). The role keeps a target: the newest update the follower offered (by `SafeBlockSeq`; Task 29 verified it before offering it: id and root, ledger, descent on a bounded walk (a full fetch verifies the watermark alone), no owner entry going back), set before its pass runs and kept whether or not the pass succeeded, or, on a resume, the journaled manifest. The copy watch ticks every `PollInterval` and, once a pass succeeded or the journal named the target (before that the follower retries its failed update itself), re-applies the target whenever the set of ready copies differs from the one the last successful pass saw or `Installer.NeedsPass` holds (contract §22.3: `Apply` is idempotent), so a copy that becomes ready between publications is filled without waiting for the next manifest (`TestRoleReappliesTheLastUpdateWhenCopiesChange`), and the Diverged partitions and unjournaled parts a startup, restart or self-audit records are repaired while the watermark stands still (review fix 245-2: before it, a repair waited for the next publication, which a quiet network never sends; `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest`); a pass that fails is retried at the next tick, as the follower retries a failed update at its next poll. The copy watch never re-applies an update older than the target (review fix 245-5): `Installer.Apply` commits and journals each owner on its own, so a pass that fails for one owner (a Diverged partition whose repair has no source) may have brought the others to the offered manifest, and the update before it, re-applied while `NeedsPass` holds, would rebuild their newer partitions with `DROP PARTITION` and take their journal back, again at every tick while the failing owner stays unavailable; parts a failed pass attached but did not journal are adopted only against the manifest that still needs them (K36), which is the target too. Task 32's `Apply` also skips an owner whose journaled entry is ahead of the update it is given, so even an older update cannot take an owner back (`TestRoleRetriesTheNewestOfferedUpdateAfterAPartialPass`; Task 32's `TestApplyNeverTakesAnOwnerBackAfterAPartialPass` measures the parts on ClickHouse). Task 30 also offers `copyset.Reconciler.Changed()`; the role polls instead, which costs nothing (it compares in memory) and needs no name beyond the contract.
 - **Restart point.** When every peer's journal entry names one manifest, the follower starts from it (`last` = that snapshot, `lastEntries` = the journaled entries), so it walks the `ParentSnapshotID` chain and counts no full fetch; that manifest, read through the store, is the copy watch's first target, which it re-applies once (it brings any copy created while the member was down to the journaled manifest). Otherwise (no journal, or owners journaled at different manifests after a partly failed pass) the follower starts with `last` "" and the journaled entries, so it accepts the verified watermark manifest alone (a full fetch) and still refuses an owner entry that goes back (Task 29's Notes, "Accepting an update"; `TestRoleResumesFromTheJournaledManifest`).
 - **Readiness and stats.** `Ready` is true once the startup audit ran, `install.Stats().AuditClean` holds and every peer has a journal entry; a peer without a ready copy also counts once an update was applied in this process (Task 32's installer journals only owners with a ready copy). `Stats` never takes the install mutex, so a scrape never waits for an install pass; every peer, every install outcome (`kept`, `rename_race`, `split`, `doubled`, `foreign`, `missed`, `refused`, `unreachable`), every source (`owner_pull`, `peer_unsafe_pull`, `restore`), every audit trigger (`startup`, `clickhouse_restart`, `self_audit`) and every mismatch kind (`shadow.MismatchKinds()`) is present with zeros, before `Run` too (`TestRoleStatsExportEveryKeyIncludingZeros`); the feed counters are the follower's `Stats()`; `UnconfiguredOwners` lists enrolled SI indexers that are neither a peer nor the host. `BehindSince` starts when a peer's journaled entry first differs from the newest entry a manifest published for it and clears when they agree again.
 - **Reach (contract §20.1).** `TestRoleCallsOnlyReadRPCs` runs the role against a fake that serves `SafeState`, `TableRegistry` and `PayloadStore` on one port and whose unary and stream interceptors fail the test on any other method; the registry is a real `dataplane.RegistryFollower` and the payloads a real `dastore` client on the fake, and the shadow is a stand-in that calls every client the role hands it once, so all seven reads of contract §20.1 are called and nothing else is. The test also parses the package's non-test sources (the `go_test` carries them as `data`, as Task 33's does) and refuses an import of `google.golang.org/grpc` or `arbiter-proto` and a call of `WithLeaderRetry`, `LeaderConn`, `RunVerifierSubscription`, `RunPromotionSubscription`, `SubmitTablePurged` or `SubmitTablePurgedReport`: the role reaches the arbiter only through the typed reads of `dataplane.Client`.
@@ -15797,11 +15916,16 @@ Notes:
 - **One script, three callers.** CI's `member-confinement` job, Cut Release and the manual deployed-image run call the same script, so the deployed image is measured on CI's topology. CI and Cut Release use the exact upstream patch `clickhouse/clickhouse-server:26.3.37.3` with the prefix `26.3.37.3` (Plan S3-A K9: never the floating `26.3` tag); the deployed image `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` sits in Sentio's private registry, so the user runs it by hand with the prefix `26.3.` (Step 17), before the release, on the branch head that the release then carries unchanged (Step 19 checks it). Its date is `P2_CONFINEMENT`; Tasks 35–36 start only once it and `CORE_TAG_P2` are recorded.
 - **Verified while drafting** on an export of arbiter-core `8f0bc43` with stubs written from contract §20–§22 and the current drafts of Tasks 29–33 (Task 29's `member/manifestfeed` verbatim, housegate `66d4df7` with `replay.OwnerEntry` and `payloadexec.VerifyLedger` stubbed from Plan S3-C1 §16, arbiter-proto `1c6ae67` with Plan S3-A's `GetBlockVerification`, a contract-faithful `sources.RemotePull.Fetch`, an installer stub with Task 32's journaling rule, `LockFile`, triggers and outcome constants, `shadow.MismatchKinds`) and with Plan S3-A Task 6's CI job, Cut Release steps and users file applied: `gofmt` and `go vet` clean; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` and Bazel 9.1.0 offline (housegate and arbiter-proto through local overrides in the scratch `MODULE.bazel` and `go.mod` only) both passed `//member:member_test` (22 tests at drafting, with and without the race detector; the review fixes of AgentConnect round 1 add two, Appendix B) and `//member/confinement:confinement_test` (14 skips by default; the opted-in failure of Step 10; 14 passes against the servers), `bazel run //:gazelle` kept both BUILD files, and `bazel test //...` passed all 17 targets; the member tests failed to build before the implementation with `undefined: Config`; the runner ran with real Bazel and docker, a `docker` wrapper on `PATH` replacing only the image pulls (no download) and the MinIO container (by a TCP proxy to a local fake S3, the MinIO image not being on the host): the wrong prefix failed with Bazel's exit 3 and the message of Step 12, the right one printed the lines of Step 13, a skipped test in `member/sources` failed the run with `a member/sources test was skipped:`, and every run removed every container and the network; `bash -n` (also under macOS `/bin/bash` 3.2) is clean for the runner and every bash block of this task, and `fish -n` for the fish block; `shellcheck` is clean for the runner and reports on the task's blocks only notes on intended constructs (SC2016 for the literal backquotes of two `grep` patterns, SC2046 for contract §20.4's `gofmt -l $(git ls-files '*.go')`, SC2086 for Step 16's split target list); `actionlint` and a YAML parse are clean for both workflows; the record step's `s3-ledger.py set` was run on a scratch copy of this plan's Appendix C. Step 13's run on `26.3.37.3`, the CI and Cut Release runs and Step 17's deployed-image run are the execution's.
 
+- **Adversarial review (2026-10-17).** Verified on arbiter-core `cfd4f42` plus the reviewed Plan S3-C1 Tasks 23–24 and Tasks 29–33, with housegate `ed24705` plus the reviewed Task 22 helpers (no S3-A stand-ins). The role has 25 tests: all pass with `-race`, and the startup ordering, newest offered target and repair trigger each fail their mutation; the first two and failed-update retry also pass three repeated race runs. Every target passes under offline Bazel 9.1.0 (27/27, plain and race); gazelle keeps this task's BUILD files. The exact runner, using real cached ClickHouse images and the digest-pinned Bitnami MinIO, passes all 14 confinement tests and all 13 byte-source ClickHouse tests on upstream 26.3.37.3 and the deployed 26.3.12.1. Both images retain every measured accepted/refused result above. The deployed image's `count()` access refusal spells `SELECT for at least one column on <table>`; its two SELECT assertions now require code 497, `SELECT` and the exact table independently of `ON` wording, with no privilege or result change. A wrong image prefix exits 3; a real skipped source test exits 1; both failure paths remove the containers and network. Every shell block parses, the runner passes shellcheck, and the two workflow hunks parse with Ruby when PyYAML is absent. The review exercised only local exports and containers; it did not perform a PR, release or ledger recording.
+- **Commit identity (user rule).** Check Task 29's `poetry <chen@sentio.xyz>` worktree identity before the first commit, print it after every commit, verify the exact remote PR head and every REST primary author/message trailer before either squash merge, and set it afresh in the ledger worktree before its record commit. Ordinary commits carry only the canonical Claude coauthor. A mismatch stops before remote writes.
+- **Release and deployed proof.** Step 17 keeps the runner's pipeline status and requires both complete summaries on the checked head. Step 19 dispatches `main`, captures exactly one new run for its captured head and persists that run id; an old run, another head or ambiguous dispatch is refused. The tag is read from that exact run's log and must point to that run's head, never to the latest release chosen independently.
+
 - [ ] **Step 1: Base check and the evidence directory**
 
 The worktree is Tasks 29–33's (`~/src/remotesrc/claude/arbiter-core/multi-source-s3c2`, branch `urwt/claude/multi-source-s3c2`, contract §20.4). Shell state does not persist between Bash calls, so every command of this task runs with `W=<worktree path>;` in front.
 
 ```bash
+W=<worktree path>; cd "$W" && git config --worktree user.name && git config --worktree user.email && git log --format='%an <%ae>' origin/main..HEAD | sort -u
 W=<worktree path>; cd "$W" && git status --short && git log --oneline -1 && test ! -e member/role.go && test ! -e member/confinement && echo 'member role and confinement are absent'
 W=<worktree path>; cd "$W" && while IFS='|' read -r dir needle; do
   n="$(grep -lF -- "$needle" "$dir"/*.go | grep -cv '_test\.go$')"
@@ -15829,7 +15953,7 @@ docker version --format '{{.Server.Version}}'
 si_evidence="$HOME/si-stage3-p2-code"; mkdir -m 700 "$si_evidence" && ls -ld "$si_evidence"
 ```
 
-Expected: a clean tree whose last commit is Task 33's (`ci: run the shadow verifier's ClickHouse test in integration-clickhouse`); `member role and confinement are absent`; thirteen lines each starting with `1 ` (each consumed name defined once, outside tests; Task 29's `Stats` and Task 33's `MismatchKinds`, beyond the contract, among them), then five more starting with `1 ` (Task 32's `LockFile`, its three triggers and its outcome constants); the three script paths, `1`, one or more `member/sources/…_ch_test.go` paths, `1`, `1`, `1`, `1`; a Docker server version; `drwx------ … /Users/uranuswch/si-stage3-p2-code`. A `0` line means an earlier task is not on the branch or names it differently: stop and report it (for `Stats`, `MismatchKinds`, `LockFile`, a trigger or an outcome constant, the task that produces it changed its Appendix B; adapt `member/config.go`, `member/role.go` and `member/stats.go` to its final name before going on, and record that in this task's Appendix B). A `mkdir` failure means an earlier attempt left the evidence directory: stop and ask the user whether to keep or remove it; never reuse it silently.
+Expected: `poetry`, `chen@sentio.xyz`, and exactly `poetry <chen@sentio.xyz>` for the branch authors. Otherwise stop and restore Task 29 Step 1's worktree identity before any commit; an existing wrong author needs an explicit author rewrite before a push. Then a clean tree whose last commit is Task 33's (`ci: run the shadow verifier's ClickHouse test in integration-clickhouse`); `member role and confinement are absent`; thirteen lines each starting with `1 ` (each consumed name defined once, outside tests; Task 29's `Stats` and Task 33's `MismatchKinds`, beyond the contract, among them), then five more starting with `1 ` (Task 32's `LockFile`, its three triggers and its outcome constants); the three script paths, `1`, one or more `member/sources/…_ch_test.go` paths, `1`, `1`, `1`, `1`; a Docker server version; `drwx------ … /Users/uranuswch/si-stage3-p2-code`. A `0` line means an earlier task is not on the branch or names it differently: stop and report it (for `Stats`, `MismatchKinds`, `LockFile`, a trigger or an outcome constant, the task that produces it changed its Appendix B; adapt `member/config.go`, `member/role.go` and `member/stats.go` to its final name before going on, and record that in this task's Appendix B). A `mkdir` failure means an earlier attempt left the evidence directory: stop and ask the user whether to keep or remove it; never reuse it silently.
 
 - [ ] **Step 2: Read the ledger values this task uses**
 
@@ -17185,7 +17309,7 @@ func TestRoleAuditsAfterAClickHouseRestart(t *testing.T) {
 W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test //member:member_test --test_output=errors
 ```
 
-Expected: gazelle writes `member/BUILD.bazel` with only a `go_test` named `member_test`; the build fails (`//member:member_test` FAILED TO BUILD, Bazel exit 1) with lines such as `member/role_test.go:213:13: undefined: Config`, `undefined: Peer` and `undefined: Role`: the package has no implementation yet.
+Expected: gazelle writes `member/BUILD.bazel` with only a `go_test` named `member_test`; the build fails (`//member:member_test` FAILED TO BUILD, Bazel exit 1) with lines such as `member/role_test.go:259:13: undefined: Config`, `undefined: Peer` and `undefined: Role`: the package has no implementation yet.
 
 - [ ] **Step 5: Implement the configuration and the state-directory lock**
 
@@ -17569,7 +17693,8 @@ type Role struct {
 	appliedOnce      bool
 	grantsUnreadable bool
 	// target is the newest update the follower offered (Task 29 verified it:
-	// its id and root, its ledger, its descent and no owner entry going back)
+	// its id and root, its ledger, descent on a bounded walk (a full fetch
+	// verifies the watermark alone), and no owner entry going back)
 	// or, on a resume, the journaled manifest every peer is at. It is kept
 	// whether or not its Apply succeeded, and the copy watch re-applies it,
 	// never an older update: Installer.Apply commits and journals each owner
@@ -18138,6 +18263,7 @@ import (
 	"github.com/sentioxyz/arbiter-core/member/install"
 	"github.com/sentioxyz/arbiter-core/member/manifestfeed"
 	"github.com/sentioxyz/arbiter-core/member/shadow"
+	"github.com/sentioxyz/arbiter-core/member/sources"
 )
 
 // The label values Stats always carries, so that every series sentio-node
@@ -18147,7 +18273,7 @@ var (
 		install.OutcomeKept, install.OutcomeRenameRace, install.OutcomeSplit, install.OutcomeDoubled, install.OutcomeForeign,
 		install.OutcomeMissed, install.OutcomeRefused, install.OutcomeUnreachable,
 	}
-	installSources = []string{"owner_pull", "peer_unsafe_pull", "restore"}
+	installSources = []string{sources.SourceOwnerPull, sources.SourcePeerUnsafePull, sources.SourceRestore}
 	auditTriggers  = []string{install.TriggerStartup, install.TriggerClickHouseRestart, install.TriggerSelfAudit}
 )
 
@@ -18394,6 +18520,7 @@ zeros; Ready gates /readyz. The role holds no keys and makes only the
 read RPCs of contract §20.1 (housegate spec 2026-10-14 §8).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
 - [ ] **Step 9: Write the confinement suite**
@@ -18650,6 +18777,19 @@ func (s *suite) refused(conn clickhouse.Conn, code int32, want, query string) {
 		s.t.Fatalf("%s was accepted, want code %d (%s)", redact(query), code, want)
 	case !errors.As(err, &ex) || ex.Code != code || !strings.Contains(ex.Message, want):
 		s.t.Fatalf("%s: %v, want code %d with %q", redact(query), err, code, want)
+	}
+}
+
+// refusedSelect requires the same 497 SELECT denial on every supported
+// build. 26.3.12.1 says "SELECT for at least one column on <table>" for
+// count(), whereas 26.3.37.3 says "SELECT ON <table>". Both the privilege
+// and the exact table must appear; a syntax error or another denial fails.
+func (s *suite) refusedSelect(conn clickhouse.Conn, table, query string) {
+	s.t.Helper()
+	err := conn.Exec(context.Background(), query)
+	var ex *clickhouse.Exception
+	if !errors.As(err, &ex) || ex.Code != 497 || !strings.Contains(ex.Message, "SELECT") || !strings.Contains(ex.Message, table) {
+		s.t.Fatalf("%s: %v, want code 497 with SELECT and %q", redact(query), err, table)
 	}
 }
 
@@ -19056,7 +19196,7 @@ func TestConfinement_SIMemberHasNothingOnTheProtocolDatabases(t *testing.T) {
 		s.exec(s.admin, "CREATE DATABASE IF NOT EXISTS "+db)
 		s.exec(s.admin, "CREATE TABLE "+db+"."+table+" (_hg_row_id String, v UInt64) ENGINE = MergeTree ORDER BY _hg_row_id")
 		t.Cleanup(func() { _ = s.admin.Exec(context.Background(), "DROP TABLE IF EXISTS "+db+"."+table+" SYNC") })
-		s.refused(s.member, 497, "ON "+db+"."+table, "SELECT count() FROM "+db+"."+table)
+		s.refusedSelect(s.member, db+"."+table, "SELECT count() FROM "+db+"."+table)
 		s.refused(s.member, 497, "ON "+db+"."+table, "INSERT INTO "+db+"."+table+" VALUES ('a', 1)")
 		s.refused(s.member, 497, "ON "+db+"."+table, "ALTER TABLE "+db+"."+table+" DROP PARTITION tuple()")
 		s.refused(s.member, 497, "ON "+db+"."+table, "DROP TABLE "+db+"."+table)
@@ -19321,7 +19461,6 @@ func TestConfinement_SIMemberDDLCannotWriteAlterOrOptimize(t *testing.T) {
 		{"ALTER SETTINGS ON " + qualified, "ALTER TABLE " + qualified + " MODIFY SETTING max_bytes_to_merge_at_max_space_in_pool = 1073741824"},
 		{"OPTIMIZE ON " + qualified, "OPTIMIZE TABLE " + qualified + " FINAL"},
 		{"TRUNCATE ON " + qualified, "TRUNCATE TABLE " + qualified},
-		{"SELECT ON " + qualified, "SELECT count() FROM " + qualified},
 		{"SYSTEM DROP REPLICA ON " + qualified, "SYSTEM DROP REPLICA 'other' FROM TABLE " + qualified},
 		{"TABLE ENGINE ON MergeTree", "CREATE TABLE hg_member_unsafe." + s.name("ddl_mt") + " (x UInt8) ENGINE = MergeTree ORDER BY x"},
 		{"TABLE ENGINE ON ReplicatedReplacingMergeTree", "CREATE TABLE hg_member_unsafe." + s.name("ddl_rrmt") + " (_hg_row_id String) ENGINE = ReplicatedReplacingMergeTree('/sentio/0/unsafe_inc/" + s.name("ddl_rrmt") + "/1', 'r') ORDER BY _hg_row_id"},
@@ -19329,6 +19468,7 @@ func TestConfinement_SIMemberDDLCannotWriteAlterOrOptimize(t *testing.T) {
 	} {
 		s.refused(ddlConn, 497, tc.want, tc.query)
 	}
+	s.refusedSelect(ddlConn, qualified, "SELECT count() FROM "+qualified)
 	s.exec(ddlConn, "DROP TABLE "+qualified+" SYNC")
 }
 ```
@@ -19429,7 +19569,7 @@ network="arbiter-core-member-${suffix}"
 confined="arbiter-core-member-confined-${suffix}"
 peer="arbiter-core-member-peer-${suffix}"
 minio="arbiter-core-member-minio-${suffix}"
-minio_image="minio/minio:RELEASE.2024-12-18T13-15-44Z"
+minio_image="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192"
 bucket="si-confinement"
 
 cleanup() {
@@ -19498,7 +19638,7 @@ docker run -d ${platform_flag:+"${platform_flag}"} \
 MINIO_ROOT_USER="${S3_ACCESS_KEY_ID}" MINIO_ROOT_PASSWORD="${S3_SECRET}" docker run -d \
   --name "${minio}" --network "${network}" --network-alias si-minio \
   -e MINIO_ROOT_USER -e MINIO_ROOT_PASSWORD \
-  "${minio_image}" server /data >/dev/null
+  --entrypoint minio "${minio_image}" server /bitnami/minio/data >/dev/null
 
 port_confined="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "${confined}")"
 port_peer="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "${peer}")"
@@ -19519,6 +19659,7 @@ if [ "${ready}" != true ]; then
   exit 1
 fi
 
+export CH_USER=default CH_PASSWORD=""
 export ARBITER_CH_MEMBER_CONFINEMENT=1 ARBITER_CH_INTEGRATION=1
 export CH_ADDR="127.0.0.1:${port_confined}"
 export CH_PEER_ADDR="127.0.0.1:${port_peer}"
@@ -19530,6 +19671,7 @@ export S3_BUCKET="${bucket}"
 env_flags=(
   --test_env=ARBITER_CH_MEMBER_CONFINEMENT --test_env=ARBITER_CH_INTEGRATION
   --test_env=CH_ADDR --test_env=CH_PEER_ADDR --test_env=CH_PEER_ADDR_FROM_SERVER
+  --test_env=CH_USER --test_env=CH_PASSWORD
   --test_env=ARBITER_CH_EXPECT_VERSION_PREFIX --test_env=ARBITER_CH_IMAGE
   --test_env=S3_ENDPOINT --test_env=S3_BUCKET --test_env=S3_ACCESS_KEY_ID --test_env=S3_SECRET
 )
@@ -19601,7 +19743,7 @@ Expected: `runner ok` (the script parses under bash 5 and 3.2, shellcheck finds 
 
 - [ ] **Step 12: Run the image check on a wrong prefix (fails), then on the right one (passes)**
 
-The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `minio/minio:RELEASE.2024-12-18T13-15-44Z` from Docker Hub when they are not on the host: a download, so it needs explicit user confirmation in chat before running (`docker image inspect <image>` shows whether each is present).
+The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` from Docker Hub when they are not on the host: a download, so it needs explicit user confirmation in chat before running (`docker image inspect <image>` shows whether each is present).
 
 ```bash
 W=<worktree path>; cd "$W" && ARBITER_CH_MEMBER_CONFINEMENT_FILTER='^TestConfinement_ServerIsTheExpectedImage$' bash scripts/ci/clickhouse-member-confinement.sh clickhouse/clickhouse-server:26.3.37.3 99.; echo "exit $?"; docker ps -a --filter name=arbiter-core-member --format '{{.Names}}'; docker network ls --filter name=arbiter-core-member --format '{{.Name}}'
@@ -19627,7 +19769,7 @@ W=<worktree path>; si_evidence="$HOME/si-stage3-p2-code"; cd "$W" && bash script
 
 The run's `docker pull` contacts Docker Hub again for both images (a remote read): it needs explicit user confirmation in chat before running, like Step 12.
 
-Expected: `contract names match` (the thirteen names of contract §23.3 and the one beyond it); `<m>`, the number of Task 31's ClickHouse tests; then `exit 0` and, from the log: `confinement server CH_ADDR: image clickhouse/clickhouse-server:26.3.37.3, ClickHouse 26.3.37.3, up <n>s` and the same for `CH_PEER_ADDR`; the measured lines `confinement: CREATE DATABASE hg_rstage ENGINE = Memory as si_member: accepted`, `confinement: CREATE DATABASE hg_replica ENGINE = Memory as si_member: accepted`, `confinement: system.grants as si_member: unreadable`, `confinement: remote() with an explicit address and login as si_member: accepted`, `confinement: CREATE VIEW in hg_rstage as si_member: accepted`, `confinement: CREATE VIEW in hg_replica as si_member: accepted`, `confinement: RESTORE FROM S3 without READ ON S3: accepted` (as measured on 26.3.51.7, Notes; a differing line is kept as measured and goes into the run record of Step 20); `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `sources: <m> ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3`. The suite itself takes a few seconds; the image pulls and Bazel's first build are most of the run. A failing refusal (an acceptance where the suite asserts a refusal) is a confinement failure of that image: stop and report it with the failing test's lines; never weaken an assertion.
+Expected: `contract names match` (the thirteen names of contract §23.3 and the one beyond it); `13`, the number of Task 31's ClickHouse tests; then `exit 0` and, from the log: `confinement server CH_ADDR: image clickhouse/clickhouse-server:26.3.37.3, ClickHouse 26.3.37.3, up <n>s` and the same for `CH_PEER_ADDR`; the measured lines `confinement: CREATE DATABASE hg_rstage ENGINE = Memory as si_member: accepted`, `confinement: CREATE DATABASE hg_replica ENGINE = Memory as si_member: accepted`, `confinement: system.grants as si_member: unreadable`, `confinement: remote() with an explicit address and login as si_member: accepted`, `confinement: CREATE VIEW in hg_rstage as si_member: accepted`, `confinement: CREATE VIEW in hg_replica as si_member: accepted`, `confinement: RESTORE FROM S3 without READ ON S3: accepted` (as measured on 26.3.51.7, Notes; a differing line is kept as measured and goes into the run record of Step 20); `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `sources: 13 ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3`. The suite itself takes a few seconds; the image pulls and Bazel's first build are most of the run. For `SELECT count()` the denial wording differs between 26.3.12.1 and 26.3.37.3; the suite requires code 497, the `SELECT` privilege and the exact table, independently of `ON` wording. A failing refusal (an acceptance where the suite asserts a refusal) is a confinement failure of that image: stop and report it with the failing test's lines; never weaken an assertion.
 
 ```bash
 W=<worktree path>
@@ -19648,6 +19790,7 @@ an unfenced peer and MinIO (housegate spec 2026-10-14 §8.2, §17; Plan
 S3-C2 contract §23.2-§23.4).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
 - [ ] **Step 14: Add the CI job and the Cut Release step**
@@ -19675,7 +19818,7 @@ Append to `.github/workflows/ci.yml`, after Plan S3-A Task 6's `clickhouse-mecha
         run: bash scripts/ci/clickhouse-member-confinement.sh --cleanup
 ```
 
-In `.github/workflows/cut-release.yml`, insert after Plan S3-A Task 6's `stop the mechanics pair` step, before `compute next version` (base `:121`; Cut Release's `timeout-minutes` is Plan S3-A Task 6's 60):
+In `.github/workflows/cut-release.yml`, insert after Plan S3-A Task 6's `stop the mechanics pair` step, before `compute next version` (base `cfd4f42` `:128`; Cut Release's `timeout-minutes` is Plan S3-A Task 6's 60):
 
 ```yaml
 
@@ -19687,13 +19830,20 @@ In `.github/workflows/cut-release.yml`, insert after Plan S3-A Task 6's `stop th
         run: bash scripts/ci/clickhouse-member-confinement.sh --cleanup
 ```
 
+In that workflow's `compute next version` step, replace `version="$(bash scripts/next-version.sh)"` with these two lines (the existing `### Cutting` goes only to `GITHUB_STEP_SUMMARY` and cannot be recovered as a resolved tag from `gh run view --log`):
+
+```bash
+version="$(bash scripts/next-version.sh)"
+echo "member release tag: ${version}"
+```
+
 ```bash
 W=<worktree path>; cd "$W" && git diff --check && git diff --stat -- .github/workflows \
-  && python3 -I -c 'import sys, yaml; [yaml.safe_load(open(p)) for p in sys.argv[1:]]; print("yaml ok")' .github/workflows/ci.yml .github/workflows/cut-release.yml \
+  && { if python3 -I -c 'import yaml' 2>/dev/null; then python3 -I -c 'import sys, yaml; [yaml.safe_load(open(p)) for p in sys.argv[1:]]; print("yaml ok")' .github/workflows/ci.yml .github/workflows/cut-release.yml; else ruby -ryaml -e 'ARGV.each { |p| YAML.load_file(p) }; puts "yaml ok"' .github/workflows/ci.yml .github/workflows/cut-release.yml; fi; } \
   && { ! command -v actionlint >/dev/null || { actionlint .github/workflows/ci.yml .github/workflows/cut-release.yml && echo 'actionlint: clean'; }; }
 ```
 
-Expected: no whitespace error; `.github/workflows/ci.yml | 18 ++++++++++++++++++` and `.github/workflows/cut-release.yml | 7 +++++++`, `2 files changed, 25 insertions(+)`; `yaml ok` (PyYAML is on the host; if `import yaml` fails, skip that check, actionlint parses the files too); `actionlint: clean` where actionlint is installed. The workflows run for real in the PR (Step 18) and the release (Step 19).
+Expected: no whitespace error; `.github/workflows/ci.yml | 18 ++++++++++++++++++` and `.github/workflows/cut-release.yml | 8 ++++++++`, `2 files changed, 26 insertions(+)`; `yaml ok` (Ruby's YAML parser is used when PyYAML is absent); `actionlint: clean` where actionlint is installed. The workflows run for real in the PR (Step 18) and the release (Step 19).
 
 ```bash
 W=<worktree path>
@@ -19706,6 +19856,7 @@ image clickhouse/clickhouse-server:26.3.37.3 (plan S3-A K9). The
 deployed 26.3-lts-decimal512 image is private and is run by hand.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
 - [ ] **Step 15: Document the member role in the README**
@@ -19722,12 +19873,12 @@ In `README.md`'s packages table, add after Plan S3-C1 Task 23's `member/gate` ro
 | `member/confinement` | Test-only ClickHouse proof that the member users are confined (§ Member role (stage 3 P2)). |
 ```
 
-Insert before `## Releases` (base `:117`; after Plan S3-A Task 6's `### ClickHouse mechanics` subsection and whatever Plan S3-C1 added to it):
+Insert before `## Releases` (base `cfd4f42` `:134`; after Plan S3-A Task 6's `### ClickHouse mechanics` subsection and whatever Plan S3-C1 added to it):
 
 ````markdown
 ### Member role (stage 3 P2)
 
-`member.Role` is the stage-3 si-member (housegate spec 2026-10-14 §8): a process separate from the SNode, run by `sentio-node si-member`, that keeps one incarnation-scoped copy in `hg_replica` of every SI table of every peer owner and fills it only with parts a verified manifest lists, through the install gate. It has a node id and no keys: it never registers, and it calls only `SafeState.GetSafeWatermark`, `GetManifest` and `GetBlockVerification`, `TableRegistry.GetTableRegistry`, `WatchTableRegistry` and `GetPurgeNodeSet`, and the DA's `PayloadStore.FetchPayloads`. At startup, in this order, it locks `<state dir>/LOCK`, refuses member databases that meet the host SNode's and a peer that is its host, creates `hg_replica` and `hg_rstage` without `ENGINE`, refuses to start unless ClickHouse refuses it an ungranted table engine (`table_engines_require_grant`) and refuses `INSERT INTO FUNCTION remote` through each of its named collections, refuses a node id an SNode or verifier uses, a peer that is not enrolled in `si_indexers` and genesis tables that differ from the genesis manifest, drops its own stale `hg_rstage` tables, runs the copy reconciler's first pass and audits the copies it made ready. It then runs the copy reconciler (`member/copyset`), the manifest feed (`member/manifestfeed`) into the installer (`member/install`, fed by `member/sources`; while an owner bootstraps, each copy's first part tries the object-store restore first), a copy watch that re-applies the last manifest when the copies change or an audit found something to repair, an audit after every ClickHouse restart and every self-audit interval and, when configured, the shadow verifier (`member/shadow`). `Role.Ready` is true once the startup audit is clean, every ready copy was audited since the start or the last restart, and every peer's copies reached a manifest; `Role.Stats` carries every series sentio-node exports, with zeros.
+`member.Role` is the stage-3 si-member (housegate spec 2026-10-14 §8): a process separate from the SNode, run by `sentio-node si-member`, that keeps one incarnation-scoped copy in `hg_replica` of every SI table of every peer owner and fills it only with parts a verified manifest lists, through the install gate. It has a node id and no keys: it never registers, and it calls only `SafeState.GetSafeWatermark`, `GetManifest` and `GetBlockVerification`, `TableRegistry.GetTableRegistry`, `WatchTableRegistry` and `GetPurgeNodeSet`, and the DA's `PayloadStore.FetchPayloads`. At startup, in this order, it locks `<state dir>/LOCK`, refuses member databases that meet the host SNode's and a peer that is its host, creates `hg_replica` and `hg_rstage` without `ENGINE`, refuses to start unless ClickHouse refuses it an ungranted table engine (`table_engines_require_grant`) and refuses `INSERT INTO FUNCTION remote` through each of its named collections, refuses a node id an SNode or verifier uses, a peer that is not enrolled in `si_indexers` and genesis tables that differ from the genesis manifest, drops its own stale `hg_rstage` tables, runs the copy reconciler's first pass and audits the copies it made ready. It then runs the copy reconciler (`member/copyset`), the manifest feed (`member/manifestfeed`) into the installer (`member/install`, fed by `member/sources`; while an owner bootstraps, each copy's first part tries the object-store restore first), a copy watch that re-applies the newest update the follower offered when the copies change or an audit found something to repair, an audit after every ClickHouse restart and every self-audit interval and, when configured, the shadow verifier (`member/shadow`). `Role.Ready` is true once the startup audit is clean, every ready copy was audited since the start or the last restart, and every peer's copies reached a manifest; `Role.Stats` carries every series sentio-node exports, with zeros.
 
 The member's ClickHouse users are confined by their grants, not by the role's code. `member/confinement` is a test-only suite that proves it on a real server with `access_control_improvements.table_engines_require_grant` (`scripts/ci/clickhouse-member-access-control.xml`): as `si_member`, every `Replicated*MergeTree` engine, `Buffer`, `Distributed`, `Merge` and `Alias`, a `Replicated` database, `ATTACH PARTITION … FROM`, `MOVE PARTITION … TO TABLE`, a materialized view or an `INSERT` into `hg_member_unsafe`, a write through `remote()` or to S3, a named collection override, `SYSTEM DROP REPLICA`, a dictionary, a view with another definer or with `SQL SECURITY NONE`, `SYSTEM STOP MERGES` and anything on `hg_safe`, `hg_unsafe` or `hg_promote` are refused, while every statement the role issues works; `si_member_ddl`'s settings profile refuses a replica created with merges allowed, and that user can neither write, alter nor optimize. Run it with:
 
@@ -19759,6 +19910,7 @@ git -C "$W" add README.md
 git -C "$W" commit -m "docs: member role, confinement suite and stage-3 P2 compatibility notes
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
 - [ ] **Step 16: Full verification**
@@ -19769,16 +19921,16 @@ W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run
   && bazel build //... && bazel test //... --test_output=errors \
   && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
 W=<worktree path>; git -C "$W" grep -n -E 'clickhouse-server:26\.3( |$)' -- .github scripts README.md || echo 'no floating 26.3 tag'
-W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline origin/main..HEAD
+W=<worktree path>; git -C "$W" status --short && git -C "$W" log --oneline origin/main..HEAD && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
 Expected: no boundary violation, no BUILD, `MODULE.bazel` or `go.mod` change after gazelle, no unformatted file, every target PASSES with and without the race detector (the ClickHouse-gated tests, `//member/confinement:confinement_test` included, SKIP); `no floating 26.3 tag`; a clean tree, and the commits of Tasks 29–33 followed by this task's four (`feat(member): the stage-3 P2 si-member role`, `test(member/confinement): ClickHouse proof that the member users are confined`, `ci: run the member confinement suite on PRs and in Cut Release`, `docs: member role, confinement suite and stage-3 P2 compatibility notes`). Then, with the passwordless two-node ClickHouse 25.8 pair of README § Build and test running (`docker run` pulls `clickhouse/clickhouse-server:25.8` when it is not on the host: a download that needs explicit user confirmation in chat before running), the ClickHouse-gated targets of Tasks 30–33 and the existing ones as CI's `integration-clickhouse` job lists them (Plan S3-A Task 4 gives that job its credentials; the local pair keeps the passwordless `default`):
 
 ```bash
 W=<worktree path>; cd "$W" && targets="$(sed -n '/- name: data-plane integration/,/--test_env/p' .github/workflows/ci.yml | grep -o '//[^ ]*_test')" && echo "$targets" && \
-  ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 ARBITER_CH_REPLICA=1 CH_ADDR=127.0.0.1:9000 CH_REPLICA_ADDR=127.0.0.1:9001 \
+  ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 ARBITER_CH_REPLICA=1 CH_USER=default CH_PASSWORD="" CH_ADDR=127.0.0.1:9000 CH_REPLICA_ADDR=127.0.0.1:9001 \
   bazel test $targets --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=ARBITER_CH_REPLICA \
-  --test_env=CH_ADDR --test_env=CH_REPLICA_ADDR --test_timeout=900 --test_output=errors
+  --test_env=CH_ADDR --test_env=CH_REPLICA_ADDR --test_env=CH_USER --test_env=CH_PASSWORD --test_timeout=900 --test_output=errors
 ```
 
 Expected: the target list of the `data-plane integration` step (the base's four and those Tasks 23 and 30–33 inserted), then every target PASSED. This task adds no target there: its ClickHouse tests run in `member-confinement`.
@@ -19792,17 +19944,25 @@ gcloud auth configure-docker us-west1-docker.pkg.dev
 cd ~/src/remotesrc/claude/arbiter-core/multi-source-s3c2
 git rev-parse HEAD | tee $HOME/si-stage3-p2-code/confinement-deployed.head
 env ARBITER_CH_PLATFORM=linux/amd64 bash scripts/ci/clickhouse-member-confinement.sh us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16 26.3. 2>&1 | tee $HOME/si-stage3-p2-code/confinement-deployed.log
-date -u +%F | tee $HOME/si-stage3-p2-code/confinement-deployed.date
+set confinement_status $pipestatus[1]
+if test "$confinement_status" -eq 0
+    date -u +%F | tee $HOME/si-stage3-p2-code/confinement-deployed.date
+else
+    echo "confinement runner failed with status $confinement_status; stop"
+end
 ```
 
 On an amd64 Linux host the `env ARBITER_CH_PLATFORM=linux/amd64` prefix is not needed; on Apple Silicon the two servers run under emulation and the run takes several times longer. The run pulls the private image and MinIO (the user's downloads, in their terminal). Once the user says it finished, read what it left (local files the user wrote for this purpose):
 
 ```bash
 si_evidence="$HOME/si-stage3-p2-code"; W=<worktree path>
+image=us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16
+if ! grep -Fx "confinement: 14 test(s) passed on $image" "$si_evidence/confinement-deployed.log" >/dev/null || ! grep -Fx "sources: 13 ClickHouse test(s) passed on $image" "$si_evidence/confinement-deployed.log" >/dev/null; then echo 'deployed confinement or sources gate missing; stop'; exit 1; fi
+test "$(cat "$si_evidence/confinement-deployed.head")" = "$(git -C "$W" rev-parse HEAD)" || { echo 'deployed proof is for another head; stop'; exit 1; }
 grep -E '^(confinement|sources)[: ]' "$si_evidence/confinement-deployed.log"; cat "$si_evidence/confinement-deployed.date" "$si_evidence/confinement-deployed.head"; git -C "$W" rev-parse HEAD
 ```
 
-Expected: `confinement server CH_ADDR: image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16, ClickHouse 26.3.<x>.<y>, up <n>s` and the same for `CH_PEER_ADDR` (one version), the measured `confinement: …` lines, `confinement: 14 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`, `sources: <m> ClickHouse test(s) passed on …` (the same image); then the date (`YYYY-MM-DD`, UTC), which becomes `P2_CONFINEMENT`, and twice the same commit, the branch head. A missing `14 test(s) passed` line means the run failed (the `tee` hides the exit status): read the failing test's lines from the log, report them to the user and stop; a failed refusal on the deployed build blocks Plan S3-C3, and a fix is a new commit on this branch followed by Steps 13, 16 and this step again.
+Expected: `confinement server CH_ADDR: image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16, ClickHouse 26.3.<x>.<y>, up <n>s` and the same for `CH_PEER_ADDR` (one version), the measured `confinement: …` lines, `confinement: 14 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`, `sources: 13 ClickHouse test(s) passed on …` (the same image); then the date (`YYYY-MM-DD`, UTC), which becomes `P2_CONFINEMENT`, and twice the same commit, the branch head. A missing confinement or sources summary, a failed runner status or a mismatched head means the run failed or belongs to another tree: read the failing test's lines from the log, report them to the user and stop; a failed refusal on the deployed build blocks Plan S3-C3, and a fix is a new commit on this branch followed by Steps 13, 16 and this step again.
 
 - [ ] **Step 18: PR, CI and merge**
 
@@ -19856,7 +20016,38 @@ gh pr checks <n> --repo sentioxyz/arbiter-core --watch
 
 Expected: `<n>` is the PR number `gh pr create` printed; `test`, `integration-clickhouse`, `clickhouse-mechanics` and `member-confinement` pass (the last prints `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` and the `sources:` line). On a failure, read the log (`gh run view <id> --repo sentioxyz/arbiter-core --log-failed`, a remote read, confirmed with the block above), fix it on the branch with a new commit, run Steps 13 and 16 again (and Step 17 if the fix touches `member/confinement`, `member/sources` or the runner), and ask again before pushing.
 
-Remote write (merge): needs explicit user confirmation in chat, after review, before running.
+Before asking to merge, verify the remote PR head equals the checked local `HEAD`, then check every REST primary author and message trailer. This remote read is covered by the CI-status confirmation above. GitHub's coauthor list is not a primary-author check.
+
+```bash
+set -eo pipefail
+W=<worktree path>
+[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+echo "PR head is HEAD"
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/<n>/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+```
+
+Expected: `PR head is HEAD`, exactly `poetry <chen@sentio.xyz>`, then `PR commit identities verified`. Missing, malformed, truncated (250 commits), unexpected primary/coauthor, duplicate or noncanonical trailer, or mismatched head stops before merge. Merge commits may omit the Claude trailer; ordinary task commits must carry it. Fix authors and confirm the push before checking again.
+
+Irreversible remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
 ```bash
 gh pr merge <n> --repo sentioxyz/arbiter-core --squash
@@ -19866,19 +20057,37 @@ Expected: the squash commit on `main`; `gh pr view <n> --repo sentioxyz/arbiter-
 
 - [ ] **Step 19: Release `CORE_TAG_P2`**
 
-Releases are annotated `vX.Y.Z` tags cut by the **Cut Release** workflow from `main` (`scripts/next-version.sh`); it now also runs the member confinement suite before tagging. Release order (conventions): `CORE_TAG` → `CORE_TAG_P1` → `CORE_TAG_P2` (this step) → `CORE_TAG_P3` …; the tag is never predicted, moved or re-cut. Remote write (the release workflow): needs explicit user confirmation in chat before running.
+Releases are annotated `vX.Y.Z` tags cut by the **Cut Release** workflow from `main` (`scripts/next-version.sh`); it now also runs the member confinement suite before tagging. Release order (conventions): `CORE_TAG` → `CORE_TAG_P1` → `CORE_TAG_P2` (this step) → `CORE_TAG_P3` …; the tag is never predicted, moved or re-cut. Irreversible remote write (the release workflow and permanent tag): needs explicit user confirmation in chat before running.
 
 ```bash
-gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main
-bash -c 'gh run watch --repo sentioxyz/arbiter-core "$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")" --exit-status'
-gh release view --repo sentioxyz/arbiter-core --json tagName -q .tagName
+si_evidence="$HOME/si-stage3-p2-code"
+head="$(gh api repos/sentioxyz/arbiter-core/git/ref/heads/main --jq .object.sha)" || exit 1
+since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main || exit 1
+id=""
+for _ in $(seq 1 30); do
+  runs="$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --event workflow_dispatch --limit 100 --json databaseId,createdAt,headSha | jq -r --arg since "$since" --arg head "$head" '.[] | select(.createdAt >= $since and .headSha == $head) | .databaseId')" || exit 1
+  count="$(printf '%s\n' "$runs" | grep -c '[0-9]' || true)"
+  if [ "$count" -gt 1 ]; then echo 'multiple matching release runs; stop and identify this dispatch before continuing'; exit 1; fi
+  if [ "$count" -eq 1 ]; then id="$runs"; break; fi
+  sleep 2
+done
+[ -n "$id" ] || { echo 'release dispatch not found; stop, never watch an older run'; exit 1; }
+printf '%s\n' "$id" > "$si_evidence/core-release-run"
+gh run watch "$id" --repo sentioxyz/arbiter-core --exit-status || exit 1
+gh run view "$id" --repo sentioxyz/arbiter-core --log > "$si_evidence/core-release.log" || exit 1
+tags="$(sed -nE 's/.*member release tag: (v[0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' "$si_evidence/core-release.log" | sort -u)"
+[ "$(printf '%s\n' "$tags" | grep -c '^v' || true)" -eq 1 ] || { echo 'the exact release run has no unique tag; stop'; exit 1; }
+printf '%s\n' "$tags" | tee "$si_evidence/core-release-tag"
 ```
 
-The new run can take a few seconds to appear: if the watched run predates the dispatch (its `createdAt` in `gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 2 --json databaseId,createdAt`), run the second line again. Expected: the run ends green with the step summary `### Cutting vX.Y.Z`, its `validate member confinement` step green; the last command prints that tag, `CORE_TAG_P2`. Then read the release run's confinement lines and check the tag by content (remote reads: need explicit user confirmation in chat before running; substitute the tag for `<tag>`):
+
+Expected: exactly one workflow-dispatch run on the captured `main` commit (the dispatch API takes a branch or tag; if `main` moves between the read and dispatch, stop and identify the actual run rather than accepting another head) created at or after `since`, its persisted id, success from `gh run watch`, and one unique `member release tag: vX.Y.Z` value from that run's stdout. Read `CORE_TAG_P2` only from that run's line, never from the latest release (another release may have completed since). An absent or ambiguous run stops the task; never dispatch again blindly. Then read the release run's confinement lines and check the tag by content (remote reads: need explicit user confirmation in chat before running; read the tag stored from that run):
 
 ```bash
-T=<tag>; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>; si_evidence="$HOME/si-stage3-p2-code"
-id="$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"; echo "run $id"
+si_evidence="$HOME/si-stage3-p2-code"; T="$(cat "$si_evidence/core-release-tag")"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
+id="$(cat "$si_evidence/core-release-run")"; echo "run $id"
+test "$(gh run view "$id" --repo sentioxyz/arbiter-core --json conclusion --jq .conclusion)" = success || exit 1
 gh run view "$id" --repo sentioxyz/arbiter-core --log | grep -o -E 'confinement server .*|confinement: [0-9]+ test\(s\) passed on .*|sources: [0-9]+ ClickHouse test\(s\) passed on .*'
 git -C "$R" fetch origin --tags
 git -C "$R" grep -h '^func TestConfinement_' "$T" -- member/confinement | wc -l
@@ -19889,10 +20098,11 @@ git -C "$R" show "$T":consensus.go | grep -c 'return \[\]string{ClientLanesFeatu
 git -C "$R" show "$T":go.mod | grep -c "github.com/housegate/housegate $HG_TAG_P1\$"
 git -C "$R" show "$T":go.mod | grep -c "github.com/sentioxyz/arbiter-proto $PROTO_TAG\$"
 git -C "$R" diff --quiet "$(cat "$si_evidence/confinement-deployed.head")" "$T" -- member scripts/ci/clickhouse-member-confinement.sh scripts/ci/clickhouse-member-access-control.xml scripts/ci/clickhouse-keeper.xml scripts/ci/clickhouse-mechanics-users.xml && echo 'deployed run tree ok'
+test "$(git -C "$R" rev-parse "$T^{commit}")" = "$(gh run view "$id" --repo sentioxyz/arbiter-core --json headSha --jq .headSha)" || exit 1
 git -C "$R" rev-parse "$T^{commit}"
 ```
 
-Expected: `run <id>`; the two `confinement server … ClickHouse 26.3.37.3 …` lines, `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` and `sources: <m> ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; then `14`, `1`, `1`, `1`, `1` (the feature list of contract §20.1, unchanged), `1`, `1` (the pins of `HG_TAG_P1` and `PROTO_TAG`); `deployed run tree ok` (the release carries exactly the suite, the sources tests and the runner the deployed image passed with); the tag's commit. Anything else: stop and ask; nothing is recorded.
+Expected: `run <id>`; the two `confinement server … ClickHouse 26.3.37.3 …` lines, `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` and `sources: 13 ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; then `14`, `1`, `1`, `1`, `1` (the feature list of contract §20.1, unchanged), `1`, `1` (the pins of `HG_TAG_P1` and `PROTO_TAG`); `deployed run tree ok` (the release carries exactly the suite, the sources tests and the runner the deployed image passed with); the tag's commit. Anything else: stop and ask; nothing is recorded.
 
 - [ ] **Step 20: Record `CORE_TAG_P2` and `P2_CONFINEMENT`**
 
@@ -19910,11 +20120,15 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true
+git -C "$d" config --worktree user.name poetry
+git -C "$d" config --worktree user.email chen@sentio.xyz
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c2-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c2-$n.md" CORE_TAG_P2="$CORE_TAG_P2" P2_CONFINEMENT="$P2_CONFINEMENT" || exit 1
 git -C "$d" commit -q -m "docs(plan): record CORE_TAG_P2 and P2_CONFINEMENT of Plan S3-C2 (Task 34)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+git -C "$d" log -1 --format='%an <%ae>'
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
@@ -19935,7 +20149,37 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 34's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the irreversible PR merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 34's ledger record"). After a yes, check the exact head and the complete REST identity list before merging:
+
+```bash
+set -eo pipefail
+pr=<number>
+L="$HOME/.cache/s3-ledger"; n=34
+d="$(sed -n 1p "$L/record-s3c2-$n")"
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo "PR head differs from the checked ledger HEAD; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any mismatched head, missing/malformed/truncated listing, wrong primary or unexpected/duplicate coauthor stops before the merge. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -19957,7 +20201,7 @@ No host changes behaviour: `standalone.Run`, `LoadConfig`, `decodeConfigYAML` an
 - Modify: `go.mod` (the arbiter-core require, base `:14`, at `CORE_TAG_P1` since Plan S3-C1 Task 25), `go.sum`, `MODULE.bazel` (`bazel_dep` `arbiter_core`, base `:12-15`; `git_override` `arbiter_core` with its `# Resolved …` comment, base `:36-41`), `MODULE.bazel.lock`
 - Create: `config/si_member.go`, `config/testdata/si-member.yaml`
 - Test: `config/si_member_test.go` (new)
-- Modify: `config/BUILD.bazel` (`go_library` srcs and deps, `go_test` srcs, data and deps, as Plan S3-B Task 12 and Plan S3-C1 Task 25 left them; base `:5`, `:9-17`, `:26-32`), `.gitignore` (the `*.yaml` line, base `:10`: the repository ignores every `.yaml` file, so the example needs an exception or `git add` silently leaves it out and the Bazel test finds no file)
+- Modify: `config/BUILD.bazel` (`go_library` srcs and deps, `go_test` srcs, data and deps, as Plan S3-B Task 12 and Plan S3-C1 Task 25 left them; post-Task-25 `:5-8`, `:11-25`, `:28-42`), `.gitignore` (the `*.yaml` line, base `:10`: the repository ignores every `.yaml` file, so the example needs an exception or `git add` silently leaves it out and the Bazel test finds no file)
 - Create: `simember/run.go`, `simember/metrics.go`, `simember/slog.go`, `simember/BUILD.bazel`
 - Test: `simember/run_test.go`, `simember/metrics_test.go`, `simember/install_ch_test.go` (new)
 - Create: `commands/si_member.go`
@@ -19965,18 +20209,18 @@ No host changes behaviour: `standalone.Run`, `LoadConfig`, `decodeConfigYAML` an
 - Modify: `commands/BUILD.bazel` (`go_library` srcs `:9-12` and deps `:26-30`; `go_test` srcs and deps as Plan S3-C1 Task 25 left them, base `:38-40`), `main.go` (`rootCmd.AddCommand`, after `commands.NewStorageIntegrityCommand(&configPath),`, `:53`)
 - Create: `scripts/ci/clickhouse-member-access-control.xml` (byte-identical to arbiter-core's, contract §23.4), `scripts/ci/clickhouse-member-users.xml`
 - Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`: `timeout-minutes` `:57`; the new step before `- name: stop ClickHouse`, `:183`)
-- Modify: `README.md` (a new subsection right before `### Dynamic storage-integrity table set`, base `:109`, after Plan S3-C1 Task 25's `### Storage-integrity backups and restore drills`)
+- Modify: `README.md` (a new subsection right before `### Dynamic storage-integrity table set`, post-Task-25 `:143`, after Plan S3-C1 Task 25's `### Storage-integrity backups and restore drills`)
 - Ledger (Step 14, housegate): Modify `docs/superpowers/plans/2026-10-15-multi-source-si-s3c2-p2-members-code.md`, Appendix C (the `SN_COMMIT_P2` and `SN_DIGEST_P2` rows and the run record `sentio-node release (Task 35)`), on the ledger copy `s3-ledger.py ref <housegate> s3c2` prints (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34), with the record procedure of contract §15 and Plan S3-C1 contract §19 (decision D23): one commit in the URWT worktree `multi-source-s3c2-ledger-35`
-- Leave unchanged: `standalone/` (the host never reads the member block, so `storageIntegrityReadOnlyMethods` and `TestStorageIntegrityReadOnlyMethodsHaveValueReceivers` are untouched), `config/config.go` (the member loader reuses Plan S3-B Task 12's `yamlMappingValues` and the existing `storageIntegrityGenesisSnapshotIDPattern` and `StorageIntegrityPeer`), `rpc/`, the existing CI steps and their PASS counts, `Dockerfile` (its `ENTRYPOINT ["/sentio-node"]` already runs any command)
+- Leave unchanged: `standalone/` (the host never reads the member block, so `storageIntegrityReadOnlyMethods` and `TestStorageIntegrityReadOnlyMethodsHaveValueReceivers` are untouched), `config/config.go` (the host helper `yamlMappingValues` stays unchanged; the member loader uses its own bounded walker and the existing `storageIntegrityGenesisSnapshotIDPattern` and `StorageIntegrityPeer`), `rpc/`, the existing CI steps and their PASS counts, `Dockerfile` (its `ENTRYPOINT ["/sentio-node"]` already runs any command)
 
 **Interfaces:**
 - Consumes (`CORE_TAG_P2`, contract §21–§23): package `github.com/sentioxyz/arbiter-core/member` (Bazel `@arbiter_core//member`): `const DefaultPollInterval = 5 * time.Second`, `MinPollInterval = time.Second`, `LockFile = "LOCK"`; `type Peer struct { IndexerID uint64; Collection, SafeDatabase, UnsafeDatabase string }`; `type Config struct { NodeID string; HostIndexerID uint64; NetworkID, GenesisSnapshotID string; Genesis []payloadexec.TableSchema; Pinned ddl.MemberPinned; Protocol ddl.Pinned; StateDir string; Peers []Peer; PoolCollections []string; Restore *sources.RestoreConfig; Shadow bool; PollInterval time.Duration; DiskBudgetBytes uint64; StopInstallsRatio float64; SelfAuditInterval time.Duration; FeedMaxWalk, FeedCacheEntries int }`; `type Deps struct { Client *dataplane.Client; Conn clickhouse.Conn; Registry dataplane.RegistryView; Payloads replay.PayloadStore; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }`; `type OwnerStats` and `type Stats` with the fields of contract §23.1; `func New(cfg Config, d Deps) (*Role, error)`; `func (r *Role) Run(ctx context.Context) error` (the `flock` on `<StateDir>/LOCK` first), `Ready() bool`, `Stats() Stats`. Package `member/install`: `DefaultStopInstallsRatio = 0.8`, `DefaultSelfAuditInterval = 6 * time.Hour`, `MinSelfAuditInterval = 10 * time.Minute`; `type Outcome string` (labels `kept`, `rename_race`, `split`, `doubled`, `foreign`, `missed`, `refused`, `unreachable`); `const JournalFile = "install-journal.json"`; `Journal`, `OwnerJournal`, `TableJournal`, `JournalPart` with the JSON tags of contract §22.2; `func ClearForeign(stateDir, tableKey string) error` and its refusal `install: state dir %s is locked by a running si-member`. Package `member/sources`: `type RestoreConfig struct { Endpoint, Bucket, AccessKeyID, Secret string }` with redacting `String()` and `LogValue()`. Package `member/shadow`: `type MismatchKind string`, `MismatchReceipt`, `MismatchScan`, `MismatchClaim`. Package `dataplane/ddl`: `type MemberPinned`, `func DefaultMemberPinned(nodeID string, keeperShardID uint32, storagePolicy string) MemberPinned`, `ReplicaDatabase`, `StageDatabase`, `func CopyTableName(tableID string, incarnationSeq uint64) string`. `CORE_TAG_P2`'s `go.mod` requires `HG_TAG_P1` and `PROTO_TAG`, and `TestHandlePromote_PostReplaceFailureRestartRetryConverges`, which this repository's CI runs from `@arbiter_core//snode:snode_test`, still exists.
 - Consumes (existing arbiter-core): `dataplane.New`, `dataplane.Config{Peers, Logger}`, `dataplane.Peer{ID, GRPCAddr}`, `(*dataplane.Client).Close`, `dataplane.NewRegistryFollower(c *Client, logger *slog.Logger) *RegistryFollower`, `(*RegistryFollower).Run`, `Ready()`, `dataplane.TableRegistryDisabledMessage`; `dastore.New(dastore.Config{DataAddr})`, `(*dastore.Client).Close`; `ddl.Pinned`, `ddl.IncarnationIntents`, `ddl.RowIDColumn`, `ddl.CHTableName`; `wire.ManifestToPB`.
 - Consumes (housegate `HG_TAG_P1`, Plan S3-C1 contract §16, and existing API): `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)`; `replay.SafeSnapshotManifest` and `Seal`, `replay.TrackFrontier`, `TableManifest`, `PartitionCommitment`, `PartManifestEntry`; `chexec.ScanParts`; `payloadexec.TableSchema`, `TableSchemaHash`, `SchemaRoot`, `ValidateTableSchemaColumns`; `lthash.Column`.
 - Consumes (arbiter-proto `PROTO_TAG`): `pb.SafeStateServer` (`GetSafeWatermark`, `GetManifest`, `GetManifestByBlock`), `pb.TableRegistryServer` (`GetTableRegistry`, `WatchTableRegistry`, `GetPurgeNodeSet`) and their messages, for the acceptance's fake arbiter.
-- Consumes (sentio-node at `SN_COMMIT_P1`): `config.StorageIntegrityPeer`, `config.StorageIntegrityUnsafeDatabase` / `SafeDatabase` / `PromoteDatabase`, the unexported `storageIntegrityGenesisSnapshotIDPattern` and Plan S3-B Task 12's `yamlMappingValues(node *yaml.Node, key string) []*yaml.Node`; `compute-network-node/common/log.WithContext`; cobra.
+- Consumes (sentio-node at `SN_COMMIT_P1`): `config.StorageIntegrityPeer`, `config.StorageIntegrityUnsafeDatabase` / `SafeDatabase` / `PromoteDatabase`, the unexported `storageIntegrityGenesisSnapshotIDPattern` and its host-only `yamlMappingValues(node *yaml.Node, key string) []*yaml.Node` (checked as an executed-base anchor; the member uses `siMemberYAMLMappingValues`); `compute-network-node/common/log.WithContext`; cobra.
 - Produces (contract §24.2–§24.6, verbatim): `const config.StorageIntegrityMemberClickhousePasswordEnv = "STORAGE_INTEGRITY_MEMBER_CLICKHOUSE_PASSWORD"`, `StorageIntegrityMemberRestoreAccessKeyIDEnv = "STORAGE_INTEGRITY_MEMBER_RESTORE_ACCESS_KEY_ID"`, `StorageIntegrityMemberRestoreSecretEnv = "STORAGE_INTEGRITY_MEMBER_RESTORE_SECRET"`, `DefaultSIMemberMetricsListen = ":9093"`; `func config.LoadSIMemberConfig(path string) (*SIMemberConfig, error)` (errors `si-member config %s: %w`); the types `SIMemberConfig`, `SIMemberStorageIntegrity`, `StorageIntegrityMemberConfig`, `StorageIntegrityMemberPeer`, `StorageIntegrityMemberRestore`, `StorageIntegrityTable`, `StorageIntegrityColumn` with the YAML keys of §24.2; `func (c StorageIntegrityMemberConfig) ClickhouseOptions() *clickhouse.Options`; `func (c SIMemberConfig) MemberConfig() (member.Config, error)`; every refusal of §24.2; `func commands.NewSIMemberCommand(configPath *string) *cobra.Command` (`Use: "si-member"`, its `Short`), the subcommand `clear-foreign` with the required `--table` and the line `cleared foreign quarantine of <table>; the copy is rebuilt at the next start`; `main.go` registering it; package `compute-network-node/simember` with `func Run(ctx context.Context, cfg *config.SIMemberConfig) error`, `siMemberStats`, `siMemberCollector`, `newSIMemberCollector`, `GET /readyz`; the 27 series of §24.4; the tests of §24.2 and §24.5; the CI step `si-member install acceptance`; release `SN_COMMIT_P2`, `SN_DIGEST_P2` (the rows `` | `SN_COMMIT_P2` | `<40 hex>` | Task 35 | `` and `` | `SN_DIGEST_P2` | `sha256:<64 hex>` | Task 35 | `` and the run record `sentio-node release (Task 35)` of this plan's Appendix C, Step 14).
-- Produces (added here, Appendix B): package `config`: `func (c SIMemberConfig) Validate() error` (joins every refusal; `LoadSIMemberConfig` runs it after the defaults), `func (t StorageIntegrityTable) Schema() payloadexec.TableSchema`, `String()` and `LogValue()` on `SIMemberConfig` and `StorageIntegrityMemberConfig` (they name where each secret comes from and read none); unexported `siMemberKeeperShardID` (0), `siMemberNodeIDPattern`, `siMemberCollectionPattern`, `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `(*SIMemberConfig).applyDefaults`; the refusals `storage_integrity.member.clickhouse_username must not be default: the si-member never connects as default`, `storage_integrity.arbiter_peers[%d].id is required`, `storage_integrity.arbiter_peers[%d].addr is required`, `storage_integrity.member.genesis_snapshot_id %q must be a 0x-prefixed 64-digit lowercase hex digest`, `storage_integrity.member.pool_collections[%d] must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)`, `storage_integrity.member.genesis_tables[%d].table_id is required`, `storage_integrity.member.genesis_tables[%d] duplicates %q`, `storage_integrity.member.genesis_tables[%d]: %w`, `storage_integrity.member.metrics_listen must be host:port, got %q`. Package `simember`: `siMemberRole` (`Run`, `Ready`, `Stats`), `runDeps{openClickHouse, newRole, listen, started}`, `defaultRunDeps`, `run`, `readyzHandler` (bodies `ready\n` and `not ready\n`; 405 with `Allow: GET, HEAD` for other methods), `closeLogged`, `siMemberShutdownTimeout` (10 s), the slog bridge `zapSlogHandler`, `newSIMemberLogger`, `zapLevel`, `appendSlogField` (file `simember/slog.go`), the label lists `siMemberInstallOutcomes`, `siMemberInstallSources`, `siMemberFeedOutcomes`, `siMemberAuditTriggers`, `siMemberMismatchKinds` and `labelValues`; the paths `/metrics` and `/readyz`; the error forms `si-member: a config is required`, `si-member: %w`, `si-member clickhouse: %w`, `si-member arbiter client: %w`, `si-member payload store: %w`, `si-member metrics: %w`, `si-member metrics listener %s: %w`, `si-member: %s: %w` (parts `metrics server`, `table registry follower`, `member role`) and `stopped while the si-member was running`; the log lines `starting the si-member`, `si-member metrics and readiness listening`, `si-member stopped`; the help texts of the 27 series (in `simember/metrics.go`). Package `commands`: `siMemberClearForeign` (a variable holding `install.ClearForeign`), `newSIMemberClearForeignCommand`, the refusal `si-member clear-foreign --table must be <database>.<table>, got %q`, the commands' `Long` texts and the flag's help. Tests beyond §24.5: `TestRunReturnsTheRolesError` (simember), `TestSIMemberClearForeignClearsTheConfiguredStateDir`, `TestSIMemberClearForeignRefusesWhileTheMemberRuns` (commands). Test-only names: `siMemberMinimalYAML`, `siMemberTestPassword`, `siMemberTestKeyID`, `siMemberTestSecret`, `clearSIMemberEnv`, `writeSIMemberConfig`, `replaceOnce`, `loadSIMemberText` (config); `fakeSIMemberRole`, `newFakeSIMemberRole`, `disabledTableRegistry`, `startDisabledTableRegistry`, `siMemberRunTestConfig`, `loadSIMemberRunTestConfig`, `httpGet`, `fakeSIMemberStats`, `siMemberMetricNames`, `gatherSIMember`, `siMemberZeroSeries`, `siMemberCHE2EEnv`, `siMemberCHMemberAddrEnv`, `siMemberCHOwnerAddrEnv`, `siMemberCHOwnerFromMemberEnv`, `siMemberGrants` (`SI_MEMBER_GRANTS` of §23.2), `siReaderGrants`, `requireSIMemberCHAcceptance`, `openSIMemberCH`, `siMemberTestPassword`, `mustExecSIMember`, `siMemberCHPart`, `activeSIMemberParts`, `rowHashesOf`, `sortedStrings`, `fakeSIMemberSafeState`, `fakeSIMemberRegistry`, `methodRecorder`, `startFakeSIMemberArbiter` (simember); `writeSIMemberCommandConfig` (commands). Acceptance env `CH_OWNER_ADDR` and `CH_OWNER_ADDR_FROM_MEMBER` (the latter the name Task 36's harness uses for the same address). Files `scripts/ci/clickhouse-member-users.xml` and the `.gitignore` exception `!config/testdata/*.yaml`. CI: env `SI_MEMBER_CLICKHOUSE_IMAGE`, network `sentio-node-ci-si-member-net-<run>-<attempt>`, containers `sentio-node-ci-si-owner-<run>-<attempt>` (alias `si-owner`) and `sentio-node-ci-si-member-<run>-<attempt>`, the job's `timeout-minutes` 45. Local: network `sn-s3c2-t35-net`, containers `sn-s3c2-t35-owner` and `sn-s3c2-t35-member`, the runner `$si_evidence/run-sentio-node-member-ch.sh` and the log `$si_evidence/sentio-node-member-ch.log` (contract §20.4). The README subsection `### Storage-integrity si-member (stage 3 P2)`; the PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c2.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c2-35.md` and its state file `$HOME/.cache/s3-ledger/record-s3c2-35` (the ledger tool, the worktree `multi-source-s3c2-ledger-35` and the record commit are contract §20.3's).
+- Produces (added here, Appendix B): package `config`: `func (c SIMemberConfig) Validate() error` (joins every refusal; `LoadSIMemberConfig` runs it after the defaults), `func (t StorageIntegrityTable) Schema() payloadexec.TableSchema`, `String()` and `LogValue()` on `SIMemberConfig` and `StorageIntegrityMemberConfig` (they name where each secret comes from and read none); unexported `siMemberKeeperShardID` (0), `siMemberNodeIDPattern`, `siMemberCollectionPattern`, `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `checkSIMemberYAMLAliases`, `siMemberYAMLMappingValues`, `(*SIMemberConfig).applyDefaults`; the refusals `storage_integrity.member.clickhouse_username must not be default: the si-member never connects as default`, `storage_integrity.arbiter_peers[%d].id is required`, `storage_integrity.arbiter_peers[%d].addr is required`, `storage_integrity.member.genesis_snapshot_id %q must be a 0x-prefixed 64-digit lowercase hex digest`, `storage_integrity.member.pool_collections[%d] must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)`, `storage_integrity.member.genesis_tables[%d].table_id is required`, `storage_integrity.member.genesis_tables[%d] duplicates %q`, `storage_integrity.member.genesis_tables[%d]: %w`, `storage_integrity.member.metrics_listen must be host:port, got %q`. Package `simember`: `siMemberRole` (`Run`, `Ready`, `Stats`), `runDeps{openClickHouse, newRole, listen, started}`, `defaultRunDeps`, `run`, `readyzHandler` (bodies `ready\n` and `not ready\n`; 405 with `Allow: GET, HEAD` for other methods), `closeLogged`, `siMemberShutdownTimeout` (10 s), the slog bridge `zapSlogHandler`, `newSIMemberLogger`, `zapLevel`, `appendSlogField` (file `simember/slog.go`), the label lists `siMemberInstallOutcomes`, `siMemberInstallSources`, `siMemberFeedOutcomes`, `siMemberAuditTriggers`, `siMemberMismatchKinds` and `labelValues`; the paths `/metrics` and `/readyz`; the error forms `si-member: a config is required`, `si-member: %w`, `si-member clickhouse: %w`, `si-member arbiter client: %w`, `si-member payload store: %w`, `si-member metrics: %w`, `si-member metrics listener %s: %w`, `si-member: %s: %w` (parts `metrics server`, `table registry follower`, `member role`) and `stopped while the si-member was running`; the log lines `starting the si-member`, `si-member metrics and readiness listening`, `si-member stopped`; the help texts of the 27 series (in `simember/metrics.go`). Package `commands`: `siMemberClearForeign` (a variable holding `install.ClearForeign`), `newSIMemberClearForeignCommand`, the refusal `si-member clear-foreign --table must be <database>.<table>, got %q`, the commands' `Long` texts and the flag's help. Tests beyond §24.5: `TestRunReturnsTheRolesError` (simember), `TestSIMemberClearForeignClearsTheConfiguredStateDir`, `TestSIMemberClearForeignRefusesWhileTheMemberRuns` (commands). Test-only names: `TestSIMemberShadowRequiresAnExplicitStoragePolicy`, `TestSIMemberConfigRejectsTrailingDocumentsAndRecursiveMerges`, `TestSIMemberSecretKeysThroughAliasesAndMergeSequences`, `siMemberMinimalYAML`, `siMemberTestPassword`, `siMemberTestKeyID`, `siMemberTestSecret`, `clearSIMemberEnv`, `writeSIMemberConfig`, `replaceOnce`, `loadSIMemberText` (config); `fakeSIMemberRole`, `newFakeSIMemberRole`, `disabledTableRegistry`, `startDisabledTableRegistry`, `siMemberRunTestConfig`, `loadSIMemberRunTestConfig`, `httpGet`, `fakeSIMemberStats`, `siMemberMetricNames`, `gatherSIMember`, `siMemberZeroSeries`, `siMemberCHE2EEnv`, `siMemberCHMemberAddrEnv`, `siMemberCHOwnerAddrEnv`, `siMemberCHOwnerFromMemberEnv`, `siMemberGrants` (`SI_MEMBER_GRANTS` of §23.2), `siReaderGrants`, `requireSIMemberCHAcceptance`, `openSIMemberCH`, `siMemberTestPassword`, `mustExecSIMember`, `siMemberCHPart`, `activeSIMemberParts`, `rowHashesOf`, `sortedStrings`, `fakeSIMemberSafeState`, `fakeSIMemberRegistry`, `methodRecorder`, `startFakeSIMemberArbiter` (simember); `writeSIMemberCommandConfig` (commands). Acceptance env `CH_OWNER_ADDR` and `CH_OWNER_ADDR_FROM_MEMBER` (the latter the name Task 36's harness uses for the same address). Files `scripts/ci/clickhouse-member-users.xml` and the `.gitignore` exception `!config/testdata/*.yaml`. CI: env `SI_MEMBER_CLICKHOUSE_IMAGE`, network `sentio-node-ci-si-member-net-<run>-<attempt>`, containers `sentio-node-ci-si-owner-<run>-<attempt>` (alias `si-owner`) and `sentio-node-ci-si-member-<run>-<attempt>`, the job's `timeout-minutes` 45. Local: network `sn-s3c2-t35-net`, containers `sn-s3c2-t35-owner` and `sn-s3c2-t35-member`, the runner `$si_evidence/run-sentio-node-member-ch.sh` and the log `$si_evidence/sentio-node-member-ch.log` (contract §20.4). The README subsection `### Storage-integrity si-member (stage 3 P2)`; the PR body file `<scratchpad>/sn-s3c2-pr.md`; the run record `$HOME/.cache/s3-ledger/record-s3c2-35.md` and its state file `$HOME/.cache/s3-ledger/record-s3c2-35` (the ledger tool, the worktree `multi-source-s3c2-ledger-35` and the record commit are contract §20.3's).
 
 Notes:
 - **The owner is a second ClickHouse (contract deviation, recorded in Appendix B).** Contract §24.5–§24.6 describe one fenced server holding the owner's `hg_safe` table, `si_reader`, `si_member` and `si_owner_0`. Measured while drafting on `clickhouse/clickhouse-server:26.3` (26.3.51.7): ClickHouse executes `remote()` whose address is the server's own (`localhost:9000` and its own container hostname alike, `prefer_localhost_replica = 0` included) locally as the calling user, so `si_member`'s pull from a collection naming its own server is refused with 497 `it's necessary to have the grant SHOW COLUMNS ON hg_safe.<table>` — the member's grants rightly hold nothing on `hg_safe`. The acceptance therefore runs two 26.3.37.3 servers on a private Docker network, as arbiter Task 36's `scripts/test-clickhouse-member.sh` does: the owner's (`CH_OWNER_ADDR`, reached from the member's server as `si-owner:9000`, `CH_OWNER_ADDR_FROM_MEMBER`) and the fenced member server (`CH_MEMBER_ADDR`) with the access-control file. Everything else of §24.5 holds as written; on devnet2 the member's server and its owners are different installations anyway.
@@ -19989,7 +20233,11 @@ Notes:
 - **Logging.** arbiter-core logs through `slog`; `simember/slog.go` hands every record to sentio-core's zap logger (`common/log.WithContext`), so `--log-level` and the log format of every other command apply, and values are resolved first, so a value's `LogValue` is what reaches the log. It mirrors the unexported adapter of `standalone/slog_adapter.go`, which `simember` cannot import without pulling in the whole host.
 - **`clear-foreign` is offline (K36).** The command loads the same file as the process (so a run outside the pod needs the same environment, the restore variables included when `restore` is set) and calls `install.ClearForeign`, which refuses while a member holds `<state_dir>/LOCK`; it prints one line and nothing else. `--table` is the journal's key, `<database>.<table>` of the logical table, refused unless it has exactly one dot with a non-empty side.
 - **Order and rollback.** `SN_COMMIT_P2` needs `CORE_TAG_P2` and `P2_CONFINEMENT` recorded (the Global Constraints), and sentio-node `main` at or after `SN_COMMIT_P1`. No running pod takes `SN_DIGEST_P2` in this plan; Plan S3-C3 runs it only in the si-member StatefulSets, and a host that never invokes `si-member` behaves exactly as on `SN_COMMIT_P1`.
-- **Verification while drafting** (Appendix B): every hunk below was applied, step by step, to `git archive origin/main` of sentio-node (`5d2f169`, still the base) after Plan S3-B Task 12's `config/config.go` and `config/BUILD.bazel` hunks (applied from its text) and Plan S3-C1 Task 25's `config/BUILD.bazel` and `commands/BUILD.bazel` hunks (for the anchors), against `git archive origin/main` of arbiter-core (`cfd4f42`, Plan S3-A's released `CORE_TAG` `v0.15.0`, so `arbiter.SafeWatermark` is real) and of housegate (`862a7a8`: `HG_TAG` `v0.20.0` plus plan docs), with arbiter-proto `PROTO_TAG` `v0.12.0`, `CORE_TAG_P2`'s surface (contract §21–§23: `member`, `member/install`, `member/sources`, `member/shadow`, the member `ddl` names, `dataplane.IncarnationSchema` and the reads) stubbed in the arbiter-core copy and `HG_TAG_P1`'s `SumPartRowLtHashes`, `VerifyLedger` and `OwnerEntry` in the housegate copy (`replace` in a scratch `go.mod`), with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test`: each "Expected: FAIL" was observed as written, every package passed after each implementation step, `-race` passed, `gofmt` and `go vet` were clean and `go test ./...` passed (an earlier pass on the base revisions `v0.14.1`, `v0.19.0` and `v0.11.0` passed the same way, so no consumed existing API moved in `CORE_TAG`); fourteen mutations (no key walk, no `KnownFields`, no environment password, the password in `LogValue`, the host accepted as a peer, `default` accepted, the restore key dropped, no defaults, `/readyz` always 200, the login dropped from `Run`, only seen owners exported, a counter exported as a gauge, the role's error swallowed, the follower not run) each failed a named test, eight of them re-run on the final text. The stub role ran the owner-pull path of contract §22.1 and §22.3 for real (the posture probes, `CREATE DATABASE` without `ENGINE`, the copy and scratch with `ENGINE = MergeTree`, resolve by `hash_of_all_files`, the no-split pull, `ATTACH PARTITION … FROM`, the journal), so `TestSIMemberInstallsACopyFromTheOwnerPull` passed against two local `clickhouse/clickhouse-server:26.3` (26.3.51.7) servers with the fence and users files exactly as below, and Step 9's CI script, with the image and its version check pointed at the local 26.3 and `go test` for `bazel test`, passed, failed as written on a version mismatch and on a skip, and removed its containers and network every time; Step 10's runner passed the same way and left nothing behind. The reader's need was re-measured on the same servers: `remote(si_owner_0, database = 'system', table = 'parts')` is refused with 497 `SHOW COLUMNS ON system.parts` while `si_reader` holds Plan S3-B contract §11's three grants and answers once the fourth is added, and the pull from `hg_safe` needs nothing more. A fresh `git clone` of the result held the example (the `.gitignore` exception) and passed; the README's YAML block, with both restore variables set, loads through `LoadSIMemberConfig` and maps through `MemberConfig`. The built binary ran Step 12's smoke block as written. The `MODULE.bazel` pin script ran on the base `MODULE.bazel` and again idempotently; `buildifier -mode=check -lint=warn` passed on the three `BUILD.bazel` files; `actionlint` reports nothing new on `ci.yml` (its one existing SC2046 warning, in the gofmt step, is unchanged); every bash block passed `bash -n` and `shellcheck`, and the CI step's script, extracted from `ci.yml`, too; the ledger `set` invocation of Step 14 ran, with Plan S3-C1 contract §19's tool, against a scratch Appendix C of the §20.3 shape and printed Step 14's line; the tool's `get` reads Plan S3-A's recorded `PROTO_TAG`, `HG_TAG` and `CORE_TAG` from housegate's `origin/main`, and its `ref … s3c2` stops with `no plan 's3c2'` until the plans branch is on origin (Step 1's stop). Bazel and gazelle were not run (no `CORE_TAG_P2` yet; the `git_override` fetches); the `BUILD.bazel` files are what gazelle writes for these imports and files. `clickhouse/clickhouse-server:26.3.37.3` itself was not pulled while drafting: Steps 9–10 pin it and check `version()`.
+- **Base (review, 2026-10-17):** sentio-node `origin/main` `0828f21` is Plan S3-B Task 12's `SN_COMMIT`; do not reapply that executed task. Apply the complete reviewed Plan S3-C1 Task 25 first. The actual reviewed housegate `ed24705` plus Task 22 and arbiter-core `cfd4f42` plus Tasks 23–24 and 29–34 were used for local verification, without a role stub. Their released tags remain execution-time ledger values, never predicted.
+- **Config strictness (review):** the member-only loader rejects trailing YAML documents and cyclic alias/merge graphs before walking secret keys; `siMemberYAMLMappingValues` bounds each walk to one visit per node, including overridden secret keys. Acyclic aliases remain valid, and secret-key refusals still take precedence over unknown fields. The host's shared helper and loader are unchanged. Added tests: `TestSIMemberConfigRejectsTrailingDocumentsAndRecursiveMerges` and `TestSIMemberSecretKeysThroughAliasesAndMergeSequences`; added helpers: `checkSIMemberYAMLAliases` and `siMemberYAMLMappingValues`.
+- **Replay disk policy (review):** with `shadow_verification: true`, `storage_policy` must be explicit (`storage_integrity.member.storage_policy is required when shadow_verification is true: choose the member disk policy explicitly`). Plan S3-C3 provisions `member`; isolated tests may explicitly choose `default`. Shadow-off configs keep the existing empty/default-policy semantics. `MemberConfig` forwards the selected policy unchanged to the actual role, whose shadow uses the policy-aware materializer from Plan S3-C1 Task 22.
+- **Verification (adversarial review, 2026-10-17):** the complete predecessor chain above and this task were applied verbatim; no role stub. Steps 3/5/7 fail with their quoted undefined names, implementations pass, nine adversarial mutations fail their intended tests, and the old loader fails the trailing-document regression. Canonical Bazel 9.1.0 (Go 1.26.3, Gazelle 0.52.2) builds the full repository and passes all 17 test targets, with the final alias-DAG fixture also passing the config target; Gazelle emits the promised BUILD files. Go build/tests, final affected-package race and vet/gofmt pass. The actual Role installs the three-part manifest and journals its owner entry on two pinned ClickHouse 26.3.37.3 servers, with race detection, after the policy producer/consumer synchronization. The extracted CI step also passes through real Bazel with its marker gates and removes both containers/network. Fresh complete C1 Task 25 plus this task replay byte-identically to the verified source tree. All shell blocks parse/lint, buildifier and workflow YAML checks pass, identity fixtures/head controls pass on Bash 3.2/5, the built binary prints the smoke expectations without secrets, and downstream C4/E4 tracked hunks still match. Only local exports and containers were used; no release or ledger recording was performed.
+
 
 - [ ] **Step 1: Worktree, ledger and contract check**
 
@@ -20002,17 +20250,46 @@ bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/
 
 Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3c2` (expanded) on branch `urwt/claude/multi-source-s3c2` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
 
+Set this worktree's identity and require signed commits before anything is committed (local):
+
+```bash
+W=<worktree path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config --worktree commit.gpgsign true || exit 1
+git -C "$W" config user.name && git -C "$W" config user.email
+```
+
+Expected: `poetry`, then `chen@sentio.xyz`. Every commit below must print `poetry <chen@sentio.xyz>` and pass signature verification. Another identity is corrected before committing; a signing error means stopping and asking the user to unlock the configured key, never disabling signing. Commit messages carry only the canonical Claude coauthor trailer.
+
 The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §20.3, Plan S3-C1 contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" ref "$h" s3c2
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c2)" || exit 1
+echo "$ref"
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" || { echo "ledger tool differs from contract §19; stop and reconcile"; exit 1; }
+echo "s3-ledger.py is contract §19 of $ref"
 python3 -I "$L/s3-ledger.py" get "$h" CORE_TAG_P2 P2_CONFINEMENT HG_TAG_P1 SN_COMMIT_P1 PROTO_TAG
 python3 -I "$L/s3-ledger.py" empty "$h" SN_COMMIT_P2 SN_DIGEST_P2
 ```
 
-Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then `CORE_TAG_P2=v…` and `P2_CONFINEMENT=20…` (Task 34's record, after its R4), `HG_TAG_P1=v…`, `SN_COMMIT_P1=<40 hex>` (Plan S3-C1's), `PROTO_TAG=v…` (Plan S3-A's), then `s3-ledger: SN_COMMIT_P2 SN_DIGEST_P2 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c2-p2-members-code.md`. A `stop` (`no plan 's3c2'`: the plans branch is not on origin yet; a value not recorded yet; or `SN_COMMIT_P2` recorded already, which means this task ran before): stop and ask. Every `CORE_TAG_P2=<ledger>; HG_TAG_P1=<ledger>; SN_COMMIT_P1=<ledger>; PROTO_TAG=<ledger>` prefix below takes these values.
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), `s3-ledger.py is contract §19 of <that ref>`, then `CORE_TAG_P2=v…` and `P2_CONFINEMENT=20…` (Task 34's record, after its R4), `HG_TAG_P1=v…`, `SN_COMMIT_P1=<40 hex>` (Plan S3-C1's), `PROTO_TAG=v…` (Plan S3-A's), then `s3-ledger: SN_COMMIT_P2 SN_DIGEST_P2 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c2-p2-members-code.md`. A `stop` (`no plan 's3c2'`: the plans branch is not on origin yet; a value not recorded yet; or `SN_COMMIT_P2` recorded already, which means this task ran before): stop and ask. Every `CORE_TAG_P2=<ledger>; HG_TAG_P1=<ledger>; SN_COMMIT_P1=<ledger>; PROTO_TAG=<ledger>` prefix below takes these values.
 
 Remote read (tag fetches): needs explicit user confirmation in chat before running.
 
@@ -20059,6 +20336,7 @@ Expected: a 40-hex commit; `go.mod` requires `github.com/housegate/housegate <HG
 Set the `bazel_dep` version (the tag without the leading `v`) and the `git_override` commit with its `# Resolved …` comment in `MODULE.bazel` (local edit; it refuses, writing nothing, unless each of the two places matches exactly once):
 
 ```bash
+set -eo pipefail
 W=<worktree path>; CORE_TAG_P2=<ledger>; CORE_SHA=<printed above>
 python3 -I - "$W/MODULE.bazel" "$CORE_TAG_P2" "$CORE_SHA" <<'PY'
 import re
@@ -20081,6 +20359,9 @@ open(path, "w").write(text)
 print(f"MODULE.bazel: arbiter-core {core_tag} at {core_sha}")
 PY
 git -C "$W" diff -- MODULE.bazel
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `MODULE.bazel: arbiter-core <CORE_TAG_P2> at <CORE_SHA>` and a diff of exactly three changed lines: the `version = "…"` line, the `# Resolved arbiter-core …` comment and the `commit = "…"` line, each `-` line at Plan S3-C1 Task 25's `CORE_TAG_P1` values. housegate's `bazel_dep` and `git_override` stay at `HG_TAG_P1`; arbiter-proto has no `bazel_dep` here, so `go.mod` is its only pin.
@@ -20095,6 +20376,7 @@ cd "$W" && bazel run @rules_go//go -- mod tidy && bazel mod tidy && bazel run //
 Expected: the build succeeds; `grep` prints the arbiter-core `commit = …` line (a stale `git_override` compiles the old sources silently), housegate's unchanged `# Resolved Housegate <HG_TAG_P1>; …` comment and the three `go.mod` requires; all tests PASS (`CORE_TAG_P2` adds the `member` tree and member reads, and changes no SNode or verifier behaviour; the ClickHouse-gated tests skip without their environment). Then `git -C "$W" status --short` lists exactly `M go.mod`, `M go.sum`, `M MODULE.bazel` and `M MODULE.bazel.lock`; anything else (a `BUILD.bazel` gazelle rewrote because an upstream package moved) is reviewed before the commit below and committed with it only if it follows from the pin.
 
 ```bash
+set -eo pipefail
 W=<worktree path>; CORE_TAG_P2=<ledger>; HG_TAG_P1=<ledger>; PROTO_TAG=<ledger>; CORE_SHA=<printed above>
 git -C "$W" status --short && git -C "$W" add -A && git -C "$W" commit -m "chore(deps): pin arbiter-core $CORE_TAG_P2
 
@@ -20105,7 +20387,10 @@ the member reads, with no consensus change. Pinned in go.mod, bazel_dep
 and git_override ($CORE_SHA); housegate stays $HG_TAG_P1 and
 arbiter-proto $PROTO_TAG.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 3: Write the failing config tests**
@@ -20563,6 +20848,67 @@ func TestSIMemberConfigNeverPrintsASecret(t *testing.T) {
 	require.Contains(t, fmt.Sprint(cfg.StorageIntegrity.Member), "member-b", "the rendering still names the member")
 	require.Contains(t, logged.String(), StorageIntegrityMemberClickhousePasswordEnv, "the rendering names where the password comes from")
 }
+
+// The member config is exactly one YAML document. A recursive merge must
+// fail closed before the node walk can recurse indefinitely.
+func TestSIMemberConfigRejectsTrailingDocumentsAndRecursiveMerges(t *testing.T) {
+	clearSIMemberEnv(t)
+	for _, suffix := range []string{"---\nnode: {}\n", "---\n", "---\nmember: [\n"} {
+		_, _, err := loadSIMemberText(t, siMemberMinimalYAML+suffix)
+		require.Error(t, err, "a trailing document must not be ignored")
+	}
+	for _, text := range []string{
+		"storage_integrity: &cycle {<<: *cycle}\n",
+		"storage_integrity: {member: &cycle {<<: [*cycle]}}\n",
+		"storage_integrity: {member: {restore: &cycle {<<: *cycle}}}\n",
+	} {
+		_, _, err := loadSIMemberText(t, text)
+		require.ErrorContains(t, err, "recursive YAML alias or merge")
+	}
+}
+
+func TestSIMemberSecretKeysThroughAliasesAndMergeSequences(t *testing.T) {
+	clearSIMemberEnv(t)
+	for _, text := range []string{
+		"base: &base {member: {clickhouse_password: null}}\nstorage_integrity: {<<: *base}\n",
+		"base: &base {restore: {secret: null}}\nstorage_integrity: {member: {<<: [*base]}}\n",
+		"base: &base {access_key_id: null}\nstorage_integrity: {member: {restore: {<<: *base}}}\n",
+		"base: &base {clickhouse_password: null}\nstorage_integrity: {member: *base}\n",
+	} {
+		_, _, err := loadSIMemberText(t, text)
+		require.ErrorContains(t, err, "not read from the config file")
+		require.NotContains(t, err.Error(), "field base not found", "the secret refusal wins")
+	}
+	text := replaceOnce(t, siMemberMinimalYAML, "node_id: member-b", "node_id: &id member-b")
+	text = replaceOnce(t, text, "state_dir: /data/si-member", "state_dir: *id")
+	cfg, _, err := loadSIMemberText(t, text)
+	require.NoError(t, err, "an acyclic alias stays valid")
+	require.Equal(t, "member-b", cfg.StorageIntegrity.Member.StateDir)
+	// Forty shared merge layers have only linear-size YAML, but an
+	// unbounded node walk would revisit the same branches 2^40 times.
+	var graph strings.Builder
+	graph.WriteString("a0: &a0 {}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&graph, "a%d: &a%d {<<: [*a%d, *a%d]}\n", i, i, i-1, i-1)
+	}
+	graph.WriteString("storage_integrity: {<<: *a40}\n")
+	_, _, err = loadSIMemberText(t, graph.String())
+	require.Error(t, err, "the invalid graph must be refused without exponential preflight work")
+}
+
+func TestSIMemberShadowRequiresAnExplicitStoragePolicy(t *testing.T) {
+	clearSIMemberEnv(t)
+	text := siMemberMinimalYAML + "    shadow_verification: true\n"
+	_, _, err := loadSIMemberText(t, text)
+	require.ErrorContains(t, err, "storage_integrity.member.storage_policy is required when shadow_verification is true: choose the member disk policy explicitly")
+	for _, policy := range []string{"default", "member"} {
+		cfg, _, err := loadSIMemberText(t, text+"    storage_policy: "+policy+"\n")
+		require.NoError(t, err)
+		mapped, err := cfg.MemberConfig()
+		require.NoError(t, err)
+		require.Equal(t, policy, mapped.Pinned.StoragePolicy)
+	}
+}
 ```
 
 Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./config/ -count=1 -run 'SIMember'`
@@ -20730,6 +21076,10 @@ func loadSIMemberConfig(path string) (*SIMemberConfig, error) {
 	if err := decoder.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, errors.New("si-member config must contain exactly one YAML document")
+	}
 	cfg.applyDefaults()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -20741,7 +21091,7 @@ func loadSIMemberConfig(path string) (*SIMemberConfig, error) {
 // ClickHouse password or restore key, whatever the value. It reads the YAML
 // nodes before the struct decode, so these refusals win over the unknown-field
 // error KnownFields gives the same keys, and it follows aliases and merge keys
-// (yamlMappingValues) as the decoder does.
+// (siMemberYAMLMappingValues) as the decoder does.
 func refuseSIMemberSecretKeys(data []byte) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -20750,18 +21100,85 @@ func refuseSIMemberSecretKeys(data []byte) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
-	for _, si := range yamlMappingValues(doc.Content[0], "storage_integrity") {
-		for _, block := range yamlMappingValues(si, "member") {
-			if len(yamlMappingValues(block, "clickhouse_password")) > 0 {
+	if err := checkSIMemberYAMLAliases(&doc, make(map[*yaml.Node]bool), make(map[*yaml.Node]bool)); err != nil {
+		return err
+	}
+	for _, si := range siMemberYAMLMappingValues(doc.Content[0], "storage_integrity") {
+		for _, block := range siMemberYAMLMappingValues(si, "member") {
+			if len(siMemberYAMLMappingValues(block, "clickhouse_password")) > 0 {
 				return fmt.Errorf("storage_integrity.member.clickhouse_password is not read from the config file; set %s instead", StorageIntegrityMemberClickhousePasswordEnv)
 			}
-			for _, restore := range yamlMappingValues(block, "restore") {
-				if len(yamlMappingValues(restore, "access_key_id")) > 0 || len(yamlMappingValues(restore, "secret")) > 0 {
+			for _, restore := range siMemberYAMLMappingValues(block, "restore") {
+				if len(siMemberYAMLMappingValues(restore, "access_key_id")) > 0 || len(siMemberYAMLMappingValues(restore, "secret")) > 0 {
 					return fmt.Errorf("storage_integrity.member.restore.access_key_id and storage_integrity.member.restore.secret are not read from the config file; set %s and %s instead", StorageIntegrityMemberRestoreAccessKeyIDEnv, StorageIntegrityMemberRestoreSecretEnv)
 				}
 			}
 		}
 	}
+	return nil
+}
+
+// siMemberYAMLMappingValues follows aliases and merge keys once per node,
+// including overridden values: even a shadowed secret key is forbidden.
+// The graph was checked for cycles before any of these walks.
+func siMemberYAMLMappingValues(node *yaml.Node, key string) []*yaml.Node {
+	seen := make(map[*yaml.Node]bool)
+	var values []*yaml.Node
+	var walk func(*yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n == nil || seen[n] {
+			return
+		}
+		seen[n] = true
+		if n.Kind == yaml.AliasNode {
+			walk(n.Alias)
+			return
+		}
+		if n.Kind == yaml.SequenceNode {
+			for _, child := range n.Content {
+				walk(child)
+			}
+			return
+		}
+		if n.Kind != yaml.MappingNode {
+			return
+		}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			name, value := n.Content[i], n.Content[i+1]
+			if name.Value == key {
+				values = append(values, value)
+			}
+			if name.ShortTag() == "!!merge" {
+				walk(value)
+			}
+		}
+	}
+	walk(node)
+	return values
+}
+
+// checkSIMemberYAMLAliases rejects a cycle before yamlMappingValues walks
+// aliases and merge keys. A shared acyclic alias is permitted. Visiting every
+// graph node once also bounds the preflight work independently of alias reuse.
+func checkSIMemberYAMLAliases(node *yaml.Node, active, done map[*yaml.Node]bool) error {
+	if node == nil || done[node] {
+		return nil
+	}
+	if active[node] {
+		return errors.New("si-member config contains a recursive YAML alias or merge")
+	}
+	active[node] = true
+	children := node.Content
+	if node.Kind == yaml.AliasNode {
+		children = []*yaml.Node{node.Alias}
+	}
+	for _, child := range children {
+		if err := checkSIMemberYAMLAliases(child, active, done); err != nil {
+			return err
+		}
+	}
+	delete(active, node)
+	done[node] = true
 	return nil
 }
 
@@ -20868,6 +21285,9 @@ func (c SIMemberConfig) Validate() error {
 		if err := payloadexec.ValidateTableSchemaColumns(table.Schema()); err != nil {
 			refuse("storage_integrity.member.genesis_tables[%d]: %w", i, err)
 		}
+	}
+	if m.ShadowVerification && blank(m.StoragePolicy) {
+		refuse("storage_integrity.member.storage_policy is required when shadow_verification is true: choose the member disk policy explicitly")
 	}
 	if m.Restore != nil && (blank(m.Restore.Endpoint) || blank(m.Restore.Bucket) ||
 		os.Getenv(StorageIntegrityMemberRestoreAccessKeyIDEnv) == "" || os.Getenv(StorageIntegrityMemberRestoreSecretEnv) == "") {
@@ -21039,7 +21459,6 @@ In `config/BUILD.bazel` (gazelle, `go_library` deps, the arbiter-core part), rep
 
 ```starlark
         "//common/log",
-        "@arbiter_core//dataplane/objstore",
         "@arbiter_core//snode",
 ```
 
@@ -21048,7 +21467,6 @@ with:
 ```starlark
         "//common/log",
         "@arbiter_core//dataplane/ddl",
-        "@arbiter_core//dataplane/objstore",
         "@arbiter_core//member",
         "@arbiter_core//member/install",
         "@arbiter_core//member/sources",
@@ -21117,9 +21535,10 @@ The four `BUILD.bazel` hunks are what `bazel run //:gazelle` writes for the new 
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config)" && GOWORK=off go vet ./config/ && GOWORK=off go test ./config/ -count=1 -run 'SIMember' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./config/ -count=1`
 
-Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestLoadSIMemberConfigReadsTheMemberBlock`, `TestLoadSIMemberConfigRefusesTheHostsConfigFile`, `TestSIMemberConfigRefusesAClickhousePasswordKey`, `TestSIMemberConfigRefusesRestoreKeysInYAML`, `TestSIMemberConfigRefusesAPasswordWithoutAUsername`, `TestSIMemberConfigRequiresAUsername`, `TestSIMemberConfigRefusesTheHostAsAPeer`, `TestSIMemberConfigRefusesADuplicatePeer`, `TestSIMemberConfigRefusesABadNodeID`, `TestSIMemberConfigDefaults`, `TestSIMemberClickhouseOptionsCarryTheUserAndTheEnvironmentPassword`, `TestSIMemberConfigNeverPrintsASecret`, `ok  	compute-network-node/config`, and the whole package `ok` (the host's tests are untouched).
+Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestLoadSIMemberConfigReadsTheMemberBlock`, `TestLoadSIMemberConfigRefusesTheHostsConfigFile`, `TestSIMemberConfigRefusesAClickhousePasswordKey`, `TestSIMemberConfigRefusesRestoreKeysInYAML`, `TestSIMemberConfigRefusesAPasswordWithoutAUsername`, `TestSIMemberConfigRequiresAUsername`, `TestSIMemberConfigRefusesTheHostAsAPeer`, `TestSIMemberConfigRefusesADuplicatePeer`, `TestSIMemberConfigRefusesABadNodeID`, `TestSIMemberConfigDefaults`, `TestSIMemberClickhouseOptionsCarryTheUserAndTheEnvironmentPassword`, `TestSIMemberConfigNeverPrintsASecret`, `TestSIMemberShadowRequiresAnExplicitStoragePolicy`, `TestSIMemberConfigRejectsTrailingDocumentsAndRecursiveMerges`, `TestSIMemberSecretKeysThroughAliasesAndMergeSequences`, `TestSIMemberShadowRequiresAnExplicitStoragePolicy`, `ok  	compute-network-node/config`, and the whole package `ok` (the host's tests are untouched).
 
 ```bash
+set -eo pipefail
 W=<worktree path>
 git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(config): si-member config file with env-only secrets
 
@@ -21131,7 +21550,10 @@ STORAGE_INTEGRITY_MEMBER_CLICKHOUSE_PASSWORD and the two
 STORAGE_INTEGRITY_MEMBER_RESTORE_* variables; KnownFields refuses the
 host's config file; clickhouse_username is required and never default.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M .gitignore`, `M config/BUILD.bazel`, `A config/si_member.go`, `A config/si_member_test.go` and `A config/testdata/si-member.yaml` before the commit.
@@ -22066,6 +22488,7 @@ func TestSIMemberInstallsACopyFromTheOwnerPull(t *testing.T) {
     clickhouse_username: si_member
     peers:
       - {indexer_id: 0, collection: %s}
+    storage_policy: default
     shadow_verification: false
     poll_interval: 1s
     disk_budget_bytes: 10737418240
@@ -22752,6 +23175,7 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l simember)" && GOWORK=off
 Expected: no unformatted file, `go vet` silent, then `--- SKIP: TestSIMemberInstallsACopyFromTheOwnerPull` (no `SENTIO_SI_MEMBER_CH_E2E`), `--- PASS: TestSIMemberCollectorExportsEveryCounterIncludingZeros`, `--- PASS: TestSIMemberCollectorNamesAreTheReviewedSet`, `--- PASS: TestRunWiresTheMemberRoleWithItsOwnLogin`, `--- PASS: TestRunReturnsTheRolesError`, `--- PASS: TestReadyzFollowsTheRole`, `ok  	compute-network-node/simember`.
 
 ```bash
+set -eo pipefail
 W=<worktree path>
 git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(si-member): the si-member process, its metrics and readiness
 
@@ -22764,7 +23188,10 @@ sentio_node_si_member_* series (every label value exported from zero)
 and GET /readyz. TestSIMemberInstallsACopyFromTheOwnerPull is the
 ClickHouse-gated install acceptance.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists the seven new files under `simember/` before the commit.
@@ -23078,9 +23505,10 @@ The root `BUILD.bazel` is unchanged (`main.go` imports nothing new).
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l commands main.go)" && GOWORK=off go vet ./commands/ . && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files|sonic'`
 
-Expected: no unformatted file, `go vet` silent, `--- PASS: TestSIMemberCommandIsRegistered`, `--- PASS: TestSIMemberClearForeignNeedsATable`, `--- PASS: TestSIMemberClearForeignClearsTheConfiguredStateDir`, `--- PASS: TestSIMemberClearForeignRefusesWhileTheMemberRuns`, the existing `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement` and `--- PASS: TestStorageIntegrityCommandListsBackupAndRestoreDrill` (Plan S3-C1 Task 25), `ok  	compute-network-node/commands`; the full run prints nothing.
+Expected: no unformatted file, `go vet` silent, `--- PASS: TestSIMemberCommandIsRegistered`, `--- PASS: TestSIMemberClearForeignNeedsATable`, `--- PASS: TestSIMemberClearForeignClearsTheConfiguredStateDir`, `--- PASS: TestSIMemberClearForeignRefusesWhileTheMemberRuns`, the existing `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement` and `--- PASS: TestStorageIntegrityCommandListsBackupAndRestoreDrill` (Plan S3-C1 Task 25), `ok  	compute-network-node/commands`; the full run prints nothing (the line exits 1 because the final `grep -v` has nothing to print; every package passed).
 
 ```bash
+set -eo pipefail
 W=<worktree path>
 git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(si-member): sentio-node si-member and si-member clear-foreign
 
@@ -23090,7 +23518,10 @@ clear-foreign --table <database>.<table> clears a Foreign quarantine
 offline with install.ClearForeign, which refuses while a member holds
 the state directory (K36).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 9: The acceptance's server files and CI step**
@@ -23239,6 +23670,7 @@ Run: `W=<worktree path>; CORE_TAG_P2=<ledger>; cd "$W" && git -C /Users/uranuswc
 Expected: `identical`; `1`; the two step names, `si-member install acceptance` first; with `actionlint` installed, `1` (the existing SC2046 warning of the gofmt step only; the new step adds none).
 
 ```bash
+set -eo pipefail
 W=<worktree path>
 git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "ci: si-member install acceptance on ClickHouse 26.3.37.3
 
@@ -23248,7 +23680,10 @@ the replicated merge default 0) on a private network, and fails on a skip, on
 no tests to run or without its PASS line. remote() against a server's own
 address runs locally as the calling user, so the owner is a second server.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 10: Run the acceptance locally**
@@ -23347,7 +23782,7 @@ Expected: the test's `--- PASS: TestSIMemberInstallsACopyFromTheOwnerPull (…)`
 
 Each paragraph stays on one line.
 
-In `README.md` (the heading of the subsection after Plan S3-C1 Task 25's backups subsection, base `:109`), replace:
+In `README.md` (the heading of the subsection after Plan S3-C1 Task 25's backups subsection, post-Task-25 `:143`), replace:
 
 ```markdown
 ### Dynamic storage-integrity table set
@@ -23407,17 +23842,21 @@ Run: `W=<worktree path>; cd "$W" && grep -c '^### Storage-integrity si-member (s
 Expected: `1`, `2`, `2`, `1` (lines). The README's YAML block is a valid member config: with both restore variables set, `LoadSIMemberConfig` accepts it as written.
 
 ```bash
+set -eo pipefail
 W=<worktree path>
 git -C "$W" add -A && git -C "$W" commit -m "docs(readme): the storage-integrity si-member
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 12: Full verification**
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
-Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`, and rerun this command); the build succeeds; every test PASSES (`//simember:simember_test` with its ClickHouse test skipped, `//config:config_test` reading `testdata/si-member.yaml` through its `data`).
+Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>' && git -C "$W" verify-commit HEAD`, and rerun this command); the build succeeds; every test PASSES (`//simember:simember_test` with its ClickHouse test skipped, `//config:config_test` reading `testdata/si-member.yaml` through its `data`).
 
 Then the built binary (local only; nothing is dialed: each run stops at a refusal before any connection is opened):
 
@@ -23496,8 +23935,8 @@ No `LEAK:` line may appear.
 sentio-node always goes through a PR (`CLAUDE.md` "Pull Request Workflow"). Write the body (local file, outside the worktree):
 
 ```bash
-CORE_TAG_P2=<ledger>; HG_TAG_P1=<ledger>; PROTO_TAG=<ledger>
-BODY="$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c2.pr-body.md"
+CORE_TAG_P2=<ledger>; HG_TAG_P1=<ledger>; PROTO_TAG=<ledger>; S=<scratchpad directory>
+BODY="$S/sn-s3c2-pr.md"
 sed -e "s|@CORE_TAG_P2@|$CORE_TAG_P2|g" -e "s|@HG_TAG_P1@|$HG_TAG_P1|g" -e "s|@PROTO_TAG@|$PROTO_TAG|g" > "$BODY" <<'PRBODY'
 The si-member process of stage 3 P2 of the multi-source storage-integrity network (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §8.1, §8.2, §8.5, §8.6, §16 P2; Plan S3-C2 Task 35, contract §24).
 
@@ -23527,12 +23966,16 @@ Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
-cd "$W" && git push -u origin urwt/claude/multi-source-s3c2
+set -eo pipefail
+W=<worktree path>; S=<scratchpad directory>
+[ "$(git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u)" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected branch author; stop and rewrite authors first"; exit 1; }
+cd "$W" && git push -u origin urwt/claude/multi-source-s3c2 || exit 1
 gh pr create --repo sentioxyz/sentio-node --base main --head urwt/claude/multi-source-s3c2 \
   --title 'feat(si-member): stage-3 P2 si-member process (copies, shadow verification)' \
-  --body-file "$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c2.pr-body.md"
+  --body-file "$S/sn-s3c2-pr.md"
 ```
+
+Expected: the push creates the remote branch and `gh pr create` prints its PR URL; use its number as `<n>` below.
 
 Remote read (CI status): needs explicit user confirmation in chat before running.
 
@@ -23545,8 +23988,35 @@ Expected: `build` and `integration-clickhouse` pass (its existing steps keep the
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
 ```bash
-gh pr merge <n> --repo sentioxyz/sentio-node --squash
+set -eo pipefail
+W=<worktree path>
+pr=<n>
+head="$(git -C "$W" rev-parse HEAD)"
+[ "$(gh pr view "$pr" --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$head" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo sentioxyz/sentio-node --squash --match-head-commit "$head"
+gh pr view "$pr" --repo sentioxyz/sentio-node --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
+
+Expected: `PR commit identities verified`, then `MERGED`, the 40-hex squash-merge commit and its merge time. The primary author is checked separately from coauthors, permitting no coauthor or exactly one canonical Claude trailer. Empty, malformed or REST-limit responses refuse the merge. A head mismatch refuses it, including a head change after validation (`--match-head-commit`).
 
 - [ ] **Step 14: Record `SN_COMMIT_P2` and `SN_DIGEST_P2`**
 
@@ -23557,7 +24027,7 @@ SN_COMMIT_P2="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit -
 gh run list --repo sentioxyz/sentio-node --branch main --workflow 'CI Build' --limit 3 --json databaseId,headSha,status,conclusion
 ```
 
-Expected: a 40-hex `SN_COMMIT_P2` (the squash-merge commit) and a run whose `headSha` is `SN_COMMIT_P2`. Watch it (`gh run watch <id> --repo sentioxyz/sentio-node`, remote read, confirmed with the block above) until its `docker-push` job succeeds (`gh run view <id> --repo sentioxyz/sentio-node --json jobs --jq '.jobs[] | select(.name == "docker-push") | .conclusion'` prints `success`), then `gh run view <id> --repo sentioxyz/sentio-node --log | grep -cF -- '--- PASS: TestSIMemberInstallsACopyFromTheOwnerPull'` prints at least `1` (the acceptance ran on the merge commit). The push tags `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P2>` (`type=sha,format=long`).
+Expected: a 40-hex `SN_COMMIT_P2` (the squash-merge commit) and a run whose `headSha` is `SN_COMMIT_P2`. Watch it (`gh run watch <id> --repo sentioxyz/sentio-node --exit-status`, remote read, confirmed with the block above) until its `docker-push` job succeeds (`gh run view <id> --repo sentioxyz/sentio-node --json jobs --jq '.jobs[] | select(.name == "docker-push") | .conclusion'` prints `success`), then `gh run view <id> --repo sentioxyz/sentio-node --log | grep -cF -- '--- PASS: TestSIMemberInstallsACopyFromTheOwnerPull'` prints at least `1` (the acceptance ran on the merge commit). The push tags `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P2>` (`type=sha,format=long`).
 
 Remote read (registry and fetch): needs explicit user confirmation in chat before running.
 
@@ -23587,6 +24057,7 @@ Record both, never predicting either, with the record procedure (contract §20.3
 R1 (local; the housegate fetch only reads; contract §20.3, decision D23). Like every remote read of this task, it needs explicit user confirmation in chat before running:
 
 ```bash
+set -eo pipefail
 SN_COMMIT_P2=<sha>; SN_DIGEST_P2=<sha256:… printed above>
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=35
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c2-p2-members-code.md
@@ -23596,12 +24067,16 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz && git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c2-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c2-$n.md" SN_COMMIT_P2="$SN_COMMIT_P2" SN_DIGEST_P2="$SN_DIGEST_P2" || exit 1
 git -C "$d" commit -q -m "docs(plan): record SN_COMMIT_P2 and SN_DIGEST_P2 of Plan S3-C2 (Task 35)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
+git -C "$d" log -1 --format='%an <%ae>'
+[ "$(git -C "$d" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 ```
 
 Expected: `s3-ledger: Task 35 recorded SN_COMMIT_P2=…, SN_DIGEST_P2=… and its run record 'sentio-node release' in …`, then one commit of the plan file only (its two rows and the run-record item). A `stop` writes nothing: report it and ask.
@@ -23609,9 +24084,12 @@ Expected: `s3-ledger: Task 35 recorded SN_COMMIT_P2=…, SN_DIGEST_P2=… and it
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 35's ledger record (Appendix C of Plan S3-C2: SN_COMMIT_P2, SN_DIGEST_P2 and the run record 'sentio-node release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
+set -eo pipefail
 L="$HOME/.cache/s3-ledger"; n=35
 d="$(sed -n 1p "$L/record-s3c2-$n")"; ref="$(sed -n 2p "$L/record-s3c2-$n")"
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+[ "$(git -C "$d" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected ledger author; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C2 only, docs only (contract §20.3, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c2-$n-pr.md"
@@ -23619,9 +24097,43 @@ if [ "$ref" = origin/main ]; then
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
+git -C "$W" log -1 --format='%an <%ae>'
+[ "$(git -C "$W" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "unexpected commit author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 35's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 35's ledger record"); after a yes, validate the checked ledger HEAD and all primary authors/trailers before merging (the remote reads are under the same confirmation):
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=35
+d="$(sed -n 1p "$L/record-s3c2-$n")"
+pr=<number>
+head="$(git -C "$d" rev-parse HEAD)"
+[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$head" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
+import re
+import subprocess
+import sys
+
+pages = json.load(sys.stdin)
+if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
+    sys.exit("missing PR commits; stop")
+if sum(map(len, pages)) >= 250:
+    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
+trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+for commit in [commit for page in pages for commit in page]:
+    author = commit["commit"]["author"]
+    message = commit["commit"]["message"]
+    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
+    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
+    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
+        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
+print("PR commit identities verified")'
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$head"
+```
+
+Expected: `PR commit identities verified`, then the squash merge. Any malformed or empty listing, unexpected primary author, duplicate or noncanonical coauthor, REST limit or head mismatch stops before merging. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -23630,8 +24142,6 @@ python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P2 SN_DIGEST_P2
 ```
 
 Expected: `SN_COMMIT_P2=<the value written>`, `SN_DIGEST_P2=<the value written>`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. Plan S3-C3 reads them from there only: it allowlists `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P2>@<SN_DIGEST_P2>` as `DEVNET2_MEMBER_IMAGE` and runs it in the si-member StatefulSets (`siMember.image`).
-
----
 
 ---
 
@@ -26257,7 +26767,7 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-C1's (�
 | record procedure R1–R4 (decision D23) | Plan S3-B contract §15 | Tasks 34–36 |
 | `replay.OwnerEntry(m, indexerID) (replay.TrackFrontier, bool)` | Plan S3-C1 contract §16 (Task 22) | Tasks 29, 32 |
 | `payloadexec.VerifyLedger(m replay.SafeSnapshotManifest) error`; `payloadexec.SumPartRowLtHashes(hexes []string) (string, error)` | Plan S3-C1 contract §16 | Tasks 29, 32 |
-| `chexec.ScanAllParts(ctx, conn, qualifiedTable, schema) ([]chexec.PartScanResult, error)`; `chexec.NewMaterializerIn(networkID, conn, database, prefix)` | Plan S3-C1 contract §16 | Tasks 31–33 |
+| `chexec.ScanAllParts(ctx, conn, qualifiedTable, schema) ([]chexec.PartScanResult, error)`; `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)` | Plan S3-C1 contract §16 | Tasks 31–33 |
 | `sitable.CopyTable(id string, incarnationSeq uint64) string` (= `PhysicalTable(id)+"__i"+seq`) | Plan S3-C1 contract §16 | Task 30 |
 | `dataplane/chparts`: `chparts.Part`, `ActiveParts`, `LogicalPartitionID` (`all`/`p_<value>`), `PartsInLogicalPartition`, `QuotePartition`, `EscapeSQLString`, `DropPartitionIfPresent`, `ScannedPart`, `PartitionContentScan` | Plan S3-C1 contract §17 (Task 23) | Tasks 31–32 |
 | `member/gate`: `gate.PlanPartition(manifest, root, local) (gate.Plan, error)` (spec §8.5 steps 1–3, Diverged or Need), `gate.Classify(gate.Fetch, []gate.ScratchPart) (gate.Classification, error)` with outcomes `kept`, `rename_race`, `split`, `doubled`, `foreign`, `gate.Closure` (Σ(L) + Σ(kept) = R), `gate.PartitionSet` | Plan S3-C1 contract §17 (Task 23) | Task 32 |
@@ -26265,7 +26775,7 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-C1's (�
 | `$HOME/.cache/s3-ledger/s3-ledger.py` and its verbs `plans`, `ref`, `show`, `get`, `empty`, `set` | Plan S3-C1 contract §19 | Tasks 34–36 |
 | ledger `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1` / `SN_DIGEST_P1`, `P1_END` | Plan S3-C1 Appendix C | §20.3 |
 
-Plan S3-C1's Go identifiers inside `dataplane/chparts`, `member/gate` and `dataplane/objstore` are bound by its contract §17 and spelled above as it gives them; where a name below wraps one of them, the wrapper keeps the name below. `chexec.NewMaterializerIn`'s prefix rule (`[A-Za-z0-9_-]{1,96}`, Plan S3-C1 §16) admits every K29 member id and every `shadow.ReplayPrefix`.
+Plan S3-C1's Go identifiers inside `dataplane/chparts`, `member/gate` and `dataplane/objstore` are bound by its contract §17 and spelled above as it gives them; where a name below wraps one of them, the wrapper keeps the name below. `chexec.NewMaterializerInWithStoragePolicy`'s prefix rule (`[A-Za-z0-9_-]{1,96}`, Plan S3-C1 §16) admits every K29 member id and every `shadow.ReplayPrefix`.
 
 **20.3 Release ledger of this plan (Appendix C).** Consumed: `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1`, `SN_DIGEST_P1`, `P1_END` (Plan S3-C1); `PROTO_TAG`, `ARBITER_TAG`, `ARBITER_DIGEST` (Plan S3-A). Produced, in this order, each by the record procedure of contract §15 with `s3-ledger.py set`:
 
@@ -26471,7 +26981,7 @@ Plan S3-E1 Task 63 keeps the member's `checkpoint_seq` in its own file `checkpoi
 - `type Deps struct { Blocks BlockReader; Watermark WatermarkReader; Snapshots replay.SnapshotStore; Payloads replay.PayloadStore; Conn clickhouse.Conn; UnsafePull func(owner uint64) sources.Source; Logger *slog.Logger; Now func() time.Time }` — `Snapshots` is the feed's `*manifestfeed.Store`; `UnsafePull` returns `sources.NewOwnerUnsafePull` on the owner's collection.
 - `type Stats struct { Blocks, MissedScans, Unverdicted map[uint64]uint64; Mismatches map[uint64]map[MismatchKind]uint64; NextBlockSeq uint64 }`.
 - `func New(cfg Config, d Deps) (*Verifier, error)`; `func (v *Verifier) Run(ctx context.Context) error`; `func (v *Verifier) Step(ctx context.Context) (bool, error)` (one block; false when the next block is not sealed); `func (v *Verifier) Stats() Stats`.
-- Per block (binding order): read `GetBlockVerification(next)` (`ErrBlockNotSealed` → back off from `PollMin` doubling to `PollMax`); skip and advance when `Header.TrackIndexerID` is nil, equals `HostIndexerID`, is not in `Owners`, or `Header.IsTableSetTransition`; otherwise pull every candidate part of every statement into its own scratch at once (`missed` → a missed scan), scan with `chexec.ScanAllParts`, replay `ReplayJob` with `replay.Verifier{Snapshots, Payloads, Executor: snapshotquery.NewCompositeExecutor(payloadexec.NewDynamic(networkID, chexec.NewMaterializerIn(networkID, conn, Pinned.StageDB, ReplayPrefix(...)), genesis...), nil), Signer: payloadexec.NewEd25519Signer(NodeID+"-shadow", <random seed per boot>), SchemaHashes: payloadexec.SchemaHashes{NetworkID, Tables: genesis}}`; re-read the block every `PollMin` until `VerdictEvaluated` or `VerdictWait` (then `unverdicted`); compare per K34; count; drop the scratch; persist the cursor. The shadow never submits anything (`TestShadowNeverSubmitsAnything`).
+- Per block (binding order): read `GetBlockVerification(next)` (`ErrBlockNotSealed` → back off from `PollMin` doubling to `PollMax`); skip and advance when `Header.TrackIndexerID` is nil, equals `HostIndexerID`, is not in `Owners`, or `Header.IsTableSetTransition`; otherwise pull every candidate part of every statement into its own scratch at once (`missed` → a missed scan), scan with `chexec.ScanAllParts`, replay `ReplayJob` with `replay.Verifier{Snapshots, Payloads, Executor: snapshotquery.NewCompositeExecutor(payloadexec.NewDynamic(networkID, chexec.NewMaterializerInWithStoragePolicy(networkID, conn, Pinned.StageDB, ReplayPrefix(...), Pinned.StoragePolicy), genesis...), nil), Signer: payloadexec.NewEd25519Signer(NodeID+"-shadow", <random seed per boot>), SchemaHashes: payloadexec.SchemaHashes{NetworkID, Tables: genesis}}`; re-read the block every `PollMin` until `VerdictEvaluated` or `VerdictWait` (then `unverdicted`); compare per K34; count; drop the scratch; persist the cursor. The shadow never submits anything (`TestShadowNeverSubmitsAnything`). Shadow replay requires an explicit provisioned `Pinned.StoragePolicy`: empty or malformed policy names refuse construction; a policy absent from ClickHouse refuses CREATE without a default-policy fallback. The legacy constructor remains unchanged for other callers. Generic test fixtures explicitly select `default`; devnet2 selects `member`.
 - Tests: `TestShadowComparesItsReceiptWithEveryRecordedAttestation`, `TestShadowComparesItsScansWithEveryRecordedByteSideScan`, `TestShadowComparesEvidenceRecordedAfterTheLatchAsRecorded`, `TestShadowReproducesARejectedBlocksReceipts`, `TestShadowClaimMismatchOnlyForAQuorumPassBlock`, `TestShadowCountsACleanedCandidateAsAMissedScan`, `TestShadowSkipsBlocksOfItsHostOtherOwnersAndTransitions`, `TestShadowCountsAnUnverdictedBlockAfterVerdictWait`, `TestShadowCursorSurvivesARestart`, `TestShadowStartsAfterTheWatermark`, `TestShadowBacksOffOnAnUnsealedBlock`, `TestShadowNeverSubmitsAnything`; ClickHouse-gated: `TestShadowReplaysInTheStageDatabaseUnderItsPrefix`.
 
 ### 23. arbiter-core: `member.Role`, stats, confinement suite and release (Task 34)
@@ -26790,6 +27300,8 @@ Replace the stale drafting bullet `sources.RestoreIndexRetryAttempts = 3 (s3_ret
 - Review, 245-3. `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts` put its other-partition decoy in partition `b`, whose `partition_id` (`d1566a03…`) sorts after `a`'s (`51fbadfb…`), so it stayed green with an unscoped listing. The decoy is now in partition `c` (`0b8b7d0f…`), the test requires it to sort before the needed part, and it fails under that mutation. `TestOwnerPullFallbackScopesTheNeededPartition` and the cursor also fail their mutations. Measured on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1.
 - Review, measured. Step 11's runner gives `25.8: 18 passed, 1 skipped, 0 failed` and `26.3: 19 passed, 0 skipped, 0 failed` (fenced 26.3.37.3 member, unfenced 26.3.37.3 owner, the Bitnami MinIO). The same 19 pass with `-race` against `…/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` (26.3.12.1), where `system.grants` has `access_object` and `is_partial_revoke`. On every image: `remote()` to a closed port answers 519; the no-split pull above `max_memory_usage` is refused with 241, issued once; the index read of an endpoint refusing connections is refused at its 5 s deadline. A synchronous `RESTORE … FROM S3(...)` as a `READ ON S3` user (no `system.backups` grant) restores from a full backup and from an incremental one whose needed part lies in its base. `si_reader` with only Plan S3-B's three grants is refused 497 `SHOW COLUMNS ON system.parts` on the resolve on both 26.3 images; Plan S3-C3 must add that grant.
 - Review, consumers. Task 24's reviewed `objstore` names match every call (`ParseBucket`, `Credentials`, `ReadIndexes`, `PartitionClause`, `RestoreSQL`, `BackupSQL`, `BackupName`, `BackupIndex*`, `IndexURL`); `RestoreAndGate` and `Drill` are not used (their `ASYNC` restore polls `system.backups`). Tasks 32–34 consume `Source`, `Need`, `Scratch`, `Result`, the outcomes, the source names, `NewOwnerPull`, `NewOwnerUnsafePull`, `NewPeerUnsafePull`, `NewRestore`, `RestoreConfig`, `CheckEngineFence`, `CheckRemoteIsReadOnly`, `ReadOwnGrants`, `CheckRemoteGrants`, `Grant` and the three sentinels with these shapes. Task 34 builds each owner's sources once, so the fallback cursors persist. Plan S3-E1 Task 63 uses the unexported `failure`, `Scratch.qualified`, `checkScratch`, `scratchParts` and `literal`, which keep their shapes.
+
+- **Task 33, member replay storage policy follow-up.** Corrected the confirmed spec §8.1 default-disk gap with C1 Task 22's compatible `chexec.NewMaterializerInWithStoragePolicy`, passing the same `Pinned.StoragePolicy` as candidate scratch. Empty/malformed-policy subcases fail against the old call and pass with the corrected producer/consumer; actual replay CREATE is checked for its configured setting. Shadow unit/race and vet pass; real ClickHouse 26.3.37.3 and 25.8.33.6 replay suites pass with race detection. Generic test servers explicitly select their existing `default` policy; the producer's separate real two-disk test proves member placement and no unknown-policy fallback. This supersedes the prior default-policy limitation; final C2 and E1 consumer-chain checks remain required.
 
 ## Appendix C: execution record
 
