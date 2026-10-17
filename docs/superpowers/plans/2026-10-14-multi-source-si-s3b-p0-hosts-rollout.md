@@ -19254,7 +19254,7 @@ Filled in while the plan runs, never edited afterwards. Each recording task fill
 | `SN_DIGEST` | `sha256:3663f8f92df476b3a31dd9b3ab42583d046767549e5961749d0b7094decf298e` | Task 12 |
 | `P0_PR` | `743` | Task 14 |
 | `P0_END` | `2026-10-17` | Task 15 |
-| `L_PR` |  | Task 17 |
+| `L_PR` | `745` | Task 17 |
 | `OPERATOR_CHART_VERSION` |  | Task 18 |
 | `L_END` |  | Task 18 |
 | `INDEXER_C_CHI_NODE` |  | Task 19 |
@@ -19281,7 +19281,9 @@ Run records (date, command, outcome), one per recording task, written in the sam
   - Benign: StorageIntegrityTablePendingTooLong firing on indexer-b for the purged devuser1.s1_e2e / s2_e2e (pre-existing default-deny Pending, identical on `5d2f169`).
   - Deviation: commit A was rebuilt once (8ee0598a2 dropped unpushed, re-committed as `8c2b50a54`) because production main moved (external `6779a6a3f`); the same content.
   - Local only: helpers.sh appended PATH to a PyYAML python and GOROOT for the brew go; a sibling `p0-user-block-extra.sh` ran the devuser3 owner block; the §11 p0-end block tolerates the missing Grafana-rule and probe files; this record was written by hand because `p0-record.py` requires the K13 probe evidence.
-- L PR (Task 17):
+- L PR (Task 17): `sentioxyz/production#745` (Tasks 16 and 17) squash-merged as `27e738527bd3e57ffdd57106806cbe914d258ebb` at 2026-10-17T02:17:46Z UTC; `test_render.py` 122 tests OK; the three `helm lint --strict` profiles passed; `render-inertness.sh origin/main` printed the seven `identical` lines; the runbook's conventions check (59 bash blocks, 1 fish block) and the §0 self-test passed; shellcheck clean; CI `validate` passed.
+  - Review fixes before merge: a stray Markdown fence removed from `_helpers.tpl`; `verifier.clickhouse.username` must be `si_verifier` and requires `clickhouse.access.users` and its password Secret; `storageIntegrity.clickhouseUsername` requires `clickhousePasswordSecret` and must be `si_snode`.
+  - Runbook review fixes: the census fails on any loopback `default` login other than the runbook's own `clickhouse-client` sessions; §12.1 refuses to return a client to `default` while its installation is locked; §8 accepts a recorded user waiver of the 24 h soak (`soak-waived`); server dry runs precede each push.
 - L run (Task 18):
 - indexer-c placement and sizing (Task 19):
 - E PR (Task 20):
