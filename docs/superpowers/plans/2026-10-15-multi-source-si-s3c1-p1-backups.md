@@ -15286,7 +15286,7 @@ for f in docs/storage-integrity-devnet2-stage3-p1-backups.md docs/examples/stora
   si_kubectl get cronjobs -o name | grep -c -- '-si-backup$' | sed 's/^/backup CronJobs: /' || true
   for chi in storage-integrity-si-v2-p1-staging storage-integrity-si-v2-lockdown-staging; do echo "CHI $chi: $(si_kubectl get chi "$chi" --ignore-not-found -o name | wc -l | tr -d ' ')"; done
   for x in a b c; do echo "host $x: si_backup/si_restore users $(si_ch_admin "$x" "SELECT count() FROM system.users WHERE name IN ('si_backup', 'si_restore')")"; done
-  for x in a b c; do si_kubectl get chi "$(si_p1_chi "$x")" -o jsonpath='{.metadata.name} {.status.status} {.status.chopVersion}{"\n"}'; done
+  for x in a b c; do si_kubectl get chi "$(si_p1_chi "$x")" -o jsonpath='{.metadata.name} {.status.status} {.status.chop-version}{"\n"}'; done
   echo "keeper p1-staging: [$( (si_keeper "ls '/storage-integrity/devnet2/p1-staging'" 2>/dev/null || true) | tr -d '[:space:]')]"
   si_keeper "ls '/storage-integrity/devnet2'"
   si_tracks | jq -c '[.indexers[] | {id: .indexer_id, quarantined, published: .published.safe_block_seq}]'
@@ -20162,6 +20162,8 @@ Drafting facts below preserve the original measurements and extra names at their
 - The local forced-multipart probe uses `repeat('mmmmmmmm', 786432)` (6291456 bytes, within ClickHouse's repeat-count bound), 1 MiB single-part and 5 MiB minimum multipart thresholds. Actual ClickHouse 26.3.37.3 records one CreateMultipartUpload, two UploadPart and one CompleteMultipartUpload; restore-key readback is 6291456 bytes. Local MinIO proves the multipart path, while GCS IAM remains an execution gate.
 - Eight canonical Appendix C cells remain empty. Synthetic-only ledger fixtures successfully record all five task row sets once, reject every duplicate record, read the branch ledger and prefer `origin/main` after a simulated merge. No fixture value is a release prediction or an actual execution record.
 - Final clean Task 26 replay (no residual untracked files) reproduces the stated red failures, including all fourteen missing-key/login-script failures, then reaches 148 tests / OK, four successful Helm lints, Terraform formatting, eight identical renders and the expected eight poetry-authored commits. The hunk checks have no offsets. Seven sequential Task 28 edit states independently each pass all 148 render tests. Cross-plan validation of the later chart phases remains outside this C1 pass.
+
+- **Task27 CHI evidence follow-up:** corrected the informational operator-version JSONPath to `.status.chop-version`, matching the pinned Altinity0.27.2 CRD and production70141ab9's same runtime-field correction. The complete changed Bash block parses under Bash3.2/5; no chart, grant, marker, ledger or live state changed. No cluster executable was run.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
