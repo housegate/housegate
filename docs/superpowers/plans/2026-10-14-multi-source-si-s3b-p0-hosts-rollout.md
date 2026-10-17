@@ -19257,8 +19257,8 @@ Filled in while the plan runs, never edited afterwards. Each recording task fill
 | `L_PR` | `745` | Task 17 |
 | `OPERATOR_CHART_VERSION` | `0.27.2` | Task 18 |
 | `L_END` | `2026-10-17` | Task 18 |
-| `INDEXER_C_CHI_NODE` |  | Task 19 |
-| `INDEXER_C_HOST_NODE` |  | Task 19 |
+| `INDEXER_C_CHI_NODE` | `sea-dg-3` | Task 19 |
+| `INDEXER_C_HOST_NODE` | `sea-dg-2` | Task 19 |
 | `E_PR` |  | Task 20 |
 | `INDEXER_C_SIGNER` |  | Task 21 |
 | `INDEXER_C_ID` |  | Task 21 |
@@ -19292,6 +19292,6 @@ Run records (date, command, outcome), one per recording task, written in the sam
   - Soak: the user waived the 24-hour soak (`soak-waived`); every other §8 check ran and was clean. Stage-3 P0's monitoring is off and its K13 delivery proof was skipped, so the `ALERTS` checks returned `[]` without being evidence.
   - Network lock: the auto-mode permission classifier refused the agent's run of §9.2's confirmed block (push, `helmfile sync`, `locked-network`). The user ran that same block in their own terminal. Its post-conditions were then re-verified read-only: posture C on all four servers, no pod change, uptimes growing, the same arbiter and verifier pods, the hook succeeded, every login ok.
   - §11 left two `Released` PVs of the staging claims for a short while (local-path removed them shortly after); none remained at the end.
-- indexer-c placement and sizing (Task 19):
+- indexer-c placement and sizing (Task 19): Read 2026-10-17T08:12:52Z (read-only; evidence `$HOME/si-devnet2-stage3-indexer-c-preflight`, kept until Plan S3-C starts) and agreed by the user in chat on 2026-10-17: indexer-c's source ClickHouse on `sea-dg-3`, in neither `DEVNET2_SOURCE_NODES` = `sea-dg-7 sea-dg-8` (the nodes where the network installation's source and verifier ClickHouses and indexer-b's source run or keep their volumes, plus `sea-dg-7` and `sea-dg-8`) nor `sea-g-3` and `sea-g-4` (indexer-a's and indexer-b's hosts); its host and DinD on `sea-dg-2`. `INDEXER_C_KEEP_FREE_SPACE_BYTES` = `107374182400` (a fixed 100 GiB): a recorded deviation from decision D19-3, by the user's decision in chat, because D19-3's rule (max(10 GiB, 10 % of the smallest `default` disk of the five SI ClickHouses, whole GiB)) gives `9181566337024` (about 8.35 TiB; the five disks are all on `sea-dg-7`, 91809130496000 B each) while a read-only df of `sea-dg-3`'s `local-path` SSD (through `storage-integrity-si-v2-arbiter-2`'s `/data`) shows 91809130496000 B total and 9218092081152 B available (90 % used), so the rule's value would leave about 36 GB writable. `INDEXER_C_MEMBER_VOLUME_SIZE` = `10Gi`, max(10Gi, 4 × the active `hg_safe` and `hg_unsafe` bytes of indexer-a and indexer-b, whole Gi); `local-path` enforces neither (K21).
 - E PR (Task 20):
 - E run and the steady state after E (Task 21):
