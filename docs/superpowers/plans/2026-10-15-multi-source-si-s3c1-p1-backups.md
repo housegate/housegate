@@ -14,6 +14,8 @@
 
 ## Global Constraints
 
+- **Signed worktrees and retained URWT paths (procedural reconciliation).** Codex-created local worktrees use runtime `codex`; this does not rename D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf`, historical execution evidence, or any existing stack branch. Every creation persists the complete returned JSON (`action` and exact absolute `path`, preserving symlink spelling), refuses malformed/empty/nonabsolute output and unexpected reuse, and subsequent tasks restore that producer's path rather than assuming the template. Code JSON state is `$HOME/.cache/s3-worktrees/s3c1-{housegate,arbiter-core,sentio-node,production}.json` for Tasks22/23/25/26, `$HOME/.cache/s3-worktrees/s3c2-{arbiter-core,sentio-node}.json` for Tasks29/35; Task28 additionally retains `s3c1-production-live.json`. A ledger R1 retains its actual raw JSON beside the existing `record-<plan>-<N>` state as `.urwt.json`, while preserving that state's path/ref interface. Reuse tasks consume their owning producer:23→24,26→27,29→30–34. Before a first real commit every worktree explicitly sets worktree `commit.gpgsign=true` with the poetry identity. Each commit must fail closed on commit/signing failure, produce a new HEAD, and verify `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publishing. A cancellation preserves staged work and asks the user to unlock that repository's actual signing key; no unsigned fallback. Scratch-only synthetic fixture commits remain explicitly unsigned and unpublished. Existing canonical Claude trailers and paginated REST primary-author/head/coauthor semantics are unchanged.
+
 - **Plans S3-A and S3-B apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies, and through them those of Plans S1-A, S1-B, S2-A and S2-B (strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions, the production rule, the runbook conventions, passwords).
 - **Activation model (contract §16):** no Raft command, Raft tag, Raft-reachable field, snapshot version (it stays 20), header byte or feature string changes, and `arbiter.LocalNodeFeatures()` is unchanged; no voter, verifier or host image changes in this plan (only the backup and drill Jobs run `SN_DIGEST_P1`); every component stays rollback-able and P1 holds no consensus state.
 - **No track pauses (spec §16 P1):** nothing restarts an SI ClickHouse, a host pod, a verifier or a voter: `si_backup` is a users.d reload, the CronJob and its ConfigMap stay outside the host checksum (the `checksum/config` annotation in `charts/sentio-node/templates/node.yaml`), and every live block that changes an installation or a release records the pods' UIDs and restart counts before and after and stops on a difference.
@@ -69,6 +71,8 @@ Every value is written into Appendix C by the task that makes it, with that task
 4. **A restart sneaks into P1.** P1 must pause no track (spec §16 P1). Expected: `siBackup` changes no host StatefulSet byte (it is outside the checksum at the `checksum/config` annotation in `templates/node.yaml`); `si_backup` arrives as a users.d reload; no ClickHouse config file changes; every installation and release step records pod UIDs and restart counts before and after and stops on a difference; the backup's load runs on the owner's ClickHouse as a separate login, never inside the host pod. Tests: Task 26 `test_backup_job_never_changes_the_host_pod`, `test_backup_job_renders_only_a_cronjob_and_its_config`, `test_si_backup_user_follows_the_rollout`, `test_default_renders_no_backup_job`; checks: `render-inertness.sh` on the P1 PR, runbook §6 and §8 `host-pods-<x>-{before,after}.txt`.
 5. **A drill that passes against the wrong reference, or vacuously.** The drill must not trust the host for schemas, the arbiter for an unverified manifest, or an owner with nothing to restore. Expected: S is accepted only when its id equals the requested id and its recomputed root, `Validate` passes and `VerifyLedger` holds; each table's schema from the owner's status RPC must hash to S's `schema_hash`; the verdict passes only with at least one verified table and every backed-up table that S lists verified; `restore-drill` exits non-zero otherwise; indexer-b gets the drill table `devuser1.s3_p1` before its drill, and the runbook compares each verified set with the owner's Active registry tables. Tests: Task 24 `TestCheckManifestRefusesAWrongIDRootOrLedger`, `TestS3_DrillFailsWhenNoTableOfTheOwnerIsVerified`, `TestS3_DrillRefusesASchemaWhoseHashIsNotTheManifests`, `TestDrillVerdictPassRule`; Task 25 `TestStorageIntegrityRestoreDrillExitsNonZeroUnlessTheVerdictPasses`, `TestStorageIntegrityRestoreDrillTakesSchemasFromTheOwnersStatusRPC`, `TestStorageIntegrityRestoreDrillRefusesATableWithoutASchema`; checks: runbook §10.
 6. **A restore user with more than a member's restore rights.** The drill's `si_restore` stands in for a member's restore on staging, and `ALL ON hg_rstage.*` would add dictionary, `SYSTEM` and definer rights the spec withholds (§8.2 as amended, D36). Expected: `SI_RESTORE_GRANTS` names spec §8.2's explicit `hg_rstage` list, never `ALL`; `si_restore` is refused a `CREATE DICTIONARY` and a `SYSTEM STOP MERGES` in `hg_rstage` and a view that names another definer, and exists only on the P1 staging installation; every right it holds is exercised by a positive probe row. Tests: Task 24 `TestMechanics_S3BackupWithAKeyThatCannotDelete` (M13's `si_restore` refusals); Task 26 `test_si_restore_exists_only_on_the_p1_staging_installation`, `test_grant_probe_covers_every_protocol_grant`; checks: runbook §4 `staging-grant-probe.tsv`.
+
+7. **A failed commit accepted as an older signed HEAD, or a different checkout restored as the worktree.** Expected: Tasks22/23/25/26 create and retain their own actual Codex URWT JSON; Tasks24/27 consume the exact producer state, and Task28 retains its separate live JSON and session path. Creation checks the expected branch/base/common repository and refuses unexpected reuse; later restoration preserves the absolute JSON path spelling. Every real commit explicitly enables worktree signing, stops on stage/commit/read failure, creates a new HEAD and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Ledger restoration checks the raw JSON against its retained path/ref state and the expected branch/common repository. Checks: the explicit gates in Tasks22–28 and the scoped workflow verification recorded in Appendix B; these do not authorize a live action or replace its confirmation.
 
 ## Task order and dependencies
 
@@ -210,6 +214,8 @@ Notes:
 - **The ledger tool comes first.** Step 1 writes `s3-ledger.py` from contract §19 and checks it byte for byte against the plan file on the ledger copy; every later recording task of every stage-3 plan rewrites the same text (contract §19). The plan file must be on origin (decision D34: the plans branch `urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `main`); without it Step 1 stops and asks. `s3-ledger.py` treats only `*-multi-source-si-s3<letter>[<digits>]-*.md` as plan files (contract §19's `KEY`), so the s3cf status, scoping and names-index files beside the plans are not plans; a tool whose every verb stops with `plan s3cf is … but …` is an older text of contract §19 (the plan file is not the reviewed one): stop and ask. If the ledger copy holds another text of this plan than the one being executed (the stack PR that carries it has not merged, so `ref` names the plans branch and that branch holds an earlier draft), Step 1's `cmp` differs after the rewrite: stop and ask; the tool is never copied from the ledger copy.
 - **Release order.** `HG_TAG` (Plan S3-A) → `HG_TAG_P1` (this task) → `HG_TAG_P3` (Plan S3-C4) → `HG_TAG_P5` (Plan S3-E1). Task 23 pins `HG_TAG_P1` in arbiter-core with `bash scripts/update-housegate.sh $HG_TAG_P1`; Task 25 pins it in sentio-node.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-housegate.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Write the ledger tool and read the ledger**
 
 The ledger lives in Appendix C of the plan files on their ledger copies, never in a local checkout or a pending PR (contract §19, decision D23). Run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19 (this plan's Appendix A), verbatim, ending with one newline after `    main(sys.argv[1:])`; an existing copy is overwritten. Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
@@ -246,14 +252,32 @@ Expected: the ledger copy of this plan, `origin/urwt/claude/ms-si-stage3-plans-c
 - [ ] **Step 2: Worktree and base check**
 
 ```bash
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3c1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$HOME/.cache/s3-worktrees/s3c1-housegate.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate codex multi-source-s3c1 urwt/codex/multi-source-s3c1 origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$HOME/.cache/s3-worktrees/s3c1-housegate.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = urwt/codex/multi-source-s3c1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/housegate/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main` (Step 1 fetched it). `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-housegate.json` (the template is descriptive only) on branch `urwt/codex/multi-source-s3c1` from `origin/main` (Step 1 fetched it). `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1;`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` themselves; never pass `--yes` or `--clobber`.
 
 ```bash
-W=<worktree path>; HG_TAG=<ledger>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; HG_TAG=<ledger>
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 git -C "$W" merge-base --is-ancestor "$HG_TAG" HEAD && echo "HEAD contains $HG_TAG"
 git -C "$W" describe --tags HEAD
@@ -525,7 +549,7 @@ func TestSumPartRowLtHashesRefusesBadHex(t *testing.T) {
 
 - [ ] **Step 4: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/replay/ ./pkg/replay/payloadexec/ -run 'TestOwnerEntry|TestVerifyLedger|TestSumPartRowLtHashes'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && go test ./pkg/replay/ ./pkg/replay/payloadexec/ -run 'TestOwnerEntry|TestVerifyLedger|TestSumPartRowLtHashes'`
 Expected: both packages FAIL to compile — `undefined: OwnerEntry` (three times, `owner_entry_test.go`) and `undefined: VerifyLedger` / `undefined: SumPartRowLtHashes` (`exports_ledger_test.go`, cut off by `too many errors`); `FAIL … [build failed]` for each.
 
 - [ ] **Step 5: Add `OwnerEntry`, export the ledger check and add the sum**
@@ -677,17 +701,19 @@ func verifyLedger(m replay.SafeSnapshotManifest) error {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- '*.bazel'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- '*.bazel'`
 Expected: gazelle adds `"owner_entry.go",` after `"hash.go",` to the `replay` srcs and `"owner_entry_test.go",` after `"hash_test.go",` to the `replay_test` srcs (`pkg/replay/BUILD.bazel`), and `"exports_ledger_test.go",` after `"executor_test.go",` to the `payloadexec_test` srcs (`pkg/replay/payloadexec/BUILD.bazel`); no dependency changes (`payloadexec` already depends on `//pkg/replay` and `//pkg/lthash`).
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/replay/owner_entry.go pkg/replay/owner_entry_test.go pkg/replay/payloadexec && go test ./pkg/replay/ ./pkg/replay/payloadexec/ && go test ./pkg/replay/ ./pkg/replay/payloadexec/ -run 'TestOwnerEntry|TestVerifyLedger|TestSumPartRowLtHashes' -v 2>&1 | grep -E '^--- '`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && gofmt -l pkg/replay/owner_entry.go pkg/replay/owner_entry_test.go pkg/replay/payloadexec && go test ./pkg/replay/ ./pkg/replay/payloadexec/ && go test ./pkg/replay/ ./pkg/replay/payloadexec/ -run 'TestOwnerEntry|TestVerifyLedger|TestSumPartRowLtHashes' -v 2>&1 | grep -E '^--- '`
 Expected: `gofmt` lists nothing; `ok` for both packages (every existing test, `TestVerifyLedgerRejectsOrphanActiveParts` and `TestExecutorMultiStatementSameBlock` included, passes unchanged); then `--- PASS:` for `TestOwnerEntry`, `TestVerifyLedgerRejectsOrphanActiveParts`, `TestVerifyLedgerIsTheExecutorsLedgerCheck`, `TestSumPartRowLtHashesEqualsThePartitionRoot`, `TestSumPartRowLtHashesOfNothingIsTheEmptyRoot` and `TestSumPartRowLtHashesRefusesBadHex`.
 
 - [ ] **Step 6: Commit the replay helpers**
 
 ```bash
-W=<worktree path>
-git -C "$W" add pkg/replay/owner_entry.go pkg/replay/owner_entry_test.go pkg/replay/BUILD.bazel pkg/replay/payloadexec/exports.go pkg/replay/payloadexec/executor.go pkg/replay/payloadexec/exports_ledger_test.go pkg/replay/payloadexec/BUILD.bazel
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+git -C "$W" add pkg/replay/owner_entry.go pkg/replay/owner_entry_test.go pkg/replay/BUILD.bazel pkg/replay/payloadexec/exports.go pkg/replay/payloadexec/executor.go pkg/replay/payloadexec/exports_ledger_test.go pkg/replay/payloadexec/BUILD.bazel || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(replay): OwnerEntry, the exported ledger check and the part-hash sum
 
 replay.OwnerEntry returns track_frontiers[O] of a manifest (false
@@ -699,7 +725,12 @@ payloadexec.SumPartRowLtHashes sums part row accumulators in the
 executor's 0x hex form, the arithmetic of the §8.5 install gate (the
 empty sum is the root of a partition without parts).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 7: Write the failing tests for `ScanAllParts`**
@@ -916,7 +947,7 @@ func TestChexecScanAllParts_EmptyTableIsEmpty(t *testing.T) {
 
 - [ ] **Step 8: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/replay/chexec/ -run TestScanAllParts; go vet ./pkg/integration/`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && go test ./pkg/replay/chexec/ -run TestScanAllParts; go vet ./pkg/integration/`
 Expected: `pkg/replay/chexec` FAILs to compile with `undefined: ScanAllParts` (twice, `scan_all_test.go`); `go vet` stops with `vet: pkg/integration/chscan_test.go:…: undefined: chexec.ScanAllParts`.
 
 - [ ] **Step 9: Scan every active part**
@@ -1109,22 +1140,24 @@ func scanResults(qualifiedTable string, partNames []string, byPart map[string]*p
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- pkg/replay/chexec/BUILD.bazel`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- pkg/replay/chexec/BUILD.bazel`
 Expected: gazelle adds `"scan_all_test.go",` after `"materializer_time_test.go",` to the `chexec_test` srcs and nothing else.
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/replay/chexec pkg/integration/chscan_test.go && go test ./pkg/replay/chexec/ && go test ./pkg/replay/chexec/ -run TestScanAllParts -v 2>&1 | grep -E '^--- ' && go vet ./pkg/integration/`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && gofmt -l pkg/replay/chexec pkg/integration/chscan_test.go && go test ./pkg/replay/chexec/ && go test ./pkg/replay/chexec/ -run TestScanAllParts -v 2>&1 | grep -E '^--- ' && go vet ./pkg/integration/`
 Expected: `gofmt` lists nothing; `ok  	github.com/housegate/housegate/pkg/replay/chexec`; `--- PASS: TestScanAllPartsScansEveryActivePartWithScanPartsRefusals`; `go vet` prints nothing.
 
 The integration target is `manual` and needs Docker; its `TestMain` starts `clickhouse/clickhouse-server:25.8` (`pkg/integration/testenv/clickhouse.go:22`), and the first run pulls that image, and testcontainers' reaper `testcontainers/ryuk`, when they are not local (remote reads): needs explicit user confirmation in chat before the first run.
 
-Run: `W=<worktree path>; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexecScanAllParts|TestChexecScanParts' --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexecScanAllParts|TestChexecScanParts' --test_output=errors`
 Expected: `//pkg/integration:integration_test PASSED`: `TestChexecScanParts_MatchesExecutorRowHashing` (unchanged), `TestChexecScanAllParts_MatchesScanPartsOverEveryActivePart` and `TestChexecScanAllParts_EmptyTableIsEmpty` (measured on 25.8.33.6, the target's image, on 26.3.37.3 and on the deployed 26.3.12.1). The same run with `go test ./pkg/integration/ -run 'TestChexecScanAllParts|TestChexecScanParts' -count=1 -v` from the worktree prints the three `--- PASS:` lines. If the run fails with `rootless Docker not found` (or cannot reach Docker), `/var/run/docker.sock` is not the active Docker context's socket: run it again with `--test_env=DOCKER_HOST="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"` (for `go test`, set `DOCKER_HOST` to the same value; in fish the option is `--test_env=DOCKER_HOST=(docker context inspect --format '{{.Endpoints.docker.Host}}')`); `--test_env=TESTCONTAINERS_RYUK_DISABLED=true` skips the reaper. The same applies to the Docker runs of Steps 13 and 20. Without Docker, skip this run; the PR's `Integration (ClickHouse)` job runs it. For the user in fish (from the worktree): `bazel test //pkg/integration:integration_test --test_filter='TestChexecScanAllParts|TestChexecScanParts' --test_output=errors`.
 
 - [ ] **Step 10: Commit `ScanAllParts`**
 
 ```bash
-W=<worktree path>
-git -C "$W" add pkg/replay/chexec/scan.go pkg/replay/chexec/scan_all_test.go pkg/replay/chexec/BUILD.bazel pkg/integration/chscan_test.go
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+git -C "$W" add pkg/replay/chexec/scan.go pkg/replay/chexec/scan_all_test.go pkg/replay/chexec/BUILD.bazel pkg/integration/chscan_test.go || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(chexec): ScanAllParts scans every active part of a table
 
 ScanAllParts is ScanParts without the _part filter: the same row
@@ -1133,7 +1166,12 @@ empty slice for a table without rows. The stage-3 install gate scans a
 restore scratch with it, whose part names are ClickHouse's (spec
 2026-10-14 §8.5 step 4). ScanParts keeps its query and its refusals.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 11: Write the failing tests for `NewMaterializerIn`**
@@ -1686,7 +1724,7 @@ func TestChexecMaterializerInWithStoragePolicyUsesMemberDisk(t *testing.T) {
 
 - [ ] **Step 12: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/replay/chexec/ -run 'TestNewMaterializerIn|TestMaterializerScratch'; go vet ./pkg/integration/`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && go test ./pkg/replay/chexec/ -run 'TestNewMaterializerIn|TestMaterializerScratch'; go vet ./pkg/integration/`
 Expected: `pkg/replay/chexec` FAILs to compile with `undefined: NewMaterializerIn` and `undefined: NewMaterializerInWithStoragePolicy` (`materializer_in_test.go`); `go vet` stops with `vet: pkg/integration/chreplay_test.go:…: undefined: chexec.NewMaterializerIn`.
 
 - [ ] **Step 13: Let the materializer take a database and a prefix**
@@ -1846,22 +1884,24 @@ After `b.WriteString(") ENGINE = MergeTree ORDER BY tuple()")` in `createScratch
 	}
 ```
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- pkg/replay/chexec/BUILD.bazel pkg/integration/BUILD.bazel`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" diff -- pkg/replay/chexec/BUILD.bazel pkg/integration/BUILD.bazel`
 Expected: gazelle adds `"materializer_in_test.go",` after `"materializer_format_test.go",` to the `chexec_test` srcs (its deps already carry `clickhouse-go`) and `"@com_github_clickhouse_clickhouse_go_v2//lib/driver",` after `"@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",` to the `integration_test` deps; it also adds `"chmaterializer_policy_test.go",` to `integration_test` srcs before `"chreplay_test.go",`; its existing clickhouse testcontainers module dependency stays unchanged.
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/replay/chexec pkg/integration/chreplay_test.go pkg/integration/chmaterializer_policy_test.go && go test ./pkg/replay/chexec/ && go test ./pkg/replay/chexec/ -run 'TestNewMaterializerIn|TestMaterializerScratch|TestMaterializerStoragePolicy' -v 2>&1 | grep -E -- '--- ' && go vet ./pkg/integration/`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && gofmt -l pkg/replay/chexec pkg/integration/chreplay_test.go pkg/integration/chmaterializer_policy_test.go && go test ./pkg/replay/chexec/ && go test ./pkg/replay/chexec/ -run 'TestNewMaterializerIn|TestMaterializerScratch|TestMaterializerStoragePolicy' -v 2>&1 | grep -E -- '--- ' && go vet ./pkg/integration/`
 Expected: `gofmt` lists nothing; `ok  	github.com/housegate/housegate/pkg/replay/chexec` (the existing `TestDecodeRowsBranchesOnPayloadFormat`, `TestChexecAdmissionEqualsTheColumnProfile` and the snapshot tests unchanged); `--- PASS:` for `TestNewMaterializerInRefusesABadDatabaseOrPrefix`, `TestMaterializerScratchStatementsNameTheirTable` and its subtests `NewMaterializer` and `NewMaterializerIn`, `TestNewMaterializerInWithStoragePolicyRefusesUnsafeNames` and `TestMaterializerStoragePolicyIsExplicitOnlyForTheNewConstructor`; `go vet` prints nothing.
 
 The additional policy test may pull `clickhouse/clickhouse-server:26.3.37.3` if absent locally (remote read): obtain explicit user confirmation in chat before its first run, in addition to Step 9's `25.8` and Ryuk confirmation.
 
-Run (needs Docker): `W=<worktree path>; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexecMaterializer|TestReplayCHExecutor' --test_output=errors`
+Run (needs Docker): `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexecMaterializer|TestReplayCHExecutor' --test_output=errors`
 Expected: `//pkg/integration:integration_test PASSED`: `TestChexecMaterializer_DefaultScratchIsUnchanged`, `TestChexecMaterializerIn_KeepsScratchInItsDatabaseUnderItsPrefix` `TestChexecMaterializerInWithStoragePolicyUsesMemberDisk` (its `legacy`, `named` and `member` cases), and the six unchanged `TestReplayCHExecutor*` tests (measured on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1; with `go test ./pkg/integration/ -run 'TestChexecMaterializer|TestReplayCHExecutor' -count=1 -v`, nine top-level `--- PASS:` lines, plus the three policy-test subtests). Without Docker, skip this run; the PR's `Integration (ClickHouse)` job runs it.
 
 - [ ] **Step 14: Commit `NewMaterializerIn`**
 
 ```bash
-W=<worktree path>
-git -C "$W" add pkg/replay/chexec/materializer.go pkg/replay/chexec/materializer_in_test.go pkg/replay/chexec/BUILD.bazel pkg/integration/chreplay_test.go pkg/integration/chmaterializer_policy_test.go pkg/integration/BUILD.bazel
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+git -C "$W" add pkg/replay/chexec/materializer.go pkg/replay/chexec/materializer_in_test.go pkg/replay/chexec/BUILD.bazel pkg/integration/chreplay_test.go pkg/integration/chmaterializer_policy_test.go pkg/integration/BUILD.bazel || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(chexec): a replay materializer in a named database under a prefix
 
 NewMaterializerIn is NewMaterializer whose replay scratch tables are
@@ -1875,7 +1915,12 @@ tests pin both with and without ClickHouse. NewMaterializerInWithStoragePolicy
 requires a validated explicit policy, keeping member replay parts on the member
 disk (spec §8.1); an unknown policy fails CREATE without fallback.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 15: Write the failing tests for `CopyTable`**
@@ -1950,7 +1995,7 @@ func TestCopyTableIsInjectiveAcrossIncarnations(t *testing.T) {
 
 - [ ] **Step 16: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/sitable/ -run TestCopyTable`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && go test ./pkg/sitable/ -run TestCopyTable`
 Expected: FAIL to compile with `undefined: CopyTable` (three times, `sitable_test.go`).
 
 - [ ] **Step 17: Name the member's copy table**
@@ -1988,14 +2033,16 @@ func CopyTable(id string, incarnationSeq uint64) string {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/sitable && go test ./pkg/sitable/ && go test ./pkg/sitable/ -run TestCopyTable -v 2>&1 | grep -E '^--- ' && bazel run //:gazelle && git -C "$W" status --short -- pkg/sitable`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && gofmt -l pkg/sitable && go test ./pkg/sitable/ && go test ./pkg/sitable/ -run TestCopyTable -v 2>&1 | grep -E '^--- ' && bazel run //:gazelle && git -C "$W" status --short -- pkg/sitable`
 Expected: `gofmt` lists nothing; `ok  	github.com/housegate/housegate/pkg/sitable` (Plan S3-A Task 1's `TestReservedDatabasesIsACopy` and `TestSnapshotSchemaAnswersAHeldPendingTable` included); `--- PASS:` for `TestCopyTableAppendsTheIncarnationToThePhysicalName` and `TestCopyTableIsInjectiveAcrossIncarnations`; gazelle changes no BUILD file (`strconv` is the standard library), so the status lists only ` M pkg/sitable/sitable.go` and ` M pkg/sitable/sitable_test.go`.
 
 - [ ] **Step 18: Commit `CopyTable`**
 
 ```bash
-W=<worktree path>
-git -C "$W" add pkg/sitable/sitable.go pkg/sitable/sitable_test.go
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+git -C "$W" add pkg/sitable/sitable.go pkg/sitable/sitable_test.go || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(sitable): CopyTable names a member's copy in hg_replica
 
 CopyTable(id, seq) = PhysicalTable(id) + '__i' + seq, the
@@ -2003,7 +2050,12 @@ incarnation-scoped name of a stage-3 member's verified copy (spec
 2026-10-14 §8.3, §20); the digits after the last __i give the seq back,
 so two incarnations never share a copy. HouseGate creates no copy.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 19: Document the helpers**
@@ -2019,20 +2071,22 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - `:192` (`pkg/replay/payloadexec` bullet): replace "with a bijective `verifyLedger` cross-check)" with "with a bijective ledger cross-check, exported as `VerifyLedger` for the stage-3 manifest reader and install gate)", and replace "`exports.go` re-exports the canonical derivations (`RowElementHash` / `SchemaRoot` / `TableSchemaHash`)" with "`exports.go` re-exports the canonical derivations (`RowElementHash` / `SchemaRoot` / `TableSchemaHash`), the ledger check `VerifyLedger` and `SumPartRowLtHashes` (the LtHash sum of part row accumulators in the executor's `0x` hex form, spec 2026-10-14 §8.5)".
 - `:193` (`pkg/replay/chexec` bullet): after its last sentence "Docker-bound `pkg/integration/chscan_test.go` proves equivalence and must `SYSTEM STOP MERGES` so `system.parts ... active` stays stable." append "`ScanAllParts(ctx, conn, "db.table", schema)` is the same scan over every active part, sorted by part name (a table without rows gives an empty slice, the install gate's rename-race signal, spec 2026-10-14 §8.5); only scratch tables and the rate-limited self-audit call it. `NewMaterializerIn(networkID, conn, database, prefix)` keeps the replay scratch as `` `<database>`.`<prefix>replay_<n>` `` (a stage-3 member's `hg_rstage` under its prefix); `NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)` additionally pins member replay to its member disk; both older constructors retain default-policy SQL, while an unknown explicit policy fails CREATE without fallback. `NewMaterializer`'s unqualified `_hg_replay_scratch_<n>` is unchanged."
 
-Run: `W=<worktree path>; cd "$W" && for n in OwnerEntry VerifyLedger SumPartRowLtHashes ScanAllParts NewMaterializerIn CopyTable; do printf '%s %s %s\n' "$n" "$(grep -c "$n" CLAUDE.md)" "$(grep -c "$n" pkg/replay/AGENTS.md)"; done`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && for n in OwnerEntry VerifyLedger SumPartRowLtHashes ScanAllParts NewMaterializerIn CopyTable; do printf '%s %s %s\n' "$n" "$(grep -c "$n" CLAUDE.md)" "$(grep -c "$n" pkg/replay/AGENTS.md)"; done`
 Expected: `OwnerEntry 1 1`, `VerifyLedger 1 1`, `SumPartRowLtHashes 1 1`, `ScanAllParts 1 1`, `NewMaterializerIn 1 1`, `CopyTable 1 0` (`grep -c` counts lines, and each `CLAUDE.md` bullet is one line).
 
 - [ ] **Step 20: Full verification and commit the documentation**
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/replay pkg/sitable pkg/integration/chscan_test.go pkg/integration/chreplay_test.go && bazel run //:gazelle && git status --short && bazel build //... && bazel test //...`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && gofmt -l pkg/replay pkg/sitable pkg/integration/chscan_test.go pkg/integration/chreplay_test.go && bazel run //:gazelle && git status --short && bazel build //... && bazel test //...`
 Expected: `gofmt` lists nothing; gazelle makes no change; the status lists exactly ` M CLAUDE.md` and ` M pkg/replay/AGENTS.md`; the build passes and every test passes (on darwin plain `bazel test //...`; `--config=ci` resolves only on linux/x64). The integration target is `manual`; Steps 9 and 13 ran its new tests, and the PR's `Integration (ClickHouse)` job runs all of it.
 
-Run (needs Docker): `W=<worktree path>; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexec|TestReplayCHExecutor' --test_output=errors`
+Run (needs Docker): `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; cd "$W" && bazel test //pkg/integration:integration_test --test_filter='TestChexec|TestReplayCHExecutor' --test_output=errors`
 Expected: `//pkg/integration:integration_test PASSED` (the four new tests and the seven existing `TestChexecScanParts_*` and `TestReplayCHExecutor*` tests). Without Docker, skip it.
 
 ```bash
-W=<worktree path>
-git -C "$W" add CLAUDE.md pkg/replay/AGENTS.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
+git -C "$W" add CLAUDE.md pkg/replay/AGENTS.md || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "docs: document the stage-3 P1 replay helpers
 
 pkg/replay/AGENTS.md and CLAUDE.md describe replay.OwnerEntry, the
@@ -2040,12 +2094,17 @@ exported payloadexec.VerifyLedger and SumPartRowLtHashes, chexec's
 ScanAllParts and NewMaterializerIn (NewMaterializer unchanged) and
 sitable.CopyTable (spec 2026-10-14 §8.3-§8.5, §15).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log --oneline -5
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: five commits on `urwt/claude/multi-source-s3c1` above `origin/main`: `docs: document the stage-3 P1 replay helpers`, `feat(sitable): CopyTable names a member's copy in hg_replica`, `feat(chexec): a replay materializer in a named database under a prefix`, `feat(chexec): ScanAllParts scans every active part of a table`, `feat(replay): OwnerEntry, the exported ledger check and the part-hash sum`; then exactly one author line, `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 2's worktree identity and rewrite the authors of these commits (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`) before anything is pushed.
+Expected: five commits on `urwt/codex/multi-source-s3c1` above `origin/main`: `docs: document the stage-3 P1 replay helpers`, `feat(sitable): CopyTable names a member's copy in hg_replica`, `feat(chexec): a replay materializer in a named database under a prefix`, `feat(chexec): ScanAllParts scans every active part of a table`, `feat(replay): OwnerEntry, the exported ledger check and the part-hash sum`; then exactly one author line, `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 2's worktree identity and rewrite the authors of these commits (a user-reviewed signed history repair, followed by the same new-HEAD/poetry+G/verify-commit gate) before anything is pushed.
 
 - [ ] **Step 21: PR and merge (requires explicit user confirmation)**
 
@@ -2068,9 +2127,9 @@ No wire change: no `json` tag of a type `replay.proto` mirrors, no reserved data
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; S=<scratchpad directory>
-git -C "$W" push -u origin urwt/claude/multi-source-s3c1
-gh pr create --repo housegate/housegate --base main --head urwt/claude/multi-source-s3c1 --title 'feat(replay): stage-3 P1 helpers (OwnerEntry, VerifyLedger, ScanAllParts, NewMaterializerIn, CopyTable)' --body-file "$S/hg-s3c1-pr.md"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1; S=<scratchpad directory>
+git -C "$W" push -u origin urwt/codex/multi-source-s3c1
+gh pr create --repo housegate/housegate --base main --head urwt/codex/multi-source-s3c1 --title 'feat(replay): stage-3 P1 helpers (OwnerEntry, VerifyLedger, ScanAllParts, NewMaterializerIn, CopyTable)' --body-file "$S/hg-s3c1-pr.md"
 ```
 
 The first line is for the agent's shell; for the user in fish it is `set W <worktree path>; set S <scratchpad directory>`, and the two commands after it run unchanged in fish. Expected: the push creates the remote branch; `gh` prints the PR URL, whose last path element is `<n>` below.
@@ -2086,7 +2145,7 @@ Expected (runs unchanged in fish): `Release tooling`, `Build` and `Integration (
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on it is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
 [ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
@@ -2145,16 +2204,36 @@ h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-led
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c1-ledger-$n" "urwt/claude/multi-source-s3c1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$L/record-s3c1-$n.urwt.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c1-ledger-$n" "urwt/codex/multi-source-s3c1-ledger-$n" "$ref")" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$L/record-s3c1-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/record-s3c1-$n.urwt.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$h" rev-parse "$ref")" || exit 1
+actual_dirty="$(git -C "$d" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" HG_TAG_P1="$HG_TAG_P1" || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record HG_TAG_P1 of Plan S3-C1 (Task 22)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 git -C "$d" log -1 --format='%an <%ae>'
 ```
@@ -2165,7 +2244,18 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=22
-d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+recorded_d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+[ "$recorded_d" = "$d" ] || { echo "ledger state path differs from retained actual URWT JSON; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] || { echo "restored ledger branch differs; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored ledger is not housegate"' "$common_w" "$common_repo" || exit 1
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
@@ -2190,7 +2280,7 @@ Expected: `HG_TAG_P1=<the value written>`. Anything else (for example the stage-
 
 ## Task 23: arbiter-core — pin HG_TAG_P1; dataplane/chparts with snode delegating; the pure install gate member/gate (S3-C1)
 
-The restore-and-gate library of spec §16 P1 needs two arbiter-core pieces before `dataplane/objstore` (Task 24) can exist, and Plan S3-C2's member installer and Plan S3-D's owner rebuild reuse both unchanged (contract §17, K27). First, the SNode's partition helpers — the `system.parts` listing, the logical partition id (`all` / `p_<value>`), partition quoting, the conditional `DROP PARTITION` and the partition content scan — move out of `snode` into a new package `dataplane/chparts`, so code outside the SNode lists, scans and drops parts exactly as the SNode does; `snode` keeps every name and signature and delegates in one line, applied on top of Plan S3-A Task 5's owner audit, which consumes those names. Second, the new package `member/gate` is the pure part of the install gate of spec §8.5: `PlanPartition` (steps 1–3: Σ(M) = R, Diverged when L ⊄ M, else Need = M − L), `Classify` (step 4: the scratch classifier, a restore keeping only needed parts and a single-part pull judged kept, rename race, split, doubled or Foreign), `Closure` (step 6: Σ(L) + Σ(kept) = R) and `PartitionSet` (step 6: the local partition set equals the manifest's). It runs no ClickHouse statement and makes no network call. Both sum row LtHashes with `payloadexec.SumPartRowLtHashes`, which is why the task starts by pinning housegate `HG_TAG_P1` (Task 22). Nothing here changes behaviour, a consensus format, a feature string or an image (contract §16); the branch `urwt/claude/multi-source-s3c1` carries Tasks 23 and 24 and Task 24 opens its one PR, so this task pushes nothing.
+The restore-and-gate library of spec §16 P1 needs two arbiter-core pieces before `dataplane/objstore` (Task 24) can exist, and Plan S3-C2's member installer and Plan S3-D's owner rebuild reuse both unchanged (contract §17, K27). First, the SNode's partition helpers — the `system.parts` listing, the logical partition id (`all` / `p_<value>`), partition quoting, the conditional `DROP PARTITION` and the partition content scan — move out of `snode` into a new package `dataplane/chparts`, so code outside the SNode lists, scans and drops parts exactly as the SNode does; `snode` keeps every name and signature and delegates in one line, applied on top of Plan S3-A Task 5's owner audit, which consumes those names. Second, the new package `member/gate` is the pure part of the install gate of spec §8.5: `PlanPartition` (steps 1–3: Σ(M) = R, Diverged when L ⊄ M, else Need = M − L), `Classify` (step 4: the scratch classifier, a restore keeping only needed parts and a single-part pull judged kept, rename race, split, doubled or Foreign), `Closure` (step 6: Σ(L) + Σ(kept) = R) and `PartitionSet` (step 6: the local partition set equals the manifest's). It runs no ClickHouse statement and makes no network call. Both sum row LtHashes with `payloadexec.SumPartRowLtHashes`, which is why the task starts by pinning housegate `HG_TAG_P1` (Task 22). Nothing here changes behaviour, a consensus format, a feature string or an image (contract §16); the branch `urwt/codex/multi-source-s3c1` carries Tasks 23 and 24 and Task 24 opens its one PR, so this task pushes nothing.
 
 **Files:**
 - Modify (by `scripts/update-housegate.sh`, never by hand): `go.mod` (the `github.com/housegate/housegate <HG_TAG>` require line `:45` → `HG_TAG_P1`), `go.sum`, `MODULE.bazel` (the housegate `bazel_dep` `version` `:9-12` and its `git_override` `# Resolved Housegate …` comment and `commit` `:18-23`), `MODULE.bazel.lock`, `README.md` (the same three lines of the pinned example `:43-58`)
@@ -2223,6 +2313,8 @@ Notes:
 - **Commit identity (user rule).** The worktree gets its own identity `poetry <chen@sentio.xyz>` in Step 1, before the first commit (the global `uranuswch@gmail.com` must never author or co-author a commit: GitHub would add it as a co-author of the squash merge); every commit block prints the author, and Step 13 checks every commit of the branch. Task 24 pushes this branch and checks every commit's author again before its squash merge. Commits are signed as the user's git config says; a commit that stops with `gpg failed to sign the data` needs the user to unlock the key: ask, never pass `--no-gpg-sign` and never change the signing configuration.
 - **Verified** (adversarial review, 2026-10-17) on a `git archive` of arbiter-core `origin/main` `cfd4f42` (`CORE_TAG` `v0.15.0`, Plan S3-A as merged), against housegate `origin/main` `ed24705` (`HG_TAG` `v0.20.0` plus plan documents) with Task 22's reviewed text applied as the stand-in for `HG_TAG_P1` (through `replace` for `go test` and `local_path_override` for Bazel), the hunks of this task applied verbatim, step by step, by a script: the chparts and gate tests failed to build with exactly the `undefined:` lists of Steps 5 and 10 (under `go test` and under Bazel) and passed after Steps 6 and 11, also under `-race`; `go vet ./...` and `gofmt` clean; every unit test of the module passed; the public-boundary check passed; offline Bazel 9.1.0 (`--repository_disable_download`): gazelle wrote exactly the BUILD files of Steps 6 and 11 once the test-only file of Steps 5 and 10 is deleted first (without that it appends the `go_library` after the `go_test`), Step 8's `snode/BUILD.bazel` diff is the one stated line, Step 13's gazelle left no diff, and `bazel build //...`, `bazel test //...` and the race run passed (19 test targets); the chparts ClickHouse tests passed on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1 and failed against the CI password overlay without `CH_USER` / `CH_PASSWORD`; on a two-node 25.8.33.6 pair with the CI password the `snode` suite gave the same 403 `--- PASS` lines and one `--- SKIP` before and after the delegation (`go test` and Bazel); the owner audit's restart repair passed after it on one `26.3.37.3` node with its own Keeper (`go test` and Bazel; the grep printed `3`, the log showed the restart line twice and the drop and unclean lines once each); the six `integration-clickhouse` targets passed as CI runs them (`ARBITER_CH_REPLICA=1`), under Bazel and with `go test` in parallel and one at a time; twenty mutations each failed a named test (the gate's once-per-occurrence restore count, the Need check of a pull, the plan's sum check, its Diverged exit and its Need sort, set-versus-multiset partition sets, the hash canonicalization, the closure ignoring local, the split's part count, the doubled row count, a rename race by part count; chparts's nil-for-none of `PartsInLogicalPartition`, backslash escaping, the empty-value refusal, `ORDER BY name`, the nil slice of `ActiveParts`, the partition value of `LogicalPartitionID`, the drop issued with no part, the scan root and the scan's nil parts for none); `go list -deps ./member/gate` named no ClickHouse, gRPC, `net` or `os/exec` package; the edited `ci.yml` parsed as YAML (Ruby fallback; Homebrew `python3` has no PyYAML) with the target in the `data-plane integration` step; Step 1's checks and Step 2's `go.mod` and housegate greps (the latter on the stand-in tree) printed what they expect; every bash block and `Run:` line passes `bash -n` and `shellcheck` 0.11 (one SC2016 note: the README grep's backquotes are literal).
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Create the worktree and check the base**
 
 Remote read (`git fetch` of arbiter-core and housegate): needs explicit user confirmation in chat before running.
@@ -2230,16 +2322,34 @@ Remote read (`git fetch` of arbiter-core and housegate): needs explicit user con
 ```bash
 git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core fetch -q origin --tags
 git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin --tags
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter-core claude multi-source-s3c1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter-core codex multi-source-s3c1 urwt/codex/multi-source-s3c1 origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = urwt/codex/multi-source-s3c1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and, from Step 2 on, with the ledger values Step 2 prints. If the branch exists already (an interrupted earlier run), the object says so; continue only if `git -C "$W" log --oneline origin/main..HEAD` lists commits of this task alone. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json` (the template is descriptive only) on branch `urwt/codex/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1;` and, from Step 2 on, with the ledger values Step 2 prints. If the branch exists already (an interrupted earlier run), the object says so; continue only if `git -C "$W" log --oneline origin/main..HEAD` lists commits of this task alone. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core config approvals add` themselves; never pass `--yes` or `--clobber`.
 
 Run (the first line gives the worktree its own commit identity before any commit; local only, never committed):
 
 ```bash
-W=<worktree path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 git -C "$W" log --oneline -1 && git -C "$W" status --short
 test -f "$W/snode/owner_audit.go" && test -f "$W/dataplane/chtest/chtest.go" && test -f "$W/scripts/ci/clickhouse-mechanics.sh" && test -f "$W/scripts/ci/clickhouse-default-password.xml" && echo s3a-base-ok
@@ -2259,7 +2369,7 @@ python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get /Users/uranuswch/Dev/projec
 Expected: four lines `CORE_TAG=v…`, `HG_TAG=v…`, `PROTO_TAG=v…`, `HG_TAG_P1=v…`. If the tool stops (`HG_TAG_P1 is not recorded`, or `fetch origin first`), or the file does not exist, stop: Task 22 writes the tool and records `HG_TAG_P1` (its R4) first.
 
 ```bash
-W=<worktree path>; CORE_TAG=<ledger>; HG_TAG=<ledger>; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; CORE_TAG=<ledger>; HG_TAG=<ledger>; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
 H=/Users/uranuswch/Dev/projects/sentio-network/housegate
 git -C "$W" merge-base --is-ancestor "$CORE_TAG" HEAD && echo core-tag-in-main
 grep -c -E "github.com/(housegate/housegate $HG_TAG|sentioxyz/arbiter-proto $PROTO_TAG)\$" "$W/go.mod"
@@ -2276,7 +2386,7 @@ Expected: `core-tag-in-main`; `2` (`CORE_TAG`'s `go.mod` requires exactly `HG_TA
 `scripts/update-housegate.sh` resolves the tag through the Go module proxy and Bazel downloads the module (remote reads): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; HG_TAG_P1=<ledger>
 cd "$W" && bash scripts/update-housegate.sh "$HG_TAG_P1" && bazel mod tidy && bazel run //:gazelle
 cd "$W" && GOWORK=off go list -m github.com/housegate/housegate github.com/sentioxyz/arbiter-proto \
   && grep -n -A1 'name = "housegate",' MODULE.bazel README.md && grep -n 'Resolved Housegate\|commit = ' MODULE.bazel README.md \
@@ -2285,12 +2395,14 @@ cd "$W" && GOWORK=off go list -m github.com/housegate/housegate github.com/senti
 
 Expected: the script's `Updated Housegate dependency:` block with `Go version: $HG_TAG_P1`; `github.com/housegate/housegate $HG_TAG_P1` and `github.com/sentioxyz/arbiter-proto $PROTO_TAG` (Step 2's value, unchanged); `MODULE.bazel` and the README's pinned example both carry `version = "<HG_TAG_P1 without the v>",`, `# Resolved Housegate $HG_TAG_P1; source is pinned by the commit below.` and a housegate `commit = "<sha>",` equal to the `rev-parse` output (the README's `arbiter_core` override keeps its `commit = "<arbiter-core commit>",` placeholder); `git status` lists exactly ` M MODULE.bazel`, ` M MODULE.bazel.lock`, ` M README.md`, ` M go.mod`, ` M go.sum` (gazelle has no new import to add yet).
 
-Run: `W=<worktree path>; cd "$W" && bazel build //... && bazel test //... --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel build //... && bazel test //... --test_output=errors`
 Expected: PASS (the ClickHouse-gated tests SKIP). The pin is additive (Task 22 only adds exports and `NewMaterializerIn`). A failure is housegate drift between `HG_TAG` and `HG_TAG_P1`: a compile error is an API change, adapt arbiter-core's call site (never housegate); a failing non-golden assertion that names no stage-3 behaviour is a deliberate housegate change, read it with `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate log --oneline $HG_TAG..$HG_TAG_P1 -- pkg/<package>` and update that expectation only; a failing frozen golden or vector means a canonical form moved, which is a consensus break: stop and report it to the user.
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>
-git -C "$W" add go.mod go.sum MODULE.bazel MODULE.bazel.lock README.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; HG_TAG_P1=<ledger>
+git -C "$W" add go.mod go.sum MODULE.bazel MODULE.bazel.lock README.md || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "chore(deps): pin housegate $HG_TAG_P1
 
 housegate $HG_TAG_P1 adds the stage-3 P1 replay helpers
@@ -2299,11 +2411,16 @@ and NewMaterializerIn, replay.OwnerEntry, sitable.CopyTable; housegate
 spec 2026-10-14 §15), additive only. dataplane/chparts and member/gate
 sum row LtHashes with SumPartRowLtHashes.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step.
 
 - [ ] **Step 4: Write the failing tests for `dataplane/chparts`**
 
@@ -2670,7 +2787,7 @@ func TestDropPartitionIfPresent(t *testing.T) {
 
 - [ ] **Step 5: Run the chparts tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test //dataplane/chparts:chparts_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //dataplane/chparts:chparts_test --test_output=errors`
 Expected: FAIL to build `//dataplane/chparts:chparts_test` (gazelle made a `go_test` with no library to embed) with `undefined: EscapeSQLString`, `undefined: ActiveParts`, `undefined: Part`, `undefined: LogicalPartitionID`, `undefined: PartitionContentScan`, `undefined: PartsInLogicalPartition` and more of the package's names (the compiler stops after ten errors).
 
 - [ ] **Step 6: Implement `dataplane/chparts`**
@@ -2849,7 +2966,7 @@ func PartitionContentScan(ctx context.Context, conn clickhouse.Conn, db, table s
 
 Step 5's gazelle wrote a BUILD file with the `go_test` alone; run again, gazelle would keep that rule first and append the `go_library` after it, so the file is deleted and written afresh.
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/chparts && rm -f dataplane/chparts/BUILD.bazel && bazel run //:gazelle && cat dataplane/chparts/BUILD.bazel && bazel test //dataplane/chparts:chparts_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && gofmt -l dataplane/chparts && rm -f dataplane/chparts/BUILD.bazel && bazel run //:gazelle && cat dataplane/chparts/BUILD.bazel && bazel test //dataplane/chparts:chparts_test --test_output=errors`
 Expected: `gofmt` lists nothing; the BUILD file is
 
 ```starlark
@@ -2892,7 +3009,7 @@ and the target PASSes (the two ClickHouse-gated tests SKIP: no `ARBITER_CH_INTEG
 Start a local pair like CI's `integration-clickhouse` (two 25.8 nodes sharing node A's Keeper, `default` given the CI-only password of Plan S3-A Task 4's `scripts/ci/clickhouse-default-password.xml`); later steps reuse it and Step 13 removes it. `docker run` pulls `clickhouse/clickhouse-server:25.8` when it is not local, a remote read that needs explicit user confirmation in chat before running:
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
 docker network create arbiter-core-s3c1
 docker run -d --rm --name arbiter-core-s3c1-a --hostname arbiter-core-s3c1-a \
   --network arbiter-core-s3c1 --network-alias arbiter-core-clickhouse-a \
@@ -2916,7 +3033,7 @@ docker exec arbiter-core-s3c1-a clickhouse-client --password arbiter-core-ci --q
 Expected: two container ids, then a `25.8.` version (25.8.33.6 at review). If port 19110 or 19111 is taken, remove what holds it or pick two free ports and use them in every command of this task.
 
 ```bash
-W=<worktree path>; cd "$W" && ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
   bazel test //dataplane/chparts:chparts_test \
   --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_env=CH_USER --test_env=CH_PASSWORD \
   --test_arg=-test.v --nocache_test_results --test_output=errors \
@@ -2940,12 +3057,14 @@ In `.github/workflows/ci.yml`, job `integration-clickhouse`, step `data-plane in
 
 The `--test_env` lines after the targets stay as they are (`ARBITER_CH_INTEGRATION`, `ARBITER_CH_KEEPER`, `ARBITER_CH_REPLICA`, `CH_ADDR`, `CH_REPLICA_ADDR`, `CH_USER`, `CH_PASSWORD`).
 
-Run: `W=<worktree path>; cd "$W" && git diff --stat -- .github/workflows/ci.yml && python3 -c 'import yaml; d = yaml.safe_load(open(".github/workflows/ci.yml")); s = [x for x in d["jobs"]["integration-clickhouse"]["steps"] if x.get("name") == "data-plane integration"][0]; print("chparts in CI:", "//dataplane/chparts:chparts_test" in s["run"])'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && git diff --stat -- .github/workflows/ci.yml && python3 -c 'import yaml; d = yaml.safe_load(open(".github/workflows/ci.yml")); s = [x for x in d["jobs"]["integration-clickhouse"]["steps"] if x.get("name") == "data-plane integration"][0]; print("chparts in CI:", "//dataplane/chparts:chparts_test" in s["run"])'`
 Expected: `.github/workflows/ci.yml | 1 +` with `1 file changed, 1 insertion(+)`, and `chparts in CI: True` (if `python3` lacks PyYAML, `ruby -ryaml -e 'puts YAML.load_file(".github/workflows/ci.yml")["jobs"]["integration-clickhouse"]["steps"].find { |x| x["name"] == "data-plane integration" }["run"].include?("//dataplane/chparts:chparts_test")'` prints `true`).
 
 ```bash
-W=<worktree path>
-git -C "$W" add dataplane/chparts .github/workflows/ci.yml
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add dataplane/chparts .github/workflows/ci.yml || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(chparts): the SNode's partition helpers as a shared package
 
 dataplane/chparts lists a table's active parts (system.parts), maps
@@ -2957,18 +3076,23 @@ member installer and the owner rebuild use it (housegate spec
 2026-10-14 §8.5, §8.6, §15). The integration-clickhouse job runs its
 ClickHouse-gated tests.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step.
 
 - [ ] **Step 8: Delegate `snode`'s partition helpers to `chparts`**
 
 This step adds no test: the existing `snode` suite is the guard, run on the pair before and after the change, and the two pass lists must be identical; after the change, Plan S3-A Task 5's restart repair runs too, because the owner audit lists, filters and drops `hg_safe` parts through the delegated helpers. `S` is the executing session's scratchpad directory (its absolute path).
 
 ```bash
-W=<worktree path>; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
   bazel test //snode:snode_test \
   --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_env=CH_USER --test_env=CH_PASSWORD \
   --test_arg=-test.v --nocache_test_results --test_timeout=900 --test_output=errors \
@@ -3097,7 +3221,7 @@ func (r *Role) partitionContentScan(ctx context.Context, db, table string, sch p
 Run:
 
 ```bash
-W=<worktree path>; cd "$W" && gofmt -l snode && bazel run //:gazelle && git -C "$W" diff -- snode/BUILD.bazel \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && gofmt -l snode && bazel run //:gazelle && git -C "$W" diff -- snode/BUILD.bazel \
   && grep -c 'chparts\.' snode/parts.go snode/intake.go snode/promote_ch.go snode/promote_replace.go \
   && ! grep -n 'FROM system.parts\|strings.CutPrefix\|chexec.ScanParts(' snode/parts.go snode/promote_ch.go snode/promote_replace.go \
   && bazel test //snode:snode_test --test_output=errors
@@ -3106,7 +3230,7 @@ W=<worktree path>; cd "$W" && gofmt -l snode && bazel run //:gazelle && git -C "
 Expected: `gofmt` lists nothing; the BUILD diff is one added line, `"//dataplane/chparts",` in the `go_library` deps after `"//dataplane",`; the counts `snode/parts.go:2`, `snode/intake.go:1`, `snode/promote_ch.go:3`, `snode/promote_replace.go:3` (one line per file; `ugrep` may print them in another order); the negated grep finds nothing (the `!` makes that succeed); PASS (the ClickHouse-gated tests SKIP).
 
 ```bash
-W=<worktree path>; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
   bazel test //snode:snode_test \
   --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_env=CH_USER --test_env=CH_PASSWORD \
   --test_arg=-test.v --nocache_test_results --test_timeout=900 --test_output=errors \
@@ -3119,7 +3243,7 @@ Expected: PASS and `same-snode-results` (at review: the same 403 `--- PASS` line
 Then the restart repair, with Plan S3-A Task 5 Step 10's topology (one node with its own Keeper whose container restarts itself on a fixed host port; `--restart always` and `--rm` exclude each other). `docker run` pulls `clickhouse/clickhouse-server:26.3.37.3` when it is not local, a remote read that needs explicit user confirmation in chat before running:
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
 docker run -d --restart always --name arbiter-core-s3c1-restart --hostname arbiter-core-s3c1-restart \
   -p 127.0.0.1:19112:9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 \
   -v "$W/scripts/ci/clickhouse-keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro" \
@@ -3140,8 +3264,10 @@ docker rm -f arbiter-core-s3c1-restart
 Expected: a container id; PASS; the log shows `ClickHouse restarted; the owner audit re-audits every hg_safe partition` once per subtest, one `owner audit dropped a resurrected hg_safe twin` (`repair`) and one `owner audit: hg_safe partition is unclean` (`report`); the grep prints `3` (the test and its `repair` and `report` subtests; a filter that matches nothing passes silently, hence the grep); then `arbiter-core-s3c1-restart`. A failure saying `no resurrection at all? see M3` is the image, not this task: Plan S3-A Task 6's `TestMechanics_ReplacePartitionResurrectsReplacedPartsAfterARestart` decides. Any other failure is the delegation: fix it as above and repeat this run.
 
 ```bash
-W=<worktree path>
-git -C "$W" add snode/parts.go snode/intake.go snode/promote_ch.go snode/promote_replace.go snode/BUILD.bazel
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add snode/parts.go snode/intake.go snode/promote_ch.go snode/promote_replace.go snode/BUILD.bazel || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "refactor(snode): delegate the partition helpers to dataplane/chparts
 
 partInfo is chparts.Part; activeParts, logicalPartitionID,
@@ -3152,11 +3278,16 @@ order, the error texts and every result are unchanged: the snode suite,
 unit and ClickHouse-gated, passes identically before and after, and the
 owner audit's restart repair passes on top of it.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step.
 
 - [ ] **Step 9: Write the failing tests for `member/gate`**
 
@@ -3513,7 +3644,7 @@ func TestClassifyAnythingElseIsForeignAndDropsNothing(t *testing.T) {
 
 - [ ] **Step 10: Run the gate tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test //member/gate:gate_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/gate:gate_test --test_output=errors`
 Expected: FAIL to build `//member/gate:gate_test` with `undefined: ScratchPart`, `undefined: Classification`, `undefined: Outcome`, `undefined: Classify`, `undefined: Fetch`, `undefined: OutcomeKept` and more of the package's names (the compiler stops after ten errors).
 
 - [ ] **Step 11: Implement `member/gate`**
@@ -3819,7 +3950,7 @@ func classifyPull(need []string, single Expected, parts []ScratchPart) Classific
 
 As in Step 6, Step 10's test-only BUILD file is deleted so that gazelle writes the library first.
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l member && rm -f member/gate/BUILD.bazel && bazel run //:gazelle && cat member/gate/BUILD.bazel && bazel test //member/gate:gate_test --test_output=errors && bazel test --@rules_go//go/config:race //member/gate:gate_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && gofmt -l member && rm -f member/gate/BUILD.bazel && bazel run //:gazelle && cat member/gate/BUILD.bazel && bazel test //member/gate:gate_test --test_output=errors && bazel test --@rules_go//go/config:race //member/gate:gate_test --test_output=errors`
 Expected: `gofmt` lists nothing; the BUILD file is
 
 ```starlark
@@ -3852,12 +3983,14 @@ go_test(
 
 and both runs PASS (eleven tests).
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go list -deps ./member/gate | grep -E 'ClickHouse|google.golang.org/grpc|^net(/|$)|^os/exec$' || echo gate-is-pure`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && GOWORK=off go list -deps ./member/gate | grep -E 'ClickHouse|google.golang.org/grpc|^net(/|$)|^os/exec$' || echo gate-is-pure`
 Expected: `gate-is-pure` (no ClickHouse driver, gRPC, network or process package anywhere in its dependency closure).
 
 ```bash
-W=<worktree path>
-git -C "$W" add member/gate
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add member/gate || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/gate): the pure stage-3 install gate
 
 PlanPartition (housegate spec 2026-10-14 §8.5 steps 1-3: the manifest's
@@ -3869,11 +4002,16 @@ Closure and PartitionSet (step 6). No ClickHouse, no network: the
 restore drill, the member installer and the owner rebuild feed it row
 LtHashes and act on its answer.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step.
 
 - [ ] **Step 12: List the two packages in the README**
 
@@ -3892,26 +4030,33 @@ and after the `verifier` row:
 Run:
 
 ```bash
-W=<worktree path>; grep -c -E '^\| `(dataplane/chparts|member/gate)` \|' "$W/README.md" && git -C "$W" diff --stat -- README.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; grep -c -E '^\| `(dataplane/chparts|member/gate)` \|' "$W/README.md" && git -C "$W" diff --stat -- README.md
 ```
 
 Expected: `2`, then `README.md | 2 ++` with `1 file changed, 2 insertions(+)`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add README.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add README.md || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "docs: dataplane/chparts and member/gate in the packages table
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step.
 
 - [ ] **Step 13: Full verification**
 
 ```bash
-W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run //:gazelle && git -C "$W" diff --exit-code -- '*.bazel' \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bash scripts/check-public-boundary.sh && bazel run //:gazelle && git -C "$W" diff --exit-code -- '*.bazel' \
   && test -z "$(gofmt -l dataplane/chparts member/gate snode)" \
   && bazel build //... && bazel test //... --test_output=errors \
   && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
@@ -3922,7 +4067,7 @@ Expected: no boundary violation, no BUILD change left by gazelle, no unformatted
 Then CI's `integration-clickhouse` targets on the pair of Step 7, as CI runs them:
 
 ```bash
-W=<worktree path>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 ARBITER_CH_REPLICA=1 \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 ARBITER_CH_REPLICA=1 \
   CH_ADDR=127.0.0.1:19110 CH_REPLICA_ADDR=127.0.0.1:19111 CH_USER=default CH_PASSWORD=arbiter-core-ci \
   bazel test //dataplane/chparts:chparts_test //dataplane/chtest:chtest_test //dataplane/ddl:ddl_test //dataplane/tableset:tableset_test //snode:snode_test //verifier:verifier_test \
   --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=ARBITER_CH_REPLICA \
@@ -3933,8 +4078,8 @@ docker rm -f arbiter-core-s3c1-a arbiter-core-s3c1-b && docker network rm arbite
 
 Expected: PASS for all six targets, then the containers and the network are gone.
 
-Run: `W=<worktree path>; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD && git -C "$W" diff --name-only HEAD~5 HEAD && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u`
-Expected: a clean tree; this task's five commits, newest first: `docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>` (if `main` moved past `CORE_TAG` before Step 1, those later main commits are listed below them); then exactly these 20 paths and no golden, vector or conformance file: `.github/workflows/ci.yml`, `MODULE.bazel`, `MODULE.bazel.lock`, `README.md`, `dataplane/chparts/BUILD.bazel`, `dataplane/chparts/chparts.go`, `dataplane/chparts/chparts_ch_test.go`, `dataplane/chparts/chparts_test.go`, `go.mod`, `go.sum`, `member/gate/BUILD.bazel`, `member/gate/classify.go`, `member/gate/classify_test.go`, `member/gate/gate.go`, `member/gate/gate_test.go`, `snode/BUILD.bazel`, `snode/intake.go`, `snode/parts.go`, `snode/promote_ch.go`, `snode/promote_replace.go`; then exactly one author line, `poetry <chen@sentio.xyz>` (any other: stop, set Step 1's identity and rewrite the authors of this task's commits with `git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`; nothing is pushed here). No push: Task 24 adds `dataplane/objstore` and the S3 mechanics on this branch, opens the one PR for Tasks 23–24 (`feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`) and cuts `CORE_TAG_P1`.
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD && git -C "$W" diff --name-only HEAD~5 HEAD && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u`
+Expected: a clean tree; this task's five commits, newest first: `docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>` (if `main` moved past `CORE_TAG` before Step 1, those later main commits are listed below them); then exactly these 20 paths and no golden, vector or conformance file: `.github/workflows/ci.yml`, `MODULE.bazel`, `MODULE.bazel.lock`, `README.md`, `dataplane/chparts/BUILD.bazel`, `dataplane/chparts/chparts.go`, `dataplane/chparts/chparts_ch_test.go`, `dataplane/chparts/chparts_test.go`, `go.mod`, `go.sum`, `member/gate/BUILD.bazel`, `member/gate/classify.go`, `member/gate/classify_test.go`, `member/gate/gate.go`, `member/gate/gate_test.go`, `snode/BUILD.bazel`, `snode/intake.go`, `snode/parts.go`, `snode/promote_ch.go`, `snode/promote_replace.go`; then exactly one author line, `poetry <chen@sentio.xyz>` (any other: stop, set Step 1's identity and rewrite the authors of this task's commits with a user-reviewed signed history repair, followed by the same new-HEAD/poetry+G/verify-commit gate; nothing is pushed here). No push: Task 24 adds `dataplane/objstore` and the S3 mechanics on this branch, opens the one PR for Tasks 23–24 (`feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`) and cuts `CORE_TAG_P1`.
 
 ---
 
@@ -3951,13 +4096,13 @@ Spec §16 P1 asks for verified object-store backups per owner, written with keys
 - Unchanged: `.github/workflows/ci.yml` and `.github/workflows/cut-release.yml` (their `clickhouse-mechanics` job and `validate ClickHouse mechanics` step run the extended runner; `test` runs the new unit tests, and the `TestS3_` tests and M12–M14 skip there)
 - Ledger (Step 17, housegate): Modify `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`, Appendix C (the `CORE_TAG_P1` and `P1_BACKUP_DELETE` rows and the run record `arbiter-core release and the S3 mechanics (Task 24)`), on the ledger copy `s3-ledger.py ref <housegate> s3c1` prints (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34), with the record procedure of contract §19 (decision D23): one commit in the URWT worktree `multi-source-s3c1-ledger-24`
 
-Line anchors refer to arbiter-core `cfd4f42` (v0.15.0, `CORE_TAG`): Plan S3-A has executed, and its `dataplane/chtest`, `dataplane/chrestart`, `dataplane/chmechanics` and `scripts/ci/clickhouse-mechanics.sh` are on `main` (every anchor below was re-read there); the worktree is Task 23's (`urwt/claude/multi-source-s3c1`), which holds `CORE_TAG` and Task 23's five commits. If `main` moved past `CORE_TAG` before Task 23 started and touched a file below, apply this task's intent on top (Global Constraints, "Hunks are anchored on the base revisions").
+Line anchors refer to arbiter-core `cfd4f42` (v0.15.0, `CORE_TAG`): Plan S3-A has executed, and its `dataplane/chtest`, `dataplane/chrestart`, `dataplane/chmechanics` and `scripts/ci/clickhouse-mechanics.sh` are on `main` (every anchor below was re-read there); the worktree is Task 23's (`urwt/codex/multi-source-s3c1`), which holds `CORE_TAG` and Task 23's five commits. If `main` moved past `CORE_TAG` before Task 23 started and touched a file below, apply this task's intent on top (Global Constraints, "Hunks are anchored on the base revisions").
 
 **Interfaces:**
 - Consumes: ledger `CORE_TAG`, `PROTO_TAG` (Plan S3-A) and `HG_TAG_P1` (Task 22), read with `s3-ledger.py get`, never predicted; Task 23 on this branch: `chparts.Part`, `chparts.ActiveParts(ctx context.Context, conn clickhouse.Conn, db, table string) ([]Part, error)`, `chparts.LogicalPartitionID(sch payloadexec.TableSchema, p Part) string`, `chparts.QuotePartition(sch payloadexec.TableSchema, partitionID string) (string, error)`, `chparts.EscapeSQLString(s string) string`, `gate.Plan{Diverged bool; Need []string; Root string}`, `gate.PlanPartition(manifest []string, root string, local []string) (Plan, error)`, `gate.Fetch{Need []string; Single *Expected}`, `gate.ScratchPart{Name, RowLtHash string; Rows uint64}`, `gate.Classification{Outcome Outcome; Keep, Drop, Kept []string}`, `gate.Classify(f Fetch, scratch []ScratchPart) (Classification, error)`, `gate.Closure(root string, local, kept []string) error`, `gate.PartitionSet(manifest, local []string) error`; housegate at `HG_TAG_P1` (contract §16): `replay.OwnerEntry(m SafeSnapshotManifest, indexerID uint64) (TrackFrontier, bool)`, `payloadexec.VerifyLedger(m replay.SafeSnapshotManifest) error`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)` (tests), `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]PartScanResult, error)`; existing housegate `replay.SafeSnapshotManifest` (`Seal`, `Validate`; `Tables []TableManifest`, `TrackFrontiers []TrackFrontier`), `replay.TableManifest{TableID, SchemaHash string; PartitionRoots []PartitionCommitment; ActiveParts []PartManifestEntry}`, `replay.PartitionCommitment{TableID, PartitionID, Root string}`, `replay.PartManifestEntry{TableID, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount, Bytes uint64; …}`, `replay.TrackFrontier{IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64}`, `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, `payloadexec.TableSchemaHash(networkID string, t TableSchema) string`, `payloadexec.SchemaRoot(networkID string, schemas []TableSchema) string` (tests), `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `lthash.New`, `lthash.FromBytes`, `lthash.ElementHash`, `(*lthash.Hash).AddHash`, `(*lthash.Hash).Bytes` (tests); existing arbiter-core `(*dataplane.Client).WithLeaderRetry(ctx context.Context, fn func(ctx context.Context, conn *grpc.ClientConn) error) error` (`dataplane/client.go:168`), `dataplane.New(cfg Config) (*Client, error)`, `dataplane.Config{Peers []Peer}`, `dataplane.Peer{ID, GRPCAddr string}`, `(*dataplane.Client).Close` (tests), `wire.ManifestFromPB(m *pb.SafeSnapshotManifest) replay.SafeSnapshotManifest` (`wire/convert.go:324`), `wire.ManifestToPB` (tests), `pb.NewSafeStateClient`, `pb.GetSafeWatermarkRequest`, `pb.SnapshotRef{SnapshotId}`, `pb.SafeWatermark`, `pb.RegisterSafeStateServer`, `pb.UnimplementedSafeStateServer` (tests), `ddl.CHTableName(tableID string) string` (`dataplane/ddl/naming.go:22`), `ddl.ParseIncarnationComment(comment string) (uint64, bool)` (`dataplane/ddl/table.go:35`), `ddl.Intents`, `ddl.Pinned`, `ddl.RowIDColumn`, `(ddl.TableIntent).SQL()` (tests); clickhouse-go `clickhouse.Conn`, `clickhouse.Context`, `clickhouse.WithSettings`, `clickhouse.WithParameters`, `clickhouse.WithQueryID`, `clickhouse.Settings`, `clickhouse.Parameters`, `*clickhouse.Exception{Code int32; Name, Message, StackTrace string; Nested []Exception}`; Plan S3-A contract §3: `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn`, the mechanics environment and runner (`scripts/ci/clickhouse-mechanics.sh` at `CORE_TAG`), M5, and these helpers of `dataplane/chmechanics`: `requireMechanics`, `mechanicsEnv{A, B; AAddr, BAddr, …}`, `mechanicsPinned`, `mechanicsSchema`, `protocolTables`, `dropDatabasesAt`, `mustInsert`, `mustExec`, `runBackup`, `backupStats{NumFiles, NumEntries, …}`, `partsOf`, `activeParts`, `mechPart`, `names`, `physHashes`, `totalRows`, `rowHashes`, `rowHashList`, `sumRowHashes`, `createUser`, `accessTypes`, `eventually`, `ident`, `literal`, `qualified`, `clickHouseCode`, `codeAccessDenied`, `suffix`, `settleTimeout`, `envAddr`, `envReplicaAddr`.
 - Produces (package `dataplane/objstore`, contract §17, verbatim): `SafeDatabase = "hg_safe"`, `StageDatabase = "hg_rstage"`, `BackupIndexFormat = "si-backup-index-v1"`, `DrillVerdictFormat = "si-restore-drill-v1"`, `IndexSuffix = ".index.json"`, `DefaultMaxChainLinks = 7`, `MaxChainLinksLimit = 30`; `type BackupKind string` with `BackupFull = "full"`, `BackupIncremental = "incr"`; `type Credentials struct { AccessKeyID, SecretAccessKey string }` with `String()` and `LogValue()`; `type Bucket struct` (unexported fields), `func ParseBucket(raw string) (Bucket, error)` (refusal `objstore: bucket %q must be http(s)://<host>[:port]/<bucket> with no further path, query or trailing slash`), `func (b Bucket) URL() string`, `func OwnerPrefix(owner uint64) string`, `func (b Bucket) BackupURL(owner uint64, name string) string`, `func (b Bucket) IndexURL(owner uint64, name string) string`, `func (b Bucket) IndexGlob(owner uint64) string`, `func BackupName(at time.Time, kind BackupKind) string`; `type BackupIndex`, `type BackupIndexTable`, `type BackupIndexPart` with the contract's fields and JSON names; `func BackupSQL(b Bucket, owner uint64, name, base string, c Credentials) string`, `func PartitionClause(sch payloadexec.TableSchema, partitionID string) (string, error)`, `func RestoreSQL(b Bucket, owner uint64, name, physicalTable, partitionClause string, s Scratch, c Credentials) string`; `type Scratch struct { Database, Table string }`, `func (s Scratch) Qualified() string`, `type ScratchNamer struct`, `func NewScratchNamer(prefix string) (*ScratchNamer, error)` (refusal `objstore: scratch prefix %q must match [A-Za-z0-9_-]{1,64}`), `func (n *ScratchNamer) Next() Scratch`; `type ManifestSource interface { Latest(ctx context.Context) (replay.SafeSnapshotManifest, error); Manifest(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error) }`, `func NewArbiterManifests(c *dataplane.Client) ManifestSource`, `func CheckManifest(requested string, m replay.SafeSnapshotManifest) error` (refusals `objstore: manifest %s answered for %s`, `objstore: manifest %s is not its own root %s`, `objstore: manifest %s: %w`) and `objstore: manifest %s has no track frontier for indexer %d`; `type Backuper struct { Conn clickhouse.Conn; Manifests ManifestSource; Bucket Bucket; Owner uint64; NetworkID string; Credentials Credentials; MaxChainLinks uint32; Now func() time.Time }`, `func (b *Backuper) Run(ctx context.Context) (BackupIndex, error)` (refusals `objstore: max chain links %d must be between 1 and 30`, `objstore: backup %s of indexer %d exists already; a backup name is never reused`), `func ReadIndexes(ctx context.Context, conn clickhouse.Conn, b Bucket, owner uint64, c Credentials) ([]BackupIndex, error)` (refusal `objstore: index %s is not a %s object: %v`), `func NextBackup(latest *BackupIndex, maxChainLinks uint32) (BackupKind, string, uint32)`; `type BackupRef struct { Bucket Bucket; Owner uint64; Name string; Credentials Credentials }`, `type GateInput struct { Backup BackupRef; Manifest replay.SafeSnapshotManifest; TableID, PhysicalTable string; Schema payloadexec.TableSchema; PartitionID string; Local []string; Scratch Scratch }`, `type GateResult struct { Plan gate.Plan; Classification gate.Classification; KeptParts []string; Complete bool; Reason DrillReason }`, `func RestoreAndGate(ctx context.Context, conn clickhouse.Conn, in GateInput) (GateResult, error)`; `type SchemaSource interface { TableSchema(ctx context.Context, tableID string) (payloadexec.TableSchema, error) }`, `type Drill struct { Conn clickhouse.Conn; Manifests ManifestSource; Schemas SchemaSource; Bucket Bucket; Owner uint64; NetworkID string; Credentials Credentials; Backup string; Scratch *ScratchNamer }`, `func (d *Drill) Run(ctx context.Context) (DrillVerdict, error)` (refusal `objstore: no backup of indexer %d under %s`), `type DrillReason string` with `DrillVerified`, `DrillNotInManifest`, `DrillSchemaHashMismatch`, `DrillRestoreFailed`, `DrillNeedUnsatisfied`, `DrillClosureMismatch`, `DrillPartitionSetMismatch`, `type DrillPartition`, `type DrillTable`, `type DrillVerdict` with the contract's fields and JSON names; the ten unit tests and seven `TestS3_` tests of contract §17.
 - Produces (package `dataplane/chmechanics`, contract §17): `TestMechanics_S3IncrementalBackupRestoreKeepsHashOfAllFiles` (M12), `TestMechanics_S3BackupWithAKeyThatCannotDelete` (M13, its one log line `M13 backup delete right: none|lock`), `TestMechanics_S3SecretsAreMaskedInLogsAndSystemTables` (M14); the runner's MinIO `arbiter-core-mech-minio-<suffix>` from `MINIO_IMAGE=bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` (MinIO RELEASE.2024-12-18T13-15-44Z as Bitnami builds it, pinned by digest; contract §17's `minio/minio:RELEASE.2024-12-18T13-15-44Z` can no longer be pulled, see Notes; alias `arbiter-core-minio`, root `mech-root` / `mech-root-secret-0000`), bucket `si-mechanics`, users `mech-nodelete` / `mech-nodelete-secret-0001` (policy `si-backup-nodelete`), `mech-lockdelete` / `mech-lockdelete-secret-0002` (`si-backup-lockdelete`), `mech-readonly` / `mech-readonly-secret-0003` (`si-restore-readonly`), the exported and `--test_env`-passed `ARBITER_CH_S3=1`, `CH_S3_ENDPOINT=http://arbiter-core-minio:9000`, `CH_S3_BUCKET=si-mechanics`, `CH_S3_NODELETE_ACCESS_KEY`, `CH_S3_NODELETE_SECRET_KEY`, `CH_S3_LOCKDELETE_ACCESS_KEY`, `CH_S3_LOCKDELETE_SECRET_KEY`, `CH_S3_READONLY_ACCESS_KEY`, `CH_S3_READONLY_SECRET_KEY`, and the lines `mechanics: 16 test(s) passed on <image>`, `mechanics: S3 backup delete right: <none|lock>`, `objstore: <n> S3 test(s) passed on <image>`; release `CORE_TAG_P1` and `P1_BACKUP_DELETE` (`none` | `lock`) (the rows `` | `CORE_TAG_P1` | `vX.Y.Z` | Task 24 | `` and `` | `P1_BACKUP_DELETE` | `none` or `lock` | Task 24 | `` and the run record `arbiter-core release and the S3 mechanics (Task 24)` of this plan's Appendix C, contract §19).
-- Produces (added here, Appendix B): `Credentials.GoString` and `Credentials.MarshalJSON` (both redact); refusals `objstore: credentials need both an access key id and a secret access key`, `objstore: backup name %q must be <yyyymmddThhmmssZ>-<full|incr>`, `objstore: backup %s of indexer %d sorts before the latest backup %s; the chain is ordered by name, so check the clock`, `objstore: a Backuper needs a ClickHouse connection and a manifest source`, `objstore: a Drill needs a ClickHouse connection, a manifest source, a schema source and a scratch namer`, `objstore: backup %s of indexer %d has no index under %s` (a named backup), `objstore: backup %s of indexer %d belongs to network %q, not %q`, `objstore: backup %s names track frontier %+v of indexer %d, but manifest %s holds %+v`, `objstore: manifest %s has no partition %s of table %s`, `objstore: manifest %s does not list table %s`, `objstore: the arbiter has published no manifest yet`, `objstore: a manifest is read by its snapshot id, and the id is empty`; error wrappers `objstore: read the safe watermark: %w`, `objstore: read manifest %s: %w`, `objstore: read the indexes of indexer %d: %w`, `objstore: list backup %s of indexer %d: %w`, `objstore: write the index of backup %s of indexer %d: %w`, `objstore: encode the index of backup %s: %w`, `objstore: backup %s of indexer %d: %w`, `objstore: list the %s tables: %w`, `objstore: list the parts of %s.%s: %w`, `objstore: list the parts of %s: %w`, `objstore: table %s partition %s: %w`, `objstore: table %s: %w`, `objstore: create database %s: %w`, `objstore: restore %s partition %s of backup %s of indexer %d into %s: %w`, `objstore: scan %s: %w`, `objstore: classify %s: %w`, `objstore: drop part %s of %s: %w`, `objstore: drop scratch %s: %w`, `system.backups row %s: %w` and the failed-operation text `<status> (operation <id>): <the system.backups error up to its stack trace>`; unexported `redacted`, `bucketHost`, `bucketName`, `backupName`, `checkBackupName`, `(Bucket).backupObjectsGlob`, `(Credentials).validate`, `(Credentials).redact`, `redactException`, `(Credentials).statementError`, `literal`, `ident`, `s3Endpoint`, `s3Function`, `indexWriteSQL`, `indexWriteSettings`, `listSettings`, `indexReadSQL`, `backupObjectsSQL`, `scratchPrefix`, `pollInterval`, `runAsync`, `firstLine`, `decodeIndex`, `backupStarted`, `writeIndex`, `arbiterManifests`, `ownerEntry`, `maxChainLinks`, `(*Backuper).safeTables`, `manifestPartition`, `dropScratch`, `drillPass`; tests `TestStatementErrorsNeverCarryTheSecret`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`, `TestDecodeIndexRefusesAnythingButItsOwnObject`, `TestArbiterManifestsChecksEveryAnswer` and their helpers (`testSecret`, `testBucket`, `elementHex`, `sumHex`, `testManifest`, `fakeSafeState`, `startFakeArbiter`, `errorsCause`), the `TestS3_` helpers (`envS3*`, `s3NetworkID`, `s3Env`, `requireS3`, `s3Exec`, `s3Table`, `createSafeTable`, `insertPart`, `publish`, `fakeManifests`, `newFakeManifests`, `fakeSchemas`, `s3T0`, `(s3Env).backuper`, `createdBackups`, `scratchParts`, `physHashesOf`, `manifestHashes`, `stageTables`); in `dataplane/chmechanics`: `envS3*`, `siBackupGrants`, `siRestoreGrants`, `mechSchemas` (an `objstore.SchemaSource` for M13's drill), `s3Mechanics`, `requireS3`, `(s3Mechanics).secrets`, `(s3Mechanics).prefix`, `s3Target`, `s3Table`, `countObjects`, `mechManifests`, `mechManifest`, `ownProtocolDatabases`, `grantUser`, M13's two refusals beyond contract §17 (`si_backup`'s `ALTER TABLE … DROP PARTITION` on `hg_safe` and `si_restore`'s `CREATE VIEW … DEFINER = default SQL SECURITY DEFINER` in `hg_rstage`, the grant probe's rows of contract §18) its check that a failed no-delete backup keeps its `.backup` and `.lock`, its check that the index `si_backup` wrote lists the table and its four parts, and its `objstore.Drill` run as `si_restore` (added by review); in the runner: `minio`, `MINIO_IMAGE`, `s3_bucket`, `s3_root_user`, `s3_root_secret`, `s3_{nodelete,lockdelete,readonly}_{key,secret}`, `tmp_dir`, `mc_env`, `add_s3_user`, the policy files `si-backup-nodelete.json`, `si-backup-lockdelete.json`, `si-restore-readonly.json`, `s3_required`, `objstore_log` and the line `mechanics: no S3 secret in the server logs on <image>`; README § ClickHouse mechanics' P1 paragraph and the stage-3 P1 § Compatibility paragraph; the PR body file `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c1-24.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-24`.
+- Produces (added here, Appendix B): `Credentials.GoString` and `Credentials.MarshalJSON` (both redact); refusals `objstore: credentials need both an access key id and a secret access key`, `objstore: backup name %q must be <yyyymmddThhmmssZ>-<full|incr>`, `objstore: backup %s of indexer %d sorts before the latest backup %s; the chain is ordered by name, so check the clock`, `objstore: a Backuper needs a ClickHouse connection and a manifest source`, `objstore: a Drill needs a ClickHouse connection, a manifest source, a schema source and a scratch namer`, `objstore: backup %s of indexer %d has no index under %s` (a named backup), `objstore: backup %s of indexer %d belongs to network %q, not %q`, `objstore: backup %s names track frontier %+v of indexer %d, but manifest %s holds %+v`, `objstore: manifest %s has no partition %s of table %s`, `objstore: manifest %s does not list table %s`, `objstore: the arbiter has published no manifest yet`, `objstore: a manifest is read by its snapshot id, and the id is empty`; error wrappers `objstore: read the safe watermark: %w`, `objstore: read manifest %s: %w`, `objstore: read the indexes of indexer %d: %w`, `objstore: list backup %s of indexer %d: %w`, `objstore: write the index of backup %s of indexer %d: %w`, `objstore: encode the index of backup %s: %w`, `objstore: backup %s of indexer %d: %w`, `objstore: list the %s tables: %w`, `objstore: list the parts of %s.%s: %w`, `objstore: list the parts of %s: %w`, `objstore: table %s partition %s: %w`, `objstore: table %s: %w`, `objstore: create database %s: %w`, `objstore: restore %s partition %s of backup %s of indexer %d into %s: %w`, `objstore: scan %s: %w`, `objstore: classify %s: %w`, `objstore: drop part %s of %s: %w`, `objstore: drop scratch %s: %w`, `system.backups row %s: %w` and the failed-operation text `<status> (operation <id>): <the system.backups error up to its stack trace>`; unexported `redacted`, `bucketHost`, `bucketName`, `backupName`, `checkBackupName`, `(Bucket).backupObjectsGlob`, `(Credentials).validate`, `(Credentials).redact`, `redactException`, `(Credentials).statementError`, `literal`, `ident`, `s3Endpoint`, `s3Function`, `indexWriteSQL`, `indexWriteSettings`, `listSettings`, `indexReadSQL`, `backupObjectsSQL`, `scratchPrefix`, `pollInterval`, `runAsync`, `firstLine`, `decodeIndex`, `backupStarted`, `writeIndex`, `arbiterManifests`, `ownerEntry`, `maxChainLinks`, `(*Backuper).safeTables`, `manifestPartition`, `dropScratch`, `drillPass`; tests `TestStatementErrorsNeverCarryTheSecret`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`, `TestDecodeIndexRefusesAnythingButItsOwnObject`, `TestArbiterManifestsChecksEveryAnswer` and their helpers (`testSecret`, `testBucket`, `elementHex`, `sumHex`, `testManifest`, `fakeSafeState`, `startFakeArbiter`, `errorsCause`), the `TestS3_` helpers (`envS3*`, `s3NetworkID`, `s3Env`, `requireS3`, `s3Exec`, `s3Table`, `createSafeTable`, `insertPart`, `publish`, `fakeManifests`, `newFakeManifests`, `fakeSchemas`, `s3T0`, `(s3Env).backuper`, `createdBackups`, `scratchParts`, `physHashesOf`, `manifestHashes`, `stageTables`); in `dataplane/chmechanics`: `envS3*`, `siBackupGrants`, `siRestoreGrants`, `mechSchemas` (an `objstore.SchemaSource` for M13's drill), `s3Mechanics`, `requireS3`, `(s3Mechanics).secrets`, `(s3Mechanics).prefix`, `s3Target`, `s3Table`, `countObjects`, `mechManifests`, `mechManifest`, `ownProtocolDatabases`, `grantUser`, M13's two refusals beyond contract §17 (`si_backup`'s `ALTER TABLE … DROP PARTITION` on `hg_safe` and `si_restore`'s `CREATE VIEW … DEFINER = default SQL SECURITY DEFINER` in `hg_rstage`, the grant probe's rows of contract §18) its check that a failed no-delete backup keeps its `.backup` and `.lock`, its check that the index `si_backup` wrote lists the table and its four parts, and its `objstore.Drill` run as `si_restore` (added by review); in the runner: `minio`, `MINIO_IMAGE`, `s3_bucket`, `s3_root_user`, `s3_root_secret`, `s3_{nodelete,lockdelete,readonly}_{key,secret}`, `tmp_dir`, `mc_env`, `add_s3_user`, the policy files `si-backup-nodelete.json`, `si-backup-lockdelete.json`, `si-restore-readonly.json`, `s3_required`, `objstore_log` and the line `mechanics: no S3 secret in the server logs on <image>`; README § ClickHouse mechanics' P1 paragraph and the stage-3 P1 § Compatibility paragraph; the PR body file `$W.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c1-24.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-24`.
 
 Notes:
 - **Statements only, keys inline (K23).** `objstore` holds no S3 or GCS client: the bucket is reached by `BACKUP … TO S3('<url>', '<id>', '<secret>')`, `RESTORE … FROM S3(...)`, `INSERT INTO FUNCTION s3(...)` and `SELECT … FROM s3(...)`, rendered only here. The URL and the two key strings are the only interpolated values (single-quoted with `chparts.EscapeSQLString`; `ParseBucket` and the name pattern keep quotes and glob characters out of URLs); the index JSON is the query parameter `index`. Every error of a statement that carried a key goes through `Credentials.redact`, which replaces the raw and the SQL-escaped secret with `[redacted]` and keeps a `*clickhouse.Exception`'s code, so a caller can still match it; `Credentials` prints the access key id and `[redacted]` through `String`, `GoString`, `LogValue` and `MarshalJSON`.
@@ -3974,24 +4119,38 @@ Notes:
 - **No frozen file, no consensus surface.** No golden, vector or conformance file changes; `objstore` is not Raft-reachable and adds no feature string. `objstore` imports `dataplane`, `wire` and arbiter-proto's existing `SafeState` client only; the manifest reader stays inside `objstore`, so Plan S3-C2 Task 29 still owns `dataplane.Client.GetSafeWatermark` / `GetManifest` (Global Constraints, cross-plan boundary).
 - **Verified in review (2026-10-16)** on an export of arbiter-core `cfd4f42` (v0.15.0) with Task 23's hunks applied as written and housegate `ed24705` (v0.20.0) with Task 22's hunks through a `replace`, `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` and offline Bazel 9.1.0 (`--override_module=housegate=<that tree>`, `--repository_disable_download`): both red steps failed to build with the names Steps 4 and 7 quote (Step 7 under Bazel only with `--keep_going`); gazelle wrote both quoted BUILD files byte for byte once Step 5 deletes the test-only file (without the deletion it keeps `go_test` first); Step 13's boundary check, clean gazelle, `bazel build //...`, `bazel test //...` (20 tests) and the race run passed; the unit tests passed, also under `-race`; `gofmt` and `go vet` were clean; with `ARBITER_CH_S3=1` and no endpoint every `TestS3_` test failed with the quoted `requires` line. The runner, with this task's eight replacements applied verbatim (`bash -n` and `shellcheck` clean, 169 lines added and 8 removed) and the MinIO image above, ran on the real images, with Bazel and with `bazel test` mapped to `go test`: on `clickhouse/clickhouse-server:26.3.37.3`, filtered as Step 10 (`mechanics: 4 test(s) passed`, `mechanics: S3 backup delete right: lock`, nine `refused:` lines, no S3 secret in the server logs, 39 s) and whole as Step 11, under real Bazel and under the shim (`mechanics: 16 test(s) passed`, the delete-right line, the SNode restart test, `objstore: 7 S3 test(s) passed`, `mechanics: no S3 secret in the server logs`, exit 0 in 2 min 56 s, no container or network left); and the S3 mechanics, M0 and M5 on the deployed image already on the host (ClickHouse 26.3.12.1, linux/amd64 under emulation): `mechanics: 5 test(s) passed`, `lock`, no secret in the server logs. The `mc mb`, `mc admin policy create`, `mc admin user add` and `mc admin policy attach` commands ran as written, and real MinIO enforced the three policies. The README replacements applied once each (`README.md | 5 +++++`), the boundary check passed and the floating-tag grep found nothing. Every standalone bash block passes `bash -n` and `shellcheck` (one SC2016 note: Step 1's `grep -F` pattern is a literal `$(`), and the fish block passes `fish -n`.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task reuses Task 23's actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Check the worktree and the base**
 
-Task 23 created the worktree and left five commits on it; this task continues there and opens the branch's one PR (contract §17). `W` below is `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1` (expanded); the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and, from Step 2 on, with the ledger values Step 2 prints.
+Task 23 created the worktree and left five commits on it; this task continues there and opens the branch's one PR (contract §17). `W` below is the exact `path` in `$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json`; the Bash tool keeps no variables between calls, so prefix every command with `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1;` and, from Step 2 on, with the ledger values Step 2 prints.
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" rev-parse --abbrev-ref HEAD && git -C "$W" status --short
 git -C "$W" log --oneline -6
 test -f "$W/dataplane/chparts/chparts.go" && test -f "$W/member/gate/gate.go" && test -f "$W/dataplane/chmechanics/backup_test.go" && test -f "$W/scripts/ci/clickhouse-mechanics.sh" && test -f "$W/dataplane/chtest/chtest.go" && echo base-ok
 test ! -e "$W/dataplane/objstore" && test ! -e "$W/dataplane/chmechanics/s3_test.go" && echo paths-free
 grep -c '^func TestMechanics_' "$W"/dataplane/chmechanics/*_test.go | awk -F: '{n += $2} END {print n}'
 grep -c -F 'echo "mechanics: $(printf' "$W/scripts/ci/clickhouse-mechanics.sh"
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: `urwt/claude/multi-source-s3c1` and a clean tree; the newest five commits are Task 23's (`docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>`); `base-ok`; `paths-free`; `13` (Plan S3-A's M0–M11); `1`; `poetry` and `chen@sentio.xyz` (the worktree's own commit identity, which Task 23 set before its first commit and this block sets again, idempotently: the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`. A missing file or another count: stop, Task 23 or Plan S3-A is missing. Another author: stop and rewrite the authors of Task 23's commits (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`, with the identity above set) before anything else; nothing has been pushed yet.
+Expected: `urwt/codex/multi-source-s3c1` and a clean tree; the newest five commits are Task 23's (`docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>`); `base-ok`; `paths-free`; `13` (Plan S3-A's M0–M11); `1`; `poetry` and `chen@sentio.xyz` (the worktree's own commit identity, which Task 23 set before its first commit and this block sets again, idempotently: the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`. A missing file or another count: stop, Task 23 or Plan S3-A is missing. Another author: stop and rewrite the authors of Task 23's commits (a user-reviewed signed history repair, followed by the same new-HEAD/poetry+G/verify-commit gate, with the identity above set) before anything else; nothing has been pushed yet.
 
 - [ ] **Step 2: Write the ledger tool and read the ledger**
 
@@ -4025,7 +4184,7 @@ python3 -I "$L/s3-ledger.py" empty "$h" CORE_TAG_P1 P1_BACKUP_DELETE
 Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged); `s3-ledger.py is contract §19 of <that ref>`; then `CORE_TAG=v…`, `PROTO_TAG=v…`, `HG_TAG_P1=v…`, then `s3-ledger: CORE_TAG_P1 P1_BACKUP_DELETE not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed (a missing or extra final newline counts) and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask. Never copy the tool from the ledger copy, never edit the plan. A `stop` (`no plan 's3c1'`, a value not recorded, or `CORE_TAG_P1` recorded already, which means this task ran before): stop and ask.
 
 ```bash
-W=<worktree path>; CORE_TAG=<ledger>; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; CORE_TAG=<ledger>; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
 grep -c "github.com/housegate/housegate $HG_TAG_P1\$" "$W/go.mod"
 grep -c "github.com/sentioxyz/arbiter-proto $PROTO_TAG\$" "$W/go.mod"
 git -C "$W" log --oneline "$CORE_TAG"..HEAD | wc -l
@@ -4340,7 +4499,7 @@ func TestBackupErrorTextLosesItsStackTrace(t *testing.T) {
 
 - [ ] **Step 4: Run them and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
 Expected: FAIL to build `//dataplane/objstore:objstore_test` (gazelle made a `go_test` with no library to embed) with `undefined: Bucket`, `undefined: ParseBucket`, `undefined: BackupName`, `undefined: BackupFull`, `undefined: BackupIncremental`, `undefined: OwnerPrefix`, `undefined: checkBackupName` and more of the package's names (the compiler stops after ten errors).
 
 - [ ] **Step 5: Implement the names, the credentials and the statements; commit**
@@ -4762,12 +4921,14 @@ func firstLine(errText string) string {
 
 Step 4's gazelle wrote a BUILD file with the `go_test` alone; run again, gazelle would keep that rule first and append the `go_library` after it (the order Step 8 quotes is library first), so the file is deleted and written afresh.
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/objstore && rm -f dataplane/objstore/BUILD.bazel && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && gofmt -l dataplane/objstore && rm -f dataplane/objstore/BUILD.bazel && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
 Expected: `gofmt` lists nothing; PASS (`TestBucketURLsAndBackupNames`, `TestParseBucketRefusesAPathQueryOrTrailingSlash`, `TestCredentialsRedactTheSecret`, `TestStatementErrorsNeverCarryTheSecret`, `TestBackupSQLNamesTheBaseOnlyForAnIncrementalBackup`, `TestRestoreSQLRestoresOnePartitionIntoTheScratch`, `TestPartitionClauseOfAnUnpartitionedTableIsEmpty`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`).
 
 ```bash
-W=<worktree path>
-git -C "$W" add dataplane/objstore
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add dataplane/objstore || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(objstore): bucket names, redacting credentials and the S3 statements
 
 dataplane/objstore names an owner's objects (owner-<id>/<name>/ and
@@ -4778,11 +4939,16 @@ reads and writes, and keeps the secret out of every printed form and
 every error (housegate spec 2026-10-14 §16 P1, §8.6; plan S3-C1
 clarification K23).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate with that identity set) before going on.
 
 - [ ] **Step 6: Write the failing tests for the index, the chain, the manifests, the drill, the S3 tests and M12–M14**
 
@@ -6397,7 +6563,7 @@ func TestMechanics_S3SecretsAreMaskedInLogsAndSystemTables(t *testing.T) {
 
 - [ ] **Step 7: Run them and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test --keep_going //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test --keep_going //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors`
 Expected: FAIL to build both targets: `//dataplane/objstore:objstore_test` with `undefined: ManifestSource`, `undefined: Backuper`, `undefined: BackupIndex`, `undefined: NextBackup`, `undefined: maxChainLinks` and more (ten errors); `//dataplane/chmechanics:chmechanics_test` with `undefined: objstore.ManifestSource`, `undefined: objstore.Backuper`, `undefined: objstore.Drill`, `undefined: objstore.RestoreAndGate`, `undefined: objstore.GateInput`, `undefined: objstore.BackupRef` (`--keep_going` makes Bazel report both targets; without it the build stops at whichever fails first).
 
 - [ ] **Step 8: Implement the index, the manifests, the Backuper, RestoreAndGate and the Drill; commit**
@@ -7260,7 +7426,7 @@ func (d *Drill) Run(ctx context.Context) (DrillVerdict, error) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/objstore dataplane/chmechanics && bazel run //:gazelle && cat dataplane/objstore/BUILD.bazel && git diff -- dataplane/chmechanics/BUILD.bazel`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && gofmt -l dataplane/objstore dataplane/chmechanics && bazel run //:gazelle && cat dataplane/objstore/BUILD.bazel && git diff -- dataplane/chmechanics/BUILD.bazel`
 Expected: `gofmt` lists nothing; the new BUILD file is
 
 ```starlark
@@ -7356,15 +7522,17 @@ go_test(
 )
 ```
 
-Run: `W=<worktree path>; cd "$W" && bazel test //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors && bazel test --@rules_go//go/config:race //dataplane/objstore:objstore_test --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bazel test //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors && bazel test --@rules_go//go/config:race //dataplane/objstore:objstore_test --test_output=errors`
 Expected: PASS twice: the unit tests pass; every `TestS3_` test skips (`set ARBITER_CH_S3=1 and run scripts/ci/clickhouse-mechanics.sh …`) and every mechanics test skips (no `ARBITER_CH_MECHANICS`), as in CI's `test` job.
 
-Run: `W=<worktree path>; cd "$W" && ARBITER_CH_S3=1 bazel test //dataplane/objstore:objstore_test --test_env=ARBITER_CH_S3 --nocache_test_results --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && ARBITER_CH_S3=1 bazel test //dataplane/objstore:objstore_test --test_env=ARBITER_CH_S3 --nocache_test_results --test_output=errors`
 Expected: FAIL (Bazel exit 3) with `ARBITER_CH_S3=1 requires CH_ADDR, CH_S3_ENDPOINT, CH_S3_BUCKET, CH_S3_LOCKDELETE_ACCESS_KEY, CH_S3_LOCKDELETE_SECRET_KEY, CH_S3_READONLY_ACCESS_KEY, CH_S3_READONLY_SECRET_KEY` for each `TestS3_` test: once opted in, a missing prerequisite fails instead of skipping.
 
 ```bash
-W=<worktree path>
-git -C "$W" add dataplane/objstore
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add dataplane/objstore || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(objstore): backup index, Backuper, RestoreAndGate and the restore Drill
 
 Backuper takes one full or incremental BACKUP DATABASE hg_safe per run
@@ -7378,11 +7546,16 @@ the manifest its index names, with each schema checked against the
 manifest's schema_hash. NewArbiterManifests applies spec §8.4's accept
 rule (housegate spec 2026-10-14 §8.4-§8.6, §16 P1; plan S3-C1 K24-K27).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate with that identity set) before going on.
 
 - [ ] **Step 9: Extend the mechanics runner with the MinIO, the S3 environment, the objstore run and the log grep**
 
@@ -7703,19 +7876,21 @@ done
 echo "mechanics: no S3 secret in the server logs on ${image}"
 ```
 
-Run: `W=<worktree path>; cd "$W" && bash -n scripts/ci/clickhouse-mechanics.sh && shellcheck scripts/ci/clickhouse-mechanics.sh && git diff --numstat -- scripts/ci/clickhouse-mechanics.sh`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bash -n scripts/ci/clickhouse-mechanics.sh && shellcheck scripts/ci/clickhouse-mechanics.sh && git diff --numstat -- scripts/ci/clickhouse-mechanics.sh`
 Expected: no output from `bash -n` and `shellcheck` (if `shellcheck` is not installed, `bash -n` alone), then `169	8	scripts/ci/clickhouse-mechanics.sh`.
 
 - [ ] **Step 10: Run M12–M14 through the runner; commit**
 
 The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` from Docker Hub (downloads, and the MinIO image may be new to this host): needs explicit user confirmation in chat before the first run of this task. Fallback on a Mac where `docker` reaches a stopped Docker Desktop while OrbStack runs: prefix the run with `DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock`; if `docker pull` stops with `error getting credentials … keychain cannot be accessed`, the session cannot read the login keychain: ask the user to unlock it (or to run the command in their own terminal) and never work around it with stored credentials.
 
-Run: `W=<worktree path>; cd "$W" && ARBITER_CH_MECHANICS_FILTER='^TestMechanics_(ServerIsTheDeployedImage|S3)' bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && ARBITER_CH_MECHANICS_FILTER='^TestMechanics_(ServerIsTheDeployedImage|S3)' bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"`
 Expected: `//dataplane/chmechanics:chmechanics_test PASSED`, the three `mechanics server … ClickHouse 26.3.37.3 …` lines, `mechanics: 4 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `mechanics: S3 backup delete right: lock` (what drafting measured on 26.3.51.7 and the review on 26.3.37.3; `none` is also a pass here, and the value is recorded only from the release run, Step 16), no SNode or objstore run (the filter skips both), `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`, `exit 0`, and `docker ps -a --filter name=arbiter-core-mech` lists nothing afterwards. Read the M13 lines of the test log (`grep -E 'M13 backup delete right|BACKUP with mech-nodelete|refused:' "$(bazel info bazel-testlogs)/dataplane/chmechanics/chmechanics_test/test.log"`): with `lock`, the no-delete backup failed with `Access Denied … while removing object with path …/.lock from S3`, and nine `refused:` lines name the missing grants (`SELECT`, `INSERT`, `ALTER DELETE` on `hg_safe` and `CREATE TABLE ON hg_rstage` for `si_backup`; `BACKUP`, `WRITE ON S3`, `CREATE DICTIONARY`, `SYSTEM MERGES`, `SET DEFINER` for `si_restore`). If MinIO does not become ready (`MinIO did not become ready`) or an `mc` command fails, read `docker logs` of the MinIO container (the script prints its tail) and fix the setup block, never the tests. If M13 fails because the `mech-lockdelete` backup did not complete, stop: K24 says the plan stops and the user decides.
 
 ```bash
-W=<worktree path>
-git -C "$W" add dataplane/chmechanics/s3_test.go dataplane/chmechanics/BUILD.bazel scripts/ci/clickhouse-mechanics.sh
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add dataplane/chmechanics/s3_test.go dataplane/chmechanics/BUILD.bazel scripts/ci/clickhouse-mechanics.sh || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "test(chmechanics): S3 mechanics M12-M14 against a MinIO in the runner
 
 M12 re-pins M5 on an S3 endpoint: an incremental BACKUP DATABASE to
@@ -7730,18 +7905,23 @@ prints the measured delete right, runs objstore's TestS3_ tests and
 greps both servers' logs for the secrets (housegate spec 2026-10-14 §2,
 §8.2, §16 P1; plan S3-C1 contract §17).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate with that identity set) before going on.
 
 - [ ] **Step 11: Run the whole runner on upstream 26.3.37.3**
 
 The runner's `docker pull` of both images contacts Docker Hub again (remote read): needs explicit user confirmation in chat before running.
 
-Run: `W=<worktree path>; cd "$W" && bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"`
-Expected, in this order: the three `mechanics server …` lines; `mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `mechanics: S3 backup delete right: lock` (or `none`, as Step 10 printed); `//snode:snode_test PASSED` and `snode: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart passed on clickhouse/clickhouse-server:26.3.37.3`; `//dataplane/objstore:objstore_test PASSED` and `objstore: 7 S3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`; `exit 0` (about three minutes; the drafting run took 2.5). A `TestS3_` failure is this task's to fix in `objstore` (Steps 6–8), never by weakening a test. Then `W=<worktree path>; cd "$W" && diff <(grep -h '^func TestS3_' dataplane/objstore/*_test.go | sed -E 's/^func ([A-Za-z0-9_]+)\(.*/\1/' | sort) <(printf '%s\n' TestS3_BackuperRunsAFullThenAnIncrementalBackup TestS3_BackuperNeverReusesABackupName TestS3_RestoreAndGateKeepsOnlyTheManifestsPartsFromABackupAheadOfPublication TestS3_RestoreAndGateReportsANeedTheBackupCannotMeet TestS3_DrillVerifiesABackupAgainstTheManifestItsIndexNames TestS3_DrillFailsWhenNoTableOfTheOwnerIsVerified TestS3_DrillRefusesASchemaWhoseHashIsNotTheManifests | sort) && echo "contract S3 names match"` prints `contract S3 names match`.
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"`
+Expected, in this order: the three `mechanics server …` lines; `mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `mechanics: S3 backup delete right: lock` (or `none`, as Step 10 printed); `//snode:snode_test PASSED` and `snode: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart passed on clickhouse/clickhouse-server:26.3.37.3`; `//dataplane/objstore:objstore_test PASSED` and `objstore: 7 S3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`; `exit 0` (about three minutes; the drafting run took 2.5). A `TestS3_` failure is this task's to fix in `objstore` (Steps 6–8), never by weakening a test. Then `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && diff <(grep -h '^func TestS3_' dataplane/objstore/*_test.go | sed -E 's/^func ([A-Za-z0-9_]+)\(.*/\1/' | sort) <(printf '%s\n' TestS3_BackuperRunsAFullThenAnIncrementalBackup TestS3_BackuperNeverReusesABackupName TestS3_RestoreAndGateKeepsOnlyTheManifestsPartsFromABackupAheadOfPublication TestS3_RestoreAndGateReportsANeedTheBackupCannotMeet TestS3_DrillVerifiesABackupAgainstTheManifestItsIndexNames TestS3_DrillFailsWhenNoTableOfTheOwnerIsVerified TestS3_DrillRefusesASchemaWhoseHashIsNotTheManifests | sort) && echo "contract S3 names match"` prints `contract S3 names match`.
 
 - [ ] **Step 12: Document the package and the S3 mechanics in the README; commit**
 
@@ -7763,24 +7943,31 @@ Append to § Compatibility, after Plan S3-A Task 6's stage-3 P0 paragraph, which
 Multi-source storage integrity, stage 3 P1 (housegate spec 2026-10-14 §16 P1, §8.4–§8.6), changes no consensus format: no Raft command, snapshot version or feature string is added and `arbiter.LocalNodeFeatures()` is unchanged, so every binary built from this release can be rolled back to the previous one. `dataplane/chparts` holds the SNode's partition helpers (the SNode delegates to it with no behaviour change), `member/gate` is the pure install gate of spec §8.5, and `dataplane/objstore` holds the object-store backups and the restore-and-gate library. `objstore` reaches the bucket only through ClickHouse statements that name it inline with `S3(...)` / `s3(...)` and the key pair, so the backup and restore users need `READ` / `WRITE ON S3` and no server configuration changes; ClickHouse masks the secret in its system tables and logs (M14), and every error `objstore` returns has the secret removed. Each backup is a `BACKUP DATABASE hg_safe` under `owner-<indexer id>/` with an index object beside it that names the manifest published when it started, and is never overwritten; a restore drill gates every partition against exactly that manifest (spec §8.4's accept rule, §8.5's plan, classifier and closure).
 ```
 
-Run: `W=<worktree path>; cd "$W" && git diff --check -- README.md && grep -c -E '^\| `dataplane/objstore` \|' README.md && grep -c '^Since stage 3 P1 the script also starts a pinned MinIO' README.md && tail -n 1 README.md | grep -c '^Multi-source storage integrity, stage 3 P1 ' && git diff --stat -- README.md`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && git diff --check -- README.md && grep -c -E '^\| `dataplane/objstore` \|' README.md && grep -c '^Since stage 3 P1 the script also starts a pinned MinIO' README.md && tail -n 1 README.md | grep -c '^Multi-source storage integrity, stage 3 P1 ' && git diff --stat -- README.md`
 Expected: no whitespace error; `1`; `1`; `1`; `README.md | 5 +++++` (the row, two paragraphs and their two blank lines).
 
 ```bash
-W=<worktree path>
-git -C "$W" add README.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+git -C "$W" add README.md || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "docs: dataplane/objstore, the S3 mechanics and stage-3 P1 compatibility notes
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate with that identity set) before going on.
 
 - [ ] **Step 13: Full verification**
 
 ```bash
-W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run //:gazelle && git -C "$W" diff --exit-code -- '*.bazel' \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; cd "$W" && bash scripts/check-public-boundary.sh && bazel run //:gazelle && git -C "$W" diff --exit-code -- '*.bazel' \
   && test -z "$(gofmt -l dataplane/objstore dataplane/chmechanics dataplane/chparts member/gate snode)" \
   && bazel build //... && bazel test //... --test_output=errors \
   && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
@@ -7788,9 +7975,9 @@ W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run
 
 Expected: no boundary violation, no BUILD change left by gazelle, no unformatted file, every target PASSes with and without the race detector (the ClickHouse-gated tests, the `TestS3_` tests and the mechanics suite SKIP).
 
-Run Step 11's runner command once more on this tree (its `docker pull` is a remote read: needs explicit user confirmation in chat before running). Expected: the same lines and `exit 0`. Then: `W=<worktree path>; git -C "$W" grep -n -E 'clickhouse-server:26\.3( |$)|minio(/minio)?:(latest|RELEASE)|sentio-352722' -- .github scripts README.md dataplane member || echo "no floating tag, no private name"; grep -c '^MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:[0-9a-f]\{64\}"$' "$W/scripts/ci/clickhouse-mechanics.sh"` prints `no floating tag, no private name` (the public repository names no private bucket or project, and no MinIO image that is not pinned by digest) and `1`.
+Run Step 11's runner command once more on this tree (its `docker pull` is a remote read: needs explicit user confirmation in chat before running). Expected: the same lines and `exit 0`. Then: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; git -C "$W" grep -n -E 'clickhouse-server:26\.3( |$)|minio(/minio)?:(latest|RELEASE)|sentio-352722' -- .github scripts README.md dataplane member || echo "no floating tag, no private name"; grep -c '^MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:[0-9a-f]\{64\}"$' "$W/scripts/ci/clickhouse-mechanics.sh"` prints `no floating tag, no private name` (the public repository names no private bucket or project, and no MinIO image that is not pinned by digest) and `1`.
 
-Run: `W=<worktree path>; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD`
 Expected: a clean tree and nine commits, newest first: `docs: dataplane/objstore, the S3 mechanics and stage-3 P1 compatibility notes`, `test(chmechanics): S3 mechanics M12-M14 against a MinIO in the runner`, `feat(objstore): backup index, Backuper, RestoreAndGate and the restore Drill`, `feat(objstore): bucket names, redacting credentials and the S3 statements`, then Task 23's five.
 
 - [ ] **Step 14: Run the runner on the deployed image (user action)**
@@ -7799,8 +7986,13 @@ Plan S3-A clarification K9: CI and Cut Release run the runner on the exact upstr
 
 ```fish
 gcloud auth configure-docker us-west1-docker.pkg.dev
-cd ~/src/remotesrc/claude/arbiter-core/multi-source-s3c1
+set W (python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")
+if test $status -eq 0; and test (count $W) -eq 1; and cd "$W"
 env ARBITER_CH_PLATFORM=linux/amd64 bash scripts/ci/clickhouse-mechanics.sh us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16 26.3.
+else
+    echo "invalid/missing saved URWT path; no suite executed" >&2
+    false
+end
 ```
 
 On an amd64 Linux host the `env ARBITER_CH_PLATFORM=linux/amd64` prefix is not needed; on Apple Silicon the ClickHouse servers run under emulation (MinIO runs natively) and the run takes several times longer than in CI.
@@ -7815,7 +8007,7 @@ Write the PR body (local file, outside the worktree), the deployed-image line ta
 
 ```bash
 HG_TAG_P1=<ledger>; PROTO_TAG=<ledger>; DEPLOYED='<date>: ClickHouse <the version M0 printed>, mechanics 16/16, objstore 7/7, delete right <none|lock>, no S3 secret in the server logs'
-BODY="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3c1.pr-body.md"
+BODY="$W.pr-body.md"
 sed -e "s|@HG_TAG_P1@|$HG_TAG_P1|g" -e "s|@PROTO_TAG@|$PROTO_TAG|g" -e "s|@DEPLOYED@|$DEPLOYED|g" > "$BODY" <<'PRBODY'
 Stage 3 P1 of the multi-source storage-integrity network (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §16 P1, §8.4–§8.6, §2; plan S3-C1 Tasks 23–24, contract §17), on housegate `@HG_TAG_P1@` and arbiter-proto `@PROTO_TAG@`. No consensus change: no Raft command, snapshot version or feature string moves, and every component can be rolled back to its previous image.
 
@@ -7842,11 +8034,11 @@ Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
-cd "$W" && git push -u origin urwt/claude/multi-source-s3c1
-gh pr create --repo sentioxyz/arbiter-core --base main --head urwt/claude/multi-source-s3c1 \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
+cd "$W" && git push -u origin urwt/codex/multi-source-s3c1
+gh pr create --repo sentioxyz/arbiter-core --base main --head urwt/codex/multi-source-s3c1 \
   --title 'feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14' \
-  --body-file "$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3c1.pr-body.md"
+  --body-file "$W.pr-body.md"
 ```
 
 Remote read (CI status): needs explicit user confirmation in chat before running.
@@ -7860,7 +8052,7 @@ Expected: `<n>` is the number `gh pr create` printed; `test`, `integration-click
 Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on the branch is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
@@ -7919,16 +8111,36 @@ h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-led
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c1-ledger-$n" "urwt/claude/multi-source-s3c1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$L/record-s3c1-$n.urwt.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c1-ledger-$n" "urwt/codex/multi-source-s3c1-ledger-$n" "$ref")" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$L/record-s3c1-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/record-s3c1-$n.urwt.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$h" rev-parse "$ref")" || exit 1
+actual_dirty="$(git -C "$d" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" CORE_TAG_P1="$CORE_TAG_P1" P1_BACKUP_DELETE="$P1_BACKUP_DELETE" || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record CORE_TAG_P1 and P1_BACKUP_DELETE of Plan S3-C1 (Task 24)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 git -C "$d" log -1 --format='%an <%ae>'
 ```
@@ -7939,7 +8151,18 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=24
-d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+recorded_d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+[ "$recorded_d" = "$d" ] || { echo "ledger state path differs from retained actual URWT JSON; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] || { echo "restored ledger branch differs; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored ledger is not housegate"' "$common_w" "$common_repo" || exit 1
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
@@ -8010,22 +8233,42 @@ Notes:
 - **Go on this Mac (fallback note).** If a `go` command fails with `cannot find GOROOT directory`, the shell inherited a stale `GOROOT` (a Homebrew Go that was upgraded since); `export GOROOT=/opt/homebrew/opt/go/libexec` first (Homebrew's stable path to the installed Go) and run the command again.
 - **Verified** (adversarial review, 2026-10-17): every hunk below was applied verbatim, step by step, by a script to a `git archive` of sentio-node `origin/main` `0828f21`, with `replace` lines in a scratch `go.mod` pointing at stand-ins for the two tags — housegate `origin/main` `ed24705` plus Task 22 as reviewed (for `HG_TAG_P1`) and arbiter-core `origin/main` `cfd4f42` plus Task 23 as reviewed and Task 24 as currently written (for `CORE_TAG_P1`, its `go.mod` requiring the housegate stand-in) — and run with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): the base passed `go test ./...` on the stand-ins (the `snode` delegation to `chparts` changes nothing here); Steps 3, 5 and 7 failed exactly as their Expected texts say (the ten `standalone` errors are two `storageIntegrityBackupDeps`, six `runStorageIntegrityBackup`, one `StorageIntegrityRestoreDrillOptions` and one `runStorageIntegrityRestoreDrill`); Steps 4, 6 and 8 passed their named tests and `go test ./...`, also with `-race` for the three packages; `gofmt -l` over every tracked Go file and `go vet ./...` were clean; Step 9's counts printed `1`, `1`, `4`, `1`; Step 1's checks, run against scratch tags of the two stand-ins, printed `SN_COMMIT is in HEAD`, an empty diff, `1` four times, the six `objstore` lines, `<tag>:dataplane/objstore/bucket.go:1`, the two BUILD lines, `<tag>:snode/promote_test.go:1` and the three `go.mod` lines; Step 2's `MODULE.bazel` script gave the six-line diff on the real `MODULE.bazel` and changed nothing on a second run; Step 10's smoke block printed its Expected text byte for byte. Eight mutations each failed a named test (the key read after ClickHouse is opened, the config's owner unchecked, the arbiter opened without the bound, only Active schemas accepted, one key half missing from the refusal list, `LoadAndValidate` in the job loader, the verdict printed only when it passes, merge keys ignored by `yamlMappingValues`). Plan S3-D Task 52's greps of this task's `config` and `standalone` lines and Plan S3-C4's anchors on `newRestoreDrillCommand` match the result. `buildifier -mode=check -lint=warn` passed on the three `BUILD.bazel` files, whose hunks list the new sources and the one new dep of each target in gazelle's sort order. Bazel and gazelle were not run: offline, sentio-core's Go dependencies (for example `github.com/soheilhy/cmux v0.1.5`) and gazelle's own (`bazelbuild/buildtools`) are not in any local cache, and the tags do not exist yet; Step 10 is the first Bazel proof. Every bash block passes `bash -n` and `shellcheck` with placeholders filled.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-sentio-node.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Worktree, ledger and contract check**
 
 Remote read (fetch): needs explicit user confirmation in chat before running.
 
 ```bash
 git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch origin
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/sentio-node claude multi-source-s3c1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/sentio-node codex multi-source-s3c1 urwt/codex/multi-source-s3c1 origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = urwt/codex/multi-source-s3c1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-sentio-node.json` (the template is descriptive only) on branch `urwt/codex/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
 
 Set the worktree's own commit identity before anything is committed (local):
 
 ```bash
-W=<worktree path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 ```
 
@@ -8063,7 +8306,7 @@ Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the 
 Remote read (tag fetches): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; SN_COMMIT=<ledger>; PROTO_TAG=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; SN_COMMIT=<ledger>; PROTO_TAG=<ledger>
 H=/Users/uranuswch/Dev/projects/sentio-network/housegate; C=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
 git -C "$W" log --oneline -1
 git -C "$W" merge-base --is-ancestor "$SN_COMMIT" HEAD && echo "SN_COMMIT is in HEAD"
@@ -8088,7 +8331,7 @@ Expected: HEAD is `SN_COMMIT` or a descendant (`SN_COMMIT is in HEAD`; at review
 `go get` downloads the two modules through the Go proxy: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>
 HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P1^{commit}")"
 CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P1^{commit}")"
 echo "$HG_SHA $CORE_SHA"
@@ -8101,7 +8344,7 @@ Expected: two 40-hex commits; `go.mod` requires `github.com/housegate/housegate 
 Set the two `bazel_dep` versions (the tags without the leading `v`) and the two `git_override` commits with their `# Resolved …` comments in `MODULE.bazel` (local edit; it refuses, writing nothing, unless each of the four places matches exactly once):
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
 python3 -I - "$W/MODULE.bazel" "$HG_TAG_P1" "$HG_SHA" "$CORE_TAG_P1" "$CORE_SHA" <<'PY'
 import re
 import sys
@@ -8132,14 +8375,16 @@ Expected: `MODULE.bazel: housegate <HG_TAG_P1> at <HG_SHA>, arbiter-core <CORE_T
 Fetching the two new `git_override` sources is a download: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_SHA=<printed above>; CORE_SHA=<printed above>
 cd "$W" && bazel run @rules_go//go -- mod tidy && bazel mod tidy && bazel run //:gazelle && bazel build //... && grep -n "$HG_SHA\|$CORE_SHA" MODULE.bazel && grep -nE 'housegate/housegate |arbiter-core |arbiter-proto ' go.mod && bazel test //... --test_output=errors
 ```
 
 Expected: the build succeeds; `grep` prints both `commit = …` lines (a stale `git_override` compiles the old sources silently) and the three `go.mod` requires; all tests PASS (the new upstream surface is additive and `snode`'s delegation to `chparts` changes no behaviour; the ClickHouse-gated tests skip without `SENTIO_SI_CH_E2E`). Then `git -C "$W" status --short` lists exactly `M go.mod`, `M go.sum`, `M MODULE.bazel` and `M MODULE.bazel.lock`; anything else (a `BUILD.bazel` gazelle rewrote because an upstream package moved) is reviewed before the commit below and committed with it only if it follows from the pins.
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" status --short && git -C "$W" add -A && git -C "$W" commit -m "chore(deps): pin housegate $HG_TAG_P1 and arbiter-core $CORE_TAG_P1
 
 Stage-3 P1 multi-source SI (housegate spec 2026-10-14 §16 P1):
@@ -8151,11 +8396,16 @@ object-store backup and restore-and-gate library dataplane/objstore.
 Both are pinned in go.mod, bazel_dep and git_override ($HG_SHA,
 $CORE_SHA); arbiter-proto stays $PROTO_TAG in go.mod only.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 3: Write the failing job-config tests**
 
@@ -8414,7 +8664,7 @@ func TestStorageIntegrityS3CredentialsComeOnlyFromTheEnvironment(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./config/ -count=1 -run 'TestLoadStorageIntegrityJobConfig|TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys|TestStorageIntegrityBackupJobValidation|TestStorageIntegrityRestoreDrillValidation|TestStorageIntegrityS3Credentials' -v`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && GOWORK=off go test ./config/ -count=1 -run 'TestLoadStorageIntegrityJobConfig|TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys|TestStorageIntegrityBackupJobValidation|TestStorageIntegrityRestoreDrillValidation|TestStorageIntegrityS3Credentials' -v`
 
 Expected: `config` FAILS to compile — `unknown field Backup in struct literal of type StorageIntegrityConfig`, `undefined: StorageIntegrityBackup`, `undefined: LoadStorageIntegrityJobConfig`, `validStorageIntegrityBackupJobConfig().ValidateBackupJob undefined (type StorageIntegrityConfig has no field or method ValidateBackupJob)`.
 
@@ -8688,12 +8938,14 @@ with:
 
 The two `BUILD.bazel` hunks are what `bazel run //:gazelle` writes for the new files (`storage_integrity_job.go` imports only the standard library and yaml.v3, already deps, and the test file nothing `go_test` lacks); Step 10 runs gazelle and must leave them unchanged.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config)" && GOWORK=off go test ./config/ -count=1 -run 'TestLoadStorageIntegrityJobConfig|TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys|TestStorageIntegrityBackupJobValidation|TestStorageIntegrityRestoreDrillValidation|TestStorageIntegrityS3Credentials' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && test -z "$(gofmt -l config)" && GOWORK=off go test ./config/ -count=1 -run 'TestLoadStorageIntegrityJobConfig|TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys|TestStorageIntegrityBackupJobValidation|TestStorageIntegrityRestoreDrillValidation|TestStorageIntegrityS3Credentials' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: no unformatted file; `--- PASS:` for `TestLoadStorageIntegrityJobConfigNeedsNoNodeConfigAndNoPrivateKey`, `TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys`, `TestStorageIntegrityBackupJobValidation`, `TestStorageIntegrityRestoreDrillValidation` and `TestStorageIntegrityS3CredentialsComeOnlyFromTheEnvironment`, then `ok  	compute-network-node/config`; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print: every package PASSES; Plan S3-B's `TestDecodeConfigYAMLRefusesAStorageIntegrityClickhousePasswordKey` and every host config test are unchanged).
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add -A && git -C "$W" commit -m "feat(config): storage_integrity.backup and the job config of the backup and restore-drill commands
 
 storage_integrity.backup names the replica bucket (bucket_url), the
@@ -8708,11 +8960,16 @@ STORAGE_INTEGRITY_S3_ACCESS_KEY_ID and STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY;
 a config file that sets storage_integrity.backup.access_key_id or
 secret_access_key is refused whatever the value. Hosts ignore the block.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 5: Write the failing backup and restore-drill tests**
 
@@ -9279,7 +9536,7 @@ func TestStorageIntegrityArbiterManifestReadsAreBounded(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./standalone/ -count=1 -run 'TestStorageIntegrityBackup|TestStorageIntegrityRestoreDrill|TestStorageIntegrityArbiterManifestReadsAreBounded' -v`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && GOWORK=off go test ./standalone/ -count=1 -run 'TestStorageIntegrityBackup|TestStorageIntegrityRestoreDrill|TestStorageIntegrityArbiterManifestReadsAreBounded' -v`
 
 Expected: `standalone` FAILS to compile; the compiler stops after ten errors, which are `undefined: storageIntegrityBackupDeps`, `undefined: runStorageIntegrityBackup`, `undefined: StorageIntegrityRestoreDrillOptions` and `undefined: runStorageIntegrityRestoreDrill`, then `too many errors`.
 
@@ -9712,12 +9969,14 @@ with:
 
 Every other import of the two files (go-ethereum's `rpc`, housegate's `pkg/registry` and `pkg/replay/payloadexec`, clickhouse-go, `//rpc`, `//config` and sentio-core's `common/log`; for the test also housegate's `pkg/replay`) is already a dep of the target that needs it; Plan S3-B Task 12's own srcs (`storage_integrity_owner_audit_metrics.go` and its tests) sit elsewhere in the lists.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l standalone)" && GOWORK=off go test ./standalone/ -count=1 -run 'TestStorageIntegrityBackup|TestStorageIntegrityRestoreDrill|TestStorageIntegrityArbiterManifestReadsAreBounded' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && test -z "$(gofmt -l standalone)" && GOWORK=off go test ./standalone/ -count=1 -run 'TestStorageIntegrityBackup|TestStorageIntegrityRestoreDrill|TestStorageIntegrityArbiterManifestReadsAreBounded' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: no unformatted file; `--- PASS:` for `TestStorageIntegrityBackupPrintsOnlyTheIndexLine`, `TestStorageIntegrityBackupOpensTheClickHouseAsTheConfiguredUser`, `TestStorageIntegrityRestoreDrillExitsNonZeroUnlessTheVerdictPasses`, `TestStorageIntegrityRestoreDrillTakesSchemasFromTheOwnersStatusRPC`, `TestStorageIntegrityRestoreDrillRefusesATableWithoutASchema` and `TestStorageIntegrityArbiterManifestReadsAreBounded`, then `ok  	compute-network-node/standalone`; `go vet` prints nothing; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print; the canonical-snapshot and listener source-shape tests of `standalone` pass unchanged: `Run` is untouched).
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add -A && git -C "$W" commit -m "feat(storage-integrity): backup and restore-drill runners on arbiter-core objstore
 
 RunStorageIntegrityBackup runs one objstore.Backuper: the owner's SI
@@ -9734,11 +9993,16 @@ unless it passes. Every manifest read from the arbiter gives up after five
 minutes, so an arbiter outage fails the Job instead of holding it until its
 deadline. Logs go to stderr; no key or password is printed.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 7: Write the failing command test**
 
@@ -9827,7 +10091,7 @@ func TestStorageIntegrityCommandListsBackupAndRestoreDrill(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./commands/ -count=1 -run TestStorageIntegrityCommandListsBackupAndRestoreDrill -v`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && GOWORK=off go test ./commands/ -count=1 -run TestStorageIntegrityCommandListsBackupAndRestoreDrill -v`
 
 Expected: FAIL — `--- FAIL: TestStorageIntegrityCommandListsBackupAndRestoreDrill` with `Received unexpected error: unknown command "backup" for "storage-integrity"`.
 
@@ -9939,12 +10203,14 @@ with:
 
 The `go_library` deps already hold `//config`, `//standalone` and cobra.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l commands)" && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && test -z "$(gofmt -l commands)" && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: no unformatted file; `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement`, `--- PASS: TestStorageIntegrityCommandListsBackupAndRestoreDrill`, `ok  	compute-network-node/commands`; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print).
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add -A && git -C "$W" commit -m "feat(storage-integrity): sentio-node storage-integrity backup and restore-drill
 
 backup (no arguments) and restore-drill (--owner and --owner-rpc
@@ -9954,11 +10220,16 @@ drill Job run without a node block or PRIVATE_KEY (Plan S3-C1
 contract §18). Each writes one JSON line to stdout; restore-drill exits
 non-zero unless its verdict passes.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 9: README**
 
@@ -10006,40 +10277,65 @@ Both commands log in to ClickHouse as `storage_integrity.clickhouse_username` (r
 ### Dynamic storage-integrity table set
 ````
 
-Run: `W=<worktree path>; grep -c '^### Storage-integrity backups and restore drills$' "$W/README.md"; grep -c 'storage-integrity backup' "$W/README.md"; grep -c 'restore-drill' "$W/README.md"; grep -c 'STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY' "$W/README.md"`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; grep -c '^### Storage-integrity backups and restore drills$' "$W/README.md"; grep -c 'storage-integrity backup' "$W/README.md"; grep -c 'restore-drill' "$W/README.md"; grep -c 'STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY' "$W/README.md"`
 
 Expected: `1`, `1`, `4`, `1` (lines).
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add -A && git -C "$W" commit -m "docs(readme): storage-integrity backup and restore-drill
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 10: Full verification**
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
-Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`, and rerun this command); the build succeeds; every test PASSES (the ClickHouse-gated ones skip).
+Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then the optional signed commit block immediately below, and rerun this command); the build succeeds; every test PASSES (the ClickHouse-gated ones skip).
+
+Only if the reviewed gazelle diff changed BUILD files, make this local commit; all normal signing/identity failure stops apply:
+
+```bash
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
+if git -C "$W" diff --quiet -- '*BUILD.bazel'; then
+  echo 'no optional gazelle commit needed'
+else
+  git -C "$W" config --worktree commit.gpgsign true || exit 1
+  workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
+  git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m 'chore(build): gazelle' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' || { echo 'commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback' >&2; exit 1; }
+  workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo 'commit produced no new HEAD; stop' >&2; exit 1; }
+  workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo 'new HEAD must be poetry <chen@sentio.xyz> G; stop' >&2; exit 1; }
+  git -C "$W" verify-commit HEAD || exit 1
+fi
+```
 
 Then every commit of the branch (local):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
 git -C "$W" log --oneline origin/main..HEAD
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: the five commits of Steps 2, 4, 6, 8 and 9 above `origin/main`, newest first (`docs(readme): storage-integrity backup and restore-drill`, `feat(storage-integrity): sentio-node storage-integrity backup and restore-drill`, `feat(storage-integrity): backup and restore-drill runners on arbiter-core objstore`, `feat(config): storage_integrity.backup and the job config of the backup and restore-drill commands`, `chore(deps): pin housegate <HG_TAG_P1> and arbiter-core <CORE_TAG_P1>`; six with Step 10's `chore(build): gazelle` on top if gazelle changed a file) and exactly one author line, `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and rewrite the authors (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`) before anything is pushed.
+Expected: the five commits of Steps 2, 4, 6, 8 and 9 above `origin/main`, newest first (`docs(readme): storage-integrity backup and restore-drill`, `feat(storage-integrity): sentio-node storage-integrity backup and restore-drill`, `feat(storage-integrity): backup and restore-drill runners on arbiter-core objstore`, `feat(config): storage_integrity.backup and the job config of the backup and restore-drill commands`, `chore(deps): pin housegate <HG_TAG_P1> and arbiter-core <CORE_TAG_P1>`; six with Step 10's `chore(build): gazelle` on top if gazelle changed a file) and exactly one author line, `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and rewrite the authors (a user-reviewed signed history repair, followed by the same new-HEAD/poetry+G/verify-commit gate) before anything is pushed.
 
 Then the built binary (local only; nothing is dialed: each run stops at a refusal before any connection is used):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
 tmp="$(mktemp -d)"
 cd "$W" && GOWORK=off go build -o "$tmp/sentio-node" .
 cat > "$tmp/job.yaml" <<'YAML'
@@ -10119,9 +10415,9 @@ Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; S=<scratchpad directory>
-cd "$W" && git push -u origin urwt/claude/multi-source-s3c1
-gh pr create --repo sentioxyz/sentio-node --base main --head urwt/claude/multi-source-s3c1 \
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; S=<scratchpad directory>
+cd "$W" && git push -u origin urwt/codex/multi-source-s3c1
+gh pr create --repo sentioxyz/sentio-node --base main --head urwt/codex/multi-source-s3c1 \
   --title 'feat(storage-integrity): multi-source SI stage 3 P1 backup and restore-drill commands' \
   --body-file "$S/sn-s3c1-pr.md"
 ```
@@ -10140,7 +10436,7 @@ Before the merge, check that the PR's head is the worktree's checked `HEAD` and 
 
 ```bash
 set -eo pipefail
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
@@ -10219,16 +10515,36 @@ h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-led
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c1-ledger-$n" "urwt/claude/multi-source-s3c1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$L/record-s3c1-$n.urwt.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c1-ledger-$n" "urwt/codex/multi-source-s3c1-ledger-$n" "$ref")" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$L/record-s3c1-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/record-s3c1-$n.urwt.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$h" rev-parse "$ref")" || exit 1
+actual_dirty="$(git -C "$d" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" SN_COMMIT_P1="$SN_COMMIT_P1" SN_DIGEST_P1="$SN_DIGEST_P1" || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record SN_COMMIT_P1 and SN_DIGEST_P1 of Plan S3-C1 (Task 25)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 git -C "$d" log -1 --format='%an <%ae>'
 ```
@@ -10239,7 +10555,18 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=25
-d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+recorded_d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+[ "$recorded_d" = "$d" ] || { echo "ledger state path differs from retained actual URWT JSON; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] || { echo "restored ledger branch differs; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored ledger is not housegate"' "$common_w" "$common_repo" || exit 1
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
@@ -10293,7 +10620,7 @@ Expected: `SN_COMMIT_P1=<the value written>`, `SN_DIGEST_P1=<the value written>`
 
 Contract §18 (its production part: Terraform, keys and logins, ClickHouse users, `siBackup`, monitoring, `test_render.py`), spec §16 P1 ("tracks paused: none", backup keys that list, read and create on their own prefix and never delete, read-only restore keys), §14 (the lockdown rules for every new ClickHouse user: literal hash, users.d reload, grant probe) and §8.2 as amended (decision D36: `si_restore`'s explicit `hg_rstage` rights, never `ALL`), clarifications K23 (ClickHouse-side object-store access with keys from the job's environment), K24 (no delete; the lock remover only when `P1_BACKUP_DELETE` is `lock`), K25 (list confinement by one managed folder per prefix), K26 (prefixes, accounts, schedules) and K27 (the drill on a staging installation). This task gives production everything P1's live task (Task 28) applies, inert on merge: (1) the Terraform of the versioned replica bucket `sentio-352722-si-devnet2-si-v2-replica`, one backup service account per owner and one mechanics writer on a no-delete custom role, each granted only on the managed folder of its own prefix, the lock remover gated on `P1_BACKUP_DELETE`, and four read-only restore service accounts; (2) the installation-wide ClickHouse user `si_backup` (`clickhouse.access.backupUser` in charts/storage-integrity, a users.d reload) with `SI_BACKUP_GRANTS`; (3) the grant probe rows of `si_backup` and `si_restore`, measured; (4) `make-si-backup-keys.sh` and the `p1-staging` and `--add-user` modes of `make-clickhouse-logins.sh`, after which the user creates the P1 staging and `si_backup` logins in their own terminal; (5) the P1 staging installation `storage-integrity-si-v2-p1-staging`, born locked with `si_backup` and the staging-only `si_restore`; (6) the `charts/sentio-node` `siBackup` CronJob and its ConfigMap, outside the host's `checksum/config`, and a `siBackup` block (off) in each devnet2 SI host overlay; (7) the backup alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` (`monitoring.backups`, nothing listed); (8) the render tests that keep all of it equal to the contract and follow Task 28's rollout. Nothing here is applied, synced or pushed: Task 27 adds the runbook and opens the P1 PR from this branch, and every release renders byte-identically to the branch base (Step 18).
 
-Worktree: production `multi-source-s3c1` on branch `urwt/claude/multi-source-s3c1`, created from `origin/main` after `E_PR` merged and `E_END` and `INDEXER_C_ID` are recorded (contract §19). Every command below runs in its own Bash call prefixed with `W=<the worktree path>; P="$HOME/si-devnet2-stage3-p1-prep";` (the path Step 1 prints; `$P` is this task's local directory).
+Worktree: production `multi-source-s3c1` on branch `urwt/codex/multi-source-s3c1`, created from `origin/main` after `E_PR` merged and `E_END` and `INDEXER_C_ID` are recorded (contract §19). Every command below runs in its own Bash call prefixed with `W=<the worktree path>; P="$HOME/si-devnet2-stage3-p1-prep";` (the path Step 1 prints; `$P` is this task's local directory).
 
 **Files** (line anchors are production at `E_END`: `origin/main` at review time, `36a680517` (Tasks 13–17 and the live lockdown through indexer-b posture C and indexer-a logins already merged), with the remaining Task 18 lockdown and Tasks 19–21 applied as prerequisite stand-ins; already-merged credential blocks are edited in place, never duplicated, as the plan header's hunk rule says; each diff below was re-anchored on that state as the review replayed it and applies with `git apply` without an offset, or by hand where Plan S3-B's execution moved a line; Notes, "Base (review)"):
 - Create: `terraform/storage_integrity_devnet2_si_v2_replica.tf`
@@ -10337,6 +10664,8 @@ Notes:
 - **Open questions settled in review (status §4.2).** (1) The grant probe is measured on CI's `26.3.37.3` and on the deployed image: 143 rows and 0 mismatches on each, `si_backup` 7 and `si_restore` 13 `system.grants` rows. (2) `timeZone: Etc/UTC` needs Kubernetes 1.27 or later; sea runs 1.33.5 (`k8s-sea/_cluster/kubespray.sh:5`, upgrade runbook to 1.34.3), so no live check is needed. (3) The backup rules read `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_status_failed` and `kube_job_owner` from the kube-state-metrics of sea's `victoria-metrics-k8s-stack` (chart 0.68.0, whose default rules already read its `kube_job_failed`, `k8s-sea/monitoring/vm_rules_values.yaml`); runbook §11 (Task 27) checks each series per CronJob before the monitoring commit. (4) K24 and K25 stay the user's: Step 1 stops for `lock` without the user's confirmed spec amendment (on `main` or the plans branch) and asks the user to confirm K25's layout before Step 4. (5) Task 28's `si_render_diff` expectations hold: enabling a job adds exactly its ConfigMap and CronJob, `backupUser` changes only the network CHI, and listing the CronJobs changes only the VMRule.
 - **Verified (adversarial review, 2026-10-17).** On a `git archive` of production `origin/main` `7e08b6ea5` (SI paths as `e21190b06`), without the two `k8s-sea/clickhouse` files the security rule forbids, with Plan S3-B's Tasks 16, 19 and 20 applied from their text and the live states of Tasks 18 and 21 simulated, every block of this task was replayed verbatim by a script, with stand-in ledger values (`INDEXER_C_ID` 2, `P1_BACKUP_DELETE` none) and stand-in hashes files: Step 1's baseline printed `1 1 1 1 1 1 1 `, `1`, `1`, `Ran 128 tests` / `OK`; every failing run printed exactly what its step quotes (with N = 128) and every implementation passed, `Ran 147 tests` / `OK` at the end; the four `helm lint --strict` runs passed; `render-inertness.sh` printed eight `identical` lines; no token was left; `terraform fmt -check` passed, and `terraform validate` passed offline (`init -backend=false` with the locally cached google provider 4.77.0, the two managed-folder resources left out because that provider predates them; their arguments checked against provider 7.3.0's documentation) for `none`, `lock` and a bad value (the precondition then refuses at plan time), with `terraform console` giving four writers, four readers and a lock-remover map empty for `none` and equal to the writers for `lock`; the grant probe corpus as above on both images; `bash -n` (bash 5.3 and 3.2) and `shellcheck` 0.11 on both scripts and every bash block (placeholders filled; one SC2016 info on Step 11's intended single-quoted go-template), `fish -n` on Step 11's fish block; Step 11's hashes check against stand-in hashes files printed `hashes ok: 9 distinct, in 4 files`. Task 28's seven single-service commits (U-b, U-c, U-n, J-b, J-c, J-a, M), made with Task 28's own `p1-edit.py` on a clone of the result, kept `Ran 147 tests` / `OK` at every commit. Fifteen mutations each failed their named test: a delete permission in the writer role, the writer role bound on the bucket, `objectAdmin` for the readers, the lock remover without its gate, `siBackup` in the host checksum, a fourth env var, a Secret name in the job config, a `SELECT` on `hg_safe` for `si_backup`, `ALL ON hg_rstage.*` for `si_restore`, a backup rule selecting `job`, a refused probe row marked ok, the key script printing the secret, `--add-user` printing a password, a backup job retried in place, and `backupUser` rendered without `users`.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-production.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Worktree, ledger values and baseline (read-only)**
 
 The ledger values come only from the ledger copies through the ledger tool (contract §19, decisions D23 and D34). Run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"`, write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool (the ledger tool at the end of contract §19, verbatim; an earlier copy holds the same text and is overwritten). Remote read (housegate and production fetches): needs explicit user confirmation in chat before running.
@@ -10366,20 +10695,38 @@ git -C "$p" cat-file -e origin/main:k8s-sea/sentio-network-devnet2/storage-integ
 git -C "$p" grep -c '"sentio-node-devnet2-indexer-c": "si_snode",' origin/main -- charts/storage-integrity/tests/test_render.py
 git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | python3 -I -c 'import ast, sys; names = ("DEVNET2_MONITORED_HOSTS", "DEVNET2_MONITORED_CLICKHOUSES"); found = {node.targets[0].id: ast.literal_eval(node.value) for node in ast.parse(sys.stdin.read()).body if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names}; print(*(found[name][-1] for name in names))'
 git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | python3 -I -c 'import ast, sys; found = [ast.literal_eval(n.value) for n in ast.parse(sys.stdin.read()).body if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == "DEVNET2_MONITORING_ENABLED" for v in n.targets)]; assert found == [True], "S3-B monitoring is not enabled: stop before P1"; print("S3-B monitoring enabled")' || exit 1
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" claude multi-source-s3c1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$HOME/.cache/s3-worktrees/s3c1-production.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" codex multi-source-s3c1 urwt/codex/multi-source-s3c1 origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$HOME/.cache/s3-worktrees/s3c1-production.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$HOME/.cache/s3-worktrees/s3c1-production.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$p" rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = urwt/codex/multi-source-s3c1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$p" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
 ```
 
-Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and `sentio-node-devnet2-indexer-c storage-integrity-si-v2-indexer-c`, the last entries of `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` (Task 21's monitoring commit, whose edit tool writes each tuple one item per line, so the constants are read as Python, never with a one-line grep; `sentio-node-devnet2-indexer-b storage-integrity-si-v2-indexer-b` means E is not finished: stop), `S3-B monitoring enabled`, then one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/production/multi-source-s3c1` (expanded): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and `sentio-node-devnet2-indexer-c storage-integrity-si-v2-indexer-c`, the last entries of `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` (Task 21's monitoring commit, whose edit tool writes each tuple one item per line, so the constants are read as Python, never with a one-line grep; `sentio-node-devnet2-indexer-b storage-integrity-si-v2-indexer-b` means E is not finished: stop), `S3-B monitoring enabled`, then one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-production.json` (the template is descriptive only): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
 
 Set the worktree's own commit identity before anything is committed (local only, never committed):
 
 ```bash
-W=<path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 ```
 
-Expected: `poetry` and `chen@sentio.xyz`. The global identity `uranuswch@gmail.com` must never author a commit of this task: GitHub would add it as a co-author of the P1 PR's squash merge. Every commit block below ends with `git -C "$W" log -1 --format='%an <%ae>'`, which must print `poetry <chen@sentio.xyz>`; any other author: stop, set this identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step. Step 18 checks every commit of the branch, and Task 27 checks them again before the squash merge.
+Expected: `poetry` and `chen@sentio.xyz`. The global identity `uranuswch@gmail.com` must never author a commit of this task: GitHub would add it as a co-author of the P1 PR's squash merge. Every commit block below ends with `git -C "$W" log -1 --format='%an <%ae>'`, which must print `poetry <chen@sentio.xyz>`; any other author: stop, set this identity and run a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate before the next step. Step 18 checks every commit of the branch, and Task 27 checks them again before the squash merge.
 
 Keep the ledger values for the fill tool (local only; it holds no secret):
 
@@ -10391,7 +10738,7 @@ mkdir -m 700 "$P" && python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get /Users
 Expected: `INDEXER_C_ID E_END SN_COMMIT_P1 SN_DIGEST_P1 HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE`.
 
 ```bash
-W=<path>; cd "$W" && git log --oneline -1 && for name in STAGE3_HOST_IMAGES MONITORING_ALERTS SI_CLICKHOUSE_GRANTS SI_MEMBER_DATABASES INDEXER_C_CHI DEVNET2_SI_RELEASES LOCKDOWN_STAGING_CHI; do grep -c "^$name = " charts/storage-integrity/tests/test_render.py; done | tr '\n' ' ' && echo && grep -c '^def probe_atoms(statement):$' charts/storage-integrity/tests/test_render.py && grep -c '^  monitoring:\|^monitoring:' k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml && test -x scripts/storage-integrity/make-clickhouse-logins.sh && test -f scripts/storage-integrity/render-inertness.sh && test ! -e terraform/storage_integrity_devnet2_si_v2_replica.tf && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && git log --oneline -1 && for name in STAGE3_HOST_IMAGES MONITORING_ALERTS SI_CLICKHOUSE_GRANTS SI_MEMBER_DATABASES INDEXER_C_CHI DEVNET2_SI_RELEASES LOCKDOWN_STAGING_CHI; do grep -c "^$name = " charts/storage-integrity/tests/test_render.py; done | tr '\n' ' ' && echo && grep -c '^def probe_atoms(statement):$' charts/storage-integrity/tests/test_render.py && grep -c '^  monitoring:\|^monitoring:' k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml && test -x scripts/storage-integrity/make-clickhouse-logins.sh && test -f scripts/storage-integrity/render-inertness.sh && test ! -e terraform/storage_integrity_devnet2_si_v2_replica.tf && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 ```
 
 Expected: HEAD is `origin/main` as fetched, `1 1 1 1 1 1 1 `, `1`, `1`, then `Ran N tests` / `OK`. Record N: 129 in the refreshed consistency replay (production `36a680517` plus the remaining S3-B E_END state, including the newly merged staging-name test). Later steps expect N+2, N+4, N+7, N+9, N+17 and N+19; the quoted outputs below use N = 129. Anything else: stop and reconcile with Plan S3-B before applying a hunk.
@@ -10778,7 +11125,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 Fill the tokens of the constants, then run:
 
 ```bash
-W=<path>; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" charts/storage-integrity/tests/test_render.py && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" charts/storage-integrity/tests/test_render.py && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured, N = 129): `filled charts/storage-integrity/tests/test_render.py`, then
@@ -10965,7 +11312,9 @@ resource "google_storage_bucket_iam_member" "storage_integrity_devnet2_si_v2_res
 ```
 
 ```bash
-W=<path>; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" terraform/storage_integrity_devnet2_si_v2_replica.tf && { ! command -v terraform > /dev/null || terraform -chdir=terraform fmt -check -diff storage_integrity_devnet2_si_v2_replica.tf; } && grep -cE '__[A-Z0-9_]+__' terraform/storage_integrity_devnet2_si_v2_replica.tf; python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" terraform/storage_integrity_devnet2_si_v2_replica.tf && { ! command -v terraform > /dev/null || terraform -chdir=terraform fmt -check -diff storage_integrity_devnet2_si_v2_replica.tf; } && grep -cE '__[A-Z0-9_]+__' terraform/storage_integrity_devnet2_si_v2_replica.tf; python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add terraform/storage_integrity_devnet2_si_v2_replica.tf charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(terraform): devnet2-si-v2 replica bucket for stage-3 P1 backups
 
 The versioned, never-destroyed bucket sentio-352722-si-devnet2-si-v2-replica
@@ -10979,7 +11328,12 @@ read-only restore service accounts (objectViewer). No HMAC key, key file or
 Secret is a resource. test_render.py pins the contract, and the stage-3 P1
 constants that the next commits use.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -11266,7 +11620,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured, N = 129):
@@ -11430,7 +11784,9 @@ diff --git a/charts/storage-integrity/templates/validate.yaml b/charts/storage-i
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add charts/storage-integrity && git -C "$W" commit -m "feat(storage-integrity): the installation-wide si_backup ClickHouse user
 
 clickhouse.access.backupUser (requires users) adds si_backup, the login of
@@ -11442,7 +11798,12 @@ Adding it changes the installation's users only: a users.d reload, no pod
 restart. Every by-role comparison of a CHI manifest renders the network
 chart with that manifest's own si_backup state.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -11563,7 +11924,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseAccessTest.test_grant_probe_covers_every_protocol_grant 2>&1 | grep -E '^AssertionError|^'"'"'si_|^(Ran|FAILED|OK)'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseAccessTest.test_grant_probe_covers_every_protocol_grant 2>&1 | grep -E '^AssertionError|^'"'"'si_|^(Ran|FAILED|OK)'
 ```
 
 Expected (measured): `AssertionError: Items in the second set but not the first:`, `'si_backup'`, `'si_restore'`, `Ran 1 test in …`, `FAILED (failures=1)`.
@@ -11635,7 +11996,7 @@ diff --git a/charts/storage-integrity/tests/clickhouse_grant_probe.tsv b/charts/
 ```
 
 ```bash
-W=<path>; cd "$W" && awk -F '\t' '$1 == "si_backup" || $1 == "si_restore"' charts/storage-integrity/tests/clickhouse_grant_probe.tsv | wc -l | tr -d ' ' && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseAccessTest 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && awk -F '\t' '$1 == "si_backup" || $1 == "si_restore"' charts/storage-integrity/tests/clickhouse_grant_probe.tsv | wc -l | tr -d ' ' && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseAccessTest 2>&1 | tail -3
 ```
 
 Expected: `35`, `Ran 9 tests` / `OK`.
@@ -11643,7 +12004,7 @@ Expected: `35`, `Ran 9 tests` / `OK`.
 Then run the whole corpus against the CI ClickHouse locally, as every role with users made from `SI_PROBE_GRANTS` (the P1 staging installation repeats it on the deployed image in Task 28 §4). Pulling `clickhouse/clickhouse-server:26.3.37.3` (about 800 MB, from Docker Hub) is a download, and the container is a local action: both need explicit user confirmation in chat before running. The block starts its own container `s3c1-t26-probe` without published ports and removes it at the end.
 
 ```bash
-W=<path>; cd "$W" && d=$(mktemp -d) && python3 -I -B - "$d/users.xml" <<'PY'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && d=$(mktemp -d) && python3 -I -B - "$d/users.xml" <<'PY'
 import hashlib
 import sys
 from xml.sax.saxutils import escape
@@ -11680,7 +12041,10 @@ docker rm -f s3c1-t26-probe > /dev/null && rm -rf "$d"
 Expected (measured in review on `clickhouse/clickhouse-server:26.3.37.3` and, with the image name swapped, on the deployed `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`; the drafter's run was on 26.3.51.7): `rows 143 mismatches 0`, then `si_backup	7` and `si_restore	13` (`system.grants` rows: one per privilege and object; the passwords here are the throwaway `probe-<role>` of this container only). A mismatch, or a row that hangs, is a measured difference on 26.3.37.3: stop and record it (contract §18: a measured difference changes both copies and Appendix B). One exception: in review a `docker exec` once stalled before its statement reached the server (`system.query_log` held no entry for it, the row was one of Plan S3-B's) and a re-run of the whole block answered every row in 15 seconds; so a single stalled row is first interrupted, the container removed with `docker rm -f s3c1-t26-probe` and the block run once more. Fallback on this Mac: if `docker` reaches no daemon, `export DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock` first (OrbStack; the default socket belongs to a stopped Docker Desktop).
 
 ```bash
-W=<path>; git -C "$W" add charts/storage-integrity/tests && git -C "$W" commit -m "test(storage-integrity): grant probe rows for si_backup and si_restore
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1;
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add charts/storage-integrity/tests && git -C "$W" commit -m "test(storage-integrity): grant probe rows for si_backup and si_restore
 
 si_backup backs up hg_safe and reads and writes s3() and nothing else;
 si_restore holds explicit hg_rstage rights and READ ON S3, and is refused a
@@ -11689,7 +12053,12 @@ hg_rstage (Plan S3-C1 contract §18, D36). The S3() and s3() rows name an
 endpoint where nothing listens, with retries and asynchronous inserts off,
 so each answers at once (measured on 26.3: 143 rows, 0 mismatches).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -11907,7 +12276,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured): `1 FAIL: test_backup_keys_script_refuses_to_overwrite_or_guess`, `8 FAIL: test_backup_keys_script_stores_the_key_only_in_its_secret` (one per account: `bash: …/make-si-backup-keys.sh: No such file or directory`), `4 FAIL: test_logins_script_adds_one_user_and_only_a_known_one` (the script prints its usage for `--add-user`), `1 FAIL: test_logins_script_writes_only_hashes_and_never_prints_a_password` (installation `p1-staging`), `1 FAILED (failures=14)`, `1 Ran 5 tests`.
@@ -12140,7 +12509,9 @@ diff --git a/scripts/storage-integrity/make-clickhouse-logins.sh b/scripts/stora
 ```
 
 ```bash
-W=<path>; cd "$W" && chmod 755 scripts/storage-integrity/make-si-backup-keys.sh && for s in scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; do bash -n "$s" && /bin/bash -n "$s"; done && { ! command -v shellcheck > /dev/null || shellcheck scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; } && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | tail -3 && env PATH="/bin:/usr/bin:$PATH" "$(command -v python3)" -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | tail -3 && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && chmod 755 scripts/storage-integrity/make-si-backup-keys.sh && for s in scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; do bash -n "$s" && /bin/bash -n "$s"; done && { ! command -v shellcheck > /dev/null || shellcheck scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; } && python3 -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | tail -3 && env PATH="/bin:/usr/bin:$PATH" "$(command -v python3)" -B charts/storage-integrity/tests/test_render.py ClickHouseLoginsScriptTest SIBackupKeysScriptTest 2>&1 | tail -3 && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add scripts/storage-integrity charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(storage-integrity): HMAC key script and the P1 logins
 
 make-si-backup-keys.sh <account>, run in the user's own terminal, creates one
@@ -12153,7 +12524,12 @@ users, si_backup and the staging-only si_restore) and --add-user si_backup
 <network|indexer-b|indexer-c> for one more user of an installation (Plan
 S3-C1 contract §18). Both are tested against stand-in gcloud and kubectl.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -12165,7 +12541,7 @@ Creating the four Secrets in `sentio-network-devnet2` is a live action and the u
 
 ```fish
 mkdir -m 700 ~/si-devnet2-stage3-p1-logins
-cd ~/src/remotesrc/claude/production/multi-source-s3c1; and bash scripts/storage-integrity/make-clickhouse-logins.sh p1-staging ~/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml
+set W (python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json"); and cd "$W"; and bash scripts/storage-integrity/make-clickhouse-logins.sh p1-staging ~/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml
 for installation in indexer-b indexer-c network
     bash scripts/storage-integrity/make-clickhouse-logins.sh --add-user si_backup $installation ~/si-devnet2-stage3-p1-logins/hashes-si_backup-$installation.yaml; or break
 end
@@ -12176,7 +12552,7 @@ Expected (each run): `created Secret <name> (sentio-network-devnet2)` and `wrote
 When the user reports it done, check the four hashes files (local) and the Secrets' key names. The Secret read is live and read-only (kubectl prints key names only, never a value): it needs explicit user confirmation in chat before it runs.
 
 ```bash
-W=<path>; cd "$W" && python3 -I - "$HOME/si-devnet2-stage3-p1-logins" <<'PY'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -I - "$HOME/si-devnet2-stage3-p1-logins" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -12327,7 +12703,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured, N = 129):
@@ -12561,7 +12937,9 @@ spec:
 ```
 
 ```bash
-W=<path>; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" --staging-hashes "$HOME/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml" docs/examples/storage-integrity-p1-staging-chi.yaml && grep -cE '__[A-Z0-9_]+__' docs/examples/storage-integrity-p1-staging-chi.yaml; python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" --staging-hashes "$HOME/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml" docs/examples/storage-integrity-p1-staging-chi.yaml && grep -cE '__[A-Z0-9_]+__' docs/examples/storage-integrity-p1-staging-chi.yaml; python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add docs/examples/storage-integrity-p1-staging-chi.yaml charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(storage-integrity): the P1 staging installation with si_restore
 
 storage-integrity-si-v2-p1-staging is indexer-b's source installation
@@ -12572,7 +12950,12 @@ whose hg_rstage rights are explicit and never ALL (Plan S3-C1 contract §18,
 D36). No other installation has si_restore. The P1 runbook applies it with
 kubectl and deletes it after the drills.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -12937,7 +13320,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured, N = 129):
@@ -13269,7 +13652,9 @@ diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integr
 ```
 
 ```bash
-W=<path>; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/sentio-node --strict | tail -1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/sentio-node --strict | tail -1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add charts/sentio-node k8s-sea/sentio-network-devnet2 charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(sentio-node): siBackup CronJob outside the host checksum
 
 charts/sentio-node gains siBackup, a top-level block that renders, when
@@ -13281,7 +13666,12 @@ and the HMAC key reach the container only as three Secret env vars. The host
 StatefulSet renders byte-identically with the job on and off. Each devnet2 SI
 host states its job, off, with the backup image, owner, schedule and Secrets.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -13476,7 +13866,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py MonitoringTest ActualFreshNetworkTest.test_devnet2_monitoring_follows_the_rollout 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py MonitoringTest ActualFreshNetworkTest.test_devnet2_monitoring_follows_the_rollout 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
 Expected (measured): `1 ERROR: test_backup_alerts_read_only_this_namespaces_cronjobs`, `1 ERROR: test_devnet2_monitoring_follows_the_rollout`, `1 ERROR: test_every_rule_reads_only_this_networks_series` (each `KeyError: 'backups'`), `1 FAIL: test_alert_names_are_the_reviewed_set`, `1 FAIL: test_backup_monitoring_is_off_until_cronjobs_are_listed`, `1 FAIL: test_default_renders_no_monitoring`, `8 FAIL: test_monitoring_settings_fail_closed` (the new settings render instead of refusing), `1 FAILED (failures=11, errors=3)`, `1 Ran 13 tests`.
@@ -13660,7 +14050,9 @@ diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-s
 ```
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" add charts/storage-integrity k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml && git -C "$W" commit -m "feat(storage-integrity): backup alerts for the SI backup CronJobs
 
 monitoring.backups (cronJobs, maxAgeSeconds, runbookURL) renders the rule
@@ -13672,7 +14064,12 @@ Job of a listed CronJob. Both read kube-state-metrics by namespace and
 CronJob, never job, and point into the P1 runbook's §15.2. devnet2 lists
 none until the P1 runbook's §11.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -13719,12 +14116,21 @@ diff --git a/.github/workflows/storage-integrity-chart.yml b/.github/workflows/s
 ```
 
 ```bash
-W=<path>; cd "$W" && git add .github/workflows/storage-integrity-chart.yml && git commit -q -m "ci(storage-integrity): chart validation runs on the stage-3 P1 files
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1;
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
+cd "$W" && git add .github/workflows/storage-integrity-chart.yml && git commit -q -m "ci(storage-integrity): chart validation runs on the stage-3 P1 files
 
 The replica bucket's Terraform, the P1 staging installation and the P1
 runbook are read by test_render.py, so a change to any of them runs it.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict | tail -1 && helm lint charts/sentio-node --strict | tail -1 && bash scripts/storage-integrity/render-inertness.sh "$(git merge-base HEAD origin/main)"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
+python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1 && helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict | tail -1 && helm lint charts/sentio-node --strict | tail -1 && bash scripts/storage-integrity/render-inertness.sh "$(git merge-base HEAD origin/main)" || exit 1
 git -C "$W" grep -nE '__(SN_COMMIT_P1|SN_DIGEST_P1|HG_TAG_P1|CORE_TAG_P1|INDEXER_C_ID|P1_BACKUP_DELETE|SHA256_P1S_[A-Z_]+)__' || echo "no token left"
 { ! command -v terraform > /dev/null || terraform -chdir="$W/terraform" fmt -check storage_integrity_devnet2_si_v2_replica.tf; } && echo "fmt ok"
 git -C "$W" status --short && git -C "$W" diff --stat "$(git -C "$W" merge-base HEAD origin/main)" | tail -1
@@ -13733,12 +14139,11 @@ git -C "$W" log --format='%an <%ae>' "$(git -C "$W" merge-base HEAD origin/main)
 
 Expected: `Ran N+19 tests` / `OK`; four `1 chart(s) linted, 0 chart(s) failed`; eight lines `storage-integrity-si-v2 identical`, `sentio-node-devnet2-indexer-a identical`, `sentio-node-devnet2-indexer-b identical`, `sentio-node-devnet2-observer identical`, `sentio-node-testnet-v2-indexer-a identical`, `sentio-node-testnet-v2-indexer-b identical`, `sentio-node-observer identical`, `sentio-node-devnet2-indexer-c identical`; `no token left`; `fmt ok`; a clean status; `18 files changed, 2093 insertions(+), 57 deletions(-)` (measured in the refreshed consistency replay), and `poetry <chen@sentio.xyz>` alone (the eight commits' authors). The comparisons use the merge base, not `origin/main` itself, as Plan S3-B Task 16's verification does. Stop on any `DIFFERS`: a default render changed. Task 27 continues on this branch (the runbook, then the push and the P1 PR, whose body quotes this step's output); nothing is pushed here.
 
-
 ---
 
 ## Task 27: production — the stage-3 P1 runbook and the P1 PR (S3-C1)
 
-Contract §18–§19 and K23–K28: Task 26 put the replica bucket's Terraform, the `si_backup` user and its grant-probe rows, the P1 staging installation with the staging-only `si_restore`, the `siBackup` CronJob of `charts/sentio-node`, the backup alerts, the key and login scripts and the render tests on the branch `urwt/claude/multi-source-s3c1`; this task adds the runbook Task 28 executes, `docs/storage-integrity-devnet2-stage3-p1-backups.md` (sections exactly as contract §18 lists them, helpers and evidence files as contract §19 names them), and takes the P1 PR (Tasks 26 and 27 together) through push, review, CI and merge, then records `P1_PR`. Merging it applies, syncs and turns on nothing: the bucket is the user's Terraform apply (runbook §2), the keys the user's terminal (§3), and every live change of P1 a single-service commit the runbook makes after the merge; the PR renders every release byte-identically (`render-inertness.sh` without `--new`).
+Contract §18–§19 and K23–K28: Task 26 put the replica bucket's Terraform, the `si_backup` user and its grant-probe rows, the P1 staging installation with the staging-only `si_restore`, the `siBackup` CronJob of `charts/sentio-node`, the backup alerts, the key and login scripts and the render tests on the branch `urwt/codex/multi-source-s3c1`; this task adds the runbook Task 28 executes, `docs/storage-integrity-devnet2-stage3-p1-backups.md` (sections exactly as contract §18 lists them, helpers and evidence files as contract §19 names them), and takes the P1 PR (Tasks 26 and 27 together) through push, review, CI and merge, then records `P1_PR`. Merging it applies, syncs and turns on nothing: the bucket is the user's Terraform apply (runbook §2), the keys the user's terminal (§3), and every live change of P1 a single-service commit the runbook makes after the merge; the PR renders every release byte-identically (`render-inertness.sh` without `--new`).
 
 **Files** (anchors are production `origin/main` after `E_PR` merged and `E_END` was recorded, the base of Task 26's branch: at review time `origin/main` is `7e08b6ea5`, and Plan S3-B's Tasks 16–21 (the lockdown and indexer-c runbooks, their charts and live commits) are still to land on it; the branch already carries Task 26's commits, and none of them touches the two files below):
 - Create: `docs/storage-integrity-devnet2-stage3-p1-backups.md`
@@ -13774,27 +14179,38 @@ Notes (drafting decisions, Appendix B):
 - **Commit identity (review fix).** GitHub never shows the global `uranuswch@gmail.com`: Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` again (Task 26 set it first) and checks Task 26's authors, Step 6 checks this task's commit, Step 10 checks every commit of the PR (authors and co-author trailers) before the squash merge, and the ledger worktree of R1 sets the same identity before its record commit, which R2 refuses under any other author. The runbook's own commit helpers run in Task 28's live worktree, whose identity Task 28 sets.
 - **Review (2026-10-17).** Re-verified on a production export with Task 26 applied (the chain `base febc6c4ac + S3-B Tasks 15–21 stand-ins + C1 Task 26`, with S3-B Task 17's lockdown runbook extracted from its plan text): Steps 2–5 as written (69 bash blocks, 36 confirmed, 4 fish blocks; `shellcheck` with SC2154 and SC2034 excluded; `bash -n` on bash 5.3 and 3.2; `fish -n`; the self-test; `test_render.py` 147 tests OK; three `helm lint --strict`; `render-inertness.sh` eight `identical`); Task 28's 24 markers and two record markers each name exactly one block; §5's backups, keys and masking helpers ran against a real ClickHouse 26.3.37.3 and MinIO with a writer key without delete (`lock-removal-denied` on the full backup, as K24 predicts), one with delete on `*/.lock` only (every row as expected except the overwrite, which MinIO grants without a delete right and GCS refuses), and a reader key; `si_s3_sql`'s in-pod script ran under the deployed image's `dash` and `mawk`; the §14 revert order applies without conflicts on all seven live commits.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task reuses Task 26's actual URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-production.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The expected code branch is `urwt/codex/multi-source-s3c1`. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Worktree, Task 26's commits and the ledger inputs (read-only)**
 
-Requires Task 26's commits on the branch `urwt/claude/multi-source-s3c1` (worktree `~/src/remotesrc/claude/production/multi-source-s3c1`), the user's P1 logins of Task 26 (the hashes files and Secrets of contract §18), and the ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE` (Tasks 22 and 24), `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25), `INDEXER_C_ID` and `E_END` (Plan S3-B), all on their ledger copies (contract §19, decision D34). Stop if any is missing. With `P1_BACKUP_DELETE` `lock`, the user's amendment of spec §16 P1 (K24) precedes Task 26 and therefore this task; the last block of this step checks it.
+Requires Task 26's commits on the branch `urwt/codex/multi-source-s3c1` (worktree the exact path retained in `$HOME/.cache/s3-worktrees/s3c1-production.json`), the user's P1 logins of Task 26 (the hashes files and Secrets of contract §18), and the ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE` (Tasks 22 and 24), `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25), `INDEXER_C_ID` and `E_END` (Plan S3-B), all on their ledger copies (contract §19, decision D34). Stop if any is missing. With `P1_BACKUP_DELETE` `lock`, the user's amendment of spec §16 P1 (K24) precedes Task 26 and therefore this task; the last block of this step checks it.
 
 The fetches below read remotes (GitHub): they need explicit user confirmation in chat before they run. The worktree is Task 26's (URWT; the script reuses an existing branch), and its commit identity is the worktree's own (Task 26 set it before its first commit; this block sets it again, idempotently):
 
 ```bash
 git -C /Users/uranuswch/Dev/projects/sentio-network/production fetch -q origin
-W="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production claude multi-source-s3c1 | jq -r .path)"; echo "$W"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/production rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
+printf '%s\n' "$W"
 git -C "$W" rev-parse --abbrev-ref HEAD
 git -C "$W" status --porcelain | wc -l | tr -d ' '
 git -C "$W" merge-base --is-ancestor origin/main HEAD && echo "the branch contains origin/main"
 git -C "$W" log --oneline origin/main..HEAD
 git -C "$W" diff --name-only origin/main...HEAD
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 git -C "$W" config user.name; git -C "$W" config user.email
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 git -C "$W" log --format=%B origin/main..HEAD | grep -i '^co-authored-by:' | sort -u
 ```
 
-Expected: `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c1`, `urwt/claude/multi-source-s3c1`, `0` (clean), `the branch contains origin/main` (if `main` moved since Task 26, rebase the unpushed branch first, `git -C "$W" rebase origin/main`, and run Task 26's checks again: Step 5's `render-inertness.sh origin/main` compares with the current `main`), Task 26's commits and nothing else, and exactly the production files of Task 26's **Files** list (the Terraform file, the two charts, the devnet2 overlays, the P1 staging file, the two scripts, `test_render.py`, the grant-probe corpus and the workflow), not `docs/storage-integrity-devnet2-stage3-p1-backups.md` and not `docs/storage-integrity-devnet2-multi-source-tracks.md`; then `poetry` and `chen@sentio.xyz` (the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`; and at most the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Another author: stop and rewrite the authors of Task 26's commits (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`, with the identity above set) before anything else; nothing has been pushed yet. Any other co-author trailer: stop and ask.
+Expected: the actual JSON-derived path retained by Task26, `urwt/codex/multi-source-s3c1`, `0` (clean), `the branch contains origin/main` (if `main` moved since Task 26, rebase the unpushed branch first, `git -C "$W" rebase origin/main`, and run Task 26's checks again: Step 5's `render-inertness.sh origin/main` compares with the current `main`), Task 26's commits and nothing else, and exactly the production files of Task 26's **Files** list (the Terraform file, the two charts, the devnet2 overlays, the P1 staging file, the two scripts, `test_render.py`, the grant-probe corpus and the workflow), not `docs/storage-integrity-devnet2-stage3-p1-backups.md` and not `docs/storage-integrity-devnet2-multi-source-tracks.md`; then `poetry` and `chen@sentio.xyz` (the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`; and at most the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Another author: stop and rewrite the authors of Task 26's commits (a user-reviewed signed history repair, followed by the same new-HEAD/poetry+G/verify-commit gate, with the identity above set) before anything else; nothing has been pushed yet. Any other co-author trailer: stop and ask.
 
 The ledger lives in Appendix C of the plan files on their ledger copies, never in a local checkout or a pending PR (contract §19, decision D23). Run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19 (this plan's Appendix A), verbatim, ending with one newline after `    main(sys.argv[1:])`; an existing copy is overwritten. Remote read (housegate fetch), then local reads, under the confirmation above:
 
@@ -13823,10 +14239,10 @@ python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_
 python3 -I "$L/s3-ledger.py" empty "$h" P1_PR
 ```
 
-Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged); `s3-ledger.py is contract §19 of <that ref>`; seven `NAME=value` lines; `s3-ledger: P1_PR not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed (a missing or extra final newline counts) and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask. Never copy the tool from the ledger copy, never edit the plan. A `stop` (`no plan 's3c1'`, a value not recorded, or `P1_PR` recorded already, which means this task ran before): stop and ask, never type a value in. Every later block of this task starts with `W=<worktree path>` and the first six of those values, copied from that output: `HG_TAG_P1=v…; CORE_TAG_P1=v…; P1_BACKUP_DELETE=none|lock; SN_COMMIT_P1=<40 hex>; SN_DIGEST_P1=sha256:<64 hex>; INDEXER_C_ID=<n>`. Then check them against the branch (local only):
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged); `s3-ledger.py is contract §19 of <that ref>`; seven `NAME=value` lines; `s3-ledger: P1_PR not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed (a missing or extra final newline counts) and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask. Never copy the tool from the ledger copy, never edit the plan. A `stop` (`no plan 's3c1'`, a value not recorded, or `P1_PR` recorded already, which means this task ran before): stop and ask, never type a value in. Every later block of this task starts with `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1` and the first six of those values, copied from that output: `HG_TAG_P1=v…; CORE_TAG_P1=v…; P1_BACKUP_DELETE=none|lock; SN_COMMIT_P1=<40 hex>; SN_DIGEST_P1=sha256:<64 hex>; INDEXER_C_ID=<n>`. Then check them against the branch (local only):
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
 cd "$W" && for v in HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_COMMIT_P1 SN_DIGEST_P1 INDEXER_C_ID; do eval "val=\${$v:-}"; case "$val" in ''|'<'*) echo "set $v from the ledger first"; exit 1 ;; esac; done
 for f in terraform/storage_integrity_devnet2_si_v2_replica.tf charts/sentio-node/templates/si-backup.yaml docs/examples/storage-integrity-p1-staging-chi.yaml scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh charts/storage-integrity/tests/clickhouse_grant_probe.tsv; do test -s "$f" && echo "present $f"; done
 test ! -e docs/storage-integrity-devnet2-stage3-p1-backups.md && echo "no P1 runbook yet"
@@ -13864,7 +14280,7 @@ Expected with `none`: nothing more to decide (no backup key holds a delete; §2 
 The check (not committed) asserts contract §18's section list, exactly one bash block in §0 and that it is §0's first block, `Confirm before running.` in front of every block that writes and only there, no confirmed block in §1, §2 and §3 and a fish block in §2 and §3, no hard-wrapped prose, `bash -n` on every bash block, `fish --no-execute` on every fish block and a compile of every embedded Python program; it writes every block into a directory for `shellcheck` and the self-test:
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 mkdir -p -m 700 "$HOME/.cache/s3c1-task27"
 cat > "$HOME/.cache/s3c1-task27/check_runbook.py" <<'EOF'
 import os, py_compile, re, shutil, subprocess, sys, tempfile
@@ -14234,6 +14650,7 @@ si_p1_tests() { # $1 log name: runs the render tests into $si_backup/tests-<name
   tail -n 3 "$si_backup/tests-$1.txt"
 }
 si_p1_user_commit() { # $1 a|b|c, local only: the single-service commit that adds si_backup to that owner's installation from its hashes file, with the DEVNET2_SI_BACKUP_USER mirror; prints the commit
+  local workflow_commit_before workflow_commit_after workflow_identity
   local inst chi file hashes subject
   case "$1" in a) subject="the network ClickHouse installation" ;; b|c) subject="indexer-$1's ClickHouse" ;; *) return 2 ;; esac
   inst="$(si_p1_installation "$1")" && chi="$(si_p1_chi "$1")" || return 2
@@ -14249,7 +14666,14 @@ si_p1_user_commit() { # $1 a|b|c, local only: the single-service commit that add
   si_p1_py mirror charts/storage-integrity/tests/test_render.py DEVNET2_SI_BACKUP_USER "$chi" True || return 1
   si_p1_tests "si-backup-user-$inst" || return 1
   git add -- "$file" charts/storage-integrity/tests/test_render.py || return 1
-  git commit -q -m "chore(devnet2): si_backup on $subject (stage-3 P1)" -m "Adds the installation-wide backup user si_backup (literal SHA-256 hash, exactly SI_BACKUP_GRANTS) to $chi as a users reload, and its DEVNET2_SI_BACKUP_USER mirror (docs/storage-integrity-devnet2-stage3-p1-backups.md §6)." -m "$si_p1_trailer" || return 1
+  git config --worktree commit.gpgsign true || return 1
+  workflow_commit_before="$(git rev-parse HEAD)" || return 1
+  git commit -q -m "chore(devnet2): si_backup on $subject (stage-3 P1)" -m "Adds the installation-wide backup user si_backup (literal SHA-256 hash, exactly SI_BACKUP_GRANTS) to $chi as a users reload, and its DEVNET2_SI_BACKUP_USER mirror (docs/storage-integrity-devnet2-stage3-p1-backups.md §6)." -m "$si_p1_trailer" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; return 1; }
+  workflow_commit_after="$(git rev-parse HEAD)" || return 1
+  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; return 1; }
+  workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
+  git verify-commit HEAD || return 1
   git show --stat --oneline HEAD | cat
 }
 si_p1_user_apply() { # $1 a|b|c, mutating (only in a confirmed block): pushes si_p1_user_commit's commit to main, applies the CHI file (b, c) or syncs storage-integrity-si-v2 (a), waits for si_backup on every server of the installation and proves it: grants, login, nothing restarted
@@ -14308,6 +14732,7 @@ print(test_render.DEVNET2_SI_BACKUP_SCHEDULES["sentio-node-devnet2-indexer-" + s
   fi
 }
 si_p1_job_commit() { # $1 a|b|c, local only: the single-service commit that turns that owner's backup CronJob on (siBackup.enabled) with its DEVNET2_SI_BACKUP mirror; prints the commit
+  local workflow_commit_before workflow_commit_after workflow_identity
   local file="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$1-storage-integrity-si-v2.yaml"
   si_p1_owner "$1" > /dev/null || return 2
   si_p1_fresh_main || return 1
@@ -14315,7 +14740,14 @@ si_p1_job_commit() { # $1 a|b|c, local only: the single-service commit that turn
   si_p1_py mirror charts/storage-integrity/tests/test_render.py DEVNET2_SI_BACKUP "sentio-node-devnet2-indexer-$1" True || return 1
   si_p1_tests "si-backup-$1" || return 1
   git add -- "$file" charts/storage-integrity/tests/test_render.py || return 1
-  git commit -q -m "chore(devnet2): indexer-$1's stage-3 P1 backup CronJob" -m "Turns on sentio-node-devnet2-indexer-$1's siBackup CronJob (a ConfigMap and a CronJob outside the host checksum; the host StatefulSet renders unchanged) and its DEVNET2_SI_BACKUP mirror (docs/storage-integrity-devnet2-stage3-p1-backups.md §8)." -m "$si_p1_trailer" || return 1
+  git config --worktree commit.gpgsign true || return 1
+  workflow_commit_before="$(git rev-parse HEAD)" || return 1
+  git commit -q -m "chore(devnet2): indexer-$1's stage-3 P1 backup CronJob" -m "Turns on sentio-node-devnet2-indexer-$1's siBackup CronJob (a ConfigMap and a CronJob outside the host checksum; the host StatefulSet renders unchanged) and its DEVNET2_SI_BACKUP mirror (docs/storage-integrity-devnet2-stage3-p1-backups.md §8)." -m "$si_p1_trailer" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; return 1; }
+  workflow_commit_after="$(git rev-parse HEAD)" || return 1
+  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; return 1; }
+  workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
+  git verify-commit HEAD || return 1
   git show --stat --oneline HEAD | cat
 }
 si_p1_job_apply() { # $1 a|b|c, mutating (only in a confirmed block): pushes si_p1_job_commit's commit to main and syncs that host's release only; the render adds exactly the CronJob and its ConfigMap, the CronJob runs si_p1_image with exactly three Secret env vars, and no pod restarts
@@ -14436,13 +14868,21 @@ si_p1_drill_check() { # $1 a|b|c: read-only: the verdict passes against the mani
   } 2>&1 | tee "$si_backup/drill-check-$1.txt"
 }
 si_p1_monitoring_commit() { # local only: the single-service commit that lists the three backup CronJobs in monitoring.backups.cronJobs with DEVNET2_MONITORED_BACKUPS; prints the commit
+  local workflow_commit_before workflow_commit_after workflow_identity
   local file=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
   si_p1_fresh_main || return 1
   si_p1_py monitoring "$file" sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup || return 1
   si_p1_py mirror charts/storage-integrity/tests/test_render.py DEVNET2_MONITORED_BACKUPS - '("sentio-node-devnet2-indexer-a-si-backup", "sentio-node-devnet2-indexer-b-si-backup", "sentio-node-devnet2-indexer-c-si-backup")' || return 1
   si_p1_tests monitoring-backups || return 1
   git add -- "$file" charts/storage-integrity/tests/test_render.py || return 1
-  git commit -q -m "chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs" -m "Lists the backup CronJobs of indexer-a, indexer-b and indexer-c in monitoring.backups.cronJobs, which renders the storage-integrity-si-v2.backups rules StorageIntegrityBackupStale and StorageIntegrityBackupFailed, and DEVNET2_MONITORED_BACKUPS (docs/storage-integrity-devnet2-stage3-p1-backups.md §11)." -m "$si_p1_trailer" || return 1
+  git config --worktree commit.gpgsign true || return 1
+  workflow_commit_before="$(git rev-parse HEAD)" || return 1
+  git commit -q -m "chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs" -m "Lists the backup CronJobs of indexer-a, indexer-b and indexer-c in monitoring.backups.cronJobs, which renders the storage-integrity-si-v2.backups rules StorageIntegrityBackupStale and StorageIntegrityBackupFailed, and DEVNET2_MONITORED_BACKUPS (docs/storage-integrity-devnet2-stage3-p1-backups.md §11)." -m "$si_p1_trailer" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; return 1; }
+  workflow_commit_after="$(git rev-parse HEAD)" || return 1
+  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; return 1; }
+  workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
+  git verify-commit HEAD || return 1
   git show --stat --oneline HEAD | cat
 }
 si_p1_monitoring_apply() { # mutating (only in a confirmed block): pushes si_p1_monitoring_commit's commit and syncs storage-integrity-si-v2; the render changes only the VMRule, and no pod restarts
@@ -16189,7 +16629,7 @@ Then one backup by hand (§15.2's manual run, confirmed) proves the new key, and
 - [ ] **Step 4: Fill the PR-time values and point the tracks runbook here**
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
 cd "$W" && sed -i '' -e "s/<HG_TAG_P1>/$HG_TAG_P1/g" -e "s/<CORE_TAG_P1>/$CORE_TAG_P1/g" -e "s/<SN_COMMIT_P1>/$SN_COMMIT_P1/g" -e "s/<SN_DIGEST_P1>/$SN_DIGEST_P1/g" -e "s/<P1_BACKUP_DELETE>/$P1_BACKUP_DELETE/g" -e "s/<INDEXER_C_ID>/$INDEXER_C_ID/g" docs/storage-integrity-devnet2-stage3-p1-backups.md
 if grep -nE '<(HG_TAG_P1|CORE_TAG_P1|SN_COMMIT_P1|SN_DIGEST_P1|P1_BACKUP_DELETE|INDEXER_C_ID)>' docs/storage-integrity-devnet2-stage3-p1-backups.md; then echo "a PR-time placeholder is left"; exit 1; fi
 grep -c "sha-$SN_COMMIT_P1@$SN_DIGEST_P1" docs/storage-integrity-devnet2-stage3-p1-backups.md
@@ -16202,7 +16642,7 @@ Expected: no line from the placeholder check, then `2` (§1.1's pins table and i
 The stage table of `docs/storage-integrity-devnet2-multi-source-tracks.md` lists every stage of devnet2-si-v2 since the tracks runbook; Plan S3-B's P0 runbook added row 9, and P1 adds row 10 right after it (one line, not wrapped; Plan S3-C3's P2 row follows this one, contract §27.10 there):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 cd "$W" && python3 -I - docs/storage-integrity-devnet2-multi-source-tracks.md <<'EOF'
 import sys
 path = sys.argv[1]
@@ -16226,7 +16666,7 @@ Expected: `stage row 10 added after the stage-3 P0 row 9` and `1 file changed, 1
 The conventions check of Step 2, now passing, then `shellcheck` on the blocks it wrote:
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 cd "$W" && python3 -I "$HOME/.cache/s3c1-task27/check_runbook.py" docs/storage-integrity-devnet2-stage3-p1-backups.md "$HOME/.cache/s3c1-task27/blocks"
 shellcheck -s bash -S info -e SC2154,SC2034 "$HOME/.cache/s3c1-task27/blocks"/*.bash && echo "shellcheck clean apart from SC2154, SC2034"
 ```
@@ -16407,7 +16847,7 @@ echo "selftest passed"
 Then run it with the pins in its environment:
 
 ```bash
-W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
 cd "$W" && HG_TAG_P1="$HG_TAG_P1" CORE_TAG_P1="$CORE_TAG_P1" SN_COMMIT_P1="$SN_COMMIT_P1" SN_DIGEST_P1="$SN_DIGEST_P1" P1_BACKUP_DELETE="$P1_BACKUP_DELETE" INDEXER_C_ID="$INDEXER_C_ID" bash "$HOME/.cache/s3c1-task27/selftest.bash"
 ```
 
@@ -16416,7 +16856,7 @@ Expected, in order: `== the seven runbooks' helpers source in order; si_backup i
 The repository's checks (contract §19):
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1
@@ -16429,7 +16869,9 @@ Expected: `Ran <N> tests` (Step 1's count) and `OK`; `1 chart(s) linted, 0 chart
 - [ ] **Step 6: Commit**
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
 cd "$W" && git add docs/storage-integrity-devnet2-stage3-p1-backups.md docs/storage-integrity-devnet2-multi-source-tracks.md && git commit -m "docs(storage-integrity): devnet2 stage-3 P1 runbook (verified object-store backups)
 
 New runbook docs/storage-integrity-devnet2-stage3-p1-backups.md
@@ -16448,30 +16890,35 @@ operating rules. No step restarts an SI ClickHouse, a host pod, a
 verifier or a voter. The tracks runbook's stage table points here
 (row 10).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log --oneline -1
 git -C "$W" show --stat --format='%an <%ae>' HEAD | cat
 ```
 
-Expected: one new commit on top of Task 26's, authored `poetry <chen@sentio.xyz>` (Step 1's worktree identity), changing exactly `docs/storage-integrity-devnet2-stage3-p1-backups.md` (new) and `docs/storage-integrity-devnet2-multi-source-tracks.md` (one line). Another author: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
+Expected: one new commit on top of Task 26's, authored `poetry <chen@sentio.xyz>` (Step 1's worktree identity), changing exactly `docs/storage-integrity-devnet2-stage3-p1-backups.md` (new) and `docs/storage-integrity-devnet2-multi-source-tracks.md` (one line). Another author: stop and amend the commit's author (a signed author repair followed by the same new-HEAD/poetry+G/verify-commit gate with that identity set) before going on.
 
 - [ ] **Step 7: Push (requires explicit user confirmation)**
 
 This step needs explicit user confirmation in chat. It publishes the branch; nothing is applied or synced.
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 cd "$W" && git push -u origin HEAD
 ```
 
-Expected: `branch 'urwt/claude/multi-source-s3c1' set up to track 'origin/urwt/claude/multi-source-s3c1'`.
+Expected: `branch 'urwt/codex/multi-source-s3c1' set up to track 'origin/urwt/codex/multi-source-s3c1'`.
 
 - [ ] **Step 8: PR (requires explicit user confirmation)**
 
 This step needs explicit user confirmation in chat. The PR carries Tasks 26 and 27: a new bucket, new service accounts and keys, a new ClickHouse user on every SI installation and new jobs widen the blast radius, so it goes through review (the user's production rule).
 
 ```bash
-W=<worktree path>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1
 cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p')" && [ -n "$count" ] && body="$(mktemp)" && cat > "$body" <<'EOF'
 ## Summary
 - Stage 3 P1 of the multi-source SI network on devnet2-si-v2 (housegate spec 2026-10-14 §16 row P1; Plan S3-C1, clarifications K23-K28): verified, incremental backups of every SI owner's `hg_safe` in one versioned GCS bucket, and one restore drill per owner gated against the published manifest its backup names.
@@ -16493,8 +16940,8 @@ Inert on merge: nothing on sea applies or syncs on merge, and every release rend
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 sed -i '' "s/TEST_COUNT/$count/" "$body"
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3c1 --title "storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)" --body-file "$body"
-gh pr view urwt/claude/multi-source-s3c1 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3c1 --title "storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)" --body-file "$body"
+gh pr view urwt/codex/multi-source-s3c1 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
 ```
 
 Expected: the PR URL, then `<number> <url>`; the blocks of Steps 9 and 10 set `pr=<number>` from it.
@@ -16504,7 +16951,7 @@ Expected: the PR URL, then `<number> <url>`; the blocks of Steps 9 and 10 set `p
 It reads GitHub: it needs explicit user confirmation in chat before it runs.
 
 ```bash
-W=<worktree path>; pr=<number>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 cd "$W" && gh pr checks "$pr" --repo sentioxyz/production --watch
 ```
@@ -16517,7 +16964,7 @@ Before the merge, check that the PR's head is the worktree's checked `HEAD` and 
 
 ```bash
 set -eo pipefail
-W=<worktree path>; pr=<number>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo "PR head differs from the checked HEAD; stop"; exit 1; }
 echo "PR head is HEAD"
@@ -16547,7 +16994,7 @@ Expected: `PR head is HEAD`, then `PR commit identities verified`. Each REST com
 The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
 
 ```bash
-W=<worktree path>; pr=<number>
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production.json")" || exit 1; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 cd "$W" && gh pr merge "$pr" --repo sentioxyz/production --squash
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
@@ -16563,16 +17010,36 @@ h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-led
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c1-ledger-$n" "urwt/claude/multi-source-s3c1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$L/record-s3c1-$n.urwt.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c1-ledger-$n" "urwt/codex/multi-source-s3c1-ledger-$n" "$ref")" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$L/record-s3c1-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/record-s3c1-$n.urwt.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$h" rev-parse "$ref")" || exit 1
+actual_dirty="$(git -C "$d" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" P1_PR="$pr" || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record P1_PR of Plan S3-C1 (Task 27)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 git -C "$d" log -1 --format='%an <%ae>'
 ```
@@ -16583,7 +17050,18 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=27
-d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+recorded_d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+[ "$recorded_d" = "$d" ] || { echo "ledger state path differs from retained actual URWT JSON; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] || { echo "restored ledger branch differs; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored ledger is not housegate"' "$common_w" "$common_repo" || exit 1
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
@@ -16659,6 +17137,8 @@ Notes:
 - **Commit identity (user rule).** GitHub must never show `uranuswch@gmail.com` (the global git identity) as author, committer or co-author. Step 1 sets the live worktree's own identity (`git config --worktree user.name poetry`, `user.email chen@sentio.xyz`, after `extensions.worktreeConfig true`) before anything is committed, and Step 20 the ledger worktree's; `p1_commit` refuses to commit unless the checkout's identity is `poetry <chen@sentio.xyz>` and checks the commit's author and committer after it; Step 19 checks the record commit before its push and every commit of the record PR before its squash merge, and Step 20 the ledger commit before its push and the ledger PR before its merge. Commit messages carry only the Claude `Co-Authored-By` line.
 - **User decisions (stop and ask).** K24 and K25 are the user's (status §3): Step 3 asks the user to confirm both before the Terraform apply (K25: the managed-folder layout that confines each writer's list; K24, only with `P1_BACKUP_DELETE` = `lock`: that their amendment of spec §16 P1 to "… but not delete, except the backup's own `.lock`" stands), and Step 6 stops and asks on any differing list or read row (K25) or a measured delete right other than `P1_BACKUP_DELETE` (K24). The agent never decides either.
 
+**Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual live URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-production-live.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The creation branch is `urwt/codex/multi-source-s3c1-live`; it is then detached as the existing live procedure requires. The docs-record branch reuses this same actual path and identity. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
+
 - [ ] **Step 1: Live checkout, session tools, ledger and helpers (local only)**
 
 After `P1_PR` has merged and Task 27's ledger record passed its R4, run this block from a block file in a fresh directory of the session scratchpad (no `source` and `cd` lines; the fetch only reads from GitHub):
@@ -16670,16 +17150,29 @@ for d in "$S" "$HOME/si-devnet2-stage3-p1"; do
   [ ! -e "$d" ] || { echo "$d exists (an earlier attempt): move it aside first; stop"; exit 1; }
 done
 [ -d "$HOME/si-devnet2-stage3-p1-logins" ] && [ "$(stat -f %Lp "$HOME/si-devnet2-stage3-p1-logins")" = 700 ] || { echo "$HOME/si-devnet2-stage3-p1-logins is missing or not mode 700 (the user's logins of Task 26); stop"; exit 1; }
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production claude multi-source-s3c1-live)"
-P="$(printf '%s\n' "$out" | jq -r .path)"
-case "$P" in /*) ;; *) printf '%s\n' "$out"; echo "urwt-create printed no worktree path; stop"; exit 1 ;; esac
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { printf '%s\n' "$out"; echo "the live worktree is not new (an earlier attempt?): stop and ask"; exit 1; }
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$HOME/.cache/s3-worktrees/s3c1-production-live.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production codex multi-source-s3c1-live urwt/codex/multi-source-s3c1-live origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$HOME/.cache/s3-worktrees/s3c1-production-live.json") || exit 1
+P="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-production-live.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$HOME/.cache/s3-worktrees/s3c1-production-live.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$P" rev-parse HEAD)" || exit 1
+base_head="$(git -C /Users/uranuswch/Dev/projects/sentio-network/production rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$P" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = urwt/codex/multi-source-s3c1-live ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/production rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
 git -C "$P" switch -q --detach origin/main
 [ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = HEAD ] || { echo "the live worktree is not detached: stop"; exit 1; }
 [ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live worktree is not at origin/main: stop"; exit 1; }
 [ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live worktree is not clean: stop"; exit 1; }
 test -f "$P/docs/storage-integrity-devnet2-stage3-p1-backups.md" || { echo "origin/main has no P1 runbook: P1_PR has not merged; stop"; exit 1; }
-git -C "$P" config extensions.worktreeConfig true && git -C "$P" config --worktree user.name poetry && git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$P" config extensions.worktreeConfig true || exit 1
+git -C "$P" config --worktree user.name poetry || exit 1
+git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$P" config --worktree commit.gpgsign true || exit 1
 [ "$(git -C "$P" config user.name) <$(git -C "$P" config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the live worktree's commit identity is not poetry <chen@sentio.xyz>; stop"; exit 1; }
 mkdir -m 700 "$S" "$S/blocks"
 mkdir -p -m 700 "$HOME/.cache/s3-ledger"
@@ -16687,7 +17180,7 @@ printf '%s\n' "$P" > "$S/live-path"
 echo "live worktree $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached), commits as $(git -C "$P" config user.name) <$(git -C "$P" config user.email)>; session $S"
 ```
 
-Expected: `live worktree …/remotesrc/claude/production/multi-source-s3c1-live at origin/main <sha> (detached), commits as poetry <chen@sentio.xyz>; session …/si-devnet2-stage3-p1-session` (the identity is the worktree's own, so the global `uranuswch@gmail.com` never reaches a commit; commits are signed as the user's git configuration says, and a signing failure stops `p1_commit` before anything is pushed: ask the user to unlock their key, never turn signing off). If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/claude/multi-source-s3c1-live` is never used or pushed: the worktree is held detached at `origin/main` (Plan S3-B decision D4) and every commit is pushed as `HEAD:main` by its runbook block.
+Expected: `live worktree <the exact absolute path retained in s3c1-production-live.json> at origin/main <sha> (detached), commits as poetry <chen@sentio.xyz>; session …/si-devnet2-stage3-p1-session` (the identity is the worktree's own, so the global `uranuswch@gmail.com` never reaches a commit; worktree commit.gpgsign is explicitly true and every new commit is required to verify as poetry <chen@sentio.xyz> G, and a signing failure stops `p1_commit` before anything is pushed: ask the user to unlock their key, never turn signing off). If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/codex/multi-source-s3c1-live` is never used or pushed: the worktree is held detached at `origin/main` (Plan S3-B decision D4) and every commit is pushed as `HEAD:main` by its runbook block.
 
 Write these six files with exactly this content (Write tool) into `$HOME/si-devnet2-stage3-p1-session/`, and `$HOME/.cache/s3-ledger/s3-ledger.py` with the text at the end of contract §19, verbatim (a copy an earlier task left is the same text and is overwritten; the next block compares it with the ledger copy's contract §19).
 
@@ -17794,6 +18287,7 @@ p1_run() { # $1 heading, then --index K | --marker TEXT [--nth N], then --confir
 }
 p1_tests() { python3 -B charts/storage-integrity/tests/test_render.py; } # the production render tests of this checkout
 p1_commit() { # $1 message file, then the exact files of this commit: refuses any other change and any identity but poetry <chen@sentio.xyz>, runs the render tests, commits on the detached HEAD (local only) and checks its author and committer
+  local workflow_commit_before workflow_commit_after workflow_identity
   local msg=$1 count
   shift
   [ "$(git config user.name) <$(git config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the checkout would commit as $(git config user.name) <$(git config user.email)>, not poetry <chen@sentio.xyz> (Step 1 sets the worktree identity): nothing committed"; return 1; }
@@ -17804,7 +18298,14 @@ p1_commit() { # $1 message file, then the exact files of this commit: refuses an
   [ -n "$count" ] && [ "$count" = "$(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1)" ] || { echo "the render tests ran ${count:-no} tests, Step 2 ran $(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1): nothing committed"; return 1; }
   echo "render tests: $count, OK"
   git add -- "$@" || return 1
-  git commit -q -F "$msg" || { echo "git commit failed (a signing failure?): nothing committed; once reported, discard the staged edits with git -C \"\$P\" reset -q --hard HEAD (local)"; return 1; }
+  git config --worktree commit.gpgsign true || return 1
+  workflow_commit_before="$(git rev-parse HEAD)" || return 1
+  git commit -q -F "$msg" || { echo "git commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback"; return 1; }
+  workflow_commit_after="$(git rev-parse HEAD)" || return 1
+  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; return 1; }
+  workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
+  git verify-commit HEAD || return 1
   [ "$(git log -1 --format='%an <%ae>|%cn <%ce>')" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] || { echo "the commit is not authored and committed by poetry <chen@sentio.xyz>: drop it with git -C \"\$P\" switch -q --detach origin/main (local, never pushed)"; return 1; }
   git show --stat --format='%h %s (%an <%ae>)' HEAD | cat
 }
@@ -19241,7 +19742,7 @@ Local:
 git fetch -q origin main
 git switch -q --detach origin/main
 [ -z "$(git status --porcelain)" ] || { echo "the live checkout has local changes; stop"; exit 1; }
-git switch -q -c urwt/claude/multi-source-s3c1-p1-record
+git switch -q -c urwt/codex/multi-source-s3c1-p1-record
 python3 -I "$p1_session/p1-record.py" runbook "$p1_runbook" "$si_backup/record.env" "$p1_session/ledger.env"
 git diff | cat
 cat > "$si_backup/msg-p1-record.txt" <<'EOF'
@@ -19268,12 +19769,12 @@ BODY
 git show --stat HEAD | cat
 ```
 
-Expected: `record written: docs/storage-integrity-devnet2-stage3-p1-backups.md §12`; a diff that adds one paragraph `Record of the first run: …` at the end of §12; `render tests: <TESTS_START>, OK`; one commit touching only the runbook. A `stop` writes nothing: a record already in §12 means an earlier attempt. Requires explicit user confirmation in chat. Gate: "push branch urwt/claude/multi-source-s3c1-p1-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P1 run' against production main". After a yes:
+Expected: `record written: docs/storage-integrity-devnet2-stage3-p1-backups.md §12`; a diff that adds one paragraph `Record of the first run: …` at the end of §12; `render tests: <TESTS_START>, OK`; one commit touching only the runbook. A `stop` writes nothing: a record already in §12 means an earlier attempt. Requires explicit user confirmation in chat. Gate: "push branch urwt/codex/multi-source-s3c1-p1-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P1 run' against production main". After a yes:
 
 ```bash
-[ "$(git rev-parse --abbrev-ref HEAD)" = urwt/claude/multi-source-s3c1-p1-record ] && [ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "HEAD is not the record commit by poetry <chen@sentio.xyz>; stop"; exit 1; }
-git push -u origin urwt/claude/multi-source-s3c1-p1-record
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3c1-p1-record --title "docs(storage-integrity): record the devnet2 stage-3 P1 run" --body-file "$si_backup/record-pr-body.md" | tee "$si_backup/record-pr.txt"
+[ "$(git rev-parse --abbrev-ref HEAD)" = urwt/codex/multi-source-s3c1-p1-record ] && [ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "HEAD is not the record commit by poetry <chen@sentio.xyz>; stop"; exit 1; }
+git push -u origin urwt/codex/multi-source-s3c1-p1-record
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3c1-p1-record --title "docs(storage-integrity): record the devnet2 stage-3 P1 run" --body-file "$si_backup/record-pr-body.md" | tee "$si_backup/record-pr.txt"
 printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/record-pr.txt" | tail -n 1)" >> "$si_backup/record.env"
 ```
 
@@ -19325,16 +19826,36 @@ h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-led
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c1-ledger-$n" "urwt/claude/multi-source-s3c1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
+[ ! -e "$L/record-s3c1-$n.urwt.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c1-ledger-$n" "urwt/codex/multi-source-s3c1-ledger-$n" "$ref")" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$L/record-s3c1-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/record-s3c1-$n.urwt.json")" = created ] || { echo "URWT returned existing; preserve the actual JSON and ask before reusing previous work; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$h" rev-parse "$ref")" || exit 1
+actual_dirty="$(git -C "$d" status --porcelain)" || exit 1
+[[ "$actual_head" =~ ^[0-9a-f]{40}$ ]] && [ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" P1_MECHANICS="$P1_MECHANICS" P1_END="$P1_END" || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+workflow_commit_before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record P1_MECHANICS and P1_END of Plan S3-C1 (Task 28)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+workflow_commit_after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 git -C "$d" log -1 --format='%an <%ae>'
 ```
@@ -19345,7 +19866,18 @@ R2 (remote write): requires explicit user confirmation in chat. Gate: "push Task
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=28
-d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$L/record-s3c1-$n.urwt.json")" || exit 1
+recorded_d="$(sed -n 1p "$L/record-s3c1-$n")" || exit 1
+[ "$recorded_d" = "$d" ] || { echo "ledger state path differs from retained actual URWT JSON; stop"; exit 1; }
+actual_branch="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$actual_branch" = "urwt/codex/multi-source-s3c1-ledger-$n" ] || { echo "restored ledger branch differs; stop"; exit 1; }
+common_w="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored ledger is not housegate"' "$common_w" "$common_repo" || exit 1
+workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
@@ -19395,10 +19927,11 @@ Expected: `P1_MECHANICS=<the value written>` and `P1_END=<the value written>`. A
 
 **What rollback means here.** Before Step 7, nothing in the cluster has changed but the staging installation (Step 18 removes it) and the bucket, its service accounts and keys, which stay: the bucket has `prevent_destroy` and holds only `mechanics/` objects, and each HMAC key can be deactivated and deleted by the user (runbook §15.3). Each of U-b, U-c and U-n can be reverted (runbook §14: revert, push, kubectl apply or sync, each asked first): `si_backup` disappears by a users reload, and a CronJob still enabled then fails its next run (revert the owner's J-x first). Each of J-b, J-c and J-a can be reverted (revert, push, sync that release, each asked first): the ConfigMap and the CronJob go, the host does not restart, and the backups already written stay in the bucket. M can be reverted the same way (the backup alerts go). Step 10's table `devuser1.s3_p1` and its promotions stay in consensus state whatever happens, and no object a backup wrote is ever deleted by a key of P1 (K24).
 
-
 ---
 
 ## Appendix A: binding contract (continues Plans S3-A and S3-B)
+
+**Signed worktrees and retained URWT paths (procedural reconciliation).** Codex-created local worktrees use runtime `codex`; this does not rename D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf`, historical execution evidence, or any existing stack branch. Every creation persists the complete returned JSON (`action` and exact absolute `path`, preserving symlink spelling), refuses malformed/empty/nonabsolute output and unexpected reuse, and subsequent tasks restore that producer's path rather than assuming the template. Code JSON state is `$HOME/.cache/s3-worktrees/s3c1-{housegate,arbiter-core,sentio-node,production}.json` for Tasks22/23/25/26, `$HOME/.cache/s3-worktrees/s3c2-{arbiter-core,sentio-node}.json` for Tasks29/35; Task28 additionally retains `s3c1-production-live.json`. A ledger R1 retains its actual raw JSON beside the existing `record-<plan>-<N>` state as `.urwt.json`, while preserving that state's path/ref interface. Reuse tasks consume their owning producer:23→24,26→27,29→30–34. Before a first real commit every worktree explicitly sets worktree `commit.gpgsign=true` with the poetry identity. Each commit must fail closed on commit/signing failure, produce a new HEAD, and verify `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publishing. A cancellation preserves staged work and asks the user to unlock that repository's actual signing key; no unsigned fallback. Scratch-only synthetic fixture commits remain explicitly unsigned and unpublished. Existing canonical Claude trailers and paginated REST primary-author/head/coauthor semantics are unchanged.
 
 Plan S3-A's Appendix A (§0–§6) and Plan S3-B's (§7–§15) stay binding; this appendix continues the numbering, so `contract §N` means the same thing in every stage-3 plan. Every name below is binding verbatim for every task of Plan S3-C1 and for every later plan that consumes it (Plan S3-C2 drafts against §16–§18 only). A task that needs a name not listed here adds it in its own section and records it in Appendix B; it never renames one listed here. Names this plan consumes are listed under each section with the section that defines them; they are spelled exactly as there.
 
@@ -19418,12 +19951,12 @@ What Plan S3-C1 changes (read first):
 - `pkg/sitable/sitable.go`: `func CopyTable(id string, incarnationSeq uint64) string` = `PhysicalTable(id) + "__i" + strconv.FormatUint(incarnationSeq, 10)` — the physical name of a member's copy in `hg_replica` (spec §8.3, §20). Tests: `TestCopyTableAppendsTheIncarnationToThePhysicalName`, `TestCopyTableIsInjectiveAcrossIncarnations` (the digits after the last `__i` give back the seq, so distinct incarnations get distinct names, also for an id that itself ends in `__i<digits>`).
 - Nothing else changes: no json tag of a type `replay.proto` mirrors (`pkg/replay/AGENTS.md`), no reserved database, no plugin. housegate keeps arbiter-proto `v0.11.0`.
 - Release `HG_TAG_P1`: `gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto`, watched and verified by content as Plan S3-A Task 2's release step; record the printed tag, never a prediction.
-- Worktree `~/src/remotesrc/claude/housegate/multi-source-s3c1`, branch `urwt/claude/multi-source-s3c1`; PR title `feat(replay): stage-3 P1 helpers (OwnerEntry, VerifyLedger, ScanAllParts, NewMaterializerIn, CopyTable)`.
+- Worktree `~/src/remotesrc/codex/housegate/multi-source-s3c1`, branch `urwt/codex/multi-source-s3c1`; PR title `feat(replay): stage-3 P1 helpers (OwnerEntry, VerifyLedger, ScanAllParts, NewMaterializerIn, CopyTable)`.
 - Consumed: `sitable.ReservedDatabases()`, `ReplicaDatabase` (`hg_replica`), `ReplicaStageDatabase` (`hg_rstage`) (Plan S3-A contract §2); `HG_TAG` as the base (S3-A §6).
 
 ### 17. arbiter-core (Tasks 23–24)
 
-Pins (Task 23): housegate `HG_TAG_P1` with `bash scripts/update-housegate.sh $HG_TAG_P1 && bazel mod tidy && bazel run //:gazelle`; arbiter-proto stays `PROTO_TAG`. One branch `urwt/claude/multi-source-s3c1` (worktree `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1`) carries Tasks 23–24 and one PR, opened by Task 24, title `feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`.
+Pins (Task 23): housegate `HG_TAG_P1` with `bash scripts/update-housegate.sh $HG_TAG_P1 && bazel mod tidy && bazel run //:gazelle`; arbiter-proto stays `PROTO_TAG`. One branch `urwt/codex/multi-source-s3c1` (worktree `~/src/remotesrc/codex/arbiter-core/multi-source-s3c1`) carries Tasks 23–24 and one PR, opened by Task 24, title `feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`.
 
 `dataplane/chparts` (new, Task 23), extracted from `snode/parts.go:11-43`, `snode/intake.go:136-141`, `snode/promote_ch.go:21-51` and `snode/promote_replace.go:192-200` / `:223-254` (arbiter-core `cfd4f42`):
 - `type Part struct { Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64 }` (system.parts `name`, `partition_id`, `partition`, `hash_of_all_files`, `path`, `rows`, `bytes_on_disk`).
@@ -19467,7 +20000,7 @@ sentio-node (Task 25):
 - Commands (`commands/storage_integrity.go`, the `enrollment-statement` pattern): `sentio-node storage-integrity backup` (no arguments) and `sentio-node storage-integrity restore-drill --owner <indexer id> --owner-rpc <url> [--backup <name>]` (`--owner` and `--owner-rpc` required); both use the global `--config-path` and load it with `LoadStorageIntegrityJobConfig`.
 - `standalone` (new file `standalone/storage_integrity_backup.go`): `func RunStorageIntegrityBackup(ctx context.Context, cfg *config.Config, out io.Writer) error` (an `objstore.Backuper`; stdout gets exactly one line, the `objstore.BackupIndex` JSON; logs go to stderr); `type StorageIntegrityRestoreDrillOptions struct { Owner uint64; OwnerRPC, Backup string }`; `func RunStorageIntegrityRestoreDrill(ctx context.Context, cfg *config.Config, opts StorageIntegrityRestoreDrillOptions, out io.Writer) error` (an `objstore.Drill`; stdout gets exactly one line, the `objstore.DrillVerdict` JSON; returns `ErrStorageIntegrityRestoreDrillFailed` = `errors.New("storage-integrity restore drill: the verdict is not pass")` unless `pass`, so the process exits non-zero); the drill's `SchemaSource` calls `sentio_getStorageIntegrityTableStatus` `[database, table]` on `--owner-rpc`, accepts any answer whose `schema_json` is non-empty (an Active table, an S3-B K11 held Pending table, a quarantined host's Refused table, a Gone one), decodes it with `payloadexec.DecodeTableSchemaJSON`, and otherwise fails with `table %s has no schema on its owner's host (status %q)`; the schema is untrusted until `objstore` checks its hash against S (K27).
 - Tests: `TestLoadStorageIntegrityJobConfigNeedsNoNodeConfigAndNoPrivateKey`, `TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys`, `TestStorageIntegrityBackupJobValidation`, `TestStorageIntegrityRestoreDrillValidation`, `TestStorageIntegrityS3CredentialsComeOnlyFromTheEnvironment` (config); `TestStorageIntegrityBackupPrintsOnlyTheIndexLine`, `TestStorageIntegrityBackupOpensTheClickHouseAsTheConfiguredUser`, `TestStorageIntegrityRestoreDrillExitsNonZeroUnlessTheVerdictPasses`, `TestStorageIntegrityRestoreDrillTakesSchemasFromTheOwnersStatusRPC`, `TestStorageIntegrityRestoreDrillRefusesATableWithoutASchema` (standalone, fakes for ClickHouse, the arbiter and the RPC); `TestStorageIntegrityCommandListsBackupAndRestoreDrill` (commands). If the canonical-snapshot audit of `standalone/storage_integrity_bootstrap_test.go` treats a new method on `si` as a write, it joins `storageIntegrityReadOnlyMethods` under `TestStorageIntegrityReadOnlyMethodsHaveValueReceivers` (S3-B D1).
-- Worktree `~/src/remotesrc/claude/sentio-node/multi-source-s3c1`, branch `urwt/claude/multi-source-s3c1`; PR title `feat(storage-integrity): multi-source SI stage 3 P1 backup and restore-drill commands`. Release: `SN_COMMIT_P1` is the squash-merge commit on `main`; `SN_DIGEST_P1` is the index digest of `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>` (docker-push on the merge commit), checked against its `org.opencontainers.image.revision` label (S3-B §8). The binary is `/sentio-node` in that image.
+- Worktree `~/src/remotesrc/codex/sentio-node/multi-source-s3c1`, branch `urwt/codex/multi-source-s3c1`; PR title `feat(storage-integrity): multi-source SI stage 3 P1 backup and restore-drill commands`. Release: `SN_COMMIT_P1` is the squash-merge commit on `main`; `SN_DIGEST_P1` is the index digest of `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>` (docker-push on the merge commit), checked against its `org.opencontainers.image.revision` label (S3-B §8). The binary is `/sentio-node` in that image.
 - Consumed: `StorageIntegrityClickhousePasswordEnv`, `StorageIntegrityConfig.ClickhouseUsername`, `ClickhouseOptions()`, `decodeConfigYAML`'s `clickhouse_password` refusal, `storageIntegrityReadOnlyMethods` (Plan S3-B contract §8); `objstore.*` (§17).
 
 production, Terraform (Task 26; new file `terraform/storage_integrity_devnet2_si_v2_replica.tf`, the `storage_integrity_devnet2_si_v2.tf:5-58` pattern):
@@ -19523,7 +20056,7 @@ devnet2 (Task 28; runbook of §18, one stage per window, every mutating block co
 Ledger (Appendix C of this plan file; S3-B decision D23's shape and procedure, through `s3-ledger.py`):
 - Consumed: from Plan S3-A `HG_TAG`, `PROTO_TAG`, `CORE_TAG`, `ARBITER_TAG`, `ARBITER_DIGEST` and its deployed-image mechanics record; from Plan S3-B `SN_COMMIT`, `SN_DIGEST`, `L_END`, `E_END`, `INDEXER_C_ID`.
 - Produced, in this order: `HG_TAG_P1` (Task 22); `CORE_TAG_P1`, `P1_BACKUP_DELETE` (`none` | `lock`) (Task 24); `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25); `P1_PR` (Task 27); `P1_MECHANICS` (the date of the passing §5 run, `YYYY-MM-DD`), `P1_END` (the end date of runbook §12, `YYYY-MM-DD`) (Task 28). Appendix C: one heading `## Appendix C: execution record`; one table `| Name | Value | Recorded by |` with these eight rows in this order (`| \`NAME\` |  | Task N |` until recorded); then "Run records" with one item per recording task: `housegate release and the ledger tool (Task 22)`, `arbiter-core release and the S3 mechanics (Task 24)`, `sentio-node release (Task 25)`, `P1 PR (Task 27)`, `P1 run (Task 28)`.
-- Record procedure (D23, run once per recording task 22, 24, 25, 27, 28): R1 (local): `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`; `ref="$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3c1)"`; a URWT worktree `multi-source-s3c1-ledger-<N>` of housegate (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3c1-ledger-<N> urwt/claude/multi-source-s3c1-ledger-<N> "$ref"`), its path and `$ref` kept in `$HOME/.cache/s3-ledger/record-s3c1-<N>`; the run record in `$HOME/.cache/s3-ledger/record-s3c1-<N>.md`; `s3-ledger.py set <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md <N> <record file> NAME=VALUE...`; one commit of the plan file only, `docs(plan): record <names> of Plan S3-C1 (Task <N>)`. R2 (explicit user confirmation in chat): when `$ref` is a plans branch, `git push origin HEAD:<that branch>` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-s3c1-<N>-pr.md`. R3 (`origin/main` only; confirmed): `gh pr merge <number> --repo housegate/housegate --squash`. R4 (read-only): fetch again; `s3-ledger.py get` the task's names must print the values just written, else stop and ask. A task ends only after R4. Readers take values only through `s3-ledger.py get`, never from a local checkout (the plans worktrees `~/src/remotesrc/claude/housegate/ms-si-stage3-plans*` are never read for a value or written) or a pending PR. Plan S3-B's own tasks keep `s3b-ledger.py`. Ledger copies (decision D34): Plans S3-A's and S3-B's are `origin/main` (housegate#237 merged them); this plan's, like that of every plan of S3-C1 to S3-F, is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, so R2 pushes to that branch before the merge and goes through a docs PR after it. When R1's `ref` stops with `no plan 's3c1'` (the plans branch is not on origin yet), the task stops and asks the user to push it; it never records into a local checkout.
+- Record procedure (D23, run once per recording task 22, 24, 25, 27, 28): R1 (local): `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`; `ref="$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3c1)"`; a URWT worktree `multi-source-s3c1-ledger-<N>` of housegate (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate codex multi-source-s3c1-ledger-<N> urwt/codex/multi-source-s3c1-ledger-<N> "$ref"`), its path and `$ref` kept in `$HOME/.cache/s3-ledger/record-s3c1-<N>` and its complete raw URWT JSON retained exclusively in `$HOME/.cache/s3-ledger/record-s3c1-<N>.urwt.json` (later calls require the exact same path, expected local branch and common repository); the run record in `$HOME/.cache/s3-ledger/record-s3c1-<N>.md`; `s3-ledger.py set <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md <N> <record file> NAME=VALUE...`; one commit of the plan file only, `docs(plan): record <names> of Plan S3-C1 (Task <N>)`. R2 (explicit user confirmation in chat): when `$ref` is a plans branch, `git push origin HEAD:<that branch>` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-s3c1-<N>-pr.md`. R3 (`origin/main` only; confirmed): `gh pr merge <number> --repo housegate/housegate --squash`. R4 (read-only): fetch again; `s3-ledger.py get` the task's names must print the values just written, else stop and ask. A task ends only after R4. Readers take values only through `s3-ledger.py get`, never from a local checkout (the plans worktrees `~/src/remotesrc/claude/housegate/ms-si-stage3-plans*` are never read for a value or written) or a pending PR. Plan S3-B's own tasks keep `s3b-ledger.py`. Ledger copies (decision D34): Plans S3-A's and S3-B's are `origin/main` (housegate#237 merged them); this plan's, like that of every plan of S3-C1 to S3-F, is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, so R2 pushes to that branch before the merge and goes through a docs PR after it. When R1's `ref` stops with `no plan 's3c1'` (the plans branch is not on origin yet), the task stops and asks the user to push it; it never records into a local checkout.
 - Ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py`: the text at the end of this section, verbatim, written with the Write tool by the first ledger step of Task 22 and of every later recording task of any stage-3 plan (an earlier copy is the same text and is overwritten); it is the only reader and writer of the Appendix C of Plans S3-C1 to S3-F and reads Plans S3-A's and S3-B's. A plan file is a `docs/superpowers/plans/*-multi-source-si-s3*-*.md` whose word after `multi-source-si-` is a plan key (`s3`, one letter, optional digits: `s3a`, `s3b`, `s3c1` … `s3c4`, `s3d`, `s3e1` … `s3e4`, `s3f`); the `s3cf` status, scoping and names-index files beside the plans match the glob but are not plans. A plan's ledger copy is the first of `origin/main`, `origin/urwt/claude/ms-si-stage3-plans`, `origin/urwt/claude/ms-si-stage3-plans-cf` that holds its file (so Plans S3-A's and S3-B's values are read on `origin/main`, where `s3b-ledger.py` writes them since housegate#237, never from the copy on the `-cf` branch; the new plans' values are read on the `-cf` branch until their PR merges, D34). A value is well formed when it matches its name's pattern: `OPERATOR_CHART_VERSION` semver, `ARBITER_PIN_P2` a commit, else by the suffix of the name without `_P1`…`_P6`: `_TAG` `vX.Y.Z`, `_DIGEST` `sha256:<64 hex>`, `_COMMIT` 40 hex, `_PR` a positive integer, `_END` `YYYY-MM-DD`, `_EPOCH`, `_ID` and `_BLOCK` an unsigned integer, `_NODE` a node name, `_SIGNER` an address; any other name a token `[A-Za-z0-9/][A-Za-z0-9._:/=,+@-]{0,199}`. Later plans choose their names under these rules.
 
 Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
@@ -19532,7 +20065,7 @@ Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
 - Activation model: Plans S3-C1 to S3-D change no consensus format and leave `LocalNodeFeatures` unchanged through `CORE_TAG_P4`; the only exception is Plan S3-D's additive, non-Raft settle surface, released unconditionally as `PROTO_TAG_P4`: `SettleTrack` (with its read `GetTrackSettle`) and the `SNodeHello.settle` / `PromotionCommand.settle` stream fields (D26); every component stays rollback-able until the P5 activation.
 - Never edit: every golden or vector file listed by Plans S2-A and S3-A, `pre_tracks_golden.json`, the `l3_track_golden_test.go` constants and `conformance/stage3_reads_test.go`, whose count literals alone Plans S3-D and S3-E1 may change (D25); the new frozen fixtures are those the conventions list (`pre_stage3_golden.json`, the L3 `group_key` vectors, the v21 plain and interned containers, the placement and group-key digests, the authority, consent, member-ready and checkpoint vectors, the tag 38–42 encodings, `conformance/stage3_test.go`).
 - Mechanics labels: the suite is Plan S3-A's M0–M11, this plan's M12–M14 and Plan S3-D's from M15; Plan S3-B's lockdown grant probe is not a mechanics test (D32).
-- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry` and `user.email=chen@sentio.xyz` before its first commit; every commit checks `poetry <chen@sentio.xyz>` and every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records.
+- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry`, `user.email=chen@sentio.xyz` and `commit.gpgsign=true` before its first real commit. Every commit explicitly stops on staging or commit failure, must create a new HEAD, and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records; new local Codex worktrees use their retained actual JSON paths, while D34 and existing stack branches stay unchanged.
 - Every runbook from P1 on computes its promotion budget with Plan S3-B's P0 runbook §13.4 (K28).
 - Execution order: S3-B → S3-C1 code → S3-C1 live → S3-C2 → S3-C3 → S3-C4 → S3-D live (S3-D code after S3-C2); S3-E1 → S3-E2 → S3-E3 → S3-E4 code, its live activation after `P4_END`; S3-E4 → S3-F (S3-F also needs `DEVNET2_FAILURE_DOMAINS` from S3-D). Release order per repository: housegate `HG_TAG` → `HG_TAG_P1` → `HG_TAG_P3` → `HG_TAG_P5`; arbiter-proto `PROTO_TAG` → `PROTO_TAG_P4` → `PROTO_TAG_P5` (D26); arbiter-core `CORE_TAG` → `CORE_TAG_P1` → `_P2` → `_P3` → `_P4` → `_P5`; arbiter `ARBITER_TAG` → `ARBITER_PIN_P2` (a commit) → `ARBITER_TAG_P4` → `ARBITER_TAG_P5`; sentio-node `SN_COMMIT` → `SN_COMMIT_P1` … `_P5`.
 - Decisions D25–D40 (taken for Plans S3-C1 to S3-F after Plan S3-B's D1–D24; binding; each plan cites those that touch it):
@@ -19554,7 +20087,7 @@ Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
   - D40: the member `replica_signer` key is made in the user's terminal (Foundry `cast wallet new` or an equivalent the user prefers); the P3 drill's agent upgrade to `HG_TAG_P3` and the Keeper thresholds' agreement with the clickhouse-extra owner are the user's actions.
 
 Repositories and commands:
-- Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Worktrees (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> claude <name>`; its JSON `path` is `$W`; agents prefix each Bash call with `W=<path>;`): housegate, arbiter-core, sentio-node and production `multi-source-s3c1` (branch `urwt/claude/multi-source-s3c1`, from `origin/main`; production's created after `E_PR` merged and `E_END` recorded); the live task's `multi-source-s3c1-live` (production, held at a detached, freshly fetched `origin/main`, checked clean before every commit and revert, commits pushed as `HEAD:main`; S3-B D4); the ledger's `multi-source-s3c1-ledger-<N>`.
+- Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Worktrees (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> codex <name>`; its retained JSON `path` is `$W`; agents restore `$W` from that task's producing JSON in every fresh Bash call, preserving its exact absolute spelling rather than filling a path template): housegate, arbiter-core, sentio-node and production `multi-source-s3c1` (branch `urwt/codex/multi-source-s3c1`, from `origin/main`; production's created after `E_PR` merged and `E_END` recorded); the live task's `multi-source-s3c1-live` (production, held at a detached, freshly fetched `origin/main`, checked clean before every commit and revert, commits pushed as `HEAD:main`; S3-B D4); the ledger's `multi-source-s3c1-ledger-<N>`.
 - housegate: `bazel build //... && bazel test //...`; the ClickHouse-gated `pkg/integration` tests with `POLYGLOT_SQL_FFI_PATH` from `bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0` as Plan S3-A Task 2; after dependency changes `bazel mod tidy && bazel run //:gazelle`.
 - arbiter-core: `bazel build //... && bazel test //...`; `bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3` (expected: `mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `objstore: 7 S3 test(s) passed on …`, `mechanics: S3 backup delete right: <none|lock>`, the SNode restart test line); the user's deployed-image run `bash scripts/ci/clickhouse-mechanics.sh us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16 26.3.` (K9).
 - sentio-node: `test -z "$(gofmt -l $(git ls-files '*.go'))"`, `bazel run //:gazelle`, `bazel build //...`, `bazel test //... --test_output=errors` (Plan S3-B §15).
@@ -20164,6 +20697,17 @@ Drafting facts below preserve the original measurements and extra names at their
 - Final clean Task 26 replay (no residual untracked files) reproduces the stated red failures, including all fourteen missing-key/login-script failures, then reaches 148 tests / OK, four successful Helm lints, Terraform formatting, eight identical renders and the expected eight poetry-authored commits. The hunk checks have no offsets. Seven sequential Task 28 edit states independently each pass all 148 render tests. Cross-plan validation of the later chart phases remains outside this C1 pass.
 
 - **Task27 CHI evidence follow-up:** corrected the informational operator-version JSONPath to `.status.chop-version`, matching the pinned Altinity0.27.2 CRD and production70141ab9's same runtime-field correction. The complete changed Bash block parses under Bash3.2/5; no chart, grant, marker, ledger or live state changed. No cluster executable was run.
+
+**Workflow reconciliation (Tasks22–35, BRIEF8b):** Harden future real code/live/ledger worktree commits with worktree-level signing, explicit stage/commit failure stops, a newly created HEAD, exact poetry/G identity and verify-commit; persist and consume validated actual Codex URWT JSON paths across task/session boundaries while retaining absolute symlink spelling. Keep D34's fixed Claude ledger-copy branch and canonical Claude trailer unchanged. Complete the two optional Gazelle commit procedures, strengthen the existing P1 commit helpers in place, and preserve implementation/test/REST/ledger bodies and historical validation evidence byte-for-byte. Verify only the changed workflow using inert local CLI fixtures under Bash3.2/5 and fish syntax; no live action or implementation test rerun is claimed.
+
+
+### Bounded C1 workflow consistency follow-up (Track B, 2026-10-17)
+
+- The accepted signing/path reconciliation is consistent across Tasks22–28, the Global Constraints, Review Focus and contract §19. The earlier drafting and review facts above remain historical evidence: their Claude local path examples are not future path producers. Future paths come only from each retained actual URWT JSON; D34's fixed Claude ledger-copy ref and existing stack worktrees are unchanged.
+- Producer/consumer state: Task22 creates `s3c1-housegate.json`; Task23 creates `s3c1-arbiter-core.json`, consumed by Task24; Task25 creates `s3c1-sentio-node.json`; Task26 creates `s3c1-production.json`, consumed by Task27; Task28 creates `s3c1-production-live.json` and retains the same exact path in its session `live-path`. Each code JSON is under `$HOME/.cache/s3-worktrees`. The live checkout is detached only after its creation branch/base checks. Five ledger creators (Tasks22/24/25/27/28) retain their complete raw JSON beside the existing path/ref state; no new ledger format, name or owner is introduced.
+- All38real commit points in these seven tasks retain the accepted explicit failure/new-HEAD/poetry-G/verify-commit gates. The independent workflow audit's1706inert cases and375complete shell-fence syntax results remain scoped workflow evidence, not a new implementation, real GPG, GitHub or deployment proof. This follow-up verifies unchanged guard bodies and documentation interfaces rather than repeating implementation or cluster checks.
+- Task27's first §0 Bash body has SHA256 `95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7`. Task28's actual `section_zero` extractor returns exactly those bytes. Only the three existing P1 commit helpers changed in the reconciliation; their names/callable interfaces and the six preceding runbook dependencies remain unchanged. Task28's local `p1_commit` separately enforces the same new-HEAD/signature rule.
+- The eight Appendix C rows and five run-record items remain byte-identical and empty. No release, ledger value, live result, implementation fence or pending user decision changed. Existing implementation verification remains at its historical bases; this bounded workflow follow-up does not refresh those bases or claim new Go/ClickHouse/render execution.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
