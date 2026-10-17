@@ -2154,25 +2154,24 @@ expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
-gh api --paginate --slurp "repos/housegate/housegate/pulls/<n>/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
@@ -2312,25 +2311,24 @@ pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
@@ -8128,25 +8126,24 @@ expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
-gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/<n>/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
@@ -8286,25 +8283,24 @@ pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
@@ -10578,32 +10574,31 @@ expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
-gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/sentio-node <n> "$expected_head" "$W" || exit 1
 ```
 
-Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then `PR commit identities verified`. The REST commit record checks each primary author independently of GitHub’s coauthor list; no coauthor or exactly one `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). The task’s ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
+Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then `PR commit identities and pinned head verified`. The REST commit record checks each primary author independently of GitHub’s coauthor list; no coauthor or exactly one `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). The task’s ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
 
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
@@ -10735,30 +10730,29 @@ pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
-Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: `PR commit identities and pinned head verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -17126,32 +17120,31 @@ expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
-gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/production "$pr" "$expected_head" "$W" || exit 1
 ```
 
-Expected: `PR head is HEAD`, then `PR commit identities verified`. Each REST commit record must have primary author `poetry <chen@sentio.xyz>`, independently of GitHub’s coauthor list, and no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer (merge commits can have none); the ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
+Expected: `PR head is HEAD`, then `PR commit identities and pinned head verified`. Each REST commit record must have primary author `poetry <chen@sentio.xyz>`, independently of GitHub’s coauthor list, and no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer (merge commits can have none); the ordinary commit blocks still require that trailer. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
 
 The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
 
@@ -17250,25 +17243,24 @@ pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
@@ -19988,25 +19980,24 @@ pr="$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)"
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 git fetch -q origin main
@@ -20014,7 +20005,7 @@ git switch -q --detach origin/main
 git log --oneline -1 | cat
 ```
 
-Expected: `PR commit identities verified`, the merge, and the live checkout detached at the new `origin/main`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the record commit above still requires its Claude trailer.
+Expected: `PR commit identities and pinned head verified`, the merge, and the live checkout detached at the new `origin/main`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the record commit above still requires its Claude trailer.
 
 - [ ] **Step 20: Appendix C record of `P1_MECHANICS` and `P1_END` (local commit; the push, or the docs PR and its merge, require explicit user confirmation)**
 
@@ -20104,30 +20095,29 @@ pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")' || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
 [ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
-Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only):
+Expected: `PR commit identities and pinned head verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -20277,7 +20267,7 @@ Cross-plan conventions (Plans S3-C1 to S3-F; pre-allocated, never renumbered):
 - Activation model: Plans S3-C1 to S3-D change no consensus format and leave `LocalNodeFeatures` unchanged through `CORE_TAG_P4`; the only exception is Plan S3-D's additive, non-Raft settle surface, released unconditionally as `PROTO_TAG_P4`: `SettleTrack` (with its read `GetTrackSettle`) and the `SNodeHello.settle` / `PromotionCommand.settle` stream fields (D26); every component stays rollback-able until the P5 activation.
 - Never edit: every golden or vector file listed by Plans S2-A and S3-A, `pre_tracks_golden.json`, the `l3_track_golden_test.go` constants and `conformance/stage3_reads_test.go`, whose count literals alone Plans S3-D and S3-E1 may change (D25); the new frozen fixtures are those the conventions list (`pre_stage3_golden.json`, the L3 `group_key` vectors, the v21 plain and interned containers, the placement and group-key digests, the authority, consent, member-ready and checkpoint vectors, the tag 38–42 encodings, `conformance/stage3_test.go`).
 - Mechanics labels: the suite is Plan S3-A's M0–M11, this plan's M12–M14 and Plan S3-D's from M15; Plan S3-B's lockdown grant probe is not a mechanics test (D32).
-- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry`, `user.email=chen@sentio.xyz` and `commit.gpgsign=true` before its first real commit. Every commit explicitly stops on staging or commit failure, must create a new HEAD, and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). The complete paginated REST validator from Task 25 fails closed on missing/malformed/truncated responses, the 250-commit limit, unexpected primary authors and duplicate/noncanonical trailers; its Python body is preserved verbatim. Ordinary and ledger merges submit the exact validated 40-hex head through `--match-head-commit` and explicitly stop on failure, even when a later command would succeed or Bash errexit is suppressed by a surrounding conditional. Tasks 22/24/25/27 persist separated ordinary-check/merge state in `$HOME/.cache/s3-worktrees/task-<N>-merge-check.json`, atomically binding the exact repository, PR number, retained worktree path spelling and checked SHA. A later confirmed merge requires the exact receipt key set and binding, unchanged local HEAD and matching remote head; missing/malformed or mismatched receipts stop rather than silently checking a new head. Same-block checks and merges keep one captured SHA without recomputing it after validation. These receipts are local review state only: they never supply release values, change R1–R4, replace actual URWT JSON or populate Appendix C. URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records; new local Codex worktrees use their retained actual JSON paths, while D34 and existing stack branches stay unchanged.
+- Worktrees: every implementation, live and ledger worktree sets `extensions.worktreeConfig=true`, worktree `user.name=poetry`, `user.email=chen@sentio.xyz` and `commit.gpgsign=true` before its first real commit. Every commit explicitly stops on staging or commit failure, must create a new HEAD, and requires `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD` before publication. Every PR checks each primary author as `poetry <chen@sentio.xyz>` independently of coauthors and accepts zero coauthors or exactly one canonical Claude trailer before squash merge (historical merge commits can omit it). The complete paginated REST validator from Task 25 receives the already checked lowercase 40-hex `expected_head` as its sole argument and uses one verbatim canonical Python body. It refuses missing/malformed/truncated responses, empty or oversized REST pages (each has 1–100 commits), 250 or more total commits, every missing/non-string/non-lowercase-40-hex or duplicate commit SHA (including numeric 40-digit JSON values), a final listed SHA different from that checked head, unexpected primary authors and duplicate/noncanonical trailers. Its success output is `PR commit identities and pinned head verified`; the argument and success output are part of the invocation contract. This listing/head binding supplements the unchanged before/after remote-head checks and atomic merge precondition. Ordinary and ledger merges submit the exact validated 40-hex head through `--match-head-commit` and explicitly stop on failure, even when a later command would succeed or Bash errexit is suppressed by a surrounding conditional. Tasks 22/24/25/27 persist separated ordinary-check/merge state in `$HOME/.cache/s3-worktrees/task-<N>-merge-check.json`, atomically binding the exact repository, PR number, retained worktree path spelling and checked SHA. A later confirmed merge requires the exact receipt key set and binding, unchanged local HEAD and matching remote head; missing/malformed or mismatched receipts stop rather than silently checking a new head. Same-block checks and merges keep one captured SHA without recomputing it after validation. These receipts are local review state only: they never supply release values, change R1–R4, replace actual URWT JSON or populate Appendix C. URWT `multi-source-s3c1` … `multi-source-s3f` per repository, `-live` variants for live tasks, `-ledger-<N>` for records; new local Codex worktrees use their retained actual JSON paths, while D34 and existing stack branches stay unchanged.
 - Every runbook from P1 on computes its promotion budget with Plan S3-B's P0 runbook §13.4 (K28).
 - Execution order: S3-B → S3-C1 code → S3-C1 live → S3-C2 → S3-C3 → S3-C4 → S3-D live (S3-D code after S3-C2); S3-E1 → S3-E2 → S3-E3 → S3-E4 code, its live activation after `P4_END`; S3-E4 → S3-F (S3-F also needs `DEVNET2_FAILURE_DOMAINS` from S3-D). Release order per repository: housegate `HG_TAG` → `HG_TAG_P1` → `HG_TAG_P3` → `HG_TAG_P5`; arbiter-proto `PROTO_TAG` → `PROTO_TAG_P4` → `PROTO_TAG_P5` (D26); arbiter-core `CORE_TAG` → `CORE_TAG_P1` → `_P2` → `_P3` → `_P4` → `_P5`; arbiter `ARBITER_TAG` → `ARBITER_PIN_P2` (a commit) → `ARBITER_TAG_P4` → `ARBITER_TAG_P5`; sentio-node `SN_COMMIT` → `SN_COMMIT_P1` … `_P5`.
 - Decisions D25–D40 (taken for Plans S3-C1 to S3-F after Plan S3-B's D1–D24; binding; each plan cites those that touch it):
@@ -20935,6 +20925,10 @@ Drafting facts below preserve the original measurements and extra names at their
 - Contract §19 now matches the bounded Tasks 22/24/25/27/28 workflow proposals: ordinary and ledger merges bind the exact validated 40-hex head through `--match-head-commit`, with explicit failure stops. Separated author-check/confirmation/merge calls in Tasks 22/24/25/27 preserve repository/PR/worktree/head receipts; malformed, missing or changed bindings require a fresh review and confirmation. Same-block gates retain one captured head rather than recomputing a new merge argument. The complete paginated REST primary-author/trailer validator remains byte-identical, with its existing fail-closed response/identity rules.
 - Verified contract/task agreement using the actual C1 proposal commands and receipts, while retaining the current-source freshness prose in the canonical front and Task 26. The earlier bounded multi-plan workflow evidence remains precisely scoped: 584 extracted fake-CLI cases, six original unsafe-flow reproductions, six conditional/local-head race controls and 54 Bash 3.2/5 syntax checks; none is a real GitHub merge, GPG, source implementation or live deployment proof. This prose-only consistency follow-up introduces no executable helper or new fixture claim.
 - All 11 C1 parts were snapshotted; only Appendix A §19 prose and this Appendix B entry change in this follow-up. The ledger Python bytes, D34 lookup order, eight empty Appendix C rows and five empty run-record items are unchanged. Task 27's first §0 helper body remains SHA256 `95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7`; the task proposals change only later workflow blocks. Pending user choices and every explicit action confirmation remain unchanged. Formal review/consistency counts do not increase, and execution remains gated by the unfinished whole-stage checks.
+
+### Canonical REST identity and checked-head follow-up (2026-10-18)
+
+Tasks22/24/25/27/28 now use the same exact FINALv2 paginated REST Python body at all10 ordinary/record merge gates (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`), invoked with the already checked `expected_head` and success output `PR commit identities and pinned head verified`. It refuses missing/non-string/invalid/uppercase or duplicate commit SHA values (including JSON numeric40-digit values), malformed/empty/oversized pages,250-total truncation and a final listed SHA different from that head, while preserving primary-author/coauthor semantics. Nine actual baseline acceptance REDs become refusals; two numeric40 regressions also show priorv1 accepts what FINALv2 refuses.522 actual full-workflow Bash3.2/5 fakeCLI executions cover all40 shared parser fixtures plus head/API/merge/receipt failures;100 additional conditional-context executions verify fail-closed behavior with errexit suppressed.42 full-workflow syntax/lint checks and mdcheck pass. All306 other task fences and every task byte outside the authorized parser/invocation/output-prose edits are unchanged; Task27's1225-line§0 helper remains SHA95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7 and AppendixA's ledger Python is byte-identical. Before/after remote-head checks, checked-head receipts, atomic `--match-head-commit`, confirmations, signed/new-HEAD gates and all runtime/ledger text remain intact. No real remote/GPG/URWT/Docker/ledger action or canonical write occurred; no formal task-review or plan-consistency count is advanced by this bounded follow-up.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
