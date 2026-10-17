@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-16): draft.** Tasks 22, 23, 24, 25, 26, 27, 28 are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet, and the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
+> **Status (2026-10-17): reviewed, consistency pass pending.** Tasks 22, 23, 24, 25, 26, 27, 28 have had their adversarial review and fixes (Track B, 2026-10-17; the review facts are at the end of Appendix B); the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
 
 **Goal:** Give every SI owner on devnet2 verified, incremental backups of its `hg_safe` in a versioned GCS bucket, written with a key that is confined to that owner's prefix and cannot delete, readable with read-only restore keys, and prove each one with a restore drill that gates the restored parts against the published manifest the backup names; land, now, the restore-and-gate library and the pure §8.5 install gate that Plan S3-C2's si-member reuses unchanged; and do all of it without a consensus change and without restarting any ClickHouse, host pod, verifier or voter (spec §16 P1: "tracks paused: none").
 
@@ -1968,18 +1968,18 @@ Expected: `HG_TAG_P1=<the value written>`. Anything else (for example the stage-
 The restore-and-gate library of spec §16 P1 needs two arbiter-core pieces before `dataplane/objstore` (Task 24) can exist, and Plan S3-C2's member installer and Plan S3-D's owner rebuild reuse both unchanged (contract §17, K27). First, the SNode's partition helpers — the `system.parts` listing, the logical partition id (`all` / `p_<value>`), partition quoting, the conditional `DROP PARTITION` and the partition content scan — move out of `snode` into a new package `dataplane/chparts`, so code outside the SNode lists, scans and drops parts exactly as the SNode does; `snode` keeps every name and signature and delegates in one line, applied on top of Plan S3-A Task 5's owner audit, which consumes those names. Second, the new package `member/gate` is the pure part of the install gate of spec §8.5: `PlanPartition` (steps 1–3: Σ(M) = R, Diverged when L ⊄ M, else Need = M − L), `Classify` (step 4: the scratch classifier, a restore keeping only needed parts and a single-part pull judged kept, rename race, split, doubled or Foreign), `Closure` (step 6: Σ(L) + Σ(kept) = R) and `PartitionSet` (step 6: the local partition set equals the manifest's). It runs no ClickHouse statement and makes no network call. Both sum row LtHashes with `payloadexec.SumPartRowLtHashes`, which is why the task starts by pinning housegate `HG_TAG_P1` (Task 22). Nothing here changes behaviour, a consensus format, a feature string or an image (contract §16); the branch `urwt/claude/multi-source-s3c1` carries Tasks 23 and 24 and Task 24 opens its one PR, so this task pushes nothing.
 
 **Files:**
-- Modify (by `scripts/update-housegate.sh`, never by hand): `go.mod` (the `github.com/housegate/housegate <HG_TAG>` require line → `HG_TAG_P1`), `go.sum`, `MODULE.bazel` (the housegate `bazel_dep` `version` and its `git_override` `# Resolved Housegate …` comment and `commit`), `MODULE.bazel.lock`, `README.md` (the same three lines of the pinned example)
+- Modify (by `scripts/update-housegate.sh`, never by hand): `go.mod` (the `github.com/housegate/housegate <HG_TAG>` require line `:45` → `HG_TAG_P1`), `go.sum`, `MODULE.bazel` (the housegate `bazel_dep` `version` `:9-12` and its `git_override` `# Resolved Housegate …` comment and `commit` `:18-23`), `MODULE.bazel.lock`, `README.md` (the same three lines of the pinned example `:43-58`)
 - Create: `dataplane/chparts/chparts.go`, `dataplane/chparts/chparts_test.go`, `dataplane/chparts/chparts_ch_test.go`, `dataplane/chparts/BUILD.bazel` (gazelle)
-- Modify: `snode/parts.go` (imports `:3-9`; `partInfo` `:11-19` and `activeParts` `:21-43`), `snode/intake.go` (imports `:3-14`; `logicalPartitionID` `:136-141`), `snode/promote_ch.go` (imports `:3-12`; `dropPartitionIfPresent` `:21-32`, `quotePartition` `:34-46`, `escapeSQLString` `:48-51`), `snode/promote_replace.go` (imports `:3-15`; `partsInLogicalPartition` `:189-197`; `partitionContentScan` with its comment `:220-251`; on top of Plan S3-A Task 5, whose three-line audit call in `buildAndReplace` comes first, these two are at `:192-200` and `:223-254`), `snode/BUILD.bazel` (gazelle: the library deps gain `//dataplane/chparts`)
-- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, as Plan S3-A Task 4 left it: `//dataplane/chparts:chparts_test` before `//dataplane/chtest:chtest_test`)
+- Modify: `snode/parts.go` (imports `:3-9`; `partInfo` `:11-19` and `activeParts` `:21-43`), `snode/intake.go` (imports `:3-14`; `logicalPartitionID` `:136-141`), `snode/promote_ch.go` (imports `:3-12`; `dropPartitionIfPresent` `:21-32`, `quotePartition` `:34-46`, `escapeSQLString` `:48-51`), `snode/promote_replace.go` (imports `:3-15`; `partsInLogicalPartition` `:192-200`; `partitionContentScan` with its comment `:223-254`; both after Plan S3-A Task 5's three-line `auditBeforeShadow` call in `buildAndReplace` `:42-44`), `snode/BUILD.bazel` (gazelle: the library deps gain `//dataplane/chparts`)
+- Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration` `:102-122`, as Plan S3-A Task 4 merged it: `//dataplane/chparts:chparts_test` before `//dataplane/chtest:chtest_test` `:109`, in the target list `:108-113`)
 - Create: `member/gate/gate.go`, `member/gate/classify.go`, `member/gate/gate_test.go`, `member/gate/classify_test.go`, `member/gate/BUILD.bazel` (gazelle)
-- Modify: `README.md` (packages table: `dataplane/chparts` after Plan S3-A Task 6's `dataplane/chmechanics` row, `member/gate` after the `verifier` row)
+- Modify: `README.md` (packages table: `dataplane/chparts` after Plan S3-A Task 6's `dataplane/chmechanics` row `:21`, `member/gate` after the `verifier` row `:23`)
 - Test: `dataplane/chparts` — `TestLogicalPartitionID`, `TestQuotePartition`, `TestPartsInLogicalPartition`, `TestEscapeSQLString` (no ClickHouse), `TestActivePartsAndPartitionContentScan`, `TestDropPartitionIfPresent` (ClickHouse-gated on `ARBITER_CH_INTEGRATION=1` and `CH_ADDR`, opened with `chtest.Open`); `member/gate` — `TestPlanPartitionNeedIsManifestMinusLocal`, `TestPlanPartitionIsDivergedWhenLocalIsNotASubMultiset`, `TestPlanPartitionRefusesAManifestWhosePartsDoNotSumToItsRoot`, `TestClassifyRestoreKeepsOnlyNeededPartsAndDropsTheRest`, `TestClassifyKeepsANeededPullOnce`, `TestClassifyZeroRowsIsARenameRace`, `TestClassifyPartsSummingToTheNeedAreASplit`, `TestClassifyDoubledRowsAreDoubled`, `TestClassifyAnythingElseIsForeignAndDropsNothing`, `TestClosureIsArithmetic`, `TestPartitionSetMustEqualTheManifests`; `snode` — every existing test, unchanged, before and after the delegation
 
-Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The worktree starts at `origin/main`, which holds Plan S3-A's Tasks 4–6 (`CORE_TAG`): Task 5 edits `buildAndReplace` (the audit between `refuseDuplicateCandidates` and `prepareShadow`), not any hunk of this task, and leaves `snode/parts.go`, `snode/intake.go` and `snode/promote_ch.go` byte-identical, so these hunks apply where the named functions are; the README rows and the `ci.yml` list follow Plan S3-A's text as merged.
+Line anchors refer to arbiter-core `origin/main` `cfd4f42` (= `CORE_TAG` `v0.15.0`: Plan S3-A executed, arbiter-core#50). It holds Plan S3-A's Tasks 4–6 as merged: `dataplane/chtest`, `dataplane/chrestart`, `dataplane/chmechanics`, the owner audit (`snode/owner_audit.go`, `snode/owner_audit_plan.go`; `buildAndReplace` calls `auditBeforeShadow` between `refuseDuplicateCandidates` and `prepareShadow`, `promote_replace.go:42-44`), the CI password overlay and the mechanics runner. Against `8f0bc43` (v0.14.1) `snode/parts.go`, `snode/intake.go` and `snode/promote_ch.go` are byte-identical and `snode/promote_replace.go` differs only by those three lines, so no hunk of this task overlaps Plan S3-A's. If `main` moved past `CORE_TAG` before Step 1, apply the hunks where the named functions are (the hunk rule of the Global Constraints).
 
 **Interfaces:**
-- Consumes: ledger `HG_TAG_P1` (Task 22) and `CORE_TAG`, `HG_TAG`, `PROTO_TAG` (Plan S3-A; `CORE_TAG` pins the other two), read with `s3-ledger.py get`, never predicted; housegate at `HG_TAG_P1`: `func payloadexec.SumPartRowLtHashes(hashes []string) (string, error)` (contract §16: the LtHash sum of 0x-prefixed hex accumulators as `"0x"` + lowercase hex, repeats counting, the empty sum the zero accumulator, a bad element `part row lthash %d: %w`); existing housegate `chexec.ScanParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema, partNames []string) ([]chexec.PartScanResult, error)` with `PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, and in tests `payloadexec.RowElementHash`, `lthash.New`, `(*lthash.Hash).Add`, `(*lthash.Hash).Bytes`; arbiter-core `ddl.Intents(p ddl.Pinned, t payloadexec.TableSchema) (TableIntent, TableIntent, TableIntent, error)` and `TableIntent.SQL()` (tests); Plan S3-A contract §3 `chtest.Open(t testing.TB, addr string) clickhouse.Conn` (it sends `CH_USER` / `CH_PASSWORD`), and Plan S3-A Task 4's `scripts/ci/clickhouse-default-password.xml` and `integration-clickhouse` job; Plan S3-A Task 5's "Consumes (existing)" names of `snode`, which stay: `partInfo{Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64}`, `activeParts`, `partsInLogicalPartition`, `logicalPartitionID`, `quotePartition`, `escapeSQLString`, `(*Role).exec`; Plan S3-A Task 5's restart test `TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart` (gated on `ARBITER_CH_RESTART=1` and `CH_RESTART_ADDR`, subtests `repair` and `report`) and its Step 10 topology (one `clickhouse/clickhouse-server:26.3.37.3` node with its own Keeper, `scripts/ci/clickhouse-keeper.xml`, `--restart always`, passwordless).
+- Consumes: ledger `HG_TAG_P1` (Task 22) and `CORE_TAG`, `HG_TAG`, `PROTO_TAG` (Plan S3-A; `CORE_TAG` pins the other two), read with `s3-ledger.py get`, never predicted; housegate at `HG_TAG_P1`: `func payloadexec.SumPartRowLtHashes(hashes []string) (string, error)` (contract §16: the LtHash sum of 0x-prefixed hex accumulators as `"0x"` + lowercase hex, repeats counting, the empty sum the zero accumulator, a bad element `part row lthash %d: %w`); existing housegate `chexec.ScanParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema, partNames []string) ([]chexec.PartScanResult, error)` with `PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, and in tests `payloadexec.RowElementHash`, `lthash.New`, `(*lthash.Hash).Add`, `(*lthash.Hash).Bytes`; arbiter-core `ddl.Intents(p ddl.Pinned, t payloadexec.TableSchema) (TableIntent, TableIntent, TableIntent, error)` and `TableIntent.SQL()` (tests); Plan S3-A contract §3 `chtest.Open(t testing.TB, addr string) clickhouse.Conn` (it sends `CH_USER` / `CH_PASSWORD`), and Plan S3-A Task 4's `scripts/ci/clickhouse-default-password.xml` and `integration-clickhouse` job; Plan S3-A Task 5's "Consumes (existing)" names of `snode`, which stay: `partInfo{Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64}`, `activeParts`, `partsInLogicalPartition`, `logicalPartitionID`, `quotePartition`, `escapeSQLString`, `(*Role).exec`; Plan S3-A Task 5's restart test `TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart` (`snode/owner_audit_restart_test.go`, gated on `ARBITER_CH_RESTART=1` and `CH_RESTART_ADDR`, subtests `repair` and `report`; as merged, `scripts/ci/clickhouse-mechanics.sh` runs it against its node B) on a node of its own (one `clickhouse/clickhouse-server:26.3.37.3` node with its own Keeper, `scripts/ci/clickhouse-keeper.xml`, `--restart always`, passwordless, Plan S3-A Task 5 Step 10's topology).
 - Produces (package `dataplane/chparts`, contract §17, verbatim): `type Part struct { Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64 }`; `func ActiveParts(ctx context.Context, conn clickhouse.Conn, db, table string) ([]Part, error)` (active, `ORDER BY name`, nil for none); `func LogicalPartitionID(sch payloadexec.TableSchema, p Part) string`; `func PartsInLogicalPartition(parts []Part, sch payloadexec.TableSchema, partitionID string) []Part` (input order, never nil); `func QuotePartition(sch payloadexec.TableSchema, partitionID string) (string, error)` (refusals `unpartitioned table wants partition all, got %s`, `partition id %s does not use p_<value> form`); `func EscapeSQLString(s string) string`; `func DropPartitionIfPresent(ctx context.Context, conn clickhouse.Conn, db, table string, sch payloadexec.TableSchema, partitionID string) (bool, error)` (true when it issued `ALTER TABLE <db>.<table> DROP PARTITION <QuotePartition>`; its failure `<statement>: <err>`); `type ScannedPart struct { Name, RowLtHash string; Rows uint64 }`; `func PartitionContentScan(ctx context.Context, conn clickhouse.Conn, db, table string, sch payloadexec.TableSchema, partitionID string) (string, []ScannedPart, error)` (root = `SumPartRowLtHashes` of `chexec.ScanParts` over the partition's active parts in name order; the zero root and nil parts for none).
 - Produces (package `snode`, no behaviour change): `type partInfo = chparts.Part`; `activeParts`, `logicalPartitionID`, `partsInLogicalPartition`, `quotePartition`, `escapeSQLString` one-line calls; `(*Role).dropPartitionIfPresent(ctx, db, table string, sch payloadexec.TableSchema, partitionID, partitionSQL string) error`, `(*Role).partitionContentRoot(ctx, db, table string, sch payloadexec.TableSchema, partitionID string) (string, error)` and `(*Role).partitionContentScan(ctx, db, table string, sch payloadexec.TableSchema, partitionID string) (string, []shadowPart, error)` keep their signatures and call `chparts`.
 - Produces (package `member/gate`, contract §17, verbatim; pure): `type Plan struct { Diverged bool; Need []string; Root string }`; `func PlanPartition(manifest []string, root string, local []string) (Plan, error)` (refusal `gate: manifest parts sum to %s, not the partition root %s`); `type Outcome string` with `OutcomeKept = "kept"`, `OutcomeRenameRace = "rename_race"`, `OutcomeSplit = "split"`, `OutcomeDoubled = "doubled"`, `OutcomeForeign = "foreign"`; `type Expected struct { RowLtHash string; Rows uint64 }`; `type Fetch struct { Need []string; Single *Expected }`; `type ScratchPart struct { Name, RowLtHash string; Rows uint64 }`; `type Classification struct { Outcome Outcome; Keep, Drop, Kept []string }`; `func Classify(f Fetch, scratch []ScratchPart) (Classification, error)`; `func Closure(root string, local, kept []string) error` (refusal `gate: closure: %d local and %d kept parts sum to %s, the partition root is %s`); `func PartitionSet(manifest, local []string) error` (refusal `gate: partition set %v is not the manifest's %v`).
@@ -1988,13 +1988,15 @@ Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The worktree starts at `
 Notes:
 - **The extraction changes no byte the SNode sends or returns.** `chparts.ActiveParts` keeps the `system.parts` query text, its argument order, the scan order and the nil slice for no row (Plan S3-A Task 5's `ownerAuditConnS` fake routes on `FROM system.parts` in that text); `Part` is the old struct, so `partInfo{...}` literals and field reads compile unchanged; `DropPartitionIfPresent` issues the same `ALTER TABLE <db>.<table> DROP PARTITION <expr>` and wraps its failure as `(*Role).exec` did (`<statement>: <err>`), and like the old code it builds the expression only once a part of the partition is present; `PartitionContentScan` returns the zero accumulator and no parts for an empty partition, and each part's row LtHash in chexec's `"0x"` + lowercase form, which is what `accumulatorHex(parseAccumulatorHex(s))` gave. The one text that differs is unreachable: a malformed scan hash would now fail with `part row lthash %d: decode lthash hex: …` instead of `lthash accumulator hex: …`, and `chexec.scanResults` always formats a 2048-byte accumulator.
 - **`partitionSQL` stays in `dropPartitionIfPresent`'s signature (contract §17) and is now unused.** Every caller passes `quotePartition(sch, cmd.PartitionID)` for the same partition id (`buildAndReplace`, `reconcilePromotionIntent`, `prepareShadow`, and `attachCandidateSubset` through `attachCandidateParts`), so `chparts` deriving it again from `partitionID` issues the identical statement.
-- **On top of Plan S3-A Task 5.** Task 5 adds `snode/owner_audit*.go` and edits `state.go`, `registry.go`, `config.go`, `snode.go`, `promote.go` and `buildAndReplace`; it never edits the functions this task replaces (`snode/parts.go`, `intake.go` and `promote_ch.go` stay byte-identical), and its owner audit consumes `activeParts`, `partInfo`, `partsInLogicalPartition`, `logicalPartitionID`, `quotePartition`, `escapeSQLString` and `(*Role).exec`, which keep their names and types (a `partInfo{...}` literal compiles unchanged against the alias). Its `ownerAuditConnS` fake answers every query containing `FROM system.parts` with an empty result, which `chparts.ActiveParts` reads exactly as `activeParts` did (`Next`, `Err`, `Close`). The owner audit lists, filters and drops `hg_safe` parts through the delegated names, so Step 8 also runs its restart repair (Plan S3-A Task 5 Step 10) after the delegation.
+- **On top of Plan S3-A Task 5 as merged.** Task 5 added `snode/owner_audit.go`, `owner_audit_plan.go` and their tests and edited `state.go`, `registry.go`, `config.go`, `snode.go`, `promote.go` and `buildAndReplace`; it never edited the functions this task replaces (`snode/parts.go`, `intake.go` and `promote_ch.go` are byte-identical to `8f0bc43`), and its owner audit calls `activeParts`, `partInfo`, `partsInLogicalPartition`, `logicalPartitionID`, `escapeSQLString` and `(*Role).exec` (its plan's list also names `quotePartition`), which keep their names and types (a `partInfo{...}` literal compiles unchanged against the alias). Its `ownerAuditConnS` fake (`owner_audit_worker_test.go`) answers every query containing `FROM system.parts` with an empty result, which `chparts.ActiveParts` reads exactly as `activeParts` did (`Next`, `Err`, `Close`). The owner audit lists, filters and drops `hg_safe` parts through the delegated names, so Step 8 also runs its restart repair (Plan S3-A Task 5 Step 10) after the delegation.
 - **The gate's hash form.** Every row hash and root must be an LtHash accumulator that `SumPartRowLtHashes` accepts (2048 bytes in hex, `0x` optional, any case); the empty string is refused, not read as the zero accumulator. The gate compares, sums and returns hashes in the executor's form (`"0x"` + lowercase hex), so a manifest hash and a scan of the same bytes are equal whatever spelling the caller passed; `Need` and `Kept` are in that form.
 - **The gate's choices inside the contract.** `PlanPartition` refuses a manifest whose parts do not sum to its root before it looks at L; a Diverged plan has a nil `Need` (the rebuild needs every part of M, which the caller holds). A restore keeps parts in the order the caller offers them, so of two parts with one row hash the first is kept: Plan S3-D Task 50 offers the parts whose `hash_of_all_files` matches the arbiter's first. A pull is `kept` only when the scratch is one part equal to `Single` and `Need` holds that hash; the same part when `Need` does not hold it is `foreign`. For `rename_race`, `split` and `doubled`, `Drop` lists every scratch part (the caller discards the scratch and retries or moves on, spec §8.5 step 4); for `foreign`, `Keep`, `Drop` and `Kept` are empty (the scratch is kept for forensics). `PartitionSet` compares sets: either argument may repeat an id (one per part) and order is ignored; its refusal prints both sets sorted.
-- **ClickHouse-gated tests.** Each test table is the `hg_safe` intent `ddl.Intents` renders (`_hg_row_id FixedString(32)`, MergeTree, `ddl.SafeSettings`) in its own database `chparts_<10 hex of sha1(test name, NUL, table id)>`, dropped at cleanup, with merges stopped, so one INSERT is one part. Expected roots come from `payloadexec.RowElementHash` per row, independently of `chexec`; the test also compares each scanned part with `chexec.ScanParts`. They connect through `chtest.Open`, so CI's password on `default` reaches them. In drafting they passed on `clickhouse/clickhouse-server:25.8` (25.8.28.1, the `integration-clickhouse` image) and on 26.3.51.7, failed with `Authentication failed` without `CH_USER` / `CH_PASSWORD` against the CI overlay and passed with them.
+- **ClickHouse-gated tests.** Each test table is the `hg_safe` intent `ddl.Intents` renders (`_hg_row_id FixedString(32)`, MergeTree, `ddl.SafeSettings`) in its own database `chparts_<10 hex of sha1(test name, NUL, table id)>`, dropped at cleanup, with merges stopped, so one INSERT is one part. Expected roots come from `payloadexec.RowElementHash` per row, independently of `chexec`; the test also compares each scanned part with `chexec.ScanParts`. They connect through `chtest.Open`, so CI's password on `default` reaches them. At review they passed on `clickhouse/clickhouse-server:25.8` (25.8.33.6, the `integration-clickhouse` image), on `26.3.37.3` and on the deployed `26.3-lts-decimal512-release-2026-09-16` (26.3.12.1), and failed without `CH_USER` / `CH_PASSWORD` against the CI overlay.
 - **No frozen file.** No golden, vector or conformance file changes (Global Constraints), and nothing here is Raft-reachable or consensus-visible: `chparts` and `member/gate` are data-plane libraries.
 - **CI.** Only `ci.yml`'s `integration-clickhouse` list gains `//dataplane/chparts:chparts_test` (contract §17). Cut Release's `validate SNode integration` step (`ddl`, `snode`, `verifier`) is unchanged; its `snode_test` exercises `chparts` through the delegation.
-- **Verified in drafting** on an export of arbiter-core `8f0bc43` with Plan S3-A Tasks 4 and 5 applied from their plan text (every file they create, their `snode`, opener, `ci.yml` and README hunks, and Task 6's README row; arbiter-proto with Plan S3-A Task 3's read messages from a scratch build), against housegate `838de2d` plus a stub of Task 22's `SumPartRowLtHashes` written from contract §16, through `replace` directives and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Bazel had no offline cache, so the BUILD files above are written as gazelle writes the neighbouring ones, under the root `# gazelle:resolve` directives for `@housegate//pkg/...`): the chparts and gate tests failed to build with the `undefined:` errors Steps 5 and 10 name before their implementation and passed after it, also under `-race`; `go vet ./...` and `gofmt` were clean, every unit test of the module passed and the public-boundary check passed; the chparts ClickHouse tests passed on 25.8.28.1 and on 26.3.51.7, and failed with `Authentication failed` against the CI password overlay without `CH_USER` / `CH_PASSWORD`; on a two-node 25.8.28.1 pair with the CI password the `snode` suite gave the same 402 `--- PASS` lines and one `--- SKIP` before and after the delegation, the owner audit's restart repair passed after it on a restartable node with its own Keeper (26.3.51.7, the local `26.3` tag; the grep printed `3`), and the six `integration-clickhouse` targets passed as CI runs them (`ARBITER_CH_REPLICA=1`), in parallel and one at a time; mutating the gate (dropping the Need check of a pull, the split's part count, the doubled row count, the restore's once-per-occurrence count, the plan's sum check or its Diverged exit, counting a zero-row part as rows, comparing partition sets as multisets, or taking a restore's parts in name order) failed a named test each time; `go list -deps ./member/gate` named no ClickHouse, gRPC, `net` or `os/exec` package while the same grep over `./dataplane/chparts` found the ClickHouse driver; the edited `ci.yml` parsed as YAML with the target in the `data-plane integration` step; this task's text, applied mechanically to a fresh copy of that tree (its new files, BUILD files, the `snode` hunks found by function, the `ci.yml` line and the README rows), reproduced the verified tree byte for byte, and its new files and `snode` hunks also applied to, built on and passed the `snode` unit suite of the bare `8f0bc43` export; every bash block and `Run:` line passes `bash -n` and `shellcheck` (one SC2016 note: the README grep's backquotes are literal).
+- **gazelle and a test-only package.** Steps 5 and 10 run gazelle while the new package holds only its tests, so it writes a `BUILD.bazel` with the `go_test` alone; run again after the implementation, gazelle keeps that rule first and appends the `go_library` after it. Steps 6 and 11 therefore delete that file before gazelle runs, so the BUILD file is the one they quote (library first, as every neighbouring BUILD file), and Step 13's gazelle run leaves it unchanged.
+- **Commit identity (user rule).** The worktree gets its own identity `poetry <chen@sentio.xyz>` in Step 1, before the first commit (the global `uranuswch@gmail.com` must never author or co-author a commit: GitHub would add it as a co-author of the squash merge); every commit block prints the author, and Step 13 checks every commit of the branch. Task 24 pushes this branch and checks every commit's author again before its squash merge. Commits are signed as the user's git config says; a commit that stops with `gpg failed to sign the data` needs the user to unlock the key: ask, never pass `--no-gpg-sign` and never change the signing configuration.
+- **Verified** (adversarial review, 2026-10-17) on a `git archive` of arbiter-core `origin/main` `cfd4f42` (`CORE_TAG` `v0.15.0`, Plan S3-A as merged), against housegate `origin/main` `ed24705` (`HG_TAG` `v0.20.0` plus plan documents) with Task 22's reviewed text applied as the stand-in for `HG_TAG_P1` (through `replace` for `go test` and `local_path_override` for Bazel), the hunks of this task applied verbatim, step by step, by a script: the chparts and gate tests failed to build with exactly the `undefined:` lists of Steps 5 and 10 (under `go test` and under Bazel) and passed after Steps 6 and 11, also under `-race`; `go vet ./...` and `gofmt` clean; every unit test of the module passed; the public-boundary check passed; offline Bazel 9.1.0 (`--repository_disable_download`): gazelle wrote exactly the BUILD files of Steps 6 and 11 once the test-only file of Steps 5 and 10 is deleted first (without that it appends the `go_library` after the `go_test`), Step 8's `snode/BUILD.bazel` diff is the one stated line, Step 13's gazelle left no diff, and `bazel build //...`, `bazel test //...` and the race run passed (19 test targets); the chparts ClickHouse tests passed on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1 and failed against the CI password overlay without `CH_USER` / `CH_PASSWORD`; on a two-node 25.8.33.6 pair with the CI password the `snode` suite gave the same 403 `--- PASS` lines and one `--- SKIP` before and after the delegation (`go test` and Bazel); the owner audit's restart repair passed after it on one `26.3.37.3` node with its own Keeper (`go test` and Bazel; the grep printed `3`, the log showed the restart line twice and the drop and unclean lines once each); the six `integration-clickhouse` targets passed as CI runs them (`ARBITER_CH_REPLICA=1`), under Bazel and with `go test` in parallel and one at a time; twenty mutations each failed a named test (the gate's once-per-occurrence restore count, the Need check of a pull, the plan's sum check, its Diverged exit and its Need sort, set-versus-multiset partition sets, the hash canonicalization, the closure ignoring local, the split's part count, the doubled row count, a rename race by part count; chparts's nil-for-none of `PartsInLogicalPartition`, backslash escaping, the empty-value refusal, `ORDER BY name`, the nil slice of `ActiveParts`, the partition value of `LogicalPartitionID`, the drop issued with no part, the scan root and the scan's nil parts for none); `go list -deps ./member/gate` named no ClickHouse, gRPC, `net` or `os/exec` package; the edited `ci.yml` parsed as YAML (Ruby fallback; Homebrew `python3` has no PyYAML) with the target in the `data-plane integration` step; Step 1's checks and Step 2's `go.mod` and housegate greps (the latter on the stand-in tree) printed what they expect; every bash block and `Run:` line passes `bash -n` and `shellcheck` 0.11 (one SC2016 note: the README grep's backquotes are literal).
 
 - [ ] **Step 1: Create the worktree and check the base**
 
@@ -2006,12 +2008,14 @@ git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin --
 bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter-core claude multi-source-s3c1
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and, from Step 2 on, with the ledger values Step 2 prints. If the branch exists already (an interrupted earlier run), the object says so; continue only if `git -C "$W" log --oneline origin/main..HEAD` lists commits of this task alone.
+Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and, from Step 2 on, with the ledger values Step 2 prints. If the branch exists already (an interrupted earlier run), the object says so; continue only if `git -C "$W" log --oneline origin/main..HEAD` lists commits of this task alone. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core config approvals add` themselves; never pass `--yes` or `--clobber`.
 
-Run:
+Run (the first line gives the worktree its own commit identity before any commit; local only, never committed):
 
 ```bash
 W=<worktree path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config user.name; git -C "$W" config user.email
 git -C "$W" log --oneline -1 && git -C "$W" status --short
 test -f "$W/snode/owner_audit.go" && test -f "$W/dataplane/chtest/chtest.go" && test -f "$W/scripts/ci/clickhouse-mechanics.sh" && test -f "$W/scripts/ci/clickhouse-default-password.xml" && echo s3a-base-ok
 grep -c '^func (r \*Role) partitionContentScan(' "$W/snode/promote_replace.go"
@@ -2019,7 +2023,7 @@ grep -c '//dataplane/chtest:chtest_test \\$' "$W/.github/workflows/ci.yml"
 test ! -e "$W/dataplane/chparts" && test ! -e "$W/member" && echo paths-free
 ```
 
-Expected: `origin/main`'s head commit and a clean tree; `s3a-base-ok`; `1`; `1`; `paths-free`. A missing S3-A file means Plan S3-A has not merged: stop, this task builds on `CORE_TAG`.
+Expected: `poetry` and `chen@sentio.xyz` (the worktree's own identity: the global `uranuswch@gmail.com` must never author a commit of this task); `origin/main`'s head commit (`cfd4f42 feat: stage-3 P0 reads, owner audit and ClickHouse mechanics (multi-source SI) (#50)` at review, or a later one) and a clean tree; `s3a-base-ok`; `1`; `1`; `paths-free`. A missing S3-A file means Plan S3-A has not merged: stop, this task builds on `CORE_TAG`.
 
 - [ ] **Step 2: Read the ledger and check HG_TAG_P1 by content**
 
@@ -2071,7 +2075,10 @@ spec 2026-10-14 §15), additive only. dataplane/chparts and member/gate
 sum row LtHashes with SumPartRowLtHashes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 4: Write the failing tests for `dataplane/chparts`**
 
@@ -2615,7 +2622,9 @@ func PartitionContentScan(ctx context.Context, conn clickhouse.Conn, db, table s
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/chparts && bazel run //:gazelle && cat dataplane/chparts/BUILD.bazel && bazel test //dataplane/chparts:chparts_test --test_output=errors`
+Step 5's gazelle wrote a BUILD file with the `go_test` alone; run again, gazelle would keep that rule first and append the `go_library` after it, so the file is deleted and written afresh.
+
+Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/chparts && rm -f dataplane/chparts/BUILD.bazel && bazel run //:gazelle && cat dataplane/chparts/BUILD.bazel && bazel test //dataplane/chparts:chparts_test --test_output=errors`
 Expected: `gofmt` lists nothing; the BUILD file is
 
 ```starlark
@@ -2679,7 +2688,7 @@ done
 docker exec arbiter-core-s3c1-a clickhouse-client --password arbiter-core-ci --query "SELECT version()"
 ```
 
-Expected: two container ids, then a `25.8.` version (25.8.28.1 in drafting). If port 19110 or 19111 is taken, remove what holds it or pick two free ports and use them in every command of this task.
+Expected: two container ids, then a `25.8.` version (25.8.33.6 at review). If port 19110 or 19111 is taken, remove what holds it or pick two free ports and use them in every command of this task.
 
 ```bash
 W=<worktree path>; cd "$W" && ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:19110 CH_USER=default CH_PASSWORD=arbiter-core-ci \
@@ -2724,7 +2733,10 @@ member installer and the owner rebuild use it (housegate spec
 ClickHouse-gated tests.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 8: Delegate `snode`'s partition helpers to `chparts`**
 
@@ -2739,7 +2751,7 @@ W=<worktree path>; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_C
   && grep -c -- '--- PASS:' "$S/s3c1-t23-snode-before.txt"; grep -E -- '--- (SKIP|FAIL):' "$S/s3c1-t23-snode-before.txt"
 ```
 
-Expected: PASS; a count of `--- PASS:` lines, subtests included (402 in drafting, with Plan S3-A Tasks 4–5 applied from their text; 348 at v0.14.1); no `--- FAIL:` line, and exactly one `--- SKIP:` line, `--- SKIP: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart` (it needs `ARBITER_CH_RESTART` and a node of its own, which this step gives it after the change).
+Expected: PASS; a count of `--- PASS:` lines, subtests included (403 at review on `cfd4f42`); no `--- FAIL:` line, and exactly one `--- SKIP:` line, `--- SKIP: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart` (it needs `ARBITER_CH_RESTART` and a node of its own, which this step gives it after the change).
 
 In `snode/parts.go` replace the import block, `partInfo` and `activeParts` (`:3-43`) with:
 
@@ -2826,7 +2838,7 @@ import (
 )
 ```
 
-replace `partsInLogicalPartition` (`:189-197`) with:
+replace `partsInLogicalPartition` (`:192-200`) with:
 
 ```go
 func partsInLogicalPartition(parts []partInfo, sch payloadexec.TableSchema, partitionID string) []partInfo {
@@ -2834,7 +2846,7 @@ func partsInLogicalPartition(parts []partInfo, sch payloadexec.TableSchema, part
 }
 ```
 
-and replace the comment and body of `partitionContentScan` (`:220-251`) with:
+and replace the comment and body of `partitionContentScan` (`:223-254`) with:
 
 ```go
 // partitionContentScan is partitionContentRoot that also returns each scanned
@@ -2877,7 +2889,7 @@ W=<worktree path>; S=<scratchpad>; cd "$W" && ARBITER_CH_INTEGRATION=1 ARBITER_C
   && diff "$S/s3c1-t23-snode-before.txt" "$S/s3c1-t23-snode-after.txt" && echo same-snode-results
 ```
 
-Expected: PASS and `same-snode-results` (in drafting: the same 402 `--- PASS` lines and one `--- SKIP` line before and after). Any difference is a behaviour change of the extraction: read the differing test, fix `chparts` or the delegation (never the test), and repeat both runs.
+Expected: PASS and `same-snode-results` (at review: the same 403 `--- PASS` lines and one `--- SKIP` line before and after). Any difference is a behaviour change of the extraction: read the differing test, fix `chparts` or the delegation (never the test), and repeat both runs.
 
 Then the restart repair, with Plan S3-A Task 5 Step 10's topology (one node with its own Keeper whose container restarts itself on a fixed host port; `--restart always` and `--rm` exclude each other). `docker run` pulls `clickhouse/clickhouse-server:26.3.37.3` when it is not local, a remote read that needs explicit user confirmation in chat before running:
 
@@ -2916,7 +2928,10 @@ unit and ClickHouse-gated, passes identically before and after, and the
 owner audit's restart repair passes on top of it.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 9: Write the failing tests for `member/gate`**
 
@@ -3577,7 +3592,9 @@ func classifyPull(need []string, single Expected, parts []ScratchPart) Classific
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l member && bazel run //:gazelle && cat member/gate/BUILD.bazel && bazel test //member/gate:gate_test --test_output=errors && bazel test --@rules_go//go/config:race //member/gate:gate_test --test_output=errors`
+As in Step 6, Step 10's test-only BUILD file is deleted so that gazelle writes the library first.
+
+Run: `W=<worktree path>; cd "$W" && gofmt -l member && rm -f member/gate/BUILD.bazel && bazel run //:gazelle && cat member/gate/BUILD.bazel && bazel test //member/gate:gate_test --test_output=errors && bazel test --@rules_go//go/config:race //member/gate:gate_test --test_output=errors`
 Expected: `gofmt` lists nothing; the BUILD file is
 
 ```starlark
@@ -3628,7 +3645,10 @@ restore drill, the member installer and the owner rebuild feed it row
 LtHashes and act on its answer.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 12: List the two packages in the README**
 
@@ -3658,7 +3678,10 @@ git -C "$W" add README.md
 git -C "$W" commit -m "docs: dataplane/chparts and member/gate in the packages table
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: the commit, then `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step.
 
 - [ ] **Step 13: Full verification**
 
@@ -3685,8 +3708,8 @@ docker rm -f arbiter-core-s3c1-a arbiter-core-s3c1-b && docker network rm arbite
 
 Expected: PASS for all six targets, then the containers and the network are gone.
 
-Run: `W=<worktree path>; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD && git -C "$W" diff --name-only HEAD~5 HEAD`
-Expected: a clean tree; this task's five commits, newest first: `docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>` (if `main` moved past `CORE_TAG` before Step 1, those later main commits are listed below them); then exactly these 20 paths and no golden, vector or conformance file: `.github/workflows/ci.yml`, `MODULE.bazel`, `MODULE.bazel.lock`, `README.md`, `dataplane/chparts/BUILD.bazel`, `dataplane/chparts/chparts.go`, `dataplane/chparts/chparts_ch_test.go`, `dataplane/chparts/chparts_test.go`, `go.mod`, `go.sum`, `member/gate/BUILD.bazel`, `member/gate/classify.go`, `member/gate/classify_test.go`, `member/gate/gate.go`, `member/gate/gate_test.go`, `snode/BUILD.bazel`, `snode/intake.go`, `snode/parts.go`, `snode/promote_ch.go`, `snode/promote_replace.go`. No push: Task 24 adds `dataplane/objstore` and the S3 mechanics on this branch, opens the one PR for Tasks 23–24 (`feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`) and cuts `CORE_TAG_P1`.
+Run: `W=<worktree path>; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD && git -C "$W" diff --name-only HEAD~5 HEAD && git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u`
+Expected: a clean tree; this task's five commits, newest first: `docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>` (if `main` moved past `CORE_TAG` before Step 1, those later main commits are listed below them); then exactly these 20 paths and no golden, vector or conformance file: `.github/workflows/ci.yml`, `MODULE.bazel`, `MODULE.bazel.lock`, `README.md`, `dataplane/chparts/BUILD.bazel`, `dataplane/chparts/chparts.go`, `dataplane/chparts/chparts_ch_test.go`, `dataplane/chparts/chparts_test.go`, `go.mod`, `go.sum`, `member/gate/BUILD.bazel`, `member/gate/classify.go`, `member/gate/classify_test.go`, `member/gate/gate.go`, `member/gate/gate_test.go`, `snode/BUILD.bazel`, `snode/intake.go`, `snode/parts.go`, `snode/promote_ch.go`, `snode/promote_replace.go`; then exactly one author line, `poetry <chen@sentio.xyz>` (any other: stop, set Step 1's identity and rewrite the authors of this task's commits with `git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`; nothing is pushed here). No push: Task 24 adds `dataplane/objstore` and the S3 mechanics on this branch, opens the one PR for Tasks 23–24 (`feat: stage-3 P1 restore-and-gate library (chparts, member/gate, objstore) and S3 mechanics M12–M14`) and cuts `CORE_TAG_P1`.
 
 ---
 
@@ -3697,19 +3720,19 @@ Spec §16 P1 asks for verified object-store backups per owner, written with keys
 **Files:**
 - Create: `dataplane/objstore/bucket.go` (package doc, constants, `BackupKind`, `Bucket`, names), `dataplane/objstore/credentials.go` (`Credentials`, redaction), `dataplane/objstore/sql.go` (the statement renderers, `Scratch`, `ScratchNamer`, the `ASYNC` runner), `dataplane/objstore/index.go` (`BackupIndex` and its tables and parts, `ReadIndexes`, the index write), `dataplane/objstore/manifests.go` (`ManifestSource`, `NewArbiterManifests`, `CheckManifest`), `dataplane/objstore/backup.go` (`Backuper`, `NextBackup`), `dataplane/objstore/restore.go` (`BackupRef`, `GateInput`, `GateResult`, `RestoreAndGate`), `dataplane/objstore/drill.go` (`SchemaSource`, `Drill`, the verdict types), `dataplane/objstore/BUILD.bazel` (gazelle)
 - Test: `dataplane/objstore/bucket_test.go`, `credentials_test.go`, `sql_test.go`, `index_test.go`, `backup_test.go`, `manifests_test.go`, `drill_test.go` (no ClickHouse), `dataplane/objstore/objstore_s3_test.go` (the `TestS3_` tests, gated on `ARBITER_CH_S3=1`)
-- Create: `dataplane/chmechanics/s3_test.go` (M12–M14); Modify: `dataplane/chmechanics/BUILD.bazel` (gazelle: `srcs` gains `s3_test.go`, `deps` gain `//dataplane/objstore` and `@housegate//pkg/replay`; Plan S3-A Task 6 Step 11's text otherwise)
-- Modify: `scripts/ci/clickhouse-mechanics.sh` (Plan S3-A Task 6 Step 4's text: the header comment `:8-20`, the names after `ch_b` and `cleanup` `:29-34`, `on_exit` `:56-57`, the pulls and the network `:66-67`, the end of the readiness check `:117-120`, the exports `:128-134`, the suite's count line `:164`, the end of the SNode block `:181-182`; eight replacements, 165 lines added and 8 removed)
+- Create: `dataplane/chmechanics/s3_test.go` (M12–M14); Modify: `dataplane/chmechanics/BUILD.bazel` (gazelle: `srcs` gains `s3_test.go`, `deps` gain `//dataplane/objstore` and `@housegate//pkg/replay`; otherwise as at `CORE_TAG`)
+- Modify: `scripts/ci/clickhouse-mechanics.sh` (as at `CORE_TAG`, Plan S3-A Task 6's file: the header comment `:8-20`, the names after `ch_b` and `cleanup` `:29-34`, `on_exit` `:56-57`, the pulls and the network `:66-67`, the end of the readiness check `:117-120`, the exports `:128-134`, the suite's count line `:164`, the end of the SNode block `:181-182`; eight replacements, 169 lines added and 8 removed)
 - Modify: `README.md` (one packages row after Task 23's `dataplane/chparts` row; one paragraph at the end of Plan S3-A Task 6's § ClickHouse mechanics; one paragraph appended to § Compatibility, after Plan S3-A Task 6's stage-3 P0 paragraph, which ends the file)
 - Unchanged: `.github/workflows/ci.yml` and `.github/workflows/cut-release.yml` (their `clickhouse-mechanics` job and `validate ClickHouse mechanics` step run the extended runner; `test` runs the new unit tests, and the `TestS3_` tests and M12–M14 skip there)
 - Ledger (Step 17, housegate): Modify `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`, Appendix C (the `CORE_TAG_P1` and `P1_BACKUP_DELETE` rows and the run record `arbiter-core release and the S3 mechanics (Task 24)`), on the ledger copy `s3-ledger.py ref <housegate> s3c1` prints (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34), with the record procedure of contract §19 (decision D23): one commit in the URWT worktree `multi-source-s3c1-ledger-24`
 
-Line anchors refer to arbiter-core `8f0bc43` (v0.14.1) for existing code and to the text of Plan S3-A Task 6 (as housegate `main` holds it since housegate#237) for the files that task creates; the worktree is Task 23's (`urwt/claude/multi-source-s3c1`), which holds Plan S3-A's Tasks 4–6 through `CORE_TAG` and Task 23's five commits. Where Plan S3-A's merged text differs from its plan text, apply this task's intent on top (Global Constraints, "Hunks are anchored on the base revisions").
+Line anchors refer to arbiter-core `cfd4f42` (v0.15.0, `CORE_TAG`): Plan S3-A has executed, and its `dataplane/chtest`, `dataplane/chrestart`, `dataplane/chmechanics` and `scripts/ci/clickhouse-mechanics.sh` are on `main` (every anchor below was re-read there); the worktree is Task 23's (`urwt/claude/multi-source-s3c1`), which holds `CORE_TAG` and Task 23's five commits. If `main` moved past `CORE_TAG` before Task 23 started and touched a file below, apply this task's intent on top (Global Constraints, "Hunks are anchored on the base revisions").
 
 **Interfaces:**
-- Consumes: ledger `CORE_TAG`, `PROTO_TAG` (Plan S3-A) and `HG_TAG_P1` (Task 22), read with `s3-ledger.py get`, never predicted; Task 23 on this branch: `chparts.Part`, `chparts.ActiveParts(ctx context.Context, conn clickhouse.Conn, db, table string) ([]Part, error)`, `chparts.LogicalPartitionID(sch payloadexec.TableSchema, p Part) string`, `chparts.QuotePartition(sch payloadexec.TableSchema, partitionID string) (string, error)`, `chparts.EscapeSQLString(s string) string`, `gate.Plan{Diverged bool; Need []string; Root string}`, `gate.PlanPartition(manifest []string, root string, local []string) (Plan, error)`, `gate.Fetch{Need []string; Single *Expected}`, `gate.ScratchPart{Name, RowLtHash string; Rows uint64}`, `gate.Classification{Outcome Outcome; Keep, Drop, Kept []string}`, `gate.Classify(f Fetch, scratch []ScratchPart) (Classification, error)`, `gate.Closure(root string, local, kept []string) error`, `gate.PartitionSet(manifest, local []string) error`; housegate at `HG_TAG_P1` (contract §16): `replay.OwnerEntry(m SafeSnapshotManifest, indexerID uint64) (TrackFrontier, bool)`, `payloadexec.VerifyLedger(m replay.SafeSnapshotManifest) error`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)` (tests), `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]PartScanResult, error)`; existing housegate `replay.SafeSnapshotManifest` (`Seal`, `Validate`; `Tables []TableManifest`, `TrackFrontiers []TrackFrontier`), `replay.TableManifest{TableID, SchemaHash string; PartitionRoots []PartitionCommitment; ActiveParts []PartManifestEntry}`, `replay.PartitionCommitment{TableID, PartitionID, Root string}`, `replay.PartManifestEntry{TableID, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount, Bytes uint64; …}`, `replay.TrackFrontier{IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64}`, `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, `payloadexec.TableSchemaHash(networkID string, t TableSchema) string`, `payloadexec.SchemaRoot(networkID string, schemas []TableSchema) string` (tests), `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `lthash.New`, `lthash.FromBytes`, `lthash.ElementHash`, `(*lthash.Hash).AddHash`, `(*lthash.Hash).Bytes` (tests); existing arbiter-core `(*dataplane.Client).WithLeaderRetry(ctx context.Context, fn func(ctx context.Context, conn *grpc.ClientConn) error) error` (`dataplane/client.go:168`), `dataplane.New(cfg Config) (*Client, error)`, `dataplane.Config{Peers []Peer}`, `dataplane.Peer{ID, GRPCAddr string}`, `(*dataplane.Client).Close` (tests), `wire.ManifestFromPB(m *pb.SafeSnapshotManifest) replay.SafeSnapshotManifest` (`wire/convert.go:311`), `wire.ManifestToPB` (tests), `pb.NewSafeStateClient`, `pb.GetSafeWatermarkRequest`, `pb.SnapshotRef{SnapshotId}`, `pb.SafeWatermark`, `pb.RegisterSafeStateServer`, `pb.UnimplementedSafeStateServer` (tests), `ddl.CHTableName(tableID string) string` (`dataplane/ddl/naming.go:22`), `ddl.ParseIncarnationComment(comment string) (uint64, bool)` (`dataplane/ddl/table.go:35`), `ddl.Intents`, `ddl.Pinned`, `ddl.RowIDColumn`, `(ddl.TableIntent).SQL()` (tests); clickhouse-go `clickhouse.Conn`, `clickhouse.Context`, `clickhouse.WithSettings`, `clickhouse.WithParameters`, `clickhouse.WithQueryID`, `clickhouse.Settings`, `clickhouse.Parameters`, `*clickhouse.Exception{Code int32; Name, Message, StackTrace string; Nested []Exception}`; Plan S3-A contract §3: `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn`, the mechanics environment and runner (Task 6 Step 4's text), M5, and these helpers of `dataplane/chmechanics`: `requireMechanics`, `mechanicsEnv{A, B; AAddr, BAddr, …}`, `mechanicsPinned`, `mechanicsSchema`, `protocolTables`, `dropDatabasesAt`, `mustInsert`, `mustExec`, `runBackup`, `backupStats{NumFiles, NumEntries, …}`, `partsOf`, `activeParts`, `mechPart`, `names`, `physHashes`, `totalRows`, `rowHashes`, `rowHashList`, `sumRowHashes`, `createUser`, `accessTypes`, `eventually`, `ident`, `literal`, `qualified`, `clickHouseCode`, `codeAccessDenied`, `suffix`, `settleTimeout`, `envAddr`, `envReplicaAddr`.
+- Consumes: ledger `CORE_TAG`, `PROTO_TAG` (Plan S3-A) and `HG_TAG_P1` (Task 22), read with `s3-ledger.py get`, never predicted; Task 23 on this branch: `chparts.Part`, `chparts.ActiveParts(ctx context.Context, conn clickhouse.Conn, db, table string) ([]Part, error)`, `chparts.LogicalPartitionID(sch payloadexec.TableSchema, p Part) string`, `chparts.QuotePartition(sch payloadexec.TableSchema, partitionID string) (string, error)`, `chparts.EscapeSQLString(s string) string`, `gate.Plan{Diverged bool; Need []string; Root string}`, `gate.PlanPartition(manifest []string, root string, local []string) (Plan, error)`, `gate.Fetch{Need []string; Single *Expected}`, `gate.ScratchPart{Name, RowLtHash string; Rows uint64}`, `gate.Classification{Outcome Outcome; Keep, Drop, Kept []string}`, `gate.Classify(f Fetch, scratch []ScratchPart) (Classification, error)`, `gate.Closure(root string, local, kept []string) error`, `gate.PartitionSet(manifest, local []string) error`; housegate at `HG_TAG_P1` (contract §16): `replay.OwnerEntry(m SafeSnapshotManifest, indexerID uint64) (TrackFrontier, bool)`, `payloadexec.VerifyLedger(m replay.SafeSnapshotManifest) error`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)` (tests), `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]PartScanResult, error)`; existing housegate `replay.SafeSnapshotManifest` (`Seal`, `Validate`; `Tables []TableManifest`, `TrackFrontiers []TrackFrontier`), `replay.TableManifest{TableID, SchemaHash string; PartitionRoots []PartitionCommitment; ActiveParts []PartManifestEntry}`, `replay.PartitionCommitment{TableID, PartitionID, Root string}`, `replay.PartManifestEntry{TableID, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount, Bytes uint64; …}`, `replay.TrackFrontier{IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64}`, `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, `payloadexec.TableSchemaHash(networkID string, t TableSchema) string`, `payloadexec.SchemaRoot(networkID string, schemas []TableSchema) string` (tests), `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `lthash.New`, `lthash.FromBytes`, `lthash.ElementHash`, `(*lthash.Hash).AddHash`, `(*lthash.Hash).Bytes` (tests); existing arbiter-core `(*dataplane.Client).WithLeaderRetry(ctx context.Context, fn func(ctx context.Context, conn *grpc.ClientConn) error) error` (`dataplane/client.go:168`), `dataplane.New(cfg Config) (*Client, error)`, `dataplane.Config{Peers []Peer}`, `dataplane.Peer{ID, GRPCAddr string}`, `(*dataplane.Client).Close` (tests), `wire.ManifestFromPB(m *pb.SafeSnapshotManifest) replay.SafeSnapshotManifest` (`wire/convert.go:324`), `wire.ManifestToPB` (tests), `pb.NewSafeStateClient`, `pb.GetSafeWatermarkRequest`, `pb.SnapshotRef{SnapshotId}`, `pb.SafeWatermark`, `pb.RegisterSafeStateServer`, `pb.UnimplementedSafeStateServer` (tests), `ddl.CHTableName(tableID string) string` (`dataplane/ddl/naming.go:22`), `ddl.ParseIncarnationComment(comment string) (uint64, bool)` (`dataplane/ddl/table.go:35`), `ddl.Intents`, `ddl.Pinned`, `ddl.RowIDColumn`, `(ddl.TableIntent).SQL()` (tests); clickhouse-go `clickhouse.Conn`, `clickhouse.Context`, `clickhouse.WithSettings`, `clickhouse.WithParameters`, `clickhouse.WithQueryID`, `clickhouse.Settings`, `clickhouse.Parameters`, `*clickhouse.Exception{Code int32; Name, Message, StackTrace string; Nested []Exception}`; Plan S3-A contract §3: `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn`, the mechanics environment and runner (`scripts/ci/clickhouse-mechanics.sh` at `CORE_TAG`), M5, and these helpers of `dataplane/chmechanics`: `requireMechanics`, `mechanicsEnv{A, B; AAddr, BAddr, …}`, `mechanicsPinned`, `mechanicsSchema`, `protocolTables`, `dropDatabasesAt`, `mustInsert`, `mustExec`, `runBackup`, `backupStats{NumFiles, NumEntries, …}`, `partsOf`, `activeParts`, `mechPart`, `names`, `physHashes`, `totalRows`, `rowHashes`, `rowHashList`, `sumRowHashes`, `createUser`, `accessTypes`, `eventually`, `ident`, `literal`, `qualified`, `clickHouseCode`, `codeAccessDenied`, `suffix`, `settleTimeout`, `envAddr`, `envReplicaAddr`.
 - Produces (package `dataplane/objstore`, contract §17, verbatim): `SafeDatabase = "hg_safe"`, `StageDatabase = "hg_rstage"`, `BackupIndexFormat = "si-backup-index-v1"`, `DrillVerdictFormat = "si-restore-drill-v1"`, `IndexSuffix = ".index.json"`, `DefaultMaxChainLinks = 7`, `MaxChainLinksLimit = 30`; `type BackupKind string` with `BackupFull = "full"`, `BackupIncremental = "incr"`; `type Credentials struct { AccessKeyID, SecretAccessKey string }` with `String()` and `LogValue()`; `type Bucket struct` (unexported fields), `func ParseBucket(raw string) (Bucket, error)` (refusal `objstore: bucket %q must be http(s)://<host>[:port]/<bucket> with no further path, query or trailing slash`), `func (b Bucket) URL() string`, `func OwnerPrefix(owner uint64) string`, `func (b Bucket) BackupURL(owner uint64, name string) string`, `func (b Bucket) IndexURL(owner uint64, name string) string`, `func (b Bucket) IndexGlob(owner uint64) string`, `func BackupName(at time.Time, kind BackupKind) string`; `type BackupIndex`, `type BackupIndexTable`, `type BackupIndexPart` with the contract's fields and JSON names; `func BackupSQL(b Bucket, owner uint64, name, base string, c Credentials) string`, `func PartitionClause(sch payloadexec.TableSchema, partitionID string) (string, error)`, `func RestoreSQL(b Bucket, owner uint64, name, physicalTable, partitionClause string, s Scratch, c Credentials) string`; `type Scratch struct { Database, Table string }`, `func (s Scratch) Qualified() string`, `type ScratchNamer struct`, `func NewScratchNamer(prefix string) (*ScratchNamer, error)` (refusal `objstore: scratch prefix %q must match [A-Za-z0-9_-]{1,64}`), `func (n *ScratchNamer) Next() Scratch`; `type ManifestSource interface { Latest(ctx context.Context) (replay.SafeSnapshotManifest, error); Manifest(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error) }`, `func NewArbiterManifests(c *dataplane.Client) ManifestSource`, `func CheckManifest(requested string, m replay.SafeSnapshotManifest) error` (refusals `objstore: manifest %s answered for %s`, `objstore: manifest %s is not its own root %s`, `objstore: manifest %s: %w`) and `objstore: manifest %s has no track frontier for indexer %d`; `type Backuper struct { Conn clickhouse.Conn; Manifests ManifestSource; Bucket Bucket; Owner uint64; NetworkID string; Credentials Credentials; MaxChainLinks uint32; Now func() time.Time }`, `func (b *Backuper) Run(ctx context.Context) (BackupIndex, error)` (refusals `objstore: max chain links %d must be between 1 and 30`, `objstore: backup %s of indexer %d exists already; a backup name is never reused`), `func ReadIndexes(ctx context.Context, conn clickhouse.Conn, b Bucket, owner uint64, c Credentials) ([]BackupIndex, error)` (refusal `objstore: index %s is not a %s object: %v`), `func NextBackup(latest *BackupIndex, maxChainLinks uint32) (BackupKind, string, uint32)`; `type BackupRef struct { Bucket Bucket; Owner uint64; Name string; Credentials Credentials }`, `type GateInput struct { Backup BackupRef; Manifest replay.SafeSnapshotManifest; TableID, PhysicalTable string; Schema payloadexec.TableSchema; PartitionID string; Local []string; Scratch Scratch }`, `type GateResult struct { Plan gate.Plan; Classification gate.Classification; KeptParts []string; Complete bool; Reason DrillReason }`, `func RestoreAndGate(ctx context.Context, conn clickhouse.Conn, in GateInput) (GateResult, error)`; `type SchemaSource interface { TableSchema(ctx context.Context, tableID string) (payloadexec.TableSchema, error) }`, `type Drill struct { Conn clickhouse.Conn; Manifests ManifestSource; Schemas SchemaSource; Bucket Bucket; Owner uint64; NetworkID string; Credentials Credentials; Backup string; Scratch *ScratchNamer }`, `func (d *Drill) Run(ctx context.Context) (DrillVerdict, error)` (refusal `objstore: no backup of indexer %d under %s`), `type DrillReason string` with `DrillVerified`, `DrillNotInManifest`, `DrillSchemaHashMismatch`, `DrillRestoreFailed`, `DrillNeedUnsatisfied`, `DrillClosureMismatch`, `DrillPartitionSetMismatch`, `type DrillPartition`, `type DrillTable`, `type DrillVerdict` with the contract's fields and JSON names; the ten unit tests and seven `TestS3_` tests of contract §17.
-- Produces (package `dataplane/chmechanics`, contract §17): `TestMechanics_S3IncrementalBackupRestoreKeepsHashOfAllFiles` (M12), `TestMechanics_S3BackupWithAKeyThatCannotDelete` (M13, its one log line `M13 backup delete right: none|lock`), `TestMechanics_S3SecretsAreMaskedInLogsAndSystemTables` (M14); the runner's MinIO `arbiter-core-mech-minio-<suffix>` from `MINIO_IMAGE=minio/minio:RELEASE.2024-12-18T13-15-44Z` (alias `arbiter-core-minio`, root `mech-root` / `mech-root-secret-0000`), bucket `si-mechanics`, users `mech-nodelete` / `mech-nodelete-secret-0001` (policy `si-backup-nodelete`), `mech-lockdelete` / `mech-lockdelete-secret-0002` (`si-backup-lockdelete`), `mech-readonly` / `mech-readonly-secret-0003` (`si-restore-readonly`), the exported and `--test_env`-passed `ARBITER_CH_S3=1`, `CH_S3_ENDPOINT=http://arbiter-core-minio:9000`, `CH_S3_BUCKET=si-mechanics`, `CH_S3_NODELETE_ACCESS_KEY`, `CH_S3_NODELETE_SECRET_KEY`, `CH_S3_LOCKDELETE_ACCESS_KEY`, `CH_S3_LOCKDELETE_SECRET_KEY`, `CH_S3_READONLY_ACCESS_KEY`, `CH_S3_READONLY_SECRET_KEY`, and the lines `mechanics: 16 test(s) passed on <image>`, `mechanics: S3 backup delete right: <none|lock>`, `objstore: <n> S3 test(s) passed on <image>`; release `CORE_TAG_P1` and `P1_BACKUP_DELETE` (`none` | `lock`) (the rows `` | `CORE_TAG_P1` | `vX.Y.Z` | Task 24 | `` and `` | `P1_BACKUP_DELETE` | `none` or `lock` | Task 24 | `` and the run record `arbiter-core release and the S3 mechanics (Task 24)` of this plan's Appendix C, contract §19).
-- Produces (added here, Appendix B): `Credentials.GoString` and `Credentials.MarshalJSON` (both redact); refusals `objstore: credentials need both an access key id and a secret access key`, `objstore: backup name %q must be <yyyymmddThhmmssZ>-<full|incr>`, `objstore: backup %s of indexer %d sorts before the latest backup %s; the chain is ordered by name, so check the clock`, `objstore: a Backuper needs a ClickHouse connection and a manifest source`, `objstore: a Drill needs a ClickHouse connection, a manifest source, a schema source and a scratch namer`, `objstore: backup %s of indexer %d has no index under %s` (a named backup), `objstore: backup %s of indexer %d belongs to network %q, not %q`, `objstore: backup %s names track frontier %+v of indexer %d, but manifest %s holds %+v`, `objstore: manifest %s has no partition %s of table %s`, `objstore: manifest %s does not list table %s`, `objstore: the arbiter has published no manifest yet`, `objstore: a manifest is read by its snapshot id, and the id is empty`; error wrappers `objstore: read the safe watermark: %w`, `objstore: read manifest %s: %w`, `objstore: read the indexes of indexer %d: %w`, `objstore: list backup %s of indexer %d: %w`, `objstore: write the index of backup %s of indexer %d: %w`, `objstore: encode the index of backup %s: %w`, `objstore: backup %s of indexer %d: %w`, `objstore: list the %s tables: %w`, `objstore: list the parts of %s.%s: %w`, `objstore: list the parts of %s: %w`, `objstore: table %s partition %s: %w`, `objstore: table %s: %w`, `objstore: create database %s: %w`, `objstore: restore %s partition %s of backup %s of indexer %d into %s: %w`, `objstore: scan %s: %w`, `objstore: classify %s: %w`, `objstore: drop part %s of %s: %w`, `objstore: drop scratch %s: %w`, `system.backups row %s: %w` and the failed-operation text `<status> (operation <id>): <the system.backups error up to its stack trace>`; unexported `redacted`, `bucketHost`, `bucketName`, `backupName`, `checkBackupName`, `(Bucket).backupObjectsGlob`, `(Credentials).validate`, `(Credentials).redact`, `redactException`, `(Credentials).statementError`, `literal`, `ident`, `s3Endpoint`, `s3Function`, `indexWriteSQL`, `indexWriteSettings`, `listSettings`, `indexReadSQL`, `backupObjectsSQL`, `scratchPrefix`, `pollInterval`, `runAsync`, `firstLine`, `decodeIndex`, `backupStarted`, `writeIndex`, `arbiterManifests`, `ownerEntry`, `maxChainLinks`, `(*Backuper).safeTables`, `manifestPartition`, `dropScratch`, `drillPass`; tests `TestStatementErrorsNeverCarryTheSecret`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`, `TestDecodeIndexRefusesAnythingButItsOwnObject`, `TestArbiterManifestsChecksEveryAnswer` and their helpers (`testSecret`, `testBucket`, `elementHex`, `sumHex`, `testManifest`, `fakeSafeState`, `startFakeArbiter`, `errorsCause`), the `TestS3_` helpers (`envS3*`, `s3NetworkID`, `s3Env`, `requireS3`, `s3Exec`, `s3Table`, `createSafeTable`, `insertPart`, `publish`, `fakeManifests`, `newFakeManifests`, `fakeSchemas`, `s3T0`, `(s3Env).backuper`, `createdBackups`, `scratchParts`, `physHashesOf`, `manifestHashes`, `stageTables`); in `dataplane/chmechanics`: `envS3*`, `siBackupGrants`, `siRestoreGrants`, `s3Mechanics`, `requireS3`, `(s3Mechanics).secrets`, `(s3Mechanics).prefix`, `s3Target`, `s3Table`, `countObjects`, `mechManifests`, `mechManifest`, `ownProtocolDatabases`, `grantUser`, M13's two refusals beyond contract §17 (`si_backup`'s `ALTER TABLE … DROP PARTITION` on `hg_safe` and `si_restore`'s `CREATE VIEW … DEFINER = default SQL SECURITY DEFINER` in `hg_rstage`, the grant probe's rows of contract §18) and its check that a failed no-delete backup keeps its `.backup` and `.lock`; in the runner: `minio`, `MINIO_IMAGE`, `s3_bucket`, `s3_root_user`, `s3_root_secret`, `s3_{nodelete,lockdelete,readonly}_{key,secret}`, `tmp_dir`, `mc_env`, `add_s3_user`, the policy files `si-backup-nodelete.json`, `si-backup-lockdelete.json`, `si-restore-readonly.json`, `s3_required`, `objstore_log` and the line `mechanics: no S3 secret in the server logs on <image>`; README § ClickHouse mechanics' P1 paragraph and the stage-3 P1 § Compatibility paragraph; the PR body file `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c1-24.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-24`.
+- Produces (package `dataplane/chmechanics`, contract §17): `TestMechanics_S3IncrementalBackupRestoreKeepsHashOfAllFiles` (M12), `TestMechanics_S3BackupWithAKeyThatCannotDelete` (M13, its one log line `M13 backup delete right: none|lock`), `TestMechanics_S3SecretsAreMaskedInLogsAndSystemTables` (M14); the runner's MinIO `arbiter-core-mech-minio-<suffix>` from `MINIO_IMAGE=bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` (MinIO RELEASE.2024-12-18T13-15-44Z as Bitnami builds it, pinned by digest; contract §17's `minio/minio:RELEASE.2024-12-18T13-15-44Z` can no longer be pulled, see Notes; alias `arbiter-core-minio`, root `mech-root` / `mech-root-secret-0000`), bucket `si-mechanics`, users `mech-nodelete` / `mech-nodelete-secret-0001` (policy `si-backup-nodelete`), `mech-lockdelete` / `mech-lockdelete-secret-0002` (`si-backup-lockdelete`), `mech-readonly` / `mech-readonly-secret-0003` (`si-restore-readonly`), the exported and `--test_env`-passed `ARBITER_CH_S3=1`, `CH_S3_ENDPOINT=http://arbiter-core-minio:9000`, `CH_S3_BUCKET=si-mechanics`, `CH_S3_NODELETE_ACCESS_KEY`, `CH_S3_NODELETE_SECRET_KEY`, `CH_S3_LOCKDELETE_ACCESS_KEY`, `CH_S3_LOCKDELETE_SECRET_KEY`, `CH_S3_READONLY_ACCESS_KEY`, `CH_S3_READONLY_SECRET_KEY`, and the lines `mechanics: 16 test(s) passed on <image>`, `mechanics: S3 backup delete right: <none|lock>`, `objstore: <n> S3 test(s) passed on <image>`; release `CORE_TAG_P1` and `P1_BACKUP_DELETE` (`none` | `lock`) (the rows `` | `CORE_TAG_P1` | `vX.Y.Z` | Task 24 | `` and `` | `P1_BACKUP_DELETE` | `none` or `lock` | Task 24 | `` and the run record `arbiter-core release and the S3 mechanics (Task 24)` of this plan's Appendix C, contract §19).
+- Produces (added here, Appendix B): `Credentials.GoString` and `Credentials.MarshalJSON` (both redact); refusals `objstore: credentials need both an access key id and a secret access key`, `objstore: backup name %q must be <yyyymmddThhmmssZ>-<full|incr>`, `objstore: backup %s of indexer %d sorts before the latest backup %s; the chain is ordered by name, so check the clock`, `objstore: a Backuper needs a ClickHouse connection and a manifest source`, `objstore: a Drill needs a ClickHouse connection, a manifest source, a schema source and a scratch namer`, `objstore: backup %s of indexer %d has no index under %s` (a named backup), `objstore: backup %s of indexer %d belongs to network %q, not %q`, `objstore: backup %s names track frontier %+v of indexer %d, but manifest %s holds %+v`, `objstore: manifest %s has no partition %s of table %s`, `objstore: manifest %s does not list table %s`, `objstore: the arbiter has published no manifest yet`, `objstore: a manifest is read by its snapshot id, and the id is empty`; error wrappers `objstore: read the safe watermark: %w`, `objstore: read manifest %s: %w`, `objstore: read the indexes of indexer %d: %w`, `objstore: list backup %s of indexer %d: %w`, `objstore: write the index of backup %s of indexer %d: %w`, `objstore: encode the index of backup %s: %w`, `objstore: backup %s of indexer %d: %w`, `objstore: list the %s tables: %w`, `objstore: list the parts of %s.%s: %w`, `objstore: list the parts of %s: %w`, `objstore: table %s partition %s: %w`, `objstore: table %s: %w`, `objstore: create database %s: %w`, `objstore: restore %s partition %s of backup %s of indexer %d into %s: %w`, `objstore: scan %s: %w`, `objstore: classify %s: %w`, `objstore: drop part %s of %s: %w`, `objstore: drop scratch %s: %w`, `system.backups row %s: %w` and the failed-operation text `<status> (operation <id>): <the system.backups error up to its stack trace>`; unexported `redacted`, `bucketHost`, `bucketName`, `backupName`, `checkBackupName`, `(Bucket).backupObjectsGlob`, `(Credentials).validate`, `(Credentials).redact`, `redactException`, `(Credentials).statementError`, `literal`, `ident`, `s3Endpoint`, `s3Function`, `indexWriteSQL`, `indexWriteSettings`, `listSettings`, `indexReadSQL`, `backupObjectsSQL`, `scratchPrefix`, `pollInterval`, `runAsync`, `firstLine`, `decodeIndex`, `backupStarted`, `writeIndex`, `arbiterManifests`, `ownerEntry`, `maxChainLinks`, `(*Backuper).safeTables`, `manifestPartition`, `dropScratch`, `drillPass`; tests `TestStatementErrorsNeverCarryTheSecret`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`, `TestDecodeIndexRefusesAnythingButItsOwnObject`, `TestArbiterManifestsChecksEveryAnswer` and their helpers (`testSecret`, `testBucket`, `elementHex`, `sumHex`, `testManifest`, `fakeSafeState`, `startFakeArbiter`, `errorsCause`), the `TestS3_` helpers (`envS3*`, `s3NetworkID`, `s3Env`, `requireS3`, `s3Exec`, `s3Table`, `createSafeTable`, `insertPart`, `publish`, `fakeManifests`, `newFakeManifests`, `fakeSchemas`, `s3T0`, `(s3Env).backuper`, `createdBackups`, `scratchParts`, `physHashesOf`, `manifestHashes`, `stageTables`); in `dataplane/chmechanics`: `envS3*`, `siBackupGrants`, `siRestoreGrants`, `mechSchemas` (an `objstore.SchemaSource` for M13's drill), `s3Mechanics`, `requireS3`, `(s3Mechanics).secrets`, `(s3Mechanics).prefix`, `s3Target`, `s3Table`, `countObjects`, `mechManifests`, `mechManifest`, `ownProtocolDatabases`, `grantUser`, M13's two refusals beyond contract §17 (`si_backup`'s `ALTER TABLE … DROP PARTITION` on `hg_safe` and `si_restore`'s `CREATE VIEW … DEFINER = default SQL SECURITY DEFINER` in `hg_rstage`, the grant probe's rows of contract §18) its check that a failed no-delete backup keeps its `.backup` and `.lock`, its check that the index `si_backup` wrote lists the table and its four parts, and its `objstore.Drill` run as `si_restore` (added by review); in the runner: `minio`, `MINIO_IMAGE`, `s3_bucket`, `s3_root_user`, `s3_root_secret`, `s3_{nodelete,lockdelete,readonly}_{key,secret}`, `tmp_dir`, `mc_env`, `add_s3_user`, the policy files `si-backup-nodelete.json`, `si-backup-lockdelete.json`, `si-restore-readonly.json`, `s3_required`, `objstore_log` and the line `mechanics: no S3 secret in the server logs on <image>`; README § ClickHouse mechanics' P1 paragraph and the stage-3 P1 § Compatibility paragraph; the PR body file `~/src/remotesrc/claude/arbiter-core/multi-source-s3c1.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c1-24.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-24`.
 
 Notes:
 - **Statements only, keys inline (K23).** `objstore` holds no S3 or GCS client: the bucket is reached by `BACKUP … TO S3('<url>', '<id>', '<secret>')`, `RESTORE … FROM S3(...)`, `INSERT INTO FUNCTION s3(...)` and `SELECT … FROM s3(...)`, rendered only here. The URL and the two key strings are the only interpolated values (single-quoted with `chparts.EscapeSQLString`; `ParseBucket` and the name pattern keep quotes and glob characters out of URLs); the index JSON is the query parameter `index`. Every error of a statement that carried a key goes through `Credentials.redact`, which replaces the raw and the SQL-escaped secret with `[redacted]` and keeps a `*clickhouse.Exception`'s code, so a caller can still match it; `Credentials` prints the access key id and `[redacted]` through `String`, `GoString`, `LogValue` and `MarshalJSON`.
@@ -3717,13 +3740,14 @@ Notes:
 - **Names are never reused (K24).** A name is `<UTC yyyymmddThhmmssZ>-<full|incr>` and the index object is `<name>.index.json` beside the backup's directory. `Backuper.Run` refuses a name that an index already has, or under which any object exists (`SELECT count() FROM s3('<backup url>**', …, 'One')`: a finished backup without an index, or the remains of a failed one), and a name that sorts at or before the latest index (a clock that went backwards would otherwise break the chain's order). ClickHouse itself refuses a `BACKUP` to a directory that holds a `.backup`, and the index is written with `s3_truncate_on_insert = 0` and `s3_create_new_file_on_insert = 0`, so an existing object is refused (measured: code 36, `… already exists …`) rather than overwritten. `ReadIndexes` decodes strictly: an unknown field, a trailing value, another format, another owner, or a `name` that is not the object's own stops it.
 - **Lists.** `ReadIndexes` and the name check set `s3_throw_on_zero_files_match = 0`, so an owner without backups gets an empty answer whatever the profile says (measured: with the setting at 1 the same read fails with code 107, `Can not match any files`). ClickHouse lists an `owner-<id>/*.index.json` glob with `ListObjectsV2` on the prefix `owner-<id>/` and no delimiter (the drafting stand-in logged `prefix=owner-<id>%2F`), so each read enumerates every object of the owner, which K25's managed folder `owner-<id>/` admits (the name check lists the prefix `owner-<id>/<name>/`, inside the same folder); that is small on devnet2 and grows with the chains (a follow-up if a bucket ever holds thousands of backups).
 - **Each backup names its manifest (K27).** `Run` reads the latest manifest (through `CheckManifest`) and the owner's entry before anything else, so the index's `snapshot_id` and `entry` are those of the manifest that was latest when the backup started; the tables and parts it lists are `system.tables` (`name`, `comment`, `partition_key`) and `chparts.ActiveParts` right before the `BACKUP`, informational only (a promotion between the listing and the `BACKUP` adds a part the index does not list, which the drill drops as unneeded). After S is published the owner's `hg_safe` only grows (K27), so M(S) is a sub-multiset of every later backup.
-- **`RestoreAndGate`.** It plans with `gate.PlanPartition` (a Diverged plan restores nothing and returns `Complete` false with no reason; an empty Need is verified by closure alone without a restore), creates `hg_rstage` with `CREATE DATABASE IF NOT EXISTS` (no `ENGINE`, spec §8.2), restores the partition into the fresh scratch, scans it with `chexec.ScanAllParts` (an empty scratch is an empty scan, so a backup without the partition ends `need_unsatisfied`), classifies in restore mode, drops every unneeded part inside the scratch with `ALTER TABLE <scratch> DROP PART '<name>'`, and then requires every needed hash kept once, `gate.Closure` and `gate.PartitionSet([p], <the scratch's remaining parts>)`. A failed RESTORE returns `restore_failed` with the redacted error; the kept parts stay in the scratch for Plan S3-C2's `ATTACH PARTITION … FROM`.
+- **`RestoreAndGate`.** It plans with `gate.PlanPartition` (a Diverged plan restores nothing and returns `Complete` false with no reason; an empty Need is verified by closure alone without a restore), creates `hg_rstage` with `CREATE DATABASE IF NOT EXISTS` (no `ENGINE`, spec §8.2), restores the partition into the fresh scratch, scans it with `chexec.ScanAllParts` (an empty scratch is an empty scan, so a backup without the partition ends `need_unsatisfied`), classifies in restore mode, drops every unneeded part inside the scratch with `ALTER TABLE <scratch> DROP PART '<name>'`, and then requires every needed hash kept once, `gate.Closure` and `gate.PartitionSet([p], <the scratch's remaining parts>)`. A failed RESTORE returns `restore_failed` with the redacted error; the kept parts stay in the scratch for Plan S3-C2's `ATTACH PARTITION … FROM`. The scan, the classification and the `DROP PART`s see the backup's parts unmerged because `RESTORE … AS` creates the scratch from the backed-up `CREATE`, which carries `hg_safe`'s pin `max_bytes_to_merge_at_max_space_in_pool = 0` (`ddl.SafeSettings`); `si_restore` needs no `SYSTEM STOP MERGES` (D36), and `TestS3_RestoreAndGateKeepsOnlyTheManifestsPartsFromABackupAheadOfPublication` asserts the pin on the scratch.
 - **The drill.** `Drill.Run` reads the owner's indexes with the read-only key, takes the named or the latest backup, refuses one of another network (the schema hash includes the network id) or whose `entry` is not S's, and takes S = `Manifests.Manifest(index.SnapshotID)`, never the latest manifest. It names each backed-up table by S itself (the table whose `ddl.CHTableName` is the physical name), never by the index's `table_id`, which is untrusted bucket data; a table S does not list is `not_in_manifest`. Each listed table's schema comes from `Schemas` and must hash (`payloadexec.TableSchemaHash(NetworkID, …)`) to S's `schema_hash` before anything is restored; then every partition S lists is gated with an empty local copy, a verified partition's scratch is dropped and a failing one is kept and named. The verdict carries no error text (its JSON is contract §17's); a `restore_failed` partition's cause stays in the staging installation's `system.backups.error`, with the secret masked.
-- **Measured while drafting (ClickHouse 26.3.51.7, the floating `26.3` tag on the drafting host; a policy-enforcing S3 stand-in in place of MinIO, see "Verified").** A `BACKUP DATABASE` to `S3()` with a key that may not delete writes every object, `.backup` included, and then fails removing its own lock: `Code: 499. DB::Exception: Access Denied. (Code: 15) while removing object with path <prefix>/<name>/.lock from S3. (S3_ERROR)`, status `BACKUP_FAILED`; the cleanup after the failure tries to delete every object of the backup, is refused too, and leaves them all in place. With a key that may also delete `*/.lock` the backup completes and the lock is gone. **M13 therefore logged `M13 backup delete right: lock`, and `P1_BACKUP_DELETE` is expected to be `lock`:** by K24 the plan then stops before Task 26 until the user amends spec §16 P1 (Step 17); Task 25 does not depend on it. Masking: `system.query_log`, `system.processes` (sampled during a `BACKUP` slowed by `max_backup_bandwidth`), `system.backups.name` and the server log file all show `S3('<url>', '<id>', '[HIDDEN]')` / `s3(…, '[HIDDEN]', …)`, and the failure texts carry paths and key ids but no secret. Grants: as a user holding exactly `SI_BACKUP_GRANTS`, `objstore.Backuper` listed `system.tables` and `system.parts` (the `BACKUP` grant implies `SHOW TABLES`), polled `system.backups`, read, listed and wrote the index through `s3()` and backed up `hg_safe`; that user was refused (497) `SELECT`, `INSERT` and `ALTER DELETE` on `hg_safe` and `CREATE TABLE` in `hg_rstage`. As a user holding exactly `SI_RESTORE_GRANTS`, `RestoreAndGate` created `hg_rstage`, restored, scanned, dropped parts and dropped the scratch; that user was refused `BACKUP` (it would need `BACKUP ON hg_rstage`), `INSERT INTO FUNCTION s3(...)` (`WRITE ON S3`), `CREATE DICTIONARY`, `SYSTEM STOP MERGES` (`SYSTEM MERGES`) and a `DEFINER = default SQL SECURITY DEFINER` view (`SET DEFINER ON default`), while a plain view was allowed (contract §18 records it). `system.grants` lists `BACKUP`, `CREATE TEMPORARY TABLE`, `READ`, `SELECT` ×3, `WRITE` and `ALTER`, `CREATE DATABASE`, `CREATE TABLE`, `CREATE TEMPORARY TABLE`, `DROP TABLE`, `INSERT`, `OPTIMIZE`, `READ`, `SELECT` ×4, `TRUNCATE`, which M13 asserts. The official image writes its log to `/var/log/clickhouse-server/clickhouse-server.log` and `.err.log` (`docker logs` holds only the startup lines), so the runner greps those files and requires an `executeQuery` line in them.
-- **The runner.** It keeps Plan S3-A's usage, gates and SNode run, and adds the MinIO (`docker run … server /data` on the pair's network, alias `arbiter-core-minio`; `ARBITER_CH_PLATFORM` applies to the ClickHouse image only, MinIO runs natively), its configuration with the image's bundled `mc` (`MC_HOST_mech` and `MC_CONFIG_DIR=/tmp/mc`, so `mc` writes no config into the image; the three policies are written to a temporary directory and copied in with `docker cp`), the S3 environment, the delete-right line (printed whenever M13 is part of the run, from exactly one `M13 backup delete right: none|lock` log line, else the run fails), the `objstore` run (unfiltered runs only, after the SNode run, gated on `--- PASS:` for every `^func TestS3_` and on no `--- SKIP:`), and the server-log grep (every run, after the last test). Contract §17 asks for the delete-right line and the log grep after unfiltered runs; running them on filtered runs too only adds checks. The MinIO keys are fixed CI-only literals of an ephemeral container on a private Docker network, like Plan S3-A Task 4's CI password, and M14 needs them known; Step 15 asks the user to accept them in this public repository before the push. The suite count becomes `mechanics: 16 test(s) passed on <image>` (13 of Plan S3-A, 3 here; Plan S3-D adds from M15, decision D32).
+- **Measured while drafting (ClickHouse 26.3.51.7, the floating `26.3` tag on the drafting host; a policy-enforcing S3 stand-in in place of MinIO, see "Verified").** A `BACKUP DATABASE` to `S3()` with a key that may not delete writes every object, `.backup` included, and then fails removing its own lock: `Code: 499. DB::Exception: Access Denied. (Code: 15) while removing object with path <prefix>/<name>/.lock from S3. (S3_ERROR)`, status `BACKUP_FAILED`; the cleanup after the failure tries to delete every object of the backup, is refused too, and leaves them all in place. With a key that may also delete `*/.lock` the backup completes and the lock is gone. **M13 therefore logged `M13 backup delete right: lock`; the review re-measured it with real MinIO (RELEASE.2024-12-18T13-15-44Z, the image of Step 9) on `clickhouse/clickhouse-server:26.3.37.3` and on the deployed image (ClickHouse 26.3.12.1, under emulation), both `lock`.** `P1_BACKUP_DELETE` is only ever the release run's value (Step 16), never this one; with `lock`, K24 stops the plan before Task 26 until the user decides on spec §16 P1 (Step 17); Task 25 does not depend on it. Masking: `system.query_log`, `system.processes` (sampled during a `BACKUP` slowed by `max_backup_bandwidth`), `system.backups.name` and the server log file all show `S3('<url>', '<id>', '[HIDDEN]')` / `s3(…, '[HIDDEN]', …)`, and the failure texts carry paths and key ids but no secret. Grants: as a user holding exactly `SI_BACKUP_GRANTS`, `objstore.Backuper` listed `system.tables` and `system.parts` (the `BACKUP` grant implies `SHOW TABLES`), polled `system.backups`, read, listed and wrote the index through `s3()` and backed up `hg_safe`; that user was refused (497) `SELECT`, `INSERT` and `ALTER DELETE` on `hg_safe` and `CREATE TABLE` in `hg_rstage`. As a user holding exactly `SI_RESTORE_GRANTS`, `RestoreAndGate` created `hg_rstage`, restored, scanned, dropped parts and dropped the scratch; that user was refused `BACKUP` (it would need `BACKUP ON hg_rstage`), `INSERT INTO FUNCTION s3(...)` (`WRITE ON S3`), `CREATE DICTIONARY`, `SYSTEM STOP MERGES` (`SYSTEM MERGES`) and a `DEFINER = default SQL SECURITY DEFINER` view (`SET DEFINER ON default`), while a plain view was allowed (contract §18 records it). `system.grants` lists `BACKUP`, `CREATE TEMPORARY TABLE`, `READ`, `SELECT` ×3, `WRITE` and `ALTER`, `CREATE DATABASE`, `CREATE TABLE`, `CREATE TEMPORARY TABLE`, `DROP TABLE`, `INSERT`, `OPTIMIZE`, `READ`, `SELECT` ×4, `TRUNCATE`, which M13 asserts. The official image writes its log to `/var/log/clickhouse-server/clickhouse-server.log` and `.err.log` (`docker logs` holds only the startup lines), so the runner greps those files and requires an `executeQuery` line in them.
+- **The runner.** It keeps Plan S3-A's usage, gates and SNode run, and adds the MinIO (`docker run … --entrypoint minio "${MINIO_IMAGE}" server /bitnami/minio/data` on the pair's network, alias `arbiter-core-minio`; `ARBITER_CH_PLATFORM` applies to the ClickHouse image only, MinIO runs natively on linux/amd64 and linux/arm64), its configuration with the image's bundled `mc` (`MC_HOST_mech` and `MC_CONFIG_DIR=/tmp/mc`, so `mc` writes no config into the image; the three policies are written to a temporary directory and copied in with `docker cp`), the S3 environment, the delete-right line (printed whenever M13 is part of the run, from exactly one `M13 backup delete right: none|lock` log line, else the run fails), the `objstore` run (unfiltered runs only, after the SNode run, gated on `--- PASS:` for every `^func TestS3_` and on no `--- SKIP:`), and the server-log grep (every run, after the last test). Contract §17 asks for the delete-right line and the log grep after unfiltered runs; running them on filtered runs too only adds checks. The MinIO keys are fixed CI-only literals of an ephemeral container on a private Docker network, like Plan S3-A Task 4's CI password, and M14 needs them known; Step 15 asks the user to accept them in this public repository before the push. The suite count becomes `mechanics: 16 test(s) passed on <image>` (13 of Plan S3-A, 3 here; Plan S3-D adds from M15, decision D32).
+- **The MinIO image (review).** MinIO no longer publishes the image contract §17 named: Docker Hub answers 404 for the repository `minio/minio` (`https://hub.docker.com/v2/repositories/minio/minio/`; the `minio` namespace lists no `minio` or `mc` repository) and `quay.io/minio/minio` refuses an anonymous pull (`unauthorized`), so `docker pull minio/minio:RELEASE.2024-12-18T13-15-44Z` fails (checked 2026-10-16) and, under `set -e`, would stop the `clickhouse-mechanics` job and Cut Release's `validate ClickHouse mechanics` step, so `CORE_TAG_P1` could never be cut. The runner therefore pins Bitnami's build of the same MinIO release by digest: `MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192"` (an index of linux/amd64 and linux/arm64 images; `minio --version` prints `DEVELOPMENT.2024-12-18T13-15-44Z (commit-id=16f8cf1c52f0a77eeb8f7565aaf7f7df12454583)`, the commit of RELEASE.2024-12-18T13-15-44Z; the bundled `mc` is `DEVELOPMENT.2024-11-21T17-21-54Z` on the image's `PATH`). Docker resolves a `name:tag@digest` reference by its digest, so the bytes cannot change; the tag only names the build. The image's entrypoint is a Bitnami setup script that would execute `server` as a command, and it runs as uid 1001 (group root), for which `/data` does not exist, so the runner starts it with `--entrypoint minio … server /bitnami/minio/data` (a directory of group root with group write). `bitnamilegacy` receives no updates, which a pinned test fixture does not need; if Docker Hub ever drops that digest, the follow-up is to copy it into a public registry the organisation controls and change `MINIO_IMAGE` alone (Appendix B). Plan S3-A's jobs on `main` start no MinIO, so nothing there changes; Plans S3-C2 (Tasks 31 and 34) and S3-E1 (Task 62) reuse this pin and its entrypoint.
 - **Open-to-change grants.** M13 and production's grant probe fix `SI_BACKUP_GRANTS` and `SI_RESTORE_GRANTS` (contract §18); a measured difference changes `siBackupGrants` / `siRestoreGrants` here and production's `test_render.py` copies in one step and is recorded in Appendix B.
 - **No frozen file, no consensus surface.** No golden, vector or conformance file changes; `objstore` is not Raft-reachable and adds no feature string. `objstore` imports `dataplane`, `wire` and arbiter-proto's existing `SafeState` client only; the manifest reader stays inside `objstore`, so Plan S3-C2 Task 29 still owns `dataplane.Client.GetSafeWatermark` / `GetManifest` (Global Constraints, cross-plan boundary).
-- **Verified while drafting** on an export of arbiter-core `8f0bc43` with Plan S3-A Tasks 4–6's `dataplane/chtest`, `dataplane/chrestart`, `dataplane/chmechanics` and runner files extracted from their plan text, Task 23's `dataplane/chparts` and `member/gate` from its verified tree, and housegate `838de2d` (the v0.19.0 code) with Task 22's `OwnerEntry`, `VerifyLedger`, `SumPartRowLtHashes` and `ScanAllParts` from its draft, through a `replace` and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test`: both red steps failed to build with the names Steps 4 and 7 quote; the unit tests passed, also under `-race`; `gofmt` and `go vet` were clean; with `ARBITER_CH_S3=1` and no endpoint the `TestS3_` tests and M12 failed with the quoted `requires` lines; on a 26.3.51.7 pair in the runner's topology with an S3 stand-in, all seven `TestS3_` tests and M12–M14 passed; five mutations (no `DROP PART`, no schema-hash check, no started-name check, an index written with `s3_truncate_on_insert = 1`, the drill on the latest manifest) each failed a named test. The extended runner passed `bash -n` and `shellcheck`, and ran end to end on 26.3.51.7 through two drafting shims — `bazel test` mapped to `go test`, and the MinIO container replaced by an nginx proxy to the stand-in (no MinIO image was available offline, so the `mc` commands themselves were not run; they are the documented `mc mb`, `mc admin policy create|attach` and `mc admin user add` of current MinIO) — with Plan S3-A Task 5's SNode restart test stubbed (not in the drafting tree): `mechanics: 16 test(s) passed`, `mechanics: S3 backup delete right: lock`, `objstore: 7 S3 test(s) passed`, `mechanics: no S3 secret in the server logs`, exit 0, no container or network left (2.5 minutes). Its gates failed as they should on a synthetic M13 log with no and with two delete-right lines and on a server log holding a secret; a deliberately unmasked `SELECT '<a mechanics secret>'` on node A also made M14 fail (`system.query_log row … carries mechanics secret 3`). The S3 stand-in (a drafting tool, not part of the plan) enforced the three MinIO policies of contract §17 by access key; MinIO's own behaviour is the release run's (Step 16) and GCS's is Task 28 §5's. Bazel and gazelle were not run (no offline module cache; the `git_override` fetch): the `BUILD.bazel` files below are what gazelle writes for these imports, and `buildifier -mode=check` passed on them. This task's text, applied mechanically to a fresh export of the same base (its new files, the two BUILD files and the eight runner replacements), reproduced the verified tree byte for byte, and the README replacements applied once each to a README holding Plan S3-A Task 6's and Task 23's text. Every standalone bash block passes `bash -n` and `shellcheck` (one SC2016 note: Step 1's `grep -F` pattern is a literal `$(`), the fish block passes `fish -n`, and the runner's replacement fragments were checked as the whole script.
+- **Verified in review (2026-10-16)** on an export of arbiter-core `cfd4f42` (v0.15.0) with Task 23's hunks applied as written and housegate `ed24705` (v0.20.0) with Task 22's hunks through a `replace`, `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` and offline Bazel 9.1.0 (`--override_module=housegate=<that tree>`, `--repository_disable_download`): both red steps failed to build with the names Steps 4 and 7 quote (Step 7 under Bazel only with `--keep_going`); gazelle wrote both quoted BUILD files byte for byte once Step 5 deletes the test-only file (without the deletion it keeps `go_test` first); Step 13's boundary check, clean gazelle, `bazel build //...`, `bazel test //...` (20 tests) and the race run passed; the unit tests passed, also under `-race`; `gofmt` and `go vet` were clean; with `ARBITER_CH_S3=1` and no endpoint every `TestS3_` test failed with the quoted `requires` line. The runner, with this task's eight replacements applied verbatim (`bash -n` and `shellcheck` clean, 169 lines added and 8 removed) and the MinIO image above, ran on the real images, with Bazel and with `bazel test` mapped to `go test`: on `clickhouse/clickhouse-server:26.3.37.3`, filtered as Step 10 (`mechanics: 4 test(s) passed`, `mechanics: S3 backup delete right: lock`, nine `refused:` lines, no S3 secret in the server logs, 39 s) and whole as Step 11, under real Bazel and under the shim (`mechanics: 16 test(s) passed`, the delete-right line, the SNode restart test, `objstore: 7 S3 test(s) passed`, `mechanics: no S3 secret in the server logs`, exit 0 in 2 min 56 s, no container or network left); and the S3 mechanics, M0 and M5 on the deployed image already on the host (ClickHouse 26.3.12.1, linux/amd64 under emulation): `mechanics: 5 test(s) passed`, `lock`, no secret in the server logs. The `mc mb`, `mc admin policy create`, `mc admin user add` and `mc admin policy attach` commands ran as written, and real MinIO enforced the three policies. The README replacements applied once each (`README.md | 5 +++++`), the boundary check passed and the floating-tag grep found nothing. Every standalone bash block passes `bash -n` and `shellcheck` (one SC2016 note: Step 1's `grep -F` pattern is a literal `$(`), and the fish block passes `fish -n`.
 
 - [ ] **Step 1: Check the worktree and the base**
 
@@ -3737,23 +3761,43 @@ test -f "$W/dataplane/chparts/chparts.go" && test -f "$W/member/gate/gate.go" &&
 test ! -e "$W/dataplane/objstore" && test ! -e "$W/dataplane/chmechanics/s3_test.go" && echo paths-free
 grep -c '^func TestMechanics_' "$W"/dataplane/chmechanics/*_test.go | awk -F: '{n += $2} END {print n}'
 grep -c -F 'echo "mechanics: $(printf' "$W/scripts/ci/clickhouse-mechanics.sh"
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config user.name; git -C "$W" config user.email
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 ```
 
-Expected: `urwt/claude/multi-source-s3c1` and a clean tree; the newest five commits are Task 23's (`docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>`); `base-ok`; `paths-free`; `13` (Plan S3-A's M0–M11); `1`. Anything else: stop, Task 23 or Plan S3-A is missing.
+Expected: `urwt/claude/multi-source-s3c1` and a clean tree; the newest five commits are Task 23's (`docs: dataplane/chparts and member/gate in the packages table`, `feat(member/gate): the pure stage-3 install gate`, `refactor(snode): delegate the partition helpers to dataplane/chparts`, `feat(chparts): the SNode's partition helpers as a shared package`, `chore(deps): pin housegate <HG_TAG_P1>`); `base-ok`; `paths-free`; `13` (Plan S3-A's M0–M11); `1`; `poetry` and `chen@sentio.xyz` (the worktree's own commit identity, which Task 23 set before its first commit and this block sets again, idempotently: the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`. A missing file or another count: stop, Task 23 or Plan S3-A is missing. Another author: stop and rewrite the authors of Task 23's commits (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`, with the identity above set) before anything else; nothing has been pushed yet.
 
 - [ ] **Step 2: Write the ledger tool and read the ledger**
 
-First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
+The ledger lives in Appendix C of the plan files on their ledger copies, never in a local checkout or a pending PR (contract §19, decision D23). Run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19 (this plan's Appendix A), verbatim, ending with one newline after `    main(sys.argv[1:])`; an existing copy is overwritten. Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" ref "$h" s3c1
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+echo "$ref"
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" && echo "s3-ledger.py is contract §19 of $ref"
 python3 -I "$L/s3-ledger.py" get "$h" CORE_TAG PROTO_TAG HG_TAG_P1
 python3 -I "$L/s3-ledger.py" empty "$h" CORE_TAG_P1 P1_BACKUP_DELETE
 ```
 
-Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then `CORE_TAG=v…`, `PROTO_TAG=v…`, `HG_TAG_P1=v…`, then `s3-ledger: CORE_TAG_P1 P1_BACKUP_DELETE not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. A `stop` (`no plan 's3c1'`, a value not recorded, or `CORE_TAG_P1` recorded already, which means this task ran before): stop and ask.
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged); `s3-ledger.py is contract §19 of <that ref>`; then `CORE_TAG=v…`, `PROTO_TAG=v…`, `HG_TAG_P1=v…`, then `s3-ledger: CORE_TAG_P1 P1_BACKUP_DELETE not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed (a missing or extra final newline counts) and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask. Never copy the tool from the ledger copy, never edit the plan. A `stop` (`no plan 's3c1'`, a value not recorded, or `CORE_TAG_P1` recorded already, which means this task ran before): stop and ask.
 
 ```bash
 W=<worktree path>; CORE_TAG=<ledger>; PROTO_TAG=<ledger>; HG_TAG_P1=<ledger>
@@ -4491,7 +4535,9 @@ func firstLine(errText string) string {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/objstore && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
+Step 4's gazelle wrote a BUILD file with the `go_test` alone; run again, gazelle would keep that rule first and append the `go_library` after it (the order Step 8 quotes is library first), so the file is deleted and written afresh.
+
+Run: `W=<worktree path>; cd "$W" && gofmt -l dataplane/objstore && rm -f dataplane/objstore/BUILD.bazel && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test --test_output=errors`
 Expected: `gofmt` lists nothing; PASS (`TestBucketURLsAndBackupNames`, `TestParseBucketRefusesAPathQueryOrTrailingSlash`, `TestCredentialsRedactTheSecret`, `TestStatementErrorsNeverCarryTheSecret`, `TestBackupSQLNamesTheBaseOnlyForAnIncrementalBackup`, `TestRestoreSQLRestoresOnePartitionIntoTheScratch`, `TestPartitionClauseOfAnUnpartitionedTableIsEmpty`, `TestIndexStatementsNameTheOwnersObjects`, `TestBackupErrorTextLosesItsStackTrace`).
 
 ```bash
@@ -4508,7 +4554,10 @@ every error (housegate spec 2026-10-14 §16 P1, §8.6; plan S3-C1
 clarification K23).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
 
 - [ ] **Step 6: Write the failing tests for the index, the chain, the manifests, the drill, the S3 tests and M12–M14**
 
@@ -5355,6 +5404,14 @@ func TestS3_RestoreAndGateKeepsOnlyTheManifestsPartsFromABackupAheadOfPublicatio
 	if len(res.Classification.Keep) != 2 || len(res.Classification.Drop) != 1 {
 		t.Fatalf("kept %v, dropped %v; want the two published parts kept and the later one dropped", res.Classification.Keep, res.Classification.Drop)
 	}
+	// RESTORE recreates the scratch from the backed-up CREATE, so it keeps
+	// hg_safe's merge pin: no background merge changes the scratch's parts
+	// between the restore, the scan and the DROP PART.
+	var engine string
+	if err := env.conn.QueryRow(ctx, "SELECT engine_full FROM system.tables WHERE database = ? AND name = ?", scratch.Database, scratch.Table).Scan(&engine); err != nil ||
+		!strings.Contains(engine, "max_bytes_to_merge_at_max_space_in_pool = 0") {
+		t.Fatalf("the scratch must keep hg_safe's merge pin (%v): %s", err, engine)
+	}
 	kept := slices.Clone(res.Classification.Kept)
 	sort.Strings(kept)
 	if !slices.Equal(kept, manifestHashes(s, tbl.schema.TableID, "p_p0")) {
@@ -5754,6 +5811,17 @@ func TestMechanics_S3IncrementalBackupRestoreKeepsHashOfAllFiles(t *testing.T) {
 	}
 }
 
+// mechSchemas is an objstore.SchemaSource over known schemas.
+type mechSchemas map[string]payloadexec.TableSchema
+
+func (s mechSchemas) TableSchema(_ context.Context, id string) (payloadexec.TableSchema, error) {
+	sch, ok := s[id]
+	if !ok {
+		return payloadexec.TableSchema{}, fmt.Errorf("no schema for %s", id)
+	}
+	return sch, nil
+}
+
 // mechManifests is an objstore.ManifestSource of one manifest.
 type mechManifests struct{ m replay.SafeSnapshotManifest }
 
@@ -5832,9 +5900,10 @@ func grantUser(t *testing.T, env mechanicsEnv, user string, grants []string) cli
 // up hg_safe with mech-nodelete and with mech-lockdelete, and the second
 // must complete; the test logs exactly one line "M13 backup delete right:
 // none" (the first completed too) or "M13 backup delete right: lock" (it
-// failed removing its own .lock and nothing else). The drill's
+// failed removing its own .lock and nothing else). The index si_backup
+// wrote lists the table and its parts. objstore.Drill and
 // objstore.RestoreAndGate, as si_restore holding exactly SI_RESTORE_GRANTS,
-// restores with mech-readonly and drops the part written after the manifest.
+// restore with mech-readonly and drop the part written after the manifest.
 // Then every refusal of spec §8.2 (as amended, never ALL on hg_rstage): 497
 // for si_backup's SELECT, INSERT and ALTER on hg_safe and CREATE TABLE in
 // hg_rstage, and for si_restore's BACKUP, INSERT INTO FUNCTION s3(...),
@@ -5901,6 +5970,27 @@ func TestMechanics_S3BackupWithAKeyThatCannotDelete(t *testing.T) {
 	lockLeft := countObjects(t, env.A, s3.bucket.BackupURL(ownerLockDelete, idx.Name)+".lock", s3.readOnly)
 	if lockLeft != 0 {
 		t.Fatalf("the mech-lockdelete backup %s left its .lock behind", idx.Name)
+	}
+	// SI_BACKUP_GRANTS list hg_safe's tables and parts: BACKUP ON hg_safe.*
+	// shows the tables in system.tables and system.parts.
+	if len(idx.Tables) != 1 || idx.Tables[0].PhysicalTable != safe.Table || idx.Tables[0].TableID != sch.TableID || len(idx.Tables[0].Parts) != 4 {
+		t.Fatalf("the index si_backup wrote lists %+v; want %s (%s) with its 4 active parts", idx.Tables, safe.Table, sch.TableID)
+	}
+
+	// The drill as si_restore with mech-readonly: the index read, the
+	// manifest the index names, a restore and gate of each partition and the
+	// drop of each verified scratch (plan S3-C1 Task 25's restore-drill).
+	drillNamer, err := objstore.NewScratchNamer("m13_drill_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drill := &objstore.Drill{
+		Conn: asRestore, Manifests: lockManifests, Schemas: mechSchemas{sch.TableID: sch}, Bucket: s3.bucket,
+		Owner: ownerLockDelete, NetworkID: "mechanics", Credentials: s3.readOnly, Scratch: drillNamer,
+	}
+	verdict, err := drill.Run(ctx)
+	if err != nil || !verdict.Pass || verdict.Backup != idx.Name || len(verdict.Tables) != 1 || len(verdict.Tables[0].Partitions) != 2 {
+		t.Fatalf("Drill as si_restore with mech-readonly: %+v, %v; want a pass over p_p0 and p_p1 of backup %s", verdict, err, idx.Name)
 	}
 
 	namer, err := objstore.NewScratchNamer("m13_")
@@ -6082,8 +6172,8 @@ func TestMechanics_S3SecretsAreMaskedInLogsAndSystemTables(t *testing.T) {
 
 - [ ] **Step 7: Run them and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors`
-Expected: FAIL to build both targets: `//dataplane/objstore:objstore_test` with `undefined: ManifestSource`, `undefined: Backuper`, `undefined: BackupIndex`, `undefined: NextBackup`, `undefined: maxChainLinks` and more (ten errors); `//dataplane/chmechanics:chmechanics_test` with `undefined: objstore.ManifestSource`, `undefined: objstore.Backuper`, `undefined: objstore.RestoreAndGate`, `undefined: objstore.GateInput`, `undefined: objstore.BackupRef`.
+Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && bazel test --keep_going //dataplane/objstore:objstore_test //dataplane/chmechanics:chmechanics_test --test_output=errors`
+Expected: FAIL to build both targets: `//dataplane/objstore:objstore_test` with `undefined: ManifestSource`, `undefined: Backuper`, `undefined: BackupIndex`, `undefined: NextBackup`, `undefined: maxChainLinks` and more (ten errors); `//dataplane/chmechanics:chmechanics_test` with `undefined: objstore.ManifestSource`, `undefined: objstore.Backuper`, `undefined: objstore.Drill`, `undefined: objstore.RestoreAndGate`, `undefined: objstore.GateInput`, `undefined: objstore.BackupRef` (`--keep_going` makes Bazel report both targets; without it the build stops at whichever fails first).
 
 - [ ] **Step 8: Implement the index, the manifests, the Backuper, RestoreAndGate and the Drill; commit**
 
@@ -6632,6 +6722,10 @@ func manifestPartition(m replay.SafeSnapshotManifest, tableID, partitionID strin
 // Foreign), then every needed hash kept once, gate.Closure and
 // gate.PartitionSet.
 //
+// RESTORE creates the scratch from the backed-up CREATE, so it keeps
+// hg_safe's merge pin (max_bytes_to_merge_at_max_space_in_pool = 0) and no
+// merge changes its parts between the restore, the scan and the DROP PARTs.
+//
 // A RESTORE that fails returns Reason DrillRestoreFailed together with the
 // redacted error; any other error leaves Reason empty. A failed gate keeps
 // its scratch for inspection; the caller drops a scratch it no longer needs.
@@ -7060,11 +7154,14 @@ manifest's schema_hash. NewArbiterManifests applies spec §8.4's accept
 rule (housegate spec 2026-10-14 §8.4-§8.6, §16 P1; plan S3-C1 K24-K27).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
 
 - [ ] **Step 9: Extend the mechanics runner with the MinIO, the S3 environment, the objstore run and the log grep**
 
-In `scripts/ci/clickhouse-mechanics.sh` (Plan S3-A Task 6 Step 4's text) make these eight replacements, each of a block that occurs exactly once.
+In `scripts/ci/clickhouse-mechanics.sh` (as at `CORE_TAG`; the line anchors below were re-read there) make these eight replacements, each of a block that occurs exactly once.
 
 1. Replace the header comment (`:8-20`):
 
@@ -7127,8 +7224,10 @@ minio="arbiter-core-mech-minio-${suffix}"
 # The S3 endpoint of M12-M14 and the objstore tests (plan S3-C1 contract
 # §17). These keys are fixed CI-only literals of an ephemeral container on a
 # private Docker network, never a real credential; M14 and the log grep below
-# search for exactly these secrets.
-MINIO_IMAGE="minio/minio:RELEASE.2024-12-18T13-15-44Z"
+# search for exactly these secrets. MINIO_IMAGE is Bitnami's build of MinIO
+# RELEASE.2024-12-18T13-15-44Z with its mc, pinned by digest: MinIO's own
+# images can no longer be pulled.
+MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192"
 s3_bucket="si-mechanics"
 s3_root_user="mech-root"
 s3_root_secret="mech-root-secret-0000"
@@ -7179,10 +7278,12 @@ docker pull "${MINIO_IMAGE}" >/dev/null
 tmp_dir="$(mktemp -d)"
 docker network create "${network}" >/dev/null
 
+# The image's entrypoint is a setup script and its user (uid 1001) has no
+# /data, so the server is started directly on the image's data directory.
 docker run -d --name "${minio}" --hostname "${minio}" \
   --network "${network}" --network-alias arbiter-core-minio \
   -e MINIO_ROOT_USER="${s3_root_user}" -e MINIO_ROOT_PASSWORD="${s3_root_secret}" \
-  "${MINIO_IMAGE}" server /data >/dev/null
+  --entrypoint minio "${MINIO_IMAGE}" server /bitnami/minio/data >/dev/null
 ```
 
 5. Replace the end of the readiness check (`:117-120`): the MinIO's readiness, policies, bucket and users follow it:
@@ -7378,14 +7479,14 @@ echo "mechanics: no S3 secret in the server logs on ${image}"
 ```
 
 Run: `W=<worktree path>; cd "$W" && bash -n scripts/ci/clickhouse-mechanics.sh && shellcheck scripts/ci/clickhouse-mechanics.sh && git diff --numstat -- scripts/ci/clickhouse-mechanics.sh`
-Expected: no output from `bash -n` and `shellcheck` (if `shellcheck` is not installed, `bash -n` alone), then `165	8	scripts/ci/clickhouse-mechanics.sh`.
+Expected: no output from `bash -n` and `shellcheck` (if `shellcheck` is not installed, `bash -n` alone), then `169	8	scripts/ci/clickhouse-mechanics.sh`.
 
 - [ ] **Step 10: Run M12–M14 through the runner; commit**
 
-The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `minio/minio:RELEASE.2024-12-18T13-15-44Z` from Docker Hub (downloads, and the MinIO image is new to this host): needs explicit user confirmation in chat before the first run of this task.
+The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` from Docker Hub (downloads, and the MinIO image may be new to this host): needs explicit user confirmation in chat before the first run of this task. Fallback on a Mac where `docker` reaches a stopped Docker Desktop while OrbStack runs: prefix the run with `DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock`; if `docker pull` stops with `error getting credentials … keychain cannot be accessed`, the session cannot read the login keychain: ask the user to unlock it (or to run the command in their own terminal) and never work around it with stored credentials.
 
 Run: `W=<worktree path>; cd "$W" && ARBITER_CH_MECHANICS_FILTER='^TestMechanics_(ServerIsTheDeployedImage|S3)' bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"`
-Expected: `//dataplane/chmechanics:chmechanics_test PASSED`, the three `mechanics server … ClickHouse 26.3.37.3 …` lines, `mechanics: 4 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `mechanics: S3 backup delete right: lock` (what drafting measured on 26.3.51.7; `none` is also a pass here, and the value is recorded only from the release run, Step 16), no SNode or objstore run (the filter skips both), `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`, `exit 0`, and `docker ps -a --filter name=arbiter-core-mech` lists nothing afterwards. Read the M13 lines of the test log (`grep -E 'M13 backup delete right|BACKUP with mech-nodelete|refused:' "$(bazel info bazel-testlogs)/dataplane/chmechanics/chmechanics_test/test.log"`): with `lock`, the no-delete backup failed with `Access Denied … while removing object with path …/.lock from S3`, and nine `refused:` lines name the missing grants (`SELECT`, `INSERT`, `ALTER DELETE` on `hg_safe` and `CREATE TABLE ON hg_rstage` for `si_backup`; `BACKUP`, `WRITE ON S3`, `CREATE DICTIONARY`, `SYSTEM MERGES`, `SET DEFINER` for `si_restore`). If MinIO does not become ready (`MinIO did not become ready`) or an `mc` command fails, read `docker logs` of the MinIO container (the script prints its tail) and fix the setup block, never the tests. If M13 fails because the `mech-lockdelete` backup did not complete, stop: K24 says the plan stops and the user decides.
+Expected: `//dataplane/chmechanics:chmechanics_test PASSED`, the three `mechanics server … ClickHouse 26.3.37.3 …` lines, `mechanics: 4 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `mechanics: S3 backup delete right: lock` (what drafting measured on 26.3.51.7 and the review on 26.3.37.3; `none` is also a pass here, and the value is recorded only from the release run, Step 16), no SNode or objstore run (the filter skips both), `mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3`, `exit 0`, and `docker ps -a --filter name=arbiter-core-mech` lists nothing afterwards. Read the M13 lines of the test log (`grep -E 'M13 backup delete right|BACKUP with mech-nodelete|refused:' "$(bazel info bazel-testlogs)/dataplane/chmechanics/chmechanics_test/test.log"`): with `lock`, the no-delete backup failed with `Access Denied … while removing object with path …/.lock from S3`, and nine `refused:` lines name the missing grants (`SELECT`, `INSERT`, `ALTER DELETE` on `hg_safe` and `CREATE TABLE ON hg_rstage` for `si_backup`; `BACKUP`, `WRITE ON S3`, `CREATE DICTIONARY`, `SYSTEM MERGES`, `SET DEFINER` for `si_restore`). If MinIO does not become ready (`MinIO did not become ready`) or an `mc` command fails, read `docker logs` of the MinIO container (the script prints its tail) and fix the setup block, never the tests. If M13 fails because the `mech-lockdelete` backup did not complete, stop: K24 says the plan stops and the user decides.
 
 ```bash
 W=<worktree path>
@@ -7405,7 +7506,10 @@ greps both servers' logs for the secrets (housegate spec 2026-10-14 §2,
 §8.2, §16 P1; plan S3-C1 contract §17).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
 
 - [ ] **Step 11: Run the whole runner on upstream 26.3.37.3**
 
@@ -7425,7 +7529,7 @@ In `README.md`, insert after Task 23's `dataplane/chparts` row of the packages t
 Append to Plan S3-A Task 6's § ClickHouse mechanics, after its last paragraph (the one that ends `Running it in CI needs a read-only registry secret for this repository.`), separated by one blank line:
 
 ```markdown
-Since stage 3 P1 the script also starts a pinned MinIO (`minio/minio:RELEASE.2024-12-18T13-15-44Z`, network alias `arbiter-core-minio`) with the bucket `si-mechanics` and three keys, fixed CI-only literals of that ephemeral container: `mech-nodelete` may read, write and list but delete nothing, `mech-lockdelete` may also delete objects named `*/.lock`, and `mech-readonly` may only read and list. It passes them to the tests as `ARBITER_CH_S3=1`, `CH_S3_ENDPOINT`, `CH_S3_BUCKET` and `CH_S3_{NODELETE,LOCKDELETE,READONLY}_{ACCESS,SECRET}_KEY`. M12 re-pins M5 on an S3 endpoint (an incremental `BACKUP DATABASE ... TO S3()` stores fewer objects than the full one, and `RESTORE TABLE ... AS ... PARTITIONS` from it keeps every `hash_of_all_files` and row); M13 runs `objstore.Backuper` as a user holding exactly the `si_backup` grants with each writing key, prints what a backup key must be allowed to delete (`mechanics: S3 backup delete right: none` when the key that cannot delete completes, `lock` when only the one that may delete `*/.lock` does), restores as a user holding exactly the `si_restore` grants and checks their refusals; M14 checks that no row of `system.query_log`, `system.processes` or `system.backups` carries a secret and that the statements show it as `[HIDDEN]`, and the script then greps both servers' log files for the three secrets (`mechanics: no S3 secret in the server logs on <image>`). Unfiltered runs also run `//dataplane/objstore:objstore_test` against the same MinIO and require every `TestS3_` test to pass (`objstore: <n> S3 test(s) passed on <image>`).
+Since stage 3 P1 the script also starts a pinned MinIO (MinIO RELEASE.2024-12-18T13-15-44Z as Bitnami builds it, `bitnamilegacy/minio:2024.12.18-debian-12-r1` pinned by digest, because MinIO's own images can no longer be pulled; network alias `arbiter-core-minio`) with the bucket `si-mechanics` and three keys, fixed CI-only literals of that ephemeral container: `mech-nodelete` may read, write and list but delete nothing, `mech-lockdelete` may also delete objects named `*/.lock`, and `mech-readonly` may only read and list. It passes them to the tests as `ARBITER_CH_S3=1`, `CH_S3_ENDPOINT`, `CH_S3_BUCKET` and `CH_S3_{NODELETE,LOCKDELETE,READONLY}_{ACCESS,SECRET}_KEY`. M12 re-pins M5 on an S3 endpoint (an incremental `BACKUP DATABASE ... TO S3()` stores fewer objects than the full one, and `RESTORE TABLE ... AS ... PARTITIONS` from it keeps every `hash_of_all_files` and row); M13 runs `objstore.Backuper` as a user holding exactly the `si_backup` grants with each writing key, prints what a backup key must be allowed to delete (`mechanics: S3 backup delete right: none` when the key that cannot delete completes, `lock` when only the one that may delete `*/.lock` does), restores as a user holding exactly the `si_restore` grants and checks their refusals; M14 checks that no row of `system.query_log`, `system.processes` or `system.backups` carries a secret and that the statements show it as `[HIDDEN]`, and the script then greps both servers' log files for the three secrets (`mechanics: no S3 secret in the server logs on <image>`). Unfiltered runs also run `//dataplane/objstore:objstore_test` against the same MinIO and require every `TestS3_` test to pass (`objstore: <n> S3 test(s) passed on <image>`).
 ```
 
 Append to § Compatibility, after Plan S3-A Task 6's stage-3 P0 paragraph, which ends the file, separated by one blank line:
@@ -7443,7 +7547,10 @@ git -C "$W" add README.md
 git -C "$W" commit -m "docs: dataplane/objstore, the S3 mechanics and stage-3 P1 compatibility notes
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Anything else: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
 
 - [ ] **Step 13: Full verification**
 
@@ -7456,7 +7563,7 @@ W=<worktree path>; cd "$W" && bash scripts/check-public-boundary.sh && bazel run
 
 Expected: no boundary violation, no BUILD change left by gazelle, no unformatted file, every target PASSes with and without the race detector (the ClickHouse-gated tests, the `TestS3_` tests and the mechanics suite SKIP).
 
-Run Step 11's runner command once more on this tree (its `docker pull` is a remote read: needs explicit user confirmation in chat before running). Expected: the same lines and `exit 0`. Then: `W=<worktree path>; git -C "$W" grep -n -E 'clickhouse-server:26\.3( |$)|minio/minio:latest|sentio-352722' -- .github scripts README.md dataplane member || echo "no floating tag, no private name"` prints `no floating tag, no private name` (the public repository names no private bucket or project).
+Run Step 11's runner command once more on this tree (its `docker pull` is a remote read: needs explicit user confirmation in chat before running). Expected: the same lines and `exit 0`. Then: `W=<worktree path>; git -C "$W" grep -n -E 'clickhouse-server:26\.3( |$)|minio(/minio)?:(latest|RELEASE)|sentio-352722' -- .github scripts README.md dataplane member || echo "no floating tag, no private name"; grep -c '^MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:[0-9a-f]\{64\}"$' "$W/scripts/ci/clickhouse-mechanics.sh"` prints `no floating tag, no private name` (the public repository names no private bucket or project, and no MinIO image that is not pinned by digest) and `1`.
 
 Run: `W=<worktree path>; CORE_TAG=<ledger>; git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG"..HEAD`
 Expected: a clean tree and nine commits, newest first: `docs: dataplane/objstore, the S3 mechanics and stage-3 P1 compatibility notes`, `test(chmechanics): S3 mechanics M12-M14 against a MinIO in the runner`, `feat(objstore): backup index, Backuper, RestoreAndGate and the restore Drill`, `feat(objstore): bucket names, redacting credentials and the S3 statements`, then Task 23's five.
@@ -7490,7 +7597,7 @@ Stage 3 P1 of the multi-source storage-integrity network (housegate spec `docs/s
 - `dataplane/chparts`: the SNode's partition helpers (active parts, logical partition ids, partition quoting, `DROP PARTITION`, partition content scans) as a shared package; `snode` delegates to it with no behaviour change.
 - `member/gate`: the pure install gate of spec §8.5 (the partition plan against a manifest, the scratch classifier, closure, partition set).
 - `dataplane/objstore`: backups of `hg_safe` to an S3-compatible bucket through ClickHouse statements only (`BACKUP … TO S3(...)` with `base_backup`, `RESTORE … AS hg_rstage.<scratch> PARTITIONS … FROM S3(...)`, `s3()` index objects; no S3 client): the chained full and incremental `Backuper` that never reuses a name, `RestoreAndGate`, the restore `Drill` against the manifest a backup's index names, and a manifest reader that applies spec §8.4's accept rule. Keys travel only inside statements, ClickHouse masks them, and every returned error is redacted.
-- `dataplane/chmechanics`: M12 (incremental S3 backups keep `hash_of_all_files`), M13 (what a backup key must be allowed to delete; the `si_backup` / `si_restore` grants and refusals), M14 (no secret in `system.query_log`, `system.processes`, `system.backups` or the server logs). `scripts/ci/clickhouse-mechanics.sh` starts a pinned MinIO (`minio/minio:RELEASE.2024-12-18T13-15-44Z`) with three fixed CI-only keys (accepted by the user before this PR), prints the measured delete right and runs `objstore`'s `TestS3_` tests, in the `clickhouse-mechanics` CI job and in Cut Release, on `clickhouse/clickhouse-server:26.3.37.3`.
+- `dataplane/chmechanics`: M12 (incremental S3 backups keep `hash_of_all_files`), M13 (what a backup key must be allowed to delete; the `si_backup` / `si_restore` grants and refusals), M14 (no secret in `system.query_log`, `system.processes`, `system.backups` or the server logs). `scripts/ci/clickhouse-mechanics.sh` starts a pinned MinIO (RELEASE.2024-12-18T13-15-44Z as `bitnamilegacy/minio:2024.12.18-debian-12-r1`, pinned by digest: MinIO's own images can no longer be pulled) with three fixed CI-only keys (accepted by the user before this PR), prints the measured delete right and runs `objstore`'s `TestS3_` tests, in the `clickhouse-mechanics` CI job and in Cut Release, on `clickhouse/clickhouse-server:26.3.37.3`.
 - Deployed `26.3-lts-decimal512-release-2026-09-16` image, run by hand: @DEPLOYED@ (arbiter-core is public, so this names the image by its tag and does not paste the log lines).
 
 ## Test plan
@@ -7525,11 +7632,24 @@ gh pr checks <n> --repo sentioxyz/arbiter-core --watch
 
 Expected: `<n>` is the number `gh pr create` printed; `test`, `integration-clickhouse` (with Task 23's `//dataplane/chparts:chparts_test`) and `clickhouse-mechanics` pass. On a failure, read the log (`gh run view <id> --repo sentioxyz/arbiter-core --log-failed`, a remote read confirmed with the block above), fix it on the branch with a new commit, and ask again before pushing.
 
-Remote write (merge): needs explicit user confirmation in chat, after review, before running.
+Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on the branch is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
+
+```bash
+W=<worktree path>
+[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+```
+
+Expected: `PR head is HEAD` and exactly `poetry <chen@sentio.xyz>` (Task 23's five commits and this task's four). Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
+
+Remote write (merge), then a remote read of the merge commit: needs explicit user confirmation in chat, after review, before running.
 
 ```bash
 gh pr merge <n> --repo sentioxyz/arbiter-core --squash
+gh pr view <n> --repo sentioxyz/arbiter-core --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
+
+Expected: `MERGED`, the squash-merge commit and the merge time; keep them for the run record (Step 17).
 
 - [ ] **Step 16: Release `CORE_TAG_P1`**
 
@@ -7537,11 +7657,11 @@ Releases are annotated `vX.Y.Z` tags cut by the **Cut Release** workflow from `m
 
 ```bash
 gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main
-bash -c 'gh run watch --repo sentioxyz/arbiter-core "$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
+bash -c 'gh run watch --exit-status --repo sentioxyz/arbiter-core "$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
 gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq '.[0].tagName'
 ```
 
-The new run can take a few seconds to appear: if the watched run is not the one just dispatched (its `createdAt` in `gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 2 --json databaseId,createdAt` predates the dispatch), wait and run the second line again. Expected: the run ends green with the step summary `### Cutting vX.Y.Z`, its `validate ClickHouse mechanics` step green; the last command prints that tag.
+The new run can take a few seconds to appear: if the watched run is not the one just dispatched (its `createdAt` in `gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 2 --json databaseId,createdAt` predates the dispatch), wait and run the second line again. Expected: the run ends green (`--exit-status` makes the watcher exit non-zero otherwise: stop, nothing is recorded) with the step summary `### Cutting vX.Y.Z`, its `validate ClickHouse mechanics` step green; the last command prints that tag.
 
 Remote read (the run's log and the tag): needs explicit user confirmation in chat before running.
 
@@ -7551,7 +7671,7 @@ gh run view "$RUN" --repo sentioxyz/arbiter-core --log | grep -oE '(mechanics|ob
 git -C "$R" fetch -q origin --tags
 git -C "$R" grep -h '^func TestMechanics_' "$T" -- dataplane/chmechanics | wc -l
 git -C "$R" grep -h '^func TestS3_' "$T" -- dataplane/objstore | wc -l
-git -C "$R" show "$T":scripts/ci/clickhouse-mechanics.sh | grep -c 'MINIO_IMAGE="minio/minio:RELEASE.2024-12-18T13-15-44Z"'
+git -C "$R" show "$T":scripts/ci/clickhouse-mechanics.sh | grep -c '^MINIO_IMAGE="bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192"$'
 git -C "$R" show "$T":dataplane/objstore/bucket.go | grep -c 'BackupIndexFormat = "si-backup-index-v1"'
 git -C "$R" show "$T":dataplane/chparts/chparts.go | grep -c '^func ActiveParts('
 git -C "$R" show "$T":member/gate/gate.go | grep -c '^func PlanPartition('
@@ -7578,22 +7698,24 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" CORE_TAG_P1="$CORE_TAG_P1" P1_BACKUP_DELETE="$P1_BACKUP_DELETE" || exit 1
 git -C "$d" commit -q -m "docs(plan): record CORE_TAG_P1 and P1_BACKUP_DELETE of Plan S3-C1 (Task 24)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
 git -C "$d" show --stat --oneline HEAD | cat
+git -C "$d" log -1 --format='%an <%ae>'
 ```
 
-Expected: `s3-ledger: Task 24 recorded CORE_TAG_P1=…, P1_BACKUP_DELETE=… and its run record 'arbiter-core release and the S3 mechanics' in …`, then one commit of the plan file only (its two rows and the run-record item). A `stop` writes nothing: report it and ask.
+Expected: `s3-ledger: Task 24 recorded CORE_TAG_P1=…, P1_BACKUP_DELETE=… and its run record 'arbiter-core release and the S3 mechanics' in …`, then one commit of the plan file only (its two rows and the run-record item), authored `poetry <chen@sentio.xyz>` (the ledger worktree's own identity; R2 refuses any other). A `stop` writes nothing: report it and ask.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 24's ledger record (Appendix C of Plan S3-C1: CORE_TAG_P1, P1_BACKUP_DELETE and the run record 'arbiter-core release and the S3 mechanics'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=24
 d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
@@ -7615,11 +7737,9 @@ Expected: `CORE_TAG_P1=<the tag written>`, `P1_BACKUP_DELETE=<the value written>
 
 Then K24 decides what follows, and the executing agent tells the user in chat:
 - `P1_BACKUP_DELETE=none`: a backup completes with a key that cannot delete. Task 26's Terraform grants the backup writers no delete at all (no lock remover); Task 25 may start now.
-- `P1_BACKUP_DELETE=lock` (what drafting measured): a backup needs to delete its own `<backup>/.lock`. The plan stops before Task 26 until the user amends spec §16's P1 row from "backup keys may list, read and create on their own prefix but not delete" to "… but not delete, except the backup's own `.lock`" (K24; a housegate docs change the user makes, or approves in chat before an agent opens it); Task 26 then adds `siDevnet2SiV2BackupLockRemover`, conditioned on the owner's prefix and the `/.lock` suffix (contract §18). Task 25 does not depend on it and may start now.
+- `P1_BACKUP_DELETE=lock` (what drafting and the review measured): a backup needs to delete its own `<backup>/.lock`. Stop and ask the user, because K24 is their decision and the agent never takes it: either they amend spec §16's P1 row from "backup keys may list, read and create on their own prefix but not delete" to "… but not delete, except the backup's own `.lock`" (a housegate docs change they make, or approve in chat before an agent opens it), after which Task 26 adds `siDevnet2SiV2BackupLockRemover`, conditioned on the owner's prefix and the `/.lock` suffix (contract §18); or they decide otherwise (the scoping fallback, delete on the own prefix with versioning and retention, is never taken without that decision). Nothing of Task 26 starts before their answer. Task 25 does not depend on it and may start now.
 
 Plan S3-C2, S3-C4 and S3-D read `CORE_TAG_P1` from the ledger only, and Task 26 reads `P1_BACKUP_DELETE` (as `DEVNET2_BACKUP_DELETE_RIGHT` and the Terraform local `si_v2_backup_delete_right`).
-
----
 
 ---
 
@@ -7633,14 +7753,15 @@ No host changes behaviour: a host never sets `storage_integrity.backup` and `Sto
 - Modify: `go.mod` (the housegate and arbiter-core requires, base `:9`, `:14`, at `HG_TAG` and `CORE_TAG` since Plan S3-B Task 12), `go.sum`, `MODULE.bazel` (`bazel_dep` `arbiter_core` and `housegate`, base `:12-19`; `git_override` `housegate` and `arbiter_core` with their `# Resolved …` comments, base `:29-41`, as Plan S3-B Task 12 left them), `MODULE.bazel.lock`
 - Create: `config/storage_integrity_job.go`
 - Test: `config/storage_integrity_job_test.go` (new)
-- Modify: `config/config.go` (`StorageIntegrityConfig` after Plan S3-B Task 12's `SNode` line, base `:57-58`; the `decodeConfigYAML` doc and body as Plan S3-B Task 12 left them, base `:376-390`), `config/BUILD.bazel` (`go_library` srcs `:5`; `go_test` srcs `:26`; the deps stay)
+- Modify: `config/config.go` (`StorageIntegrityConfig` `:58-69`: `Backup` after Plan S3-B Task 12's `SNode` line, the replaced lines `:67-69`; the `decodeConfigYAML` doc tail and body as Plan S3-B Task 12 left them, `:436-450`), `config/BUILD.bazel` (`go_library` srcs `:5`; `go_test` srcs `:27`; the deps stay)
 - Create: `standalone/storage_integrity_backup.go`
 - Test: `standalone/storage_integrity_backup_test.go` (new)
-- Modify: `standalone/BUILD.bazel` (`go_library` srcs `:10-11` and deps `:37-38`, `:58-59`; `go_test` srcs `:80-81` and deps `:111-112`; gazelle's output)
+- Modify: `standalone/BUILD.bazel` (`go_library` srcs `:10-11` and deps `:38-39`, `:59-61`; `go_test` srcs `:81-82` and deps `:114-115`; gazelle's output)
 - Modify: `commands/storage_integrity.go` (`AddCommand` `:18`; two functions appended after `newEnrollmentStatementCommand`, the end of the file, `:47`)
 - Test: `commands/storage_integrity_test.go` (imports `:3-7`; one test appended after `:19`), `commands/BUILD.bazel` (`go_test` deps `:40`)
-- Modify: `README.md` (a new subsection right before `### Dynamic storage-integrity table set`, base `:109`, after the enrolment subsection)
+- Modify: `README.md` (a new subsection right before `### Dynamic storage-integrity table set`, `:113`, after the enrolment subsection `:103`)
 - Ledger (Step 12, housegate): Modify `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`, Appendix C (the `SN_COMMIT_P1` and `SN_DIGEST_P1` rows and the run record `sentio-node release (Task 25)`), on the ledger copy `s3-ledger.py ref <housegate> s3c1` prints (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34), with the record procedure of contract §19 (decision D23): one commit in the URWT worktree `multi-source-s3c1-ledger-25`
+- Local only, never committed: the worktree-level commit identity of both worktrees (`git config --worktree user.name poetry`, `user.email chen@sentio.xyz`, after `extensions.worktreeConfig true`), so no commit of this task carries the global `uranuswch@gmail.com`; `$HOME/.cache/s3-ledger/s3-ledger.py` (the ledger tool of contract §19, written with the Write tool) and `$HOME/.cache/s3-ledger/s3-ledger.py.plan` (the tool's text as the ledger copy holds it, for `cmp`); the run record `$HOME/.cache/s3-ledger/record-s3c1-25.md`, the state file `$HOME/.cache/s3-ledger/record-s3c1-25` and, only when the ledger copy is `origin/main`, `record-s3c1-25-pr.md` and `record-s3c1-25-pr-url`; the PR body `<scratchpad>/sn-s3c1-pr.md`
 - Leave unchanged: `standalone/standalone.go` and `standalone/storage_integrity_bootstrap_test.go` (`Run` never reads `storage_integrity.backup`, so `storageIntegrityReadOnlyMethods` keeps `ClickhouseOptions` alone and `TestStorageIntegrityReadOnlyMethodsHaveValueReceivers` is untouched), `StorageIntegrityConfig.Validate`, `rpc/` (the drill calls the existing status method of another host), `.github/workflows/ci.yml` (the new tests need no ClickHouse; the acceptance step's filter and PASS count stay; `objstore`'s S3 tests run in arbiter-core's mechanics runner, Task 24).
 
 **Interfaces:**
@@ -7648,7 +7769,7 @@ No host changes behaviour: a host never sets `storage_integrity.backup` and `Sto
 - Consumes (`HG_TAG_P1`, existing housegate API): `payloadexec.DecodeTableSchemaJSON(tableID, schemaJSON string) (TableSchema, error)`, `payloadexec.TableSchema`, `replay.SafeSnapshotManifest`, `replay.TrackFrontier`, `hgregistry.TableStatus{Status, RefusedCode, RefusedReason, SchemaJSON, SchemaHash, RegistryVersion}` and its status constants (`github.com/housegate/housegate/pkg/registry`); the new `HG_TAG_P1` helpers (contract §16) reach sentio-node only through `objstore`.
 - Consumes (sentio-node at `SN_COMMIT`, Plan S3-B contract §8 and Task 12): `config.StorageIntegrityClickhousePasswordEnv`, `config.StorageIntegrityConfig.ClickhouseUsername`, `func (c StorageIntegrityConfig) ClickhouseOptions() *clickhouse.Options`, `decodeConfigYAML` with `refuseStorageIntegrityClickhousePasswordKey(data []byte) error` and `yamlMappingValues(node *yaml.Node, key string) []*yaml.Node`; existing `config.StorageIntegrityPeer`, `config.StorageIntegritySNode.NetworkID`, `rpc.NewStorageNodeRPCServer(syncer, env, opts...)`, `rpc.WithStorageIntegrityTableStatus(source)`, `rpc.StorageIntegrityTableStatusSource` (tests), `standalone.PrintStorageIntegrityEnrollmentStatement`'s command pattern, `log.FromContext` (`sentioxyz/sentio-core/common/log`), arbiter-core `dataplane.New`, `dataplane.Config{Peers}`, `dataplane.Peer{ID, GRPCAddr}`, `(*dataplane.Client).Close`; go-ethereum `rpc.DialOptions`, `rpc.WithHTTPClient`, `(*rpc.Client).CallContext`, `(*rpc.Client).Close`; `clickhouse.Open`, `clickhouse.Conn`, `clickhouse.Options`, `clickhouse.Auth`; cobra `MarkFlagRequired`, `CheckErr`, `BashCompOneRequiredFlag`.
 - Produces (contract §18, verbatim): `const config.StorageIntegrityS3AccessKeyIDEnv = "STORAGE_INTEGRITY_S3_ACCESS_KEY_ID"`, `const config.StorageIntegrityS3SecretAccessKeyEnv = "STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY"`; `type config.StorageIntegrityBackup struct { BucketURL string "bucket_url"; OwnerIndexerID *uint64 "owner_indexer_id"; MaxChainLinks uint32 "max_chain_links"; ScratchPrefix string "scratch_prefix" }` as `StorageIntegrityConfig.Backup` (`yaml:"backup"`, after `SNode`); `func config.LoadStorageIntegrityJobConfig(path string) (*Config, error)`; `func (c StorageIntegrityConfig) ValidateBackupJob() error`; `func (c StorageIntegrityConfig) ValidateRestoreDrill() error`; `func config.StorageIntegrityS3Credentials() (accessKeyID, secretAccessKey string, err error)`; the refusals `storage_integrity.backup.access_key_id is not read from the config file; set STORAGE_INTEGRITY_S3_ACCESS_KEY_ID instead`, `storage_integrity.backup.secret_access_key is not read from the config file; set STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY instead`, `storage_integrity.backup.bucket_url is required`, `storage_integrity.backup.bucket_url: %w`, `storage_integrity.backup.owner_indexer_id is required for storage-integrity backup`, `storage_integrity.backup.max_chain_links must be between 1 and 30, got %d`, `storage_integrity.backup.scratch_prefix must match [A-Za-z0-9_-]{1,64}, got %q`, `storage_integrity.clickhouse_username is required: storage-integrity backup and restore-drill never use the passwordless default user`, `STORAGE_INTEGRITY_S3_ACCESS_KEY_ID and STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY must both be set`, and the existing `storage_integrity.%s is required` for `arbiter_peers` (and each peer's `id` and `addr`), `clickhouse_dsn` and `snode.network_id`; the commands `sentio-node storage-integrity backup` and `sentio-node storage-integrity restore-drill --owner <indexer id> --owner-rpc <url> [--backup <name>]`; `func standalone.RunStorageIntegrityBackup(ctx context.Context, cfg *config.Config, out io.Writer) error`; `type standalone.StorageIntegrityRestoreDrillOptions struct { Owner uint64; OwnerRPC string; Backup string }`; `func standalone.RunStorageIntegrityRestoreDrill(ctx context.Context, cfg *config.Config, opts StorageIntegrityRestoreDrillOptions, out io.Writer) error`; `var standalone.ErrStorageIntegrityRestoreDrillFailed = errors.New("storage-integrity restore drill: the verdict is not pass")`; the schema refusal `table %s has no schema on its owner's host (status %q)`; the eleven named tests of contract §18; release `SN_COMMIT_P1`, `SN_DIGEST_P1` (the rows `` | `SN_COMMIT_P1` | `<40 hex>` | Task 25 | `` and `` | `SN_DIGEST_P1` | `sha256:<64 hex>` | Task 25 | `` and the run record `sentio-node release (Task 25)` of this plan's Appendix C, Step 12, contract §19).
-- Produces (added here, Appendix B): refusals `storage-integrity backup requires a config`, `storage-integrity restore-drill requires a config`, `storage-integrity restore-drill requires --owner-rpc: the owner host's storage RPC URL, which serves each table's schema`, `storage-integrity restore-drill --owner-rpc %q must be an http(s) URL`, `storage-integrity restore-drill --owner %d is not storage_integrity.backup.owner_indexer_id %d`, `table id %q is not <database>.<table>`; error wrappers `storage-integrity backup of indexer %d: %w`, `storage-integrity restore drill of indexer %d: %w`, `storage integrity clickhouse: %w`, `storage integrity arbiter client: %w`, `storage-integrity restore-drill --owner-rpc %s: %w`, `table %s: sentio_getStorageIntegrityTableStatus on %s: %w`, `storage integrity arbiter: reading %s took longer than %s: %w` (`the latest manifest` or `manifest <snapshot id>`), `read config file: %w`, `unmarshal config: %w` (LoadConfig's forms); log lines (stderr, never a key) `backing up hg_safe to the replica bucket`, `backed up hg_safe`, `restoring a backup into hg_rstage and gating it against the manifest its index names`, `restore drill finished`; the flags' help texts and the commands' `Short` and `Long` texts (below); unexported package `config` names `storageIntegrityScratchPrefixPattern`, `storageIntegrityMaxChainLinksLimit` (30), `storageIntegrityBackupKeyRefusals`, `(StorageIntegrityConfig).validateStorageIntegrityJob() []error`, `refuseStorageIntegrityBackupKeys(data []byte) error`; unexported package `standalone` names `storageIntegrityOwnerStatusMethod`, `storageIntegrityOwnerStatusTimeout` (30 s), `storageIntegrityArbiterReadTimeout` (5 min), `storageIntegrityBoundedManifests` (methods `Latest`, `Manifest`, `explain`), `storageIntegrityBackupDeps`, `defaultStorageIntegrityBackupDeps`, `openStorageIntegrityArbiterManifests`, `runStorageIntegrityBackup`, `runStorageIntegrityRestoreDrill`, `storageIntegrityBackupJob`, `openStorageIntegrityBackupJob`, `storageIntegrityOwnerSchemas`, `newStorageIntegrityOwnerSchemas`, `writeStorageIntegrityJSONLine`; package `commands` `newBackupCommand`, `newRestoreDrillCommand`; test-only names `storageIntegrityTestBucketURL`, `storageIntegrityBackupJobYAML`, `validStorageIntegrityBackupJobConfig`, `validStorageIntegrityRestoreDrillConfig` (config), `backupTest*` constants and fixtures, `backupTestRecording`, `backupTestConn`, `backupTestManifests`, `backupTestDeps`, `setBackupTestEnv`, `restoreDrillTestConfig`, `drillTestVerdict`, `requireOneJSONLine`, `fixedOwnerStatuses`, `startOwnerStatusRPC`, `drillTestSchemaJSON`, `blockingManifests`, `answeringManifests` (standalone); the test `TestStorageIntegrityArbiterManifestReadsAreBounded` (standalone, beyond the contract's eleven); the README subsection `### Storage-integrity backups and restore drills`; the PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c1.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c1-25.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-25` (the ledger tool, the worktree `multi-source-s3c1-ledger-25` and the record commit are contract §19's).
+- Produces (added here, Appendix B): refusals `storage-integrity backup requires a config`, `storage-integrity restore-drill requires a config`, `storage-integrity restore-drill requires --owner-rpc: the owner host's storage RPC URL, which serves each table's schema`, `storage-integrity restore-drill --owner-rpc %q must be an http(s) URL`, `storage-integrity restore-drill --owner %d is not storage_integrity.backup.owner_indexer_id %d`, `table id %q is not <database>.<table>`; error wrappers `storage-integrity backup of indexer %d: %w`, `storage-integrity restore drill of indexer %d: %w`, `storage integrity clickhouse: %w`, `storage integrity arbiter client: %w`, `storage-integrity restore-drill --owner-rpc %s: %w`, `table %s: sentio_getStorageIntegrityTableStatus on %s: %w`, `storage integrity arbiter: reading %s took longer than %s: %w` (`the latest manifest` or `manifest <snapshot id>`), `read config file: %w`, `unmarshal config: %w` (LoadConfig's forms); log lines (stderr, never a key) `backing up hg_safe to the replica bucket`, `backed up hg_safe`, `restoring a backup into hg_rstage and gating it against the manifest its index names`, `restore drill finished`; the flags' help texts and the commands' `Short` and `Long` texts (below); unexported package `config` names `storageIntegrityScratchPrefixPattern`, `storageIntegrityMaxChainLinksLimit` (30), `storageIntegrityBackupKeyRefusals`, `(StorageIntegrityConfig).validateStorageIntegrityJob() []error`, `refuseStorageIntegrityBackupKeys(data []byte) error`; unexported package `standalone` names `storageIntegrityOwnerStatusMethod`, `storageIntegrityOwnerStatusTimeout` (30 s), `storageIntegrityArbiterReadTimeout` (5 min), `storageIntegrityBoundedManifests` (methods `Latest`, `Manifest`, `explain`), `storageIntegrityBackupDeps`, `defaultStorageIntegrityBackupDeps`, `openStorageIntegrityArbiterManifests`, `runStorageIntegrityBackup`, `runStorageIntegrityRestoreDrill`, `storageIntegrityBackupJob`, `openStorageIntegrityBackupJob`, `storageIntegrityOwnerSchemas`, `newStorageIntegrityOwnerSchemas`, `writeStorageIntegrityJSONLine`; package `commands` `newBackupCommand`, `newRestoreDrillCommand`; test-only names `storageIntegrityTestBucketURL`, `storageIntegrityBackupJobYAML`, `validStorageIntegrityBackupJobConfig`, `validStorageIntegrityRestoreDrillConfig` (config), `backupTest*` constants and fixtures, `backupTestRecording`, `backupTestConn`, `backupTestManifests`, `backupTestDeps`, `setBackupTestEnv`, `restoreDrillTestConfig`, `drillTestVerdict`, `requireOneJSONLine`, `fixedOwnerStatuses`, `startOwnerStatusRPC`, `drillTestSchemaJSON`, `blockingManifests`, `answeringManifests` (standalone); the test `TestStorageIntegrityArbiterManifestReadsAreBounded` (standalone, beyond the contract's eleven); the README subsection `### Storage-integrity backups and restore drills`; the PR body file `<scratchpad>/sn-s3c1-pr.md` (this session's scratchpad directory); the run record `$HOME/.cache/s3-ledger/record-s3c1-25.md` and its state file `$HOME/.cache/s3-ledger/record-s3c1-25` (the ledger tool, the worktree `multi-source-s3c1-ledger-25` and the record commit are contract §19's).
 
 Notes:
 - **`config` gains no arbiter-core import (contract §18).** `StorageIntegrityS3Credentials` returns the two strings and `standalone` wraps them into `objstore.Credentials`, so `config` needs nothing of `objstore`: `ValidateBackupJob` and `ValidateRestoreDrill` only require `bucket_url`, whose form is `objstore.ParseBucket`'s, checked by `standalone` before it reads the key or opens anything (refusal `storage_integrity.backup.bucket_url: %w`), and the chain cap 30 is restated as `storageIntegrityMaxChainLinksLimit`, which `TestStorageIntegrityBackupPrintsOnlyTheIndexLine` pins against `objstore.MaxChainLinksLimit`. (`config/config.go:20` imports arbiter-core's `snode` at the base already, so the contract's "`config` does not import arbiter-core" is read as "gains no arbiter-core import"; recorded in Appendix B.) Plan S3-D Task 52 consumes `StorageIntegrityS3Credentials` with this signature and parses the bucket itself.
@@ -7659,7 +7780,10 @@ Notes:
 - **Output and exit status.** stdout carries one line of JSON and nothing else (`json.Marshal`, then a newline); sentio-core's logger writes to stderr. The drill prints its verdict whether or not it passes and then returns `ErrStorageIntegrityRestoreDrillFailed`, so `main.go`'s `log.Fatal` exits 1; a drill or a backup that cannot run returns its error wrapped with the owner's id and prints nothing on stdout. A missing `--owner` or `--owner-rpc` is cobra's `required flag(s) "owner", "owner-rpc" not set`. In a pod both streams land in `kubectl logs`: the index or the verdict is the one line that starts with `{"format":"si-backup-index-v1"` or `{"format":"si-restore-drill-v1"` (`json.Marshal` writes the fields in declaration order, `format` first, while a sentio-core log line starts with a timestamp, or with `{"level"` when it logs JSON), which is how the runbook's `si_backup_run` and `si_drill` (Task 27) pick it out.
 - **Seams.** `storageIntegrityBackupDeps` holds `clickhouse.Open`, the arbiter opener and the two `Run` calls, so the standalone tests check exactly what reaches `objstore.Backuper` and `objstore.Drill` without a ClickHouse, an arbiter or a bucket; the schema-source tests serve the status method from sentio-node's own storage RPC server (`rpc.NewStorageNodeRPCServer`). `objstore`'s ClickHouse and MinIO behaviour is Task 24's `TestS3_` tests; the live proof on GCS is Task 28.
 - **Order and rollback.** `SN_COMMIT_P1` needs `HG_TAG_P1`, `CORE_TAG_P1` and `SN_COMMIT` on `main`. Merging runs only CI's `docker-push` (`latest` and `sha-<SN_COMMIT_P1>`); this task never dispatches `Release Devnet` or `Release Testnet`, and neither may run on a commit containing `SN_COMMIT_P1` during this plan (the floating `:devnet` tag that the devnet2 observer and the testnet-v2 releases follow with `pullPolicy: Always` would move pods no runbook covers). No host takes `SN_DIGEST_P1` in P1; the backup CronJobs can return to no job at all (`siBackup.enabled: false`), and a host on `SN_DIGEST` never reads `storage_integrity.backup`.
-- **Verification while drafting** (Appendix B): every hunk below was applied, step by step and from this text, to `git archive origin/main` of sentio-node (`5d2f169`) after Plan S3-B Task 12's login and owner-audit hunks in `config/config.go`, `standalone/standalone.go`, `schema_backfill/backfill.go`, `standalone/storage_integrity_smoke_test.go` and its `storageIntegrityAliasWrites` allowlist (applied from its text), with `replace` lines in a scratch `go.mod` pointing at Task 24's drafted arbiter-core (its `dataplane/objstore` and Task 23's `dataplane/chparts` and `member/gate` on `v0.14.1`, with `CORE_TAG`'s `snode.OwnerAuditMode` stubbed) and at Task 22's drafted housegate, and run with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test`: each "Expected: FAIL" was observed as written, every package passed after each implementation step, `gofmt` and `go vet` were clean and `go test ./...` passed; sixteen mutations (no owner check, a schema-less answer accepted, the `default` login allowed, a failing verdict ignored, no key refusal, one key half missing from the refusal list, `LoadAndValidate` in the job loader, an optional `--owner`, `LoadConfig` in a command, ClickHouse opened before the key is read, the config's owner ignored, a fixed scratch prefix, the bucket's form left unchecked, a chain cap above `objstore`'s, the arbiter opened without the bound, a read without its deadline) each failed the named test; the built binary, with its seams swapped for canned answers in the scratch copy only, printed exactly one JSON line on stdout and its logs on stderr, exited 0 for a passing and 1 for a failing verdict, and no stream carried the key or the password; Step 10's smoke block ran as written; Step 2's `MODULE.bazel` script ran on a `MODULE.bazel` in Plan S3-B Task 12's shape (a six-line diff) and again idempotently; `buildifier -mode=check -lint=warn` passed on the three `BUILD.bazel` files; every bash block passed `bash -n` and `shellcheck`. Bazel and gazelle were not run (they need the registries and the `git_override` fetches, and the tags do not exist yet); the `BUILD.bazel` hunks are what gazelle writes for these imports and files.
+- **Base (review, 2026-10-17).** sentio-node `origin/main` is `0828f21`, Plan S3-B's `SN_COMMIT` itself (sentio-node#197: Task 12 merged, pinning housegate `v0.20.0`, arbiter-core `v0.15.0` and arbiter-proto `v0.12.0`), so this task branches straight from it. Every Plan S3-B Task 12 name this task builds on is there in the shape it assumes: `StorageIntegrityClickhousePasswordEnv` (`config/config.go:43`), `StorageIntegrityConfig` with `ClickhouseUsername` and `SNode` last (`:58-69`), `ClickhouseOptions()` (`:78`), `decodeConfigYAML` with its `clickhouse_password` refusal (`:436-450`), `refuseStorageIntegrityClickhousePasswordKey` (`:456`), `yamlMappingValues` (`:474`), `storageIntegrityReadOnlyMethods = []string{"ClickhouseOptions"}` (`standalone/storage_integrity_bootstrap_test.go:1879`), the 47-line `commands/storage_integrity.go` and its 19-line test, the README subsections `### Storage-integrity enrolment` (`:103`) and `### Dynamic storage-integrity table set` (`:113`), the acceptance step's six-name filter (`.github/workflows/ci.yml:140`, PASS count 6 at `:155-157`) and the `@arbiter_core//snode:snode_test` step (`:169-180`). Plan S3-B Task 12's owner-audit metrics files moved the `standalone/BUILD.bazel` anchors by one to three lines and the `config/config.go` anchors by about sixty against the draft's base `5d2f169`; every replaced text is unchanged.
+- **Commit identity (user rule).** The global git identity is `uranuswch@gmail.com`, which must never author or co-author a commit on GitHub (a squash merge by `poetry <chen@sentio.xyz>` of a commit with another author adds it as a co-author). Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` before the first commit, every commit block prints the author, Step 10 checks every commit of the branch, Step 11 checks the PR's head and authors before the squash merge, and Step 12's R1 sets the same identity in the ledger worktree, which R2 checks before the push. Commit messages carry only the Claude `Co-Authored-By` line.
+- **Go on this Mac (fallback note).** If a `go` command fails with `cannot find GOROOT directory`, the shell inherited a stale `GOROOT` (a Homebrew Go that was upgraded since); `export GOROOT=/opt/homebrew/opt/go/libexec` first (Homebrew's stable path to the installed Go) and run the command again.
+- **Verified** (adversarial review, 2026-10-17): every hunk below was applied verbatim, step by step, by a script to a `git archive` of sentio-node `origin/main` `0828f21`, with `replace` lines in a scratch `go.mod` pointing at stand-ins for the two tags — housegate `origin/main` `ed24705` plus Task 22 as reviewed (for `HG_TAG_P1`) and arbiter-core `origin/main` `cfd4f42` plus Task 23 as reviewed and Task 24 as currently written (for `CORE_TAG_P1`, its `go.mod` requiring the housegate stand-in) — and run with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): the base passed `go test ./...` on the stand-ins (the `snode` delegation to `chparts` changes nothing here); Steps 3, 5 and 7 failed exactly as their Expected texts say (the ten `standalone` errors are two `storageIntegrityBackupDeps`, six `runStorageIntegrityBackup`, one `StorageIntegrityRestoreDrillOptions` and one `runStorageIntegrityRestoreDrill`); Steps 4, 6 and 8 passed their named tests and `go test ./...`, also with `-race` for the three packages; `gofmt -l` over every tracked Go file and `go vet ./...` were clean; Step 9's counts printed `1`, `1`, `4`, `1`; Step 1's checks, run against scratch tags of the two stand-ins, printed `SN_COMMIT is in HEAD`, an empty diff, `1` four times, the six `objstore` lines, `<tag>:dataplane/objstore/bucket.go:1`, the two BUILD lines, `<tag>:snode/promote_test.go:1` and the three `go.mod` lines; Step 2's `MODULE.bazel` script gave the six-line diff on the real `MODULE.bazel` and changed nothing on a second run; Step 10's smoke block printed its Expected text byte for byte. Eight mutations each failed a named test (the key read after ClickHouse is opened, the config's owner unchecked, the arbiter opened without the bound, only Active schemas accepted, one key half missing from the refusal list, `LoadAndValidate` in the job loader, the verdict printed only when it passes, merge keys ignored by `yamlMappingValues`). Plan S3-D Task 52's greps of this task's `config` and `standalone` lines and Plan S3-C4's anchors on `newRestoreDrillCommand` match the result. `buildifier -mode=check -lint=warn` passed on the three `BUILD.bazel` files, whose hunks list the new sources and the one new dep of each target in gazelle's sort order. Bazel and gazelle were not run: offline, sentio-core's Go dependencies (for example `github.com/soheilhy/cmux v0.1.5`) and gazelle's own (`bazelbuild/buildtools`) are not in any local cache, and the tags do not exist yet; Step 10 is the first Bazel proof. Every bash block passes `bash -n` and `shellcheck` with placeholders filled.
 
 - [ ] **Step 1: Worktree, ledger and contract check**
 
@@ -7672,17 +7796,44 @@ bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/
 
 Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3c1` (expanded) on branch `urwt/claude/multi-source-s3c1` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
 
-The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
+Set the worktree's own commit identity before anything is committed (local):
+
+```bash
+W=<worktree path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config user.name; git -C "$W" config user.email
+```
+
+Expected: `poetry` and `chen@sentio.xyz`. The global identity `uranuswch@gmail.com` must never author a commit of this task: GitHub would add it as a co-author of the squash merge.
+
+The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19 (this plan's Appendix A), verbatim, ending with one newline after `    main(sys.argv[1:])`; an earlier copy is overwritten. Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" ref "$h" s3c1
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+echo "$ref"
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" && echo "s3-ledger.py is contract §19 of $ref"
 python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P1 CORE_TAG_P1 SN_COMMIT PROTO_TAG
 python3 -I "$L/s3-ledger.py" empty "$h" SN_COMMIT_P1 SN_DIGEST_P1
 ```
 
-Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then `HG_TAG_P1=v…`, `CORE_TAG_P1=v…` (Task 22's and Task 24's records, after their R4), `SN_COMMIT=<40 hex>` (Plan S3-B Task 12's, read on `origin/main`), `PROTO_TAG=v…` (Plan S3-A's), then `s3-ledger: SN_COMMIT_P1 SN_DIGEST_P1 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. A `stop` (`no plan 's3c1'`: the plans branch is not on origin yet; a value not recorded yet; or `SN_COMMIT_P1` recorded already, which means this task ran before): stop and ask. Every `HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; SN_COMMIT=<ledger>; PROTO_TAG=<ledger>` prefix below takes these values.
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), `s3-ledger.py is contract §19 of <that ref>`, then `HG_TAG_P1=v…`, `CORE_TAG_P1=v…` (Task 22's and Task 24's records, after their R4), `SN_COMMIT=<40 hex>` (Plan S3-B Task 12's, read on `origin/main`), `PROTO_TAG=v…` (Plan S3-A's), then `s3-ledger: SN_COMMIT_P1 SN_DIGEST_P1 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask (never copy the tool from the ledger copy, never edit the plan). A `ref` that stops with `plan s3cf is … but …` means the tool is an older text of contract §19, whose `KEY` took the s3cf status, scoping and names-index files for a plan: rewrite it from the plan being executed; if that text stops the same way, stop and ask. Any other `stop` (`no plan 's3c1'`: the plans branch is not on origin yet; a value not recorded yet; or `SN_COMMIT_P1` recorded already, which means this task ran before): stop and ask. Every `HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; SN_COMMIT=<ledger>; PROTO_TAG=<ledger>` prefix below takes these values.
 
 Remote read (tag fetches): needs explicit user confirmation in chat before running.
 
@@ -7705,7 +7856,7 @@ git -C "$C" show "$CORE_TAG_P1":go.mod | grep -E "housegate/housegate $HG_TAG_P1
 git -C "$H" show "$HG_TAG_P1":go.mod | grep 'sentioxyz/arbiter-proto '
 ```
 
-Expected: HEAD is `SN_COMMIT` or a descendant (`SN_COMMIT is in HEAD`) and the diff is empty (every file this task touches is as Plan S3-B Task 12 left it; otherwise re-read each changed file before applying a hunk); `1`, `1`, `1`, `1` (Plan S3-B Task 12's YAML refusal, its helper, its `StorageIntegrityConfig` layout and its allowlist); six `dataplane/objstore` lines (`ParseBucket`, `NewArbiterManifests`, `NewScratchNamer`, the two `Run` methods, `MaxChainLinksLimit`) in `CORE_TAG_P1`; `<CORE_TAG_P1>:dataplane/objstore/bucket.go:1` (the bucket refusal, once, outside the tests); the `objstore` go_library's name and importpath; one `snode` file with count `1` (the CI step's test still exists after Task 23's extraction); arbiter-core's `go.mod` requiring `github.com/housegate/housegate <HG_TAG_P1>` and `github.com/sentioxyz/arbiter-proto <PROTO_TAG>`; housegate's requiring `github.com/sentioxyz/arbiter-proto v0.11.0` (contract §16). If a name differs, stop and reconcile with Tasks 22–24 instead of improvising.
+Expected: HEAD is `SN_COMMIT` or a descendant (`SN_COMMIT is in HEAD`; at review time `origin/main` was `SN_COMMIT` itself) and the diff is empty (every file this task touches is as Plan S3-B Task 12 left it; otherwise re-read each changed file before applying a hunk); `1`, `1`, `1`, `1` (Plan S3-B Task 12's YAML refusal, its helper, its `StorageIntegrityConfig` layout and its allowlist); six `dataplane/objstore` lines (`ParseBucket`, `NewArbiterManifests`, `NewScratchNamer`, the two `Run` methods, `MaxChainLinksLimit`) in `CORE_TAG_P1`; `<CORE_TAG_P1>:dataplane/objstore/bucket.go:1` (the bucket refusal, once, outside the tests); the `objstore` go_library's name and importpath; one `snode` file with count `1` (the CI step's test still exists after Task 23's extraction); arbiter-core's `go.mod` requiring `github.com/housegate/housegate <HG_TAG_P1>` and `github.com/sentioxyz/arbiter-proto <PROTO_TAG>`; housegate's requiring `github.com/sentioxyz/arbiter-proto v0.11.0` (contract §16). If a name differs, stop and reconcile with Tasks 22–24 instead of improvising.
 
 - [ ] **Step 2: Pins**
 
@@ -7776,7 +7927,10 @@ Both are pinned in go.mod, bazel_dep and git_override ($HG_SHA,
 $CORE_SHA); arbiter-proto stays $PROTO_TAG in go.mod only.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 3: Write the failing job-config tests**
 
@@ -8212,7 +8366,7 @@ func refuseStorageIntegrityBackupKeys(data []byte) error {
 }
 ```
 
-In `config/config.go` (`StorageIntegrityConfig` gains `Backup` after Plan S3-B Task 12's `SNode` line, base `:57-58`), replace:
+In `config/config.go` (`StorageIntegrityConfig` gains `Backup` after Plan S3-B Task 12's `SNode` line, `:67-69`), replace:
 
 ```go
 	ClickhouseUsername string                `yaml:"clickhouse_username"`
@@ -8232,7 +8386,7 @@ with:
 }
 ```
 
-In `config/config.go` (`decodeConfigYAML` as Plan S3-B Task 12 left it, base `:376-390`), replace:
+In `config/config.go` (`decodeConfigYAML` as Plan S3-B Task 12 left it, the end of its doc comment and its body, `:436-450`), replace:
 
 ```go
 // It also refuses a storage_integrity.clickhouse_password key, whatever its
@@ -8292,7 +8446,7 @@ with:
     ],
 ```
 
-In `config/BUILD.bazel` (gazelle, `go_test` srcs, `:26`), replace:
+In `config/BUILD.bazel` (gazelle, `go_test` srcs, `:27`), replace:
 
 ```starlark
     srcs = ["config_test.go"],
@@ -8311,7 +8465,7 @@ The two `BUILD.bazel` hunks are what `bazel run //:gazelle` writes for the new f
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config)" && GOWORK=off go test ./config/ -count=1 -run 'TestLoadStorageIntegrityJobConfig|TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys|TestStorageIntegrityBackupJobValidation|TestStorageIntegrityRestoreDrillValidation|TestStorageIntegrityS3Credentials' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
-Expected: no unformatted file; `--- PASS:` for `TestLoadStorageIntegrityJobConfigNeedsNoNodeConfigAndNoPrivateKey`, `TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys`, `TestStorageIntegrityBackupJobValidation`, `TestStorageIntegrityRestoreDrillValidation` and `TestStorageIntegrityS3CredentialsComeOnlyFromTheEnvironment`, then `ok  	compute-network-node/config`; the full run prints nothing (every package PASSES: Plan S3-B's `TestDecodeConfigYAMLRefusesAStorageIntegrityClickhousePasswordKey` and every host config test are unchanged).
+Expected: no unformatted file; `--- PASS:` for `TestLoadStorageIntegrityJobConfigNeedsNoNodeConfigAndNoPrivateKey`, `TestDecodeConfigYAMLRefusesStorageIntegrityBackupKeys`, `TestStorageIntegrityBackupJobValidation`, `TestStorageIntegrityRestoreDrillValidation` and `TestStorageIntegrityS3CredentialsComeOnlyFromTheEnvironment`, then `ok  	compute-network-node/config`; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print: every package PASSES; Plan S3-B's `TestDecodeConfigYAMLRefusesAStorageIntegrityClickhousePasswordKey` and every host config test are unchanged).
 
 ```bash
 W=<worktree path>
@@ -8330,7 +8484,10 @@ a config file that sets storage_integrity.backup.access_key_id or
 secret_access_key is refused whatever the value. Hosts ignore the block.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 5: Write the failing backup and restore-drill tests**
 
@@ -9266,7 +9423,7 @@ with:
         "storage_integrity_contract_snapshot.go",
 ```
 
-In `standalone/BUILD.bazel` (gazelle, `go_library` deps, `:37-38`), replace:
+In `standalone/BUILD.bazel` (gazelle, `go_library` deps, `:38-39`), replace:
 
 ```starlark
         "@arbiter_core//dataplane/dastore",
@@ -9281,7 +9438,7 @@ with:
         "@arbiter_core//dataplane/objstore",
 ```
 
-In `standalone/BUILD.bazel` (gazelle, `go_library` deps, `:58-59`), replace:
+In `standalone/BUILD.bazel` (gazelle, `go_library` deps, `:59-61`), replace:
 
 ```starlark
         "@housegate//pkg/registry",
@@ -9298,7 +9455,7 @@ with:
         "@housegate//pkg/rewriter",
 ```
 
-In `standalone/BUILD.bazel` (gazelle, `go_test` srcs, `:80-81`), replace:
+In `standalone/BUILD.bazel` (gazelle, `go_test` srcs, `:81-82`), replace:
 
 ```starlark
         "storage_integrity_acceptance_ch_test.go",
@@ -9313,7 +9470,7 @@ with:
         "storage_integrity_bootstrap_test.go",
 ```
 
-In `standalone/BUILD.bazel` (gazelle, `go_test` deps, `:111-112`), replace:
+In `standalone/BUILD.bazel` (gazelle, `go_test` deps, `:114-115`), replace:
 
 ```starlark
         "@arbiter_core//dataplane",
@@ -9332,7 +9489,7 @@ Every other import of the two files (go-ethereum's `rpc`, housegate's `pkg/regis
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l standalone)" && GOWORK=off go test ./standalone/ -count=1 -run 'TestStorageIntegrityBackup|TestStorageIntegrityRestoreDrill|TestStorageIntegrityArbiterManifestReadsAreBounded' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
-Expected: no unformatted file; `--- PASS:` for `TestStorageIntegrityBackupPrintsOnlyTheIndexLine`, `TestStorageIntegrityBackupOpensTheClickHouseAsTheConfiguredUser`, `TestStorageIntegrityRestoreDrillExitsNonZeroUnlessTheVerdictPasses`, `TestStorageIntegrityRestoreDrillTakesSchemasFromTheOwnersStatusRPC`, `TestStorageIntegrityRestoreDrillRefusesATableWithoutASchema` and `TestStorageIntegrityArbiterManifestReadsAreBounded`, then `ok  	compute-network-node/standalone`; `go vet` prints nothing; the full run prints nothing (the canonical-snapshot and listener source-shape tests of `standalone` pass unchanged: `Run` is untouched).
+Expected: no unformatted file; `--- PASS:` for `TestStorageIntegrityBackupPrintsOnlyTheIndexLine`, `TestStorageIntegrityBackupOpensTheClickHouseAsTheConfiguredUser`, `TestStorageIntegrityRestoreDrillExitsNonZeroUnlessTheVerdictPasses`, `TestStorageIntegrityRestoreDrillTakesSchemasFromTheOwnersStatusRPC`, `TestStorageIntegrityRestoreDrillRefusesATableWithoutASchema` and `TestStorageIntegrityArbiterManifestReadsAreBounded`, then `ok  	compute-network-node/standalone`; `go vet` prints nothing; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print; the canonical-snapshot and listener source-shape tests of `standalone` pass unchanged: `Run` is untouched).
 
 ```bash
 W=<worktree path>
@@ -9353,7 +9510,10 @@ minutes, so an arbiter outage fails the Job instead of holding it until its
 deadline. Logs go to stderr; no key or password is printed.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 7: Write the failing command test**
 
@@ -9556,7 +9716,7 @@ The `go_library` deps already hold `//config`, `//standalone` and cobra.
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l commands)" && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
-Expected: no unformatted file; `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement`, `--- PASS: TestStorageIntegrityCommandListsBackupAndRestoreDrill`, `ok  	compute-network-node/commands`; the full run prints nothing.
+Expected: no unformatted file; `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement`, `--- PASS: TestStorageIntegrityCommandListsBackupAndRestoreDrill`, `ok  	compute-network-node/commands`; the full run prints nothing (and the line exits 1, `grep -v` having nothing to print).
 
 ```bash
 W=<worktree path>
@@ -9570,13 +9730,16 @@ contract §18). Each writes one JSON line to stdout; restore-drill exits
 non-zero unless its verdict passes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 9: README**
 
 Each paragraph stays on one line.
 
-In `README.md` (the heading of the subsection after the enrolment one, `:109`), replace:
+In `README.md` (the heading of the subsection after the enrolment one, `:113`), replace:
 
 ```markdown
 ### Dynamic storage-integrity table set
@@ -9627,13 +9790,26 @@ W=<worktree path>
 git -C "$W" add -A && git -C "$W" commit -m "docs(readme): storage-integrity backup and restore-drill
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other author: `git -C "$W" commit --amend --no-edit --reset-author` after setting that identity, and check again; a commit-signing failure (`gpg failed to sign the data`) means asking the user to unlock the key, never `--no-gpg-sign`.
 
 - [ ] **Step 10: Full verification**
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
 Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`, and rerun this command); the build succeeds; every test PASSES (the ClickHouse-gated ones skip).
+
+Then every commit of the branch (local):
+
+```bash
+W=<worktree path>
+git -C "$W" log --oneline origin/main..HEAD
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+```
+
+Expected: the five commits of Steps 2, 4, 6, 8 and 9 above `origin/main`, newest first (`docs(readme): storage-integrity backup and restore-drill`, `feat(storage-integrity): sentio-node storage-integrity backup and restore-drill`, `feat(storage-integrity): backup and restore-drill runners on arbiter-core objstore`, `feat(config): storage_integrity.backup and the job config of the backup and restore-drill commands`, `chore(deps): pin housegate <HG_TAG_P1> and arbiter-core <CORE_TAG_P1>`; six with Step 10's `chore(build): gazelle` on top if gazelle changed a file) and exactly one author line, `poetry <chen@sentio.xyz>`. Any other author: stop, set Step 1's worktree identity and rewrite the authors (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`) before anything is pushed.
 
 Then the built binary (local only; nothing is dialed: each run stops at a refusal before any connection is used):
 
@@ -9686,11 +9862,11 @@ refused: a key in the config file
 
 - [ ] **Step 11: PR, CI and merge**
 
-sentio-node always goes through a PR (`CLAUDE.md` "Pull Request Workflow"). Write the body (local file, outside the worktree):
+sentio-node always goes through a PR (`CLAUDE.md` "Pull Request Workflow"). Write the body (local file in this session's scratchpad directory, outside the worktree):
 
 ```bash
-HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>
-BODY="$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c1.pr-body.md"
+HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>; S=<scratchpad directory>
+BODY="$S/sn-s3c1-pr.md"
 sed -e "s|@HG_TAG_P1@|$HG_TAG_P1|g" -e "s|@CORE_TAG_P1@|$CORE_TAG_P1|g" -e "s|@PROTO_TAG@|$PROTO_TAG|g" > "$BODY" <<'PRBODY'
 Host-side commands of stage 3 P1 of the multi-source storage-integrity network (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §16 P1, §8.4, §8.6; Plan S3-C1 Task 25, contract §18).
 
@@ -9718,12 +9894,14 @@ Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
+W=<worktree path>; S=<scratchpad directory>
 cd "$W" && git push -u origin urwt/claude/multi-source-s3c1
 gh pr create --repo sentioxyz/sentio-node --base main --head urwt/claude/multi-source-s3c1 \
   --title 'feat(storage-integrity): multi-source SI stage 3 P1 backup and restore-drill commands' \
-  --body-file "$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c1.pr-body.md"
+  --body-file "$S/sn-s3c1-pr.md"
 ```
+
+Expected: the push creates the remote branch; `gh` prints the PR URL, whose last path element is `<n>` below.
 
 Remote read (CI status): needs explicit user confirmation in chat before running.
 
@@ -9733,11 +9911,25 @@ gh pr checks <n> --repo sentioxyz/sentio-node --watch
 
 Expected: `build` and `integration-clickhouse` pass (the acceptance step's PASS count is unchanged; `@arbiter_core//snode:snode_test` runs on `CORE_TAG_P1`). On a failure, read the log (`gh run view <id> --repo sentioxyz/sentio-node --log-failed`), fix it on the branch with a new commit, and ask again before pushing.
 
+Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit on it is this worktree's identity (the `gh` call is a remote read, under the same confirmation as the checks above):
+
+```bash
+W=<worktree path>
+[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+gh pr view <n> --repo sentioxyz/sentio-node --json commits --jq '.commits[].authors[].email' | sort -u
+```
+
+Expected: `PR head is HEAD`, then exactly `poetry <chen@sentio.xyz>`, then exactly `chen@sentio.xyz`. Anything else: stop; nothing is merged (rewrite the authors as in Step 10, push with confirmation, and check again).
+
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
 ```bash
 gh pr merge <n> --repo sentioxyz/sentio-node --squash
+gh pr view <n> --repo sentioxyz/sentio-node --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
+
+Expected: `MERGED`, the 40-hex squash-merge commit (`SN_COMMIT_P1` in Step 12) and the merge time; keep both for the run record.
 
 - [ ] **Step 12: Record `SN_COMMIT_P1` and `SN_DIGEST_P1`**
 
@@ -9770,7 +9962,7 @@ SN_COMMIT_P1=<sha>; SN_DIGEST_P1=<sha256:… printed above>
 docker run --rm --platform linux/amd64 "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P1@$SN_DIGEST_P1" storage-integrity --help 2>/dev/null | sed -n '/^Available Commands:/,/^$/p'
 ```
 
-Expected: the three `Available Commands` lines of Step 10 (`backup`, `enrollment-statement`, `restore-drill`): the image's entrypoint `/sentio-node`, which Task 26's CronJob runs as `["/sentio-node", "storage-integrity", "backup", "--config-path", "/etc/si-backup/config.yaml"]`, has both commands.
+Expected: the three `Available Commands` lines of Step 10 (`backup`, `enrollment-statement`, `restore-drill`): the image's binary `/sentio-node` (its `ENTRYPOINT`; Task 26's CronJob runs it as `command: ["/sentio-node", "storage-integrity", "backup", "--config-path", "/etc/si-backup/config.yaml"]`) has both commands. The image is `linux/amd64` only; on this arm64 Mac OrbStack runs it under Rosetta emulation. If no amd64 emulation is available, say so in the run record: the index digest, the revision label and the `go.mod` requires above stand, and Task 28's first backup run is then the first run of the image.
 
 Record both, never predicting either, with the record procedure of contract §19 (decision D23). First write the run record `$HOME/.cache/s3-ledger/record-s3c1-25.md` with the Write tool, one paragraph of what the commands above printed: `sentioxyz/sentio-node#<n>` squash-merged as `<SN_COMMIT_P1>` on <merge date> UTC; `CI Build` run `<id>` with `docker-push` `success`; `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>`, index digest `<SN_DIGEST_P1>`, revision label `<SN_COMMIT_P1>`; `go.mod` at `<SN_COMMIT_P1>` requires housegate `<HG_TAG_P1>`, arbiter-core `<CORE_TAG_P1>` and arbiter-proto `<PROTO_TAG>`; the image's `/sentio-node storage-integrity --help` lists `backup` and `restore-drill`.
 
@@ -9786,22 +9978,24 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" SN_COMMIT_P1="$SN_COMMIT_P1" SN_DIGEST_P1="$SN_DIGEST_P1" || exit 1
 git -C "$d" commit -q -m "docs(plan): record SN_COMMIT_P1 and SN_DIGEST_P1 of Plan S3-C1 (Task 25)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
 git -C "$d" show --stat --oneline HEAD | cat
+git -C "$d" log -1 --format='%an <%ae>'
 ```
 
-Expected: `s3-ledger: Task 25 recorded SN_COMMIT_P1=…, SN_DIGEST_P1=… and its run record 'sentio-node release' in …`, then one commit of the plan file only (its two rows and the run-record item). A `stop` writes nothing: report it and ask.
+Expected: `s3-ledger: Task 25 recorded SN_COMMIT_P1=…, SN_DIGEST_P1=… and its run record 'sentio-node release' in …`, then one commit of the plan file only (` 1 file changed, 3 insertions(+), 3 deletions(-)`, plus one insertion per sub-item: its two rows and the run-record item), authored `poetry <chen@sentio.xyz>` (the ledger worktree's own identity; R2 refuses any other). A `stop` writes nothing: report it and ask.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 25's ledger record (Appendix C of Plan S3-C1: SN_COMMIT_P1, SN_DIGEST_P1 and the run record 'sentio-node release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=25
 d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
@@ -9811,7 +10005,7 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 25's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 25's ledger record"); before it, `gh pr view <number> --repo housegate/housegate --json commits --jq '.commits[].authors[].email' | sort -u` must print exactly `chen@sentio.xyz`; after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -9823,15 +10017,13 @@ Expected: `SN_COMMIT_P1=<the value written>`, `SN_DIGEST_P1=<the value written>`
 
 ---
 
----
-
 ## Task 26: production — the replica bucket and its service accounts, `si_backup` and the P1 staging installation, the `siBackup` CronJob outside the host checksum, the backup alerts, the key and login scripts, render tests (S3-C1)
 
 Contract §18 (its production part: Terraform, keys and logins, ClickHouse users, `siBackup`, monitoring, `test_render.py`), spec §16 P1 ("tracks paused: none", backup keys that list, read and create on their own prefix and never delete, read-only restore keys), §14 (the lockdown rules for every new ClickHouse user: literal hash, users.d reload, grant probe) and §8.2 as amended (decision D36: `si_restore`'s explicit `hg_rstage` rights, never `ALL`), clarifications K23 (ClickHouse-side object-store access with keys from the job's environment), K24 (no delete; the lock remover only when `P1_BACKUP_DELETE` is `lock`), K25 (list confinement by one managed folder per prefix), K26 (prefixes, accounts, schedules) and K27 (the drill on a staging installation). This task gives production everything P1's live task (Task 28) applies, inert on merge: (1) the Terraform of the versioned replica bucket `sentio-352722-si-devnet2-si-v2-replica`, one backup service account per owner and one mechanics writer on a no-delete custom role, each granted only on the managed folder of its own prefix, the lock remover gated on `P1_BACKUP_DELETE`, and four read-only restore service accounts; (2) the installation-wide ClickHouse user `si_backup` (`clickhouse.access.backupUser` in charts/storage-integrity, a users.d reload) with `SI_BACKUP_GRANTS`; (3) the grant probe rows of `si_backup` and `si_restore`, measured; (4) `make-si-backup-keys.sh` and the `p1-staging` and `--add-user` modes of `make-clickhouse-logins.sh`, after which the user creates the P1 staging and `si_backup` logins in their own terminal; (5) the P1 staging installation `storage-integrity-si-v2-p1-staging`, born locked with `si_backup` and the staging-only `si_restore`; (6) the `charts/sentio-node` `siBackup` CronJob and its ConfigMap, outside the host's `checksum/config`, and a `siBackup` block (off) in each devnet2 SI host overlay; (7) the backup alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` (`monitoring.backups`, nothing listed); (8) the render tests that keep all of it equal to the contract and follow Task 28's rollout. Nothing here is applied, synced or pushed: Task 27 adds the runbook and opens the P1 PR from this branch, and every release renders byte-identically to the branch base (Step 18).
 
 Worktree: production `multi-source-s3c1` on branch `urwt/claude/multi-source-s3c1`, created from `origin/main` after `E_PR` merged and `E_END` and `INDEXER_C_ID` are recorded (contract §19). Every command below runs in its own Bash call prefixed with `W=<the worktree path>; P="$HOME/si-devnet2-stage3-p1-prep";` (the path Step 1 prints; `$P` is this task's local directory).
 
-**Files** (line anchors are production at `E_END`: the base `75514e3de` with Plan S3-B's Tasks 13, 16 and 19 merged and its live commits of Tasks 15, 18 and 21 applied, as the plan header's hunk rule says; each diff below was generated against that state and applies with `git apply` or by hand on top of it):
+**Files** (line anchors are production at `E_END`: `origin/main` at review time, `e21190b06`, whose SI paths are byte-identical to `7e08b6ea5` (Plan S3-B's P0 PR #743, that is Tasks 13–14, and all of Task 15's devnet2 commits), with Plan S3-B's Tasks 16 and 19 merged, Task 20's documents and the live commits of Tasks 18 and 21 applied, as the plan header's hunk rule says; each diff below was re-anchored on that state as the review replayed it and applies with `git apply` without an offset, or by hand where Plan S3-B's execution moved a line; Notes, "Base (review)"):
 - Create: `terraform/storage_integrity_devnet2_si_v2_replica.tf`
 - Modify: `charts/storage-integrity/values.yaml` (`clickhouse.access` after `lockDefault` and `passwordSha256`; `monitoring` before `runbookURL`)
 - Modify: `charts/storage-integrity/values.schema.json` (`clickhouse.access`; `monitoring`)
@@ -9868,6 +10060,10 @@ Notes:
 - **Plan S3-B tests extended in place** (beyond the contract's four), each keeping every assertion it had: `test_indexer_b_source_clickhouse_carries_the_network_source_profile`, `test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk` and `test_devnet2_clickhouse_logins_follow_the_rollout` (a manifest's or the overlay's own `si_backup` state), `test_si_clients_take_clickhouse_passwords_only_from_secrets` (the job's password environment), `test_legacy_profile_keeps_its_clickhouse_users` (`backupUser` is refused on the legacy profile), `test_logins_script_writes_only_hashes_and_never_prints_a_password` (through `PLANS["p1-staging"]`), `test_default_renders_no_monitoring`, `test_every_rule_reads_only_this_networks_series`, `test_monitoring_settings_fail_closed` and `test_devnet2_monitoring_follows_the_rollout` (the backups group); `MonitoringTest.MONITORED` lists two probe CronJobs, so every monitoring test renders the group.
 - **Contract text adjusted (Appendix B).** The CI paths already hold `scripts/storage-integrity/**` since Plan S3-B Task 16, so Step 18 adds the other three paths only; `make-si-backup-keys.sh` passes `--project=sentio-352722` to `gcloud storage hmac create`, so the key belongs to the bucket's project whatever the user's gcloud default; the probe rows' `SETTINGS` (above); the drill's `hg_rstage` table in the corpus is `hg_rstage.si_grant_probe_restore (v Int64)`, the corpus's own naming, for the contract's `hg_rstage.probe (a UInt8)`.
 - **Verification while drafting** (2026-10-15, on `git archive` of production `origin/main` under the scratchpad, without the two `k8s-sea/clickhouse` files the security rule forbids, with Plan S3-B's Tasks 13, 16 and 19 applied from their text and the live states of its Tasks 15, 18 and 21 simulated): every step below replayed with stand-in ledger values (`INDEXER_C_ID` 2, `P1_BACKUP_DELETE` none) and stand-in staging hashes, each failing run printing what its step quotes and each implementation passing, `Ran 146 tests` / `OK` at the end (N = 127 at `E_END`); the three `helm lint --strict` profiles and `helm lint --strict charts/sentio-node` pass; `render-inertness.sh` prints eight `identical` lines; `terraform fmt -check` passes on the filled file for `INDEXER_C_ID` 2 and 13 and both delete rights; both scripts pass `bash -n` under bash 5.3 and 3.2, `shellcheck`, and their tests under both bashes; eleven mutations (a delete permission in the writer role, the writer role bound on the bucket instead of its managed folder (re-run for the managed-folder layout, Appendix B "Review fixes"), `objectAdmin` for the readers, `siBackup` inside the host checksum, a fourth env var, a `SELECT` grant for `si_backup`, the key script printing the secret, `ALL ON hg_rstage.*` for `si_restore`, an alert selecting `job`, a refused probe row marked ok, the logins script printing a password) each fail the named test; the grant probe corpus as above.
+- **Base (review, 2026-10-17).** production `origin/main` is `e21190b06`, `7e08b6ea5` plus three commits outside every SI path: Plan S3-B's P0 PR #743 (Tasks 13–14) and all of Task 15's devnet2 commits (arbiter v0.13.0, both SNodes on `0828f21` in report mode, monitoring on, then indexer-b's and indexer-a's owner audits in repair mode) are merged; Tasks 16–21 are not. The review replayed Plan S3-B's Tasks 16, 19 and 20 from their text and the live states of its Tasks 18 and 21 as stand-ins on that base (the `E_END` state this task starts from), then this task verbatim. Every hunk applied, at the offsets PR #743's extra test and Plan S3-B's execution introduce (`test_render.py` +10 or +11 near the top and +31 near the end, `_helpers.tpl` −1, two host overlays +1, `monitoring.yaml` +3, the network overlay +2, `MONITORING_ALERTS` +2); the diffs below carry the measured line numbers. `origin/main` runs 103 tests, one more than Plan S3-B Task 13's text, so N at `E_END` is 128, not 127. The host checksum line is `charts/sentio-node/templates/node.yaml:503` at `origin/main` and `:555` after Plan S3-B's Tasks 16 and 19 (the plan header's `:486` is the old base's); it still hashes `node.config`, `housegate`, `storageIntegrity` and `housegateSidecar` only.
+- **Commit identity (user rule).** The global git identity is `uranuswch@gmail.com`, which must never author or co-author a commit on GitHub (a squash merge by `poetry <chen@sentio.xyz>` of a commit with another author adds it as a co-author). Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` before the first commit, every commit block prints the author, Step 18 checks every commit of the branch, and Task 27 checks them again before the P1 PR's squash merge. Commit messages carry only the Claude `Co-Authored-By` line.
+- **Open questions settled in review (status §4.2).** (1) The grant probe is measured on CI's `26.3.37.3` and on the deployed image: 143 rows and 0 mismatches on each, `si_backup` 7 and `si_restore` 13 `system.grants` rows. (2) `timeZone: Etc/UTC` needs Kubernetes 1.27 or later; sea runs 1.33.5 (`k8s-sea/_cluster/kubespray.sh:5`, upgrade runbook to 1.34.3), so no live check is needed. (3) The backup rules read `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_status_failed` and `kube_job_owner` from the kube-state-metrics of sea's `victoria-metrics-k8s-stack` (chart 0.68.0, whose default rules already read its `kube_job_failed`, `k8s-sea/monitoring/vm_rules_values.yaml`); runbook §11 (Task 27) checks each series per CronJob before the monitoring commit. (4) K24 and K25 stay the user's: Step 1 stops for `lock` without the user's confirmed spec amendment (on `main` or the plans branch) and asks the user to confirm K25's layout before Step 4. (5) Task 28's `si_render_diff` expectations hold: enabling a job adds exactly its ConfigMap and CronJob, `backupUser` changes only the network CHI, and listing the CronJobs changes only the VMRule.
+- **Verified (adversarial review, 2026-10-17).** On a `git archive` of production `origin/main` `7e08b6ea5` (SI paths as `e21190b06`), without the two `k8s-sea/clickhouse` files the security rule forbids, with Plan S3-B's Tasks 16, 19 and 20 applied from their text and the live states of Tasks 18 and 21 simulated, every block of this task was replayed verbatim by a script, with stand-in ledger values (`INDEXER_C_ID` 2, `P1_BACKUP_DELETE` none) and stand-in hashes files: Step 1's baseline printed `1 1 1 1 1 1 1 `, `1`, `1`, `Ran 128 tests` / `OK`; every failing run printed exactly what its step quotes (with N = 128) and every implementation passed, `Ran 147 tests` / `OK` at the end; the four `helm lint --strict` runs passed; `render-inertness.sh` printed eight `identical` lines; no token was left; `terraform fmt -check` passed, and `terraform validate` passed offline (`init -backend=false` with the locally cached google provider 4.77.0, the two managed-folder resources left out because that provider predates them; their arguments checked against provider 7.3.0's documentation) for `none`, `lock` and a bad value (the precondition then refuses at plan time), with `terraform console` giving four writers, four readers and a lock-remover map empty for `none` and equal to the writers for `lock`; the grant probe corpus as above on both images; `bash -n` (bash 5.3 and 3.2) and `shellcheck` 0.11 on both scripts and every bash block (placeholders filled; one SC2016 info on Step 11's intended single-quoted go-template), `fish -n` on Step 11's fish block; Step 11's hashes check against stand-in hashes files printed `hashes ok: 9 distinct, in 4 files`. Task 28's seven single-service commits (U-b, U-c, U-n, J-b, J-c, J-a, M), made with Task 28's own `p1-edit.py` on a clone of the result, kept `Ran 147 tests` / `OK` at every commit. Fifteen mutations each failed their named test: a delete permission in the writer role, the writer role bound on the bucket, `objectAdmin` for the readers, the lock remover without its gate, `siBackup` in the host checksum, a fourth env var, a Secret name in the job config, a `SELECT` on `hg_safe` for `si_backup`, `ALL ON hg_rstage.*` for `si_restore`, a backup rule selecting `job`, a refused probe row marked ok, the key script printing the secret, `--add-user` printing a password, a backup job retried in place, and `backupUser` rendered without `users`.
 
 - [ ] **Step 1: Worktree, ledger values and baseline (read-only)**
 
@@ -9880,23 +10076,37 @@ python3 -I "$L/s3-ledger.py" ref "$h" s3c1
 python3 -I "$L/s3-ledger.py" get "$h" INDEXER_C_ID E_END SN_COMMIT_P1 SN_DIGEST_P1 HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE
 ```
 
-Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then seven lines `INDEXER_C_ID=<n>`, `E_END=<YYYY-MM-DD>`, `SN_COMMIT_P1=<40 hex>`, `SN_DIGEST_P1=sha256:<64 hex>`, `HG_TAG_P1=v…`, `CORE_TAG_P1=v…`, `P1_BACKUP_DELETE=none` or `lock`. A `stop` (`no plan 's3c1'`, or a value not recorded yet): stop and ask. When `P1_BACKUP_DELETE=lock`, the spec must carry the user's amendment (K24) before anything below; this read is local:
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then seven lines `INDEXER_C_ID=<n>`, `E_END=<YYYY-MM-DD>`, `SN_COMMIT_P1=<40 hex>`, `SN_DIGEST_P1=sha256:<64 hex>`, `HG_TAG_P1=v…`, `CORE_TAG_P1=v…`, `P1_BACKUP_DELETE=none` or `lock`. A `stop` (`no plan 's3c1'`, or a value not recorded yet): stop and ask. When `P1_BACKUP_DELETE=lock`, the spec must carry the user's amendment (K24) before anything below; this read is local (the housegate fetch above):
 
 ```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/housegate grep -c "not delete, except the backup's own \`.lock\`" origin/main -- docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+spec=docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md
+for r in origin/main origin/urwt/claude/ms-si-stage3-plans-cf; do printf '%s: %s\n' "$r" "$(git -C "$h" show "$r:$spec" 2>/dev/null | grep '^| P1 |' | grep -c "not delete, except the backup's own \`.lock\`")"; done
 ```
 
-Expected (only with `lock`): `origin/main:docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md:1` or more; no output means the amendment is missing: stop and ask the user to amend spec §16 P1 first.
+Expected (only with `lock`): a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR; Task 27 Step 1 runs the same check): the P1 row of spec §16 reads "… but not delete, except the backup's own `.lock`" (K24). The delete right is the user's decision: stop and ask the user in chat unless they confirm that this amendment is theirs (or approved by them) and stands; never write or open the amendment as an agent, and never go on with `lock` on two `0` counts. With `none` nothing is asked: no backup key holds a delete, and the lock remover's two resources render no instance.
+
+**K25 is the user's decision too (status §3).** This task writes K25's managed-folder layout: one managed folder per writer prefix, the writer role on its own folder only, nothing of it on the bucket. It is the default that runbook §5 proves live on GCS and that stops P1 on any differing row. Before Step 4, ask the user in chat to confirm that this layout stands. If the user chose another layout (one bucket per owner renames the bucket that Plans S3-C2, S3-C3 and S3-D read), stop: that layout is not this task's text.
 
 ```bash
 p=/Users/uranuswch/Dev/projects/sentio-network/production
 git -C "$p" cat-file -e origin/main:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml && git -C "$p" cat-file -e origin/main:k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml && echo "E_PR is on origin/main"
 git -C "$p" grep -c '"sentio-node-devnet2-indexer-c": "si_snode",' origin/main -- charts/storage-integrity/tests/test_render.py
-git -C "$p" grep -nE '^DEVNET2_MONITORED_HOSTS = .*indexer-c' origin/main -- charts/storage-integrity/tests/test_render.py | cut -c1-80
+git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | python3 -I -c 'import ast, sys; names = ("DEVNET2_MONITORED_HOSTS", "DEVNET2_MONITORED_CLICKHOUSES"); found = {node.targets[0].id: ast.literal_eval(node.value) for node in ast.parse(sys.stdin.read()).body if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names}; print(*(found[name][-1] for name in names))'
 bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" claude multi-source-s3c1
 ```
 
-Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and the `DEVNET2_MONITORED_HOSTS` line with indexer-c (Task 21's monitoring commit), then one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/production/multi-source-s3c1` (expanded): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and `sentio-node-devnet2-indexer-c storage-integrity-si-v2-indexer-c`, the last entries of `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` (Task 21's monitoring commit, whose edit tool writes each tuple one item per line, so the constants are read as Python, never with a one-line grep; `sentio-node-devnet2-indexer-b storage-integrity-si-v2-indexer-b` means E is not finished: stop), then one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/production/multi-source-s3c1` (expanded): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
+
+Set the worktree's own commit identity before anything is committed (local only, never committed):
+
+```bash
+W=<path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config user.name; git -C "$W" config user.email
+```
+
+Expected: `poetry` and `chen@sentio.xyz`. The global identity `uranuswch@gmail.com` must never author a commit of this task: GitHub would add it as a co-author of the P1 PR's squash merge. Every commit block below ends with `git -C "$W" log -1 --format='%an <%ae>'`, which must print `poetry <chen@sentio.xyz>`; any other author: stop, set this identity and run `git -C "$W" commit --amend --no-edit --reset-author` before the next step. Step 18 checks every commit of the branch, and Task 27 checks them again before the squash merge.
 
 Keep the ledger values for the fill tool (local only; it holds no secret):
 
@@ -9911,7 +10121,7 @@ Expected: `INDEXER_C_ID E_END SN_COMMIT_P1 SN_DIGEST_P1 HG_TAG_P1 CORE_TAG_P1 P1
 W=<path>; cd "$W" && git log --oneline -1 && for name in STAGE3_HOST_IMAGES MONITORING_ALERTS SI_CLICKHOUSE_GRANTS SI_MEMBER_DATABASES INDEXER_C_CHI DEVNET2_SI_RELEASES LOCKDOWN_STAGING_CHI; do grep -c "^$name = " charts/storage-integrity/tests/test_render.py; done | tr '\n' ' ' && echo && grep -c '^def probe_atoms(statement):$' charts/storage-integrity/tests/test_render.py && grep -c '^  monitoring:\|^monitoring:' k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml && test -x scripts/storage-integrity/make-clickhouse-logins.sh && test -f scripts/storage-integrity/render-inertness.sh && test ! -e terraform/storage_integrity_devnet2_si_v2_replica.tf && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 ```
 
-Expected: HEAD is `origin/main` as fetched, `1 1 1 1 1 1 1 `, `1`, `1`, then `Ran N tests` / `OK`. Record N (127 when Plan S3-B's Tasks 13, 16 and 19 carry exactly their tests); later steps expect N+2, N+4, N+7, N+9 and N+19. Anything else: stop and reconcile with Plan S3-B before applying a hunk.
+Expected: HEAD is `origin/main` as fetched, `1 1 1 1 1 1 1 `, `1`, `1`, then `Ran N tests` / `OK`. Record N: 128 when Plan S3-B's Tasks 16 and 19 carry exactly their tests (`origin/main` runs 103 since PR #743, one more than Plan S3-B Task 13's text; Task 16 adds 19 and Task 19 adds 6). Later steps expect N+2, N+4, N+7, N+9, N+17 and N+19; the outputs quoted below are the review's, measured with N = 128. Anything else: stop and reconcile with Plan S3-B before applying a hunk.
 
 - [ ] **Step 2: The fill tool (local only, never committed)**
 
@@ -10003,7 +10213,7 @@ printf '%s\n' __SHA256_P1S_DEFAULT__ > "$P/fill-smoke.txt"
 python3 -I "$P/fill-p1.py" "$P/ledger.env" "$P/fill-smoke.txt"; cat "$P/fill-smoke.txt"; rm "$P/fill-smoke.txt"
 ```
 
-Expected: the usage line `usage: fill-p1.py <ledger.env> [--staging-hashes <hashes-p1-staging.yaml>] <file>...`; `filled …/fill-smoke.txt` and three lines: `INDEXER_C_ID`, `P1_BACKUP_DELETE` (`none` or `lock`) and `SN_COMMIT_P1`; then `…/fill-smoke.txt: no value for ['__SHA256_P1S_DEFAULT__']; nothing was written` and the unchanged `__SHA256_P1S_DEFAULT__` (a staging token needs `--staging-hashes`). A refusal naming `ledger.env` means Step 1's values are missing or malformed: stop. Remove `$P` at the end of Task 27 (it holds no secret).
+Expected: the usage line `usage: fill-p1.py <ledger.env> [--staging-hashes <hashes-p1-staging.yaml>] <file>...`; `filled …/fill-smoke.txt` and the three recorded values, one per line: `<INDEXER_C_ID>`, `none` or `lock`, and `<SN_COMMIT_P1>` (40 hex); then `…/fill-smoke.txt: no value for ['__SHA256_P1S_DEFAULT__']; nothing was written` and the unchanged `__SHA256_P1S_DEFAULT__` (a staging token needs `--staging-hashes`). A refusal naming `ledger.env` means Step 1's values are missing or malformed: stop. Remove `$P` at the end of Task 27 (it holds no secret).
 
 - [ ] **Step 3: Write the failing replica-bucket and owner tests**
 
@@ -10013,7 +10223,7 @@ Expected: the usage line `usage: fill-p1.py <ledger.env> [--staging-hashes <hash
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -369,6 +369,109 @@ DEVNET2_SI_RELEASES = (
+@@ -379,6 +379,109 @@ DEVNET2_SI_RELEASES = (
  LOCAL_PATH_STORAGE = ROOT / "k8s-sea/local-path-storage/local-path-storage.yaml"
  GATEWAY = ROOT / "k8s-sea/gateway.yaml"
  GATEWAY_ROUTES = ROOT / "k8s-sea/gateway-routes.yaml"
@@ -10123,7 +10333,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  
  
  SENTIO_NODE_CHART = ROOT / "charts/sentio-node"
-@@ -925,6 +1028,31 @@ def local_path_directories():
+@@ -935,6 +1038,31 @@ def local_path_directories():
      return {entry["node"]: entry["paths"] for entry in config["storageClassConfigs"]["local-path"]["nodePathMap"]}
  
  
@@ -10155,7 +10365,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  class DeploymentContractTest(unittest.TestCase):
      @classmethod
      def setUpClass(cls):
-@@ -4100,6 +4228,134 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4131,6 +4259,134 @@ class ActualFreshNetworkTest(unittest.TestCase):
          self.assertIn(f'clickhouse_altinity_com_chi=~"{chis}"', alert_rule(monitored, "StorageIntegrityClickHouseDiskLow", FRESH_RELEASE)["expr"])
          self.assertIn(f'network="{DEVNET2_MONITORING_NETWORK}"', alert_rule(monitored, "ArbiterStateSizeHigh", FRESH_RELEASE)["expr"])
  
@@ -10298,13 +10508,13 @@ Fill the tokens of the constants, then run:
 W=<path>; P="$HOME/si-devnet2-stage3-p1-prep"; cd "$W" && python3 -I "$P/fill-p1.py" "$P/ledger.env" charts/storage-integrity/tests/test_render.py && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
-Expected (measured, N = 127): `filled charts/storage-integrity/tests/test_render.py`, then
+Expected (measured, N = 128): `filled charts/storage-integrity/tests/test_render.py`, then
 
 ```text
 1 ERROR: test_devnet2_backup_owners_are_the_si_indexers
 1 ERROR: test_replica_bucket_terraform_follows_the_p1_contract
 1 FAILED (errors=2)
-1 Ran 129 tests
+1 Ran 130 tests
 ```
 
 Both errors are `FileNotFoundError: … terraform/storage_integrity_devnet2_si_v2_replica.tf` (the owners test reads the Terraform writers last).
@@ -10497,9 +10707,10 @@ Secret is a resource. test_render.py pins the contract, and the stage-3 P1
 constants that the next commits use.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `filled terraform/storage_integrity_devnet2_si_v2_replica.tf`, no `fmt` output, `0`, `Ran N+2 tests` / `OK`, one commit. Applying the Terraform is the user's action in Task 28 §2, after the P1 PR merged.
+Expected: `filled terraform/storage_integrity_devnet2_si_v2_replica.tf`, no `fmt` output, `0`, `Ran N+2 tests` / `OK`, one commit, then `poetry <chen@sentio.xyz>`. Applying the Terraform is the user's action in Task 28 §2, after the P1 PR merged.
 
 - [ ] **Step 5: Write the failing `si_backup` user tests**
 
@@ -10507,7 +10718,7 @@ Expected: `filled terraform/storage_integrity_devnet2_si_v2_replica.tf`, no `fmt
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -291,7 +291,7 @@ SI_DEFAULT_LOOPBACK_XML = (
+@@ -301,7 +301,7 @@ SI_DEFAULT_LOOPBACK_XML = (
  # Render-only password hashes, one per user.
  TEST_PASSWORD_SHA256 = {
      user: hashlib.sha256(f"render-test-{user}".encode()).hexdigest()
@@ -10516,7 +10727,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  }
  # Posture of each SI ClickHouse installation of devnet2-si-v2, by CHI name:
  # "A" today's users, "B" the si_* users added, "C" default locked. The
-@@ -790,13 +790,25 @@ def si_grants(role, physical_database="devnet2"):
+@@ -800,13 +800,25 @@ def si_grants(role, physical_database="devnet2"):
      return [grant.replace(" ON devnet2.*", f" ON {physical_database}.*") for grant in SI_CLICKHOUSE_GRANTS[role]]
  
  
@@ -10545,7 +10756,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
      """
      if posture == "C":
          users = {
-@@ -817,6 +829,10 @@ def si_clickhouse_users(kind, posture, hashes, physical_database="devnet2"):
+@@ -827,6 +839,10 @@ def si_clickhouse_users(kind, posture, hashes, physical_database="devnet2"):
              users[f"{user}/networks/ip"] = ["::/0"]
              users[f"{user}/profile"] = "default"
              users[f"{user}/grants/query"] = si_grants(user, physical_database)
@@ -10556,7 +10767,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
      return users
  
  
-@@ -833,18 +849,21 @@ def unlocked_files(files):
+@@ -843,18 +859,21 @@ def unlocked_files(files):
      return {name: text for name, text in files.items() if name != SI_DEFAULT_LOOPBACK_FILE}
  
  
@@ -10580,7 +10791,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
      values = {"clickhouse": {"access": access}}
      if posture == "C":
          access["bootstrapPasswordSecret"] = {"name": "render-test-clickhouse-bootstrap", "key": "password"}
-@@ -1902,6 +1921,15 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -1913,6 +1932,15 @@ class ClickHouseAccessTest(unittest.TestCase):
              ({"clickhouse": {"access": {"passwordSha256": {"si_snode": 7}}}}, "si_snode"),
              ({"clickhouse": {"access": {"bootstrapPasswordSecret": {"key": ""}}}}, "bootstrapPasswordSecret"),
              ({"verifier": {"clickhouse": {"username": "si-verifier"}}}, "username"),
@@ -10596,7 +10807,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          ):
              with self.subTest(error=error, overrides=overrides):
                  self.assert_rejected(overrides, error)
-@@ -1934,6 +1962,9 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -1945,6 +1973,9 @@ class ClickHouseAccessTest(unittest.TestCase):
  
      def test_si_clickhouse_users_carry_only_literal_hashes(self):
          installations = {f"chart posture {p}": self.installation(self.posture[p])["configuration"] for p in self.posture}
@@ -10606,7 +10817,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          for path in (INDEXER_B_CHI, INDEXER_C_CHI, LOCKDOWN_STAGING_CHI):
              installations[path.name] = yaml.safe_load(path.read_text())["spec"]["configuration"]
          for posture in ("B", "C"):
-@@ -2224,6 +2255,7 @@ class LegacyCompatibilityTest(unittest.TestCase):
+@@ -2235,6 +2266,7 @@ class LegacyCompatibilityTest(unittest.TestCase):
              clickhouse_access("B"),
              {"clickhouse": {"access": {"bootstrapPasswordSecret": {"name": "legacy-bootstrap"}}}},
              {"clickhouse": {"access": {"passwordSha256": {"si_snode": TEST_PASSWORD_SHA256["si_snode"]}}}},
@@ -10614,7 +10825,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
              {"verifier": {"clickhouse": {"username": "si_verifier"}}},
              {"verifier": {"clickhouse": {"username": "si_verifier", "passwordSecret": {"name": "legacy-verifier"}}}},
          ):
-@@ -2848,10 +2880,11 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -2858,10 +2890,11 @@ class ActualFreshNetworkTest(unittest.TestCase):
              arguments += ["--set-file", f'{item["name"]}={FRESH_HELMFILE.parent / item["file"]}']
          return subprocess.run(arguments, capture_output=True, text=True, check=False)
  
@@ -10629,7 +10840,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          return docs[("ClickHouseInstallation", FRESH_RELEASE)]
  
      def require_indexer_c(self):
-@@ -3368,7 +3401,8 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -3378,7 +3411,8 @@ class ActualFreshNetworkTest(unittest.TestCase):
                  # si_verifier, which only the network installation has).
                  # indexer-c's member disk and node pin are checked by
                  # test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk.
@@ -10639,7 +10850,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                  profile = source_profile(chi)
                  if path == INDEXER_C_CHI:
                      (pod,) = profile["templates"]["podTemplates"]
-@@ -3412,7 +3446,9 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -3422,7 +3456,9 @@ class ActualFreshNetworkTest(unittest.TestCase):
                  [line.replace("indexer-b", "indexer-c") for line in posture_comment(INDEXER_B_CHI)],
              )
          hashes = {key: value for key, value in configuration["users"].items() if key.endswith("/password_sha256_hex")}
@@ -10650,7 +10861,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          for key, value in hashes.items():
              self.assertRegex(value, r"^[0-9a-f]{64}$", key)
          self.assertEqual(len(set(hashes.values())), len(hashes), "one password per user")
-@@ -3447,7 +3483,7 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -3457,7 +3493,7 @@ class ActualFreshNetworkTest(unittest.TestCase):
          # Everything else is the network installation's source profile at
          # posture C; the pod is pinned to its node instead of the network's
          # general-node selector.
@@ -10659,7 +10870,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          profile = source_profile(chi)
          (profile_pod,) = profile["templates"]["podTemplates"]
          self.assertEqual(profile_pod["spec"]["nodeSelector"], {"kubernetes.io/hostname": INDEXER_C_CHI_NODE})
-@@ -3863,14 +3899,17 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -3873,14 +3909,17 @@ class ActualFreshNetworkTest(unittest.TestCase):
              (access.get("users", False), access.get("lockDefault", False)),
              (network_posture != "A", network_posture == "C"),
          )
@@ -10680,7 +10891,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          ))
          self.assertEqual(network["files"], si_clickhouse_files(unlocked_files(network["files"]), network_posture))
          # indexer-b's and indexer-c's installations, applied with kubectl, carry their own literal hashes.
-@@ -3880,7 +3919,7 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -3890,7 +3929,7 @@ class ActualFreshNetworkTest(unittest.TestCase):
                  configuration = chi["spec"]["configuration"]
                  hashes = {key.split("/", 1)[0]: value for key, value in configuration["users"].items() if key.endswith("/password_sha256_hex")}
                  self.assertEqual(configuration["users"], si_clickhouse_users(
@@ -10689,7 +10900,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                  ))
                  self.assertEqual(configuration["files"], si_clickhouse_files(unlocked_files(configuration["files"]), DEVNET2_CLICKHOUSE_POSTURE[name]))
          # The verifiers and the bootstrap-source hook (the network installation).
-@@ -4356,6 +4395,89 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4387,6 +4426,89 @@ class ActualFreshNetworkTest(unittest.TestCase):
          writers = dict(re.findall(r'^\s*"([^"]+)" = "([^"]+)"$', terraform_blocks(REPLICA_TERRAFORM.read_text())[("locals",)], re.M))
          self.assertEqual({key: value for key, value in writers.items() if key != "mech"}, {str(owner): f"owner-{owner}/" for owner in owners})
  
@@ -10785,7 +10996,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
-Expected (measured):
+Expected (measured, N = 128):
 
 ```text
 1 ERROR: setUpClass
@@ -10796,7 +11007,7 @@ Expected (measured):
 2 FAIL: test_si_backup_user_holds_exactly_its_grants
 1 FAIL: test_si_clients_take_clickhouse_passwords_only_from_secrets
 1 FAILED (failures=8, errors=2)
-1 Ran 122 tests
+1 Ran 123 tests
 ```
 
 The chart refuses the new keys (`values don't meet the specifications of the schema(s) … additional properties 'si_backup' not allowed`), so `ClickHouseAccessTest`'s `setUpClass` errors and the class's nine tests do not run (hence `Ran N-5 tests`); `test_si_backup_user_follows_the_rollout` ends with `KeyError: 'backupUser'`.
@@ -10872,7 +11083,7 @@ diff --git a/charts/storage-integrity/values.schema.json b/charts/storage-integr
 diff --git a/charts/storage-integrity/templates/_helpers.tpl b/charts/storage-integrity/templates/_helpers.tpl
 --- a/charts/storage-integrity/templates/_helpers.tpl
 +++ b/charts/storage-integrity/templates/_helpers.tpl
-@@ -155,6 +155,19 @@ system.processes. */ -}}
+@@ -154,6 +154,19 @@ system.processes. */ -}}
  - "GRANT SELECT(database, table, name, active, rows, partition_id, hash_of_all_files) ON system.parts"
  {{- end }}
  
@@ -10892,7 +11103,7 @@ diff --git a/charts/storage-integrity/templates/_helpers.tpl b/charts/storage-in
  {{- /* The users block of the installation in its lockdown posture: A (today:
  default passwordless, any address, access_management), B (users: the si_*
  users added, default unchanged) or C (lockDefault: default with a password,
-@@ -182,6 +195,14 @@ default/access_management: "1"
+@@ -181,6 +194,14 @@ default/access_management: "1"
  {{ $user }}/grants/query:
  {{ include (printf "storage-integrity.grants.%s" $user) $ | indent 2 }}
  {{- end }}
@@ -10959,9 +11170,10 @@ restart. Every by-role comparison of a CHI manifest renders the network
 chart with that manifest's own si_backup state.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `Ran N+4 tests` / `OK`, two `1 chart(s) linted, 0 chart(s) failed`, one commit.
+Expected: `Ran N+4 tests` / `OK`, two `1 chart(s) linted, 0 chart(s) failed`, one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 7: Write the failing grant probe tests**
 
@@ -10969,7 +11181,7 @@ Expected: `Ran N+4 tests` / `OK`, two `1 chart(s) linted, 0 chart(s) failed`, on
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -939,7 +939,7 @@ def role_atoms(role):
+@@ -949,7 +949,7 @@ def role_atoms(role):
      """Every atom a role holds, ClickHouse's implicit grants included (any CREATE
      TABLE gives a global CREATE TEMPORARY TABLE, CREATE and DROP TABLE give the
      VIEW forms on the same object)."""
@@ -10978,7 +11190,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
      for privilege, target, columns in list(atoms):
          if privilege == "CREATE TABLE":
              atoms |= {("CREATE TEMPORARY TABLE", "*.*", None), ("CREATE VIEW", target, None)}
-@@ -969,13 +969,27 @@ def probe_atoms(statement):
+@@ -979,13 +979,27 @@ def probe_atoms(statement):
           lambda m: {("CREATE TABLE", probe_object(m[1], m[2]), None)}),
          (rf"CREATE VIEW {name} AS SELECT (.+) FROM {name}",
           lambda m: {("CREATE VIEW", probe_object(m[1], m[2]), None), ("SELECT", probe_object(m[4], m[5]), None)}),
@@ -11006,7 +11218,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          (rf"SELECT (.+) FROM {name}(?: WHERE (.+))?",
           lambda m: {("SELECT", probe_object(m[2], m[3]), probe_columns(m[1], m[4]))}),
          (rf"ALTER TABLE {name} (?:REPLACE|ATTACH) PARTITION tuple\(\) FROM {name}", lambda m: {
-@@ -984,9 +998,10 @@ def probe_atoms(statement):
+@@ -994,9 +1008,10 @@ def probe_atoms(statement):
              ("INSERT", probe_object(m[1], m[2]), None),
          }),
          (rf"ALTER TABLE {name} DROP PARTITION tuple\(\)", lambda m: {("ALTER DELETE", probe_object(m[1], m[2]), None)}),
@@ -11018,7 +11230,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          (r"SYSTEM DROP REPLICA '[\w-]+' FROM ZKPATH '[\w/-]+'", lambda m: {("SYSTEM DROP REPLICA", "*.*", None)}),
      )
      for pattern, atoms in forms:
-@@ -1994,7 +2009,7 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -2005,7 +2020,7 @@ class ClickHouseAccessTest(unittest.TestCase):
      def test_grant_probe_covers_every_protocol_grant(self):
          rows = grant_probe_rows()
          roles = [role for role, _, _ in rows]
@@ -11027,7 +11239,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          self.assertTrue(all(expect in ("ok", "denied") for _, expect, _ in rows))
          # default (the admin) only sets the referenced tables up first and drops them last.
          protocol = [index for index, role in enumerate(roles) if role != "default"]
-@@ -2006,7 +2021,7 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -2017,7 +2032,7 @@ class ClickHouseAccessTest(unittest.TestCase):
              probe_atoms(statement)
          created = {target for _, _, statement in setup for privilege, target, _ in probe_atoms(statement) if privilege == "CREATE TABLE"}
          self.assertEqual(created, {"hg_unsafe.*", "hg_safe.*", "hg_promote.*", "devnet2.*"})
@@ -11036,7 +11248,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
              held = role_atoms(role)
              mine = [(expect, statement, probe_atoms(statement)) for who, expect, statement in rows if who == role]
              with self.subTest(role=role):
-@@ -2015,7 +2030,7 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -2026,7 +2041,7 @@ class ClickHouseAccessTest(unittest.TestCase):
                      granted = all(atom_granted(atom, held) for atom in atoms)
                      self.assertEqual(granted, expect == "ok", f"{role} {expect}: {statement}")
                  # Every grant is exercised by an ok row of its role.
@@ -11045,7 +11257,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                      for grant_atom in grant_atoms(grant):
                          self.assertTrue(any(
                              expect == "ok" and any(atom_exercises(atom, grant_atom) for atom in atoms)
-@@ -2023,7 +2038,7 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -2034,7 +2049,7 @@ class ClickHouseAccessTest(unittest.TestCase):
                          ), f"{role}: no ok row exercises {grant_atom} of {grant!r}")
                  self.assertIn("denied", [expect for expect, _, _ in mine])
          denied = {role: [atoms for who, expect, statement in rows if who == role and expect == "denied"
@@ -11054,7 +11266,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  
          def refused(role, test):
              return any(any(test(atom) for atom in atoms) for atoms in denied[role])
-@@ -2036,6 +2051,20 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -2047,6 +2062,20 @@ class ClickHouseAccessTest(unittest.TestCase):
          reader_columns = next(atom[2] for atom in grant_atoms(SI_CLICKHOUSE_GRANTS["si_reader"][-1]))
          self.assertTrue(refused("si_reader", lambda atom: atom[:2] == ("SELECT", "system.parts")
                                  and atom[2] is not None and not atom[2] <= reader_columns))
@@ -11174,7 +11386,7 @@ for role, grants in t.SI_PROBE_GRANTS.items():
 open(sys.argv[1], "w").write("\n".join(lines + ["  </users>", "</clickhouse>"]) + "\n")
 PY
 docker run -d --name s3c1-t26-probe -v "$d/users.xml:/etc/clickhouse-server/users.d/zz-probe.xml:ro" clickhouse/clickhouse-server:26.3.37.3 > /dev/null
-for i in $(seq 1 60); do docker exec s3c1-t26-probe clickhouse-client -q 'SELECT 1' > /dev/null 2>&1 && break; sleep 1; done
+for _ in $(seq 1 60); do docker exec s3c1-t26-probe clickhouse-client -q 'SELECT 1' > /dev/null 2>&1 && break; sleep 1; done
 n=0; bad=0
 while IFS=$'\t' read -r role expect statement; do
   case "$role" in ''|'#'*|role) continue ;; esac
@@ -11191,7 +11403,7 @@ docker exec s3c1-t26-probe clickhouse-client -q "SELECT user_name, count() FROM 
 docker rm -f s3c1-t26-probe > /dev/null && rm -rf "$d"
 ```
 
-Expected (measured on 26.3.51.7): `rows 143 mismatches 0`, then `si_backup	7` and `si_restore	13` (`system.grants` rows: one per privilege and object; the passwords here are the throwaway `probe-<role>` of this container only). A mismatch, or a row that hangs, is a measured difference on 26.3.37.3: stop and record it (contract §18: a measured difference changes both copies and Appendix B).
+Expected (measured in review on `clickhouse/clickhouse-server:26.3.37.3` and, with the image name swapped, on the deployed `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`; the drafter's run was on 26.3.51.7): `rows 143 mismatches 0`, then `si_backup	7` and `si_restore	13` (`system.grants` rows: one per privilege and object; the passwords here are the throwaway `probe-<role>` of this container only). A mismatch, or a row that hangs, is a measured difference on 26.3.37.3: stop and record it (contract §18: a measured difference changes both copies and Appendix B). One exception: in review a `docker exec` once stalled before its statement reached the server (`system.query_log` held no entry for it, the row was one of Plan S3-B's) and a re-run of the whole block answered every row in 15 seconds; so a single stalled row is first interrupted, the container removed with `docker rm -f s3c1-t26-probe` and the block run once more. Fallback on this Mac: if `docker` reaches no daemon, `export DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock` first (OrbStack; the default socket belongs to a stopped Docker Desktop).
 
 ```bash
 W=<path>; git -C "$W" add charts/storage-integrity/tests && git -C "$W" commit -m "test(storage-integrity): grant probe rows for si_backup and si_restore
@@ -11204,9 +11416,10 @@ endpoint where nothing listens, with retries and asynchronous inserts off,
 so each answers at once (measured on 26.3: 143 rows, 0 mismatches).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: one commit.
+Expected: one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 9: Write the failing script tests**
 
@@ -11214,7 +11427,7 @@ Expected: one commit.
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -2116,6 +2116,9 @@ sys.exit(f"stub kubectl: unexpected call {args}")
+@@ -2127,6 +2127,9 @@ sys.exit(f"stub kubectl: unexpected call {args}")
              for x in ("b", "c")
          },
          "staging": {"storage-integrity-si-v2-lockdown-staging-logins": {user: user for user in SI_CLICKHOUSE_USERS["network"]}},
@@ -11224,7 +11437,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
      }
  
      def run_script(self, directory, *arguments, existing=()):
-@@ -2161,7 +2164,9 @@ sys.exit(f"stub kubectl: unexpected call {args}")
+@@ -2172,7 +2175,9 @@ sys.exit(f"stub kubectl: unexpected call {args}")
                              value = manager["credential"]["subgraph"]["password"]
                          self.assertRegex(value, r"^[0-9a-f]{48}$")
                          self.assertEqual(passwords.setdefault(user, value), value, "one password per user and installation")
@@ -11235,7 +11448,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                  self.assertEqual(set(passwords), set(users))
                  self.assertEqual(len(set(passwords.values())), len(users))
                  # The hashes file holds the SHA-256 of each password, in the shape
-@@ -2209,6 +2214,181 @@ sys.exit(f"stub kubectl: unexpected call {args}")
+@@ -2220,6 +2225,181 @@ sys.exit(f"stub kubectl: unexpected call {args}")
                  self.assertIn("usage: bash scripts/storage-integrity/make-clickhouse-logins.sh", result.stderr)
                  self.assertEqual(calls, [])
  
@@ -11467,8 +11680,9 @@ usage() {
 
 [ "$#" -eq 1 ] || usage
 account=$1
-# Service account ids have at most 30 characters, so an owner id at most 5 digits.
-[[ "$account" =~ ^(backup-(0|[1-9][0-9]{0,4})|backup-mech|restore-(a|b|c|drill))$ ]] || usage
+# Service account ids have at most 30 characters and si-devnet2-si-v2-backup- has
+# 24, so an owner id has at most 6 digits.
+[[ "$account" =~ ^(backup-(0|[1-9][0-9]{0,5})|backup-mech|restore-(a|b|c|drill))$ ]] || usage
 
 readonly service_account="si-devnet2-si-v2-$account@$project.iam.gserviceaccount.com"
 readonly secret_name="storage-integrity-si-v2-$account"
@@ -11666,9 +11880,10 @@ users, si_backup and the staging-only si_restore) and --add-user si_backup
 S3-C1 contract §18). Both are tested against stand-in gcloud and kubectl.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: the syntax checks print nothing, `Ran 5 tests` / `OK` twice (the second with the system bash first on PATH: 3.2 on macOS), `Ran N+7 tests` / `OK`, one commit.
+Expected: the syntax checks print nothing, `Ran 5 tests` / `OK` twice (the second with the system bash first on PATH: 3.2 on macOS), `Ran N+7 tests` / `OK`, one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 11: The P1 staging and `si_backup` logins (user action)**
 
@@ -11731,7 +11946,7 @@ Expected: `hashes ok: 9 distinct, in 4 files`, then `storage-integrity-si-v2-p1-
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -1087,6 +1087,14 @@ def terraform_attribute(body, name):
+@@ -1097,6 +1097,14 @@ def terraform_attribute(body, name):
      return [value.strip() for value in re.findall(rf"^\s*{re.escape(name)}\s*=\s*(.+)$", body, re.M)]
  
  
@@ -11746,7 +11961,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  class DeploymentContractTest(unittest.TestCase):
      @classmethod
      def setUpClass(cls):
-@@ -1980,7 +1988,7 @@ class ClickHouseAccessTest(unittest.TestCase):
+@@ -1991,7 +1999,7 @@ class ClickHouseAccessTest(unittest.TestCase):
          installations["chart posture C with si_backup"] = self.installation(
              documents(render(clickhouse_access("C", backup=True)))
          )["configuration"]
@@ -11755,7 +11970,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
              installations[path.name] = yaml.safe_load(path.read_text())["spec"]["configuration"]
          for posture in ("B", "C"):
              installations[f"staging posture {posture}"] = lockdown_staging_chi(posture, TEST_PASSWORD_SHA256)["spec"]["configuration"]
-@@ -4687,6 +4695,79 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4718,6 +4726,79 @@ class ActualFreshNetworkTest(unittest.TestCase):
                  installation = DEVNET2_HOST_INSTALLATION[release][0]
                  self.assertTrue(DEVNET2_SI_BACKUP_USER[installation], f"{release} backs up as si_backup before {installation} has the user")
  
@@ -11841,14 +12056,14 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
-Expected (measured):
+Expected (measured, N = 128):
 
 ```text
 1 ERROR: test_p1_staging_chi_mirrors_indexer_b
 1 ERROR: test_si_clickhouse_users_carry_only_literal_hashes
 1 ERROR: test_si_restore_exists_only_on_the_p1_staging_installation
 1 FAILED (errors=3)
-1 Ran 136 tests
+1 Ran 137 tests
 ```
 
 Each is `FileNotFoundError: … docs/examples/storage-integrity-p1-staging-chi.yaml`.
@@ -12084,9 +12299,10 @@ D36). No other installation has si_restore. The P1 runbook applies it with
 kubectl and deletes it after the drills.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `filled docs/examples/storage-integrity-p1-staging-chi.yaml`, `0` (no token left), `Ran N+9 tests` / `OK` (`test_p1_staging_chi_mirrors_indexer_b` compares it with indexer-b's installation field by field: if it reports a difference outside the name, the Keeper root, the users and the volume sizes, the branch's indexer-b file differs from Plan S3-B's text, so take that part from it as it is), one commit.
+Expected: `filled docs/examples/storage-integrity-p1-staging-chi.yaml`, `0` (no token left), `Ran N+9 tests` / `OK` (`test_p1_staging_chi_mirrors_indexer_b` compares it with indexer-b's installation field by field: if it reports a difference outside the name, the Keeper root, the users and the volume sizes, the branch's indexer-b file differs from Plan S3-B's text, so take that part from it as it is), one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 14: Write the failing backup job tests**
 
@@ -12094,7 +12310,7 @@ Expected: `filled docs/examples/storage-integrity-p1-staging-chi.yaml`, `0` (no 
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -1095,6 +1095,27 @@ def p1_staging_users(hashes):
+@@ -1105,6 +1105,27 @@ def p1_staging_users(hashes):
      return users
  
  
@@ -12122,7 +12338,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  class DeploymentContractTest(unittest.TestCase):
      @classmethod
      def setUpClass(cls):
-@@ -2398,6 +2419,200 @@ print(json.dumps({"kind": "storage#hmacKey", "metadata": {
+@@ -2409,6 +2430,200 @@ print(json.dumps({"kind": "storage#hmacKey", "metadata": {
                  self.assertEqual((logs["gcloud"], logs["calls"]), ([], []))
  
  
@@ -12323,7 +12539,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  class LegacyCompatibilityTest(unittest.TestCase):
      @classmethod
      def setUpClass(cls):
-@@ -4080,14 +4295,23 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4090,14 +4305,23 @@ class ActualFreshNetworkTest(unittest.TestCase):
  
          for name, docs in rendered.items():
              with self.subTest(release=name):
@@ -12350,7 +12566,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                  # No rendered config carries a ClickHouse password key, and the
                  # charts render no Secret holding one.
                  for key, resource in docs.items():
-@@ -4768,6 +4992,93 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4799,6 +5023,93 @@ class ActualFreshNetworkTest(unittest.TestCase):
              self.assertNotIn("si_restore", json.dumps(list(docs.values())), name)
          self.assertNotIn("si_restore", yaml.safe_load((CHART / "values.yaml").read_text())["clickhouse"]["access"]["passwordSha256"])
  
@@ -12450,7 +12666,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^(Ran|FAILED|OK)' | sed -E 's/^((FAIL|ERROR): [A-Za-z0-9_]+).*/\1/; s/ in [0-9.]+s$//' | sort | uniq -c
 ```
 
-Expected (measured):
+Expected (measured, N = 128):
 
 ```text
 1 ERROR: test_backup_job_config_carries_no_secret
@@ -12462,7 +12678,7 @@ Expected (measured):
 7 FAIL: test_backup_job_never_changes_the_host_pod
 1 FAIL: test_backup_job_renders_only_a_cronjob_and_its_config
 1 FAILED (failures=32, errors=6)
-1 Ran 144 tests
+1 Ran 145 tests
 ```
 
 Without the template every guard renders instead of refusing (`AssertionError: 0 == 0 : {…} rendered`), every release refuses nothing and renders no job (`Items in the second set but not the first`), and the overlays have no `siBackup` (`KeyError: 'siBackup'`).
@@ -12695,7 +12911,7 @@ The three SI host overlays (each block appended after the file's last line; the 
 diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
 --- a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
 +++ b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
-@@ -160,3 +160,22 @@ housegateSidecar:
+@@ -161,3 +161,22 @@ housegateSidecar:
      networkStateSource: http://localhost:32003
      inlineValues:
        enabled: true
@@ -12724,7 +12940,7 @@ diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integr
 diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
 --- a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
 +++ b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
-@@ -153,3 +153,22 @@ housegateSidecar:
+@@ -154,3 +154,22 @@ housegateSidecar:
      networkStateSource: http://localhost:33003
      inlineValues:
        enabled: true
@@ -12792,9 +13008,10 @@ StatefulSet renders byte-identically with the job on and off. Each devnet2 SI
 host states its job, off, with the backup image, owner, schedule and Secrets.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: three `filled …` lines, `Ran N+17 tests` / `OK`, `1 chart(s) linted, 0 chart(s) failed`, one commit.
+Expected: three `filled …` lines, `Ran N+17 tests` / `OK`, `1 chart(s) linted, 0 chart(s) failed`, one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 16: Write the failing backup alert tests**
 
@@ -12802,7 +13019,7 @@ Expected: three `filled …` lines, `Ran N+17 tests` / `OK`, `1 chart(s) linted,
 diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
 --- a/charts/storage-integrity/tests/test_render.py
 +++ b/charts/storage-integrity/tests/test_render.py
-@@ -184,6 +184,8 @@ MONITORING_ALERTS = {
+@@ -186,6 +186,8 @@ MONITORING_ALERTS = {
      "clickhouse": frozenset({
          "StorageIntegrityClickHouseRestarted", "StorageIntegrityClickHouseDiskLow", "StorageIntegrityClickHouseDiskCritical",
      }),
@@ -12811,7 +13028,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  }
  # The P0 runbook every monitoring runbook_url points into, and its top-level
  # sections (Plan S3-B contract §9): each runbook_url anchor is one of them.
-@@ -749,7 +751,7 @@ PROMQL_SELECTOR = re.compile(r"([A-Za-z_:][A-Za-z0-9_:]*)\{([^{}]*)\}")
+@@ -759,7 +761,7 @@ PROMQL_SELECTOR = re.compile(r"([A-Za-z_:][A-Za-z0-9_:]*)\{([^{}]*)\}")
  PROMQL_MATCHER = re.compile(r'\s*([A-Za-z_][A-Za-z0-9_]*)(=~|!~|!=|=)"([^"]*)"\s*(?:,|$)')
  # Every word the chart's rule expressions may contain outside series selectors,
  # grouping labels and range durations.
@@ -12820,7 +13037,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  
  
  def promql_selectors(expr):
-@@ -1504,6 +1506,7 @@ class MonitoringTest(unittest.TestCase):
+@@ -1514,6 +1516,7 @@ class MonitoringTest(unittest.TestCase):
              "enabled": True,
              "hosts": {"releases": ["sentio-node-probe-a", "sentio-node-probe-b"]},
              "clickhouse": {"installations": ["storage-integrity", "storage-integrity-probe-b"]},
@@ -12828,7 +13045,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          },
      }
  
-@@ -1522,6 +1525,10 @@ class MonitoringTest(unittest.TestCase):
+@@ -1532,6 +1535,10 @@ class MonitoringTest(unittest.TestCase):
              "enabled": False, "network": "", "interval": "30s", "scrapeTimeout": "10s", "labels": {},
              "stateLimitBytes": 536870912, "hosts": {"releases": []},
              "clickhouse": {"installations": [], "diskFreeWarnRatio": 0.2, "diskFreeCriticalRatio": 0.1},
@@ -12839,7 +13056,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
              "runbookURL": "https://github.com/sentioxyz/production/blob/main/docs/storage-integrity-devnet2-stage3-p0.md",
          })
          for profile, docs in (("fresh", self.docs), ("legacy", documents(render_legacy()))):
-@@ -1597,6 +1604,8 @@ class MonitoringTest(unittest.TestCase):
+@@ -1607,6 +1614,8 @@ class MonitoringTest(unittest.TestCase):
              headings = re.findall(r"^## (.+)$", STAGE3_P0_RUNBOOK.read_text(), re.M)
              self.assertLessEqual(set(STAGE3_P0_RUNBOOK_SECTIONS), set(headings))
          runbook = yaml.safe_load((CHART / "values.yaml").read_text())["monitoring"]["runbookURL"]
@@ -12848,7 +13065,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          probe = {"fullnameOverride": "si-probe", "monitoring": {
              **self.MONITORED["monitoring"], "network": "probe-net", "clickhouse": {"installations": ["si-probe", "si-probe-b"]},
          }}
-@@ -1614,7 +1623,17 @@ class MonitoringTest(unittest.TestCase):
+@@ -1624,7 +1633,17 @@ class MonitoringTest(unittest.TestCase):
                          self.assertNotEqual(selectors, [])
                          for metric, matchers in selectors:
                              self.assertNotIn("job", matchers)
@@ -12867,7 +13084,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                                  self.assertEqual(matchers["namespace"], ("=", namespace))
                                  self.assertEqual(matchers["pod"], ("=~", f"{name}-arbiter-[0-9]+"))
                                  self.assertNotIn("network", matchers)
-@@ -1636,8 +1655,11 @@ class MonitoringTest(unittest.TestCase):
+@@ -1646,8 +1665,11 @@ class MonitoringTest(unittest.TestCase):
                          self.assertEqual(rule["labels"]["network"], network)
                          self.assertNotEqual(rule["annotations"]["summary"].strip(), "")
                          url, _, anchor = rule["annotations"]["runbook_url"].partition("#")
@@ -12881,7 +13098,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  
      def test_alert_names_are_the_reviewed_set(self):
          rules = vm_rules(self.monitored)
-@@ -1769,10 +1791,81 @@ class MonitoringTest(unittest.TestCase):
+@@ -1780,10 +1802,81 @@ class MonitoringTest(unittest.TestCase):
              ({"runbookURL": "http://example.com/runbook.md"}, "runbookURL"),
              ({"runbookURL": "https://example.com/runbook.md#8-monitoring"}, "runbookURL"),
              ({"hosts": None}, "hosts"),
@@ -12963,7 +13180,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
  
  class ClickHouseAccessTest(unittest.TestCase):
      """Phase L (housegate spec 2026-10-14 §14): the users of the network's SI
-@@ -4707,6 +4800,18 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -4738,6 +4831,18 @@ class ActualFreshNetworkTest(unittest.TestCase):
          chis = "|".join(DEVNET2_MONITORED_CLICKHOUSES)
          self.assertIn(f'clickhouse_altinity_com_chi=~"{chis}"', alert_rule(monitored, "StorageIntegrityClickHouseDiskLow", FRESH_RELEASE)["expr"])
          self.assertIn(f'network="{DEVNET2_MONITORING_NETWORK}"', alert_rule(monitored, "ArbiterStateSizeHigh", FRESH_RELEASE)["expr"])
@@ -13107,7 +13324,7 @@ diff --git a/charts/storage-integrity/templates/monitoring.yaml b/charts/storage
  {{- $voterPods := printf "%s-arbiter-[0-9]+" $fullname }}
  apiVersion: v1
  kind: Service
-@@ -416,4 +420,42 @@ spec:
+@@ -419,4 +423,42 @@ spec:
              summary: "An SI ClickHouse's default disk is below monitoring.clickhouse.diskFreeCriticalRatio free"
              runbook_url: "{{ $runbook }}#13-operating-rules"
      {{- end }}
@@ -13158,7 +13375,7 @@ diff --git a/charts/storage-integrity/templates/monitoring.yaml b/charts/storage
 diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
 --- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
 +++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-@@ -186,3 +186,7 @@ monitoring:
+@@ -188,3 +188,7 @@ monitoring:
        - storage-integrity-si-v2
        - storage-integrity-si-v2-indexer-b
        - storage-integrity-si-v2-indexer-c
@@ -13182,9 +13399,10 @@ CronJob, never job, and point into the P1 runbook's §15.2. devnet2 lists
 none until the P1 runbook's §11.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `Ran N+19 tests` / `OK`, one commit.
+Expected: `Ran N+19 tests` / `OK`, one commit, then `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 18: CI paths and full verification**
 
@@ -13236,9 +13454,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && python3 -B charts/st
 git -C "$W" grep -nE '__(SN_COMMIT_P1|SN_DIGEST_P1|HG_TAG_P1|CORE_TAG_P1|INDEXER_C_ID|P1_BACKUP_DELETE|SHA256_P1S_[A-Z_]+)__' || echo "no token left"
 { ! command -v terraform > /dev/null || terraform -chdir="$W/terraform" fmt -check storage_integrity_devnet2_si_v2_replica.tf; } && echo "fmt ok"
 git -C "$W" status --short && git -C "$W" diff --stat "$(git -C "$W" merge-base HEAD origin/main)" | tail -1
+git -C "$W" log --format='%an <%ae>' "$(git -C "$W" merge-base HEAD origin/main)..HEAD" | sort -u
 ```
 
-Expected: `Ran N+19 tests` / `OK`; four `1 chart(s) linted, 0 chart(s) failed`; eight lines `storage-integrity-si-v2 identical`, `sentio-node-devnet2-indexer-a identical`, `sentio-node-devnet2-indexer-b identical`, `sentio-node-devnet2-observer identical`, `sentio-node-testnet-v2-indexer-a identical`, `sentio-node-testnet-v2-indexer-b identical`, `sentio-node-observer identical`, `sentio-node-devnet2-indexer-c identical`; `no token left`; `fmt ok`; a clean status; `18 files changed, 2065 insertions(+), 56 deletions(-)` (measured). The comparisons use the merge base, not `origin/main` itself, as Plan S3-B Task 16's verification does. Stop on any `DIFFERS`: a default render changed. Task 27 continues on this branch (the runbook, then the push and the P1 PR, whose body quotes this step's output); nothing is pushed here.
+Expected: `Ran N+19 tests` / `OK`; four `1 chart(s) linted, 0 chart(s) failed`; eight lines `storage-integrity-si-v2 identical`, `sentio-node-devnet2-indexer-a identical`, `sentio-node-devnet2-indexer-b identical`, `sentio-node-devnet2-observer identical`, `sentio-node-testnet-v2-indexer-a identical`, `sentio-node-testnet-v2-indexer-b identical`, `sentio-node-observer identical`, `sentio-node-devnet2-indexer-c identical`; `no token left`; `fmt ok`; a clean status; `18 files changed, 2092 insertions(+), 56 deletions(-)` (measured in review), and `poetry <chen@sentio.xyz>` alone (the eight commits' authors). The comparisons use the merge base, not `origin/main` itself, as Plan S3-B Task 16's verification does. Stop on any `DIFFERS`: a default render changed. Task 27 continues on this branch (the runbook, then the push and the P1 PR, whose body quotes this step's output); nothing is pushed here.
 
 ---
 
@@ -13246,14 +13465,15 @@ Expected: `Ran N+19 tests` / `OK`; four `1 chart(s) linted, 0 chart(s) failed`; 
 
 Contract §18–§19 and K23–K28: Task 26 put the replica bucket's Terraform, the `si_backup` user and its grant-probe rows, the P1 staging installation with the staging-only `si_restore`, the `siBackup` CronJob of `charts/sentio-node`, the backup alerts, the key and login scripts and the render tests on the branch `urwt/claude/multi-source-s3c1`; this task adds the runbook Task 28 executes, `docs/storage-integrity-devnet2-stage3-p1-backups.md` (sections exactly as contract §18 lists them, helpers and evidence files as contract §19 names them), and takes the P1 PR (Tasks 26 and 27 together) through push, review, CI and merge, then records `P1_PR`. Merging it applies, syncs and turns on nothing: the bucket is the user's Terraform apply (runbook §2), the keys the user's terminal (§3), and every live change of P1 a single-service commit the runbook makes after the merge; the PR renders every release byte-identically (`render-inertness.sh` without `--new`).
 
-**Files** (anchors are production `origin/main` after `E_PR` merged and `E_END` was recorded, the base of Task 26's branch; every SI path byte-identical to Plan S3-B's base `9d3d0326b` plus Plan S3-B's merged changes; the branch already carries Task 26's commits, and none of them touches the file below):
+**Files** (anchors are production `origin/main` after `E_PR` merged and `E_END` was recorded, the base of Task 26's branch: at review time `origin/main` is `7e08b6ea5`, and Plan S3-B's Tasks 16–21 (the lockdown and indexer-c runbooks, their charts and live commits) are still to land on it; the branch already carries Task 26's commits, and none of them touches the two files below):
 - Create: `docs/storage-integrity-devnet2-stage3-p1-backups.md`
+- Modify: `docs/storage-integrity-devnet2-multi-source-tracks.md` (stage table: one row after the stage-3 P0 row `| 9 | Multi-source stage 3 P0 (…) | See that runbook (§12) |`, which Plan S3-B Task 14 added; the pointer Plan S3-C3 contract §27.10 places its P2 row after)
 - Modify after the merge (housegate, on this plan's ledger copy, with the record procedure of contract §19, decision D23): Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md` (the `P1_PR` row and the run record `P1 PR`), one commit in the URWT worktree `multi-source-s3c1-ledger-27`, pushed to the plans branch or merged through a docs PR (D34)
 - Test: the runbook's conventions check `$HOME/.cache/s3c1-task27/check_runbook.py` and the §0 helpers' self-test `$HOME/.cache/s3c1-task27/selftest.bash` (Steps 2 and 5; neither is committed); `charts/storage-integrity/tests/test_render.py` is unchanged by this task (Task 26's count; Task 26's runbook-anchor test, which reads this file once it exists, now checks `#152-a-failed-or-stale-backup`)
 
 **Interfaces:**
 - Consumes (contract §16–§19, verbatim): the bucket `sentio-352722-si-devnet2-si-v2-replica`, the roles `siDevnet2SiV2BackupWriter` and `siDevnet2SiV2BackupLockRemover`, the service accounts `si-devnet2-si-v2-backup-{0,1,<INDEXER_C_ID>,mech}` and `si-devnet2-si-v2-restore-{a,b,c,drill}`, the Terraform resource addresses of `terraform/storage_integrity_devnet2_si_v2_replica.tf`; `scripts/storage-integrity/make-si-backup-keys.sh <account>` and the access-id files `$HOME/si-devnet2-stage3-p1-logins/hmac-<account>.access-id`; `make-clickhouse-logins.sh p1-staging` and `--add-user si_backup <installation> <hashes-file>` with the hashes files `$HOME/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml` and `hashes-si_backup-<network|indexer-b|indexer-c>.yaml` (the user's, before the P1 PR); the Secrets `storage-integrity-si-v2-backup-*`, `storage-integrity-si-v2-restore-{a,b,c,drill}` (keys `access-id`, `secret`), `storage-integrity-si-v2-clickhouse-backup-{network,indexer-b,indexer-c}` (key `password`) and `storage-integrity-si-v2-p1-staging-logins`; `docs/examples/storage-integrity-p1-staging-chi.yaml` (CHI `storage-integrity-si-v2-p1-staging`, pod `storage-integrity-si-v2-p1-staging-source-0-0-0`, Service `storage-integrity-si-v2-p1-staging-source`, Keeper root `/storage-integrity/devnet2/p1-staging`); the values `clickhouse.access.backupUser`, `clickhouse.access.passwordSha256.si_backup`, `siBackup.*`, `monitoring.backups.{cronJobs,maxAgeSeconds,runbookURL}`; the CronJobs and ConfigMaps `<fullname>-si-backup` (key `config.yaml`); the alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` in the rule group `<fullname>.backups`; the `test_render.py` constants `SI_BACKUP_BUCKET`, `SI_BACKUP_GRANTS`, `SI_RESTORE_GRANTS`, `DEVNET2_SI_BACKUP_IMAGE`, `DEVNET2_BACKUP_OWNERS`, `DEVNET2_SI_BACKUP_SCHEDULES`, `DEVNET2_SI_BACKUP`, `DEVNET2_SI_BACKUP_USER`, `DEVNET2_MONITORED_BACKUPS`, `DEVNET2_BACKUP_DELETE_RIGHT`, `P1_STAGING_USERS`; the grant-probe rows of `si_backup` and `si_restore` in `clickhouse_grant_probe.tsv`; the commands `/sentio-node storage-integrity backup` and `restore-drill --config-path --owner --owner-rpc` (Task 25) and their one stdout line, the `objstore.BackupIndex` (`format` `si-backup-index-v1`, `name`, `kind`, `base`, `chain_length`, `snapshot_id`, `entry`, `tables[].physical_table`) and the `objstore.DrillVerdict` (`format` `si-restore-drill-v1`, `backup`, `snapshot_id`, `entry`, `tables[].{table_id, physical_table, reason, partitions[].{partition_id, reason, need, kept, dropped, scratch}}`, `pass`) of Task 24. The ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE`, `SN_COMMIT_P1`, `SN_DIGEST_P1` (this plan, Tasks 22, 24 and 25) and `INDEXER_C_ID`, `E_END` (Plan S3-B), read with `s3-ledger.py get`. The earlier runbooks' §0 helpers, unchanged: dynamic-table-set (`si_kubectl`, `si_arbiter`, `si_leader`, `si_show`, `si_images`), multi-source (`si_rpc_on`, `si_info`, `si_status`), multi-source-tracks (`si_tracks`, `si_track`, `si_track_published`, `si_wait_track`, `si_agent_start`, `si_agent_stop`, `si_agent_ch`), stage-3 P0 (`si_vm_query`, `si_vmalert_groups`, `si_head_is`, `si_revert_stage3`; its §13.4 budget procedure, copied verbatim), lockdown (`si_lockdown_dir` and its lock records, `si_ch_admin`, `si_ch_pod`, `si_installation`, `si_inpod_client`, `si_keeper`, `si_stamp`, `si_chi_state`, `si_wait_chi`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff`), indexer-c (`si_source_ch`, `si_info`, `si_status` and `si_rpc_on` with `c`; `$HOME/si-devnet2-stage3-indexer-c/acceptance-db` and `e-end.txt`).
-- Produces: the runbook with the sections of contract §18 verbatim and the names of contract §19: `si_backup="$HOME/si-devnet2-stage3-p1"`, `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, the helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql <account> <sql-file>`, `si_p1s_grant_probe`, `si_index <a|b|c> <name>`, `si_host_pods <a|b|c>`, `si_backup_run <a|b|c> <n>` (Job `sentio-node-devnet2-indexer-<x>-si-backup-p1-<n>`), `si_drill <a|b|c>` (ConfigMap `si-p1-drill-config-<x>`, Job `si-p1-drill-<x>`), the evidence files of contract §19 and the run values (`devuser1.s3_p1`, rows `5101`–`5104`, `hg_safe.p1_mech`, `mechanics/<stamp>-*`, `hg_rstage.p1drill_<x>_<n>`). The names this task adds (Appendix B): the variables `si_p1_bucket`, `si_p1_bucket_url`, `si_p1s_chi`, `si_p1s_pod`, `si_p1s_logins`, `si_p1_trailer`, `si_p1_inpod_client`, `si_s3_inpod`; the helpers `si_p1_pin`, `si_p1_owner`, `si_p1_installation`, `si_p1_chi`, `si_p1_rpc_url`, `si_p1_cronjob`, `si_p1_account`, `si_p1s_as`, `si_secret_hits`, `si_s3_outcome`, `si_p1_check`, `si_p1_probe`, `si_indexes`, `si_p1_pods_check`, `si_p1_wait_backup_user`, `si_p1_grants`, `si_p1_backup_login`, `si_p1_servers`, `si_p1_fresh_main`, `si_p1_tests`, `si_p1_user_commit`, `si_p1_user_apply`, `si_p1_schedule_clear`, `si_p1_job_commit`, `si_p1_job_apply`, `si_p1_job_line`, `si_p1_backup_check`, `si_p1_active`, `si_p1_drill_check`, `si_p1_monitoring_commit`, `si_p1_monitoring_apply`, `si_p1_revert_chi`, `si_p1_mech_url`, `si_p1_sql`, `si_p1_status`, `si_p1_mech_backups`, `si_p1_mech_lock`, `si_p1_mech_keys`, `si_p1_hits_all`, `si_p1_key_fd`, `si_p1_mech_masking`, `si_p1_budget_left`, `si_p1_py` (subcommands `pr-state`, `hashes`, `staging-check`, `bucket`, `service-accounts`, `hmac`, `chi-add-user`, `values-add-user`, `enable-backup`, `monitoring`, `mirror`, `grants-check`, `cronjob-check`, `job-line`, `index-check`, `same-json`, `drill-config`, `drill-job`, `verdict-check`, `mech-verdict`); the mechanics checks of `mechanics-gcs.tsv` (49 rows, named in §5); the evidence files `identities.txt`, `known-tables.txt`, `expected-table-<x>`, `preconditions.txt`, `sts-<x>-before.txt`, `chi-<installation>-before.txt`, `runtime-uids-before.txt`, `images-before.txt`, `tracks-before.json`, `backup-writer-role.json`, `lock-remover-role.json`, `managed-folders.json`, `managed-folder-iam-<folder>.json` (K25), `hmac-list.json`, `keys.txt`, `staging-file.txt`, `staging-logins.txt`, `staging-server.txt`, `staging-chi.txt`, `staging-grants-<user>.jsonl`, `mech-stamp`, `mechanics-gcs.log`, `mechanics-verdict.txt`, `grants-si_backup-<host>.jsonl`, `chi-<installation>-after-si-backup-user.txt`, `render-si-backup-user-network.txt`, `render-si-backup-<x>.txt`, `cronjob-<x>.json`, `cronjob-<x>-config.yaml`, `host-pods-<x>-<step>.txt`, `drill-table-*.txt`, `backup-<x>-<n>.{prev,prev.json,log}`, `index-<x>-<n>.json`, `backup-check-<x>-<n>.txt`, `drill-<x>.log`, `drill-config-<x>.yaml`, `drill-job-<x>.json`, `active-<x>.tsv`, `drill-check-<x>.txt`, `render-monitoring-backups.txt`, `monitoring-backups.txt`, `staging-pvcs.txt`, `keeper-after-cleanup.txt`, `tests-<name>.txt`. The ledger value `P1_PR` (Step 10). PR title (contract §18): `storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)`.
+- Produces: the runbook with the sections of contract §18 verbatim and the names of contract §19: `si_backup="$HOME/si-devnet2-stage3-p1"`, `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, the helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql <account> <sql-file>`, `si_p1s_grant_probe`, `si_index <a|b|c> <name>`, `si_host_pods <a|b|c>`, `si_backup_run <a|b|c> <n>` (Job `sentio-node-devnet2-indexer-<x>-si-backup-p1-<n>`), `si_drill <a|b|c>` (ConfigMap `si-p1-drill-config-<x>`, Job `si-p1-drill-<x>`), the evidence files of contract §19 and the run values (`devuser1.s3_p1`, rows `5101`–`5104`, `hg_safe.p1_mech`, `mechanics/<stamp>-*`, `hg_rstage.p1drill_<x>_<n>`); the tracks runbook's stage row 10 (`| 10 | Multi-source stage 3 P1 (…): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |`). The names this task adds (Appendix B): the variables `si_p1_bucket`, `si_p1_bucket_url`, `si_p1s_chi`, `si_p1s_pod`, `si_p1s_logins`, `si_p1_trailer`, `si_p1_inpod_client`, `si_s3_inpod`; the helpers `si_p1_pin`, `si_p1_owner`, `si_p1_installation`, `si_p1_chi`, `si_p1_rpc_url`, `si_p1_cronjob`, `si_p1_account`, `si_p1s_as`, `si_secret_hits`, `si_s3_outcome`, `si_p1_check`, `si_p1_probe`, `si_indexes`, `si_p1_pods_check`, `si_p1_wait_backup_user`, `si_p1_grants`, `si_p1_backup_login`, `si_p1_servers`, `si_p1_fresh_main`, `si_p1_tests`, `si_p1_user_commit`, `si_p1_user_apply`, `si_p1_schedule_clear`, `si_p1_job_commit`, `si_p1_job_apply`, `si_p1_job_line`, `si_p1_backup_check`, `si_p1_active`, `si_p1_drill_check`, `si_p1_monitoring_commit`, `si_p1_monitoring_apply`, `si_p1_revert_chi`, `si_p1_mech_url`, `si_p1_sql`, `si_p1_status`, `si_p1_mech_backups`, `si_p1_mech_lock`, `si_p1_mech_keys`, `si_p1_hits_all`, `si_p1_key_fd`, `si_p1_mech_masking`, `si_p1_budget_left`, `si_p1_py` (subcommands `pr-state`, `hashes`, `staging-check`, `bucket`, `service-accounts`, `hmac`, `chi-add-user`, `values-add-user`, `enable-backup`, `monitoring`, `mirror`, `grants-check`, `cronjob-check`, `job-line`, `index-check`, `same-json`, `drill-config`, `drill-job`, `verdict-check`, `mech-verdict`); the mechanics checks of `mechanics-gcs.tsv` (49 rows, named in §5); the evidence files `identities.txt`, `known-tables.txt`, `expected-table-<x>`, `preconditions.txt`, `sts-<x>-before.txt`, `chi-<installation>-before.txt`, `runtime-uids-before.txt`, `images-before.txt`, `tracks-before.json`, `backup-writer-role.json`, `lock-remover-role.json`, `managed-folders.json`, `managed-folder-iam-<folder>.json` (K25), `hmac-list.json`, `keys.txt`, `staging-file.txt`, `staging-logins.txt`, `staging-server.txt`, `staging-chi.txt`, `staging-grants-<user>.jsonl`, `mech-stamp`, `mechanics-gcs.log`, `mechanics-verdict.txt`, `grants-si_backup-<host>.jsonl`, `chi-<installation>-after-si-backup-user.txt`, `render-si-backup-user-network.txt`, `render-si-backup-<x>.txt`, `cronjob-<x>.json`, `cronjob-<x>-config.yaml`, `host-pods-<x>-<step>.txt`, `drill-table-*.txt`, `backup-<x>-<n>.{prev,prev.json,log}`, `index-<x>-<n>.json`, `backup-check-<x>-<n>.txt`, `drill-<x>.log`, `drill-config-<x>.yaml`, `drill-job-<x>.json`, `active-<x>.tsv`, `drill-check-<x>.txt`, `render-monitoring-backups.txt`, `monitoring-backups.txt`, `staging-pvcs.txt`, `keeper-after-cleanup.txt`, `tests-<name>.txt`. The ledger value `P1_PR` (Step 10). PR title (contract §18): `storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)`.
 
 Notes (drafting decisions, Appendix B):
 - **Sections, helpers and evidence are the contract's.** The headings are contract §18's list, the §0 helpers and evidence files contract §19's, each spelled as there; §5's four parts (backups and restore, versions, keys, masking) are run-in labels, not headings, because the contract lists no subsection of §5. §1, §2 and §3 hold no confirmed block (§2 and §3 are the user's fish blocks; their checks are read-only), which Task 28 relies on.
@@ -13266,39 +13486,73 @@ Notes (drafting decisions, Appendix B):
 - **`system.grants` is compared row by row.** Measured on 26.3.51.7: `SI_BACKUP_GRANTS` expands to 7 rows (`GRANT READ, WRITE ON S3` is two, `access_object` `S3`) and `SI_RESTORE_GRANTS` to 13 (`ON hg_rstage.*` one row per right); `si_p1_py grants-check` holds those rows.
 - **The backup checks are relative to the latest index before each run.** `si_backup_run` records it (`backup-<x>-<n>.prev`), so a scheduled run that comes between §8 and §9 makes the next link instead of failing a check; the sync of §8 and every manual run refuse to start from 90 minutes before to 70 minutes after the owner's schedule, so the first run is the manual one in practice.
 - **The drill is the CronJob's sibling.** `si_drill` derives its config from the owner's deployed CronJob config (arbiter peers, network id, bucket) with only the staging address, `si_restore` and the scratch prefix changed, and its pod spec from the CronJob's (pull secrets, node selector, resources); the verdict line is taken from `kubectl logs` by its `format`, since the logs interleave sentio-node's stdout and stderr.
+- **The drill restores the backup this runbook made and checked (review fix).** `si_drill` passes `--backup <name>` (Task 25's optional flag) with the name of the owner's newest `backup-<x>-<n>.json`, and refuses unless `si_p1_backup_check` wrote its check: the owner's CronJob runs every day, so a drill that took "the latest backup" in a later window would restore a scheduled backup that no check of §8 or §9 read, and `si_p1_drill_check` (which compares the verdict with that file) would stop a healthy run.
 - **The registry comparison reads the hosts, not the voters.** The P0 runbook's partstates tool would have to be copied into the voters again (a write in §1) and reads P0's evidence names; `si_p1_active` instead lists each `hg_safe` table of the owner's source ClickHouse with the host's `sentio_getStorageIntegrityTableStatus`, which the host derives from the registry it follows, and §10 requires the verified tables to be exactly the `active` ones and the owner's known table among them.
 - **No secret reaches a disk or argv.** `si_secret_hits` and `si_p1_hits_all` read secrets through file descriptors (fixed descriptors 3 to 10, so bash 3.2 runs them too); a Job's log is saved only when it holds none; the masking samples stay in a shell variable.
-- **The budget is §13.4 verbatim (K28).** §1.3 copies the P0 runbook's two blocks into `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq` and `budget.txt`; §7 refuses unless that budget minus every promotion since is at least 16.
+- **The budget is §13.4 verbatim (K28).** §1.3 copies the P0 runbook's two blocks into `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq` and `budget.txt` (the second one only adds `| tee "$si_backup/budget.txt"`); size and sequence come from one finished, CRC-checked snapshot, never from `arbiter_state_bytes` with the live sequence; §7's read-only check and its `CREATE TABLE` block both refuse unless that budget minus every promotion since is at least 16.
+- **The user's Terraform apply follows their reading of the plan (review fix).** `terraform apply <saved plan>` does not ask again, so §2 has two fish blocks: `init` and `plan` with the plan's resource lines and summary, then, only once the plan adds exactly the replica resources, `apply` and the plan file's removal.
+- **Every series the backup alerts read is proven exported (review fix).** §11's read-only check after the sync requires, for each listed CronJob, `kube_cronjob_created`, `kube_cronjob_status_last_successful_time` and `kube_job_status_failed` of the Jobs `kube_job_owner` names it the owner of, the selectors of Task 26's two rules; a missing one would leave a rule that never fires.
+- **§12 records `P1_END` only for a clean end (review fix).** The CHIs, the arbiter and verifier images, the tracks and the backup alerts stop the record when they differ, as the pod checks already did.
+- **The tracks runbook points here (review fix).** As the P0 runbook did with row 9, the stage table of `docs/storage-integrity-devnet2-multi-source-tracks.md` gains row 10 for P1, so Plan S3-C3 contract §27.10's P2 row goes after it.
 - **Contract issue (recorded):** the render tests must accept every state the live commits produce. Plan S3-B's `test_si_clients_take_clickhouse_passwords_only_from_secrets`, `test_devnet2_clickhouse_logins_follow_the_rollout` and the indexer-c profile comparison see the CronJob's Secret env vars and the `si_backup` users once the P1 mirrors turn on; Task 26 extends them (contract §18), and Step 5's self-test applies every live commit of §6, §8 and §11 in a clone and runs the render tests, so a gap fails here, before the PR, not in Task 28.
 - **Verification while drafting.** The runbook and both scripts were run in a scratch export: the production tree that Plan S3-B's live tasks leave (a git archive of `origin/main` with S3-B Tasks 13, 16 and 19 and the P0, L and E live commits applied from their text, `test_render.py` 127 tests OK) plus stand-ins of Task 26's files written from contract §18; the six earlier runbooks' §0 blocks (the P0, lockdown and indexer-c ones extracted from Plan S3-B's text) sourced in order before this one (no name collides but `si_backup`); the helpers run against a locked ClickHouse 26.3.51.7 container standing in for the P1 staging installation and an S3 endpoint modelling the bucket's IAM rules (writer, writer with the lock remover, reader; overwrite needs delete): the grant probe (108 rows as expected, 30 `si_verifier` rows skipped, 8 s), all 49 mechanics rows (PASS, verdict `lock`), `si_index`, `si_indexes`, `si_backup_run` and `si_drill` with stand-in Jobs, every edit subcommand on the stand-in files, the render diffs of every live commit (as listed above), and `render-inertness.sh` (all eight releases `identical`); the conventions check, `bash -n`, `fish --no-execute`, `shellcheck` and the self-test as Steps 2 and 5 run them, on bash 5.3 and 3.2.
+- **Commit identity (review fix).** GitHub never shows the global `uranuswch@gmail.com`: Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` again (Task 26 set it first) and checks Task 26's authors, Step 6 checks this task's commit, Step 10 checks every commit of the PR (authors and co-author trailers) before the squash merge, and the ledger worktree of R1 sets the same identity before its record commit, which R2 refuses under any other author. The runbook's own commit helpers run in Task 28's live worktree, whose identity Task 28 sets.
+- **Review (2026-10-17).** Re-verified on a production export with Task 26 applied (the chain `base febc6c4ac + S3-B Tasks 15–21 stand-ins + C1 Task 26`, with S3-B Task 17's lockdown runbook extracted from its plan text): Steps 2–5 as written (69 bash blocks, 36 confirmed, 4 fish blocks; `shellcheck` with SC2154 and SC2034 excluded; `bash -n` on bash 5.3 and 3.2; `fish -n`; the self-test; `test_render.py` 147 tests OK; three `helm lint --strict`; `render-inertness.sh` eight `identical`); Task 28's 24 markers and two record markers each name exactly one block; §5's backups, keys and masking helpers ran against a real ClickHouse 26.3.37.3 and MinIO with a writer key without delete (`lock-removal-denied` on the full backup, as K24 predicts), one with delete on `*/.lock` only (every row as expected except the overwrite, which MinIO grants without a delete right and GCS refuses), and a reader key; `si_s3_sql`'s in-pod script ran under the deployed image's `dash` and `mawk`; the §14 revert order applies without conflicts on all seven live commits.
 
 - [ ] **Step 1: Worktree, Task 26's commits and the ledger inputs (read-only)**
 
-Requires Task 26's commits on the branch `urwt/claude/multi-source-s3c1` (worktree `~/src/remotesrc/claude/production/multi-source-s3c1`), the user's P1 logins of Task 26 (the hashes files and Secrets of contract §18), and the ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE` (Tasks 22 and 24), `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25), `INDEXER_C_ID` and `E_END` (Plan S3-B), all on their ledger copies (contract §19, decision D34). Stop if any is missing. With `P1_BACKUP_DELETE` `lock`, the user's amendment of spec §16 P1 (K24) precedes Task 26 and therefore this task.
+Requires Task 26's commits on the branch `urwt/claude/multi-source-s3c1` (worktree `~/src/remotesrc/claude/production/multi-source-s3c1`), the user's P1 logins of Task 26 (the hashes files and Secrets of contract §18), and the ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE` (Tasks 22 and 24), `SN_COMMIT_P1`, `SN_DIGEST_P1` (Task 25), `INDEXER_C_ID` and `E_END` (Plan S3-B), all on their ledger copies (contract §19, decision D34). Stop if any is missing. With `P1_BACKUP_DELETE` `lock`, the user's amendment of spec §16 P1 (K24) precedes Task 26 and therefore this task; the last block of this step checks it.
 
-The fetches below read remotes (GitHub): they need explicit user confirmation in chat before they run. The worktree is Task 26's (URWT; the script reuses an existing branch):
+The fetches below read remotes (GitHub): they need explicit user confirmation in chat before they run. The worktree is Task 26's (URWT; the script reuses an existing branch), and its commit identity is the worktree's own (Task 26 set it before its first commit; this block sets it again, idempotently):
 
 ```bash
 git -C /Users/uranuswch/Dev/projects/sentio-network/production fetch -q origin
 W="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production claude multi-source-s3c1 | jq -r .path)"; echo "$W"
+git -C "$W" rev-parse --abbrev-ref HEAD
 git -C "$W" status --porcelain | wc -l | tr -d ' '
+git -C "$W" merge-base --is-ancestor origin/main HEAD && echo "the branch contains origin/main"
 git -C "$W" log --oneline origin/main..HEAD
 git -C "$W" diff --name-only origin/main...HEAD
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config user.name; git -C "$W" config user.email
+git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+git -C "$W" log --format=%B origin/main..HEAD | grep -i '^co-authored-by:' | sort -u
 ```
 
-Expected: `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c1`, `0` (clean), Task 26's commits and nothing else, and exactly the production files of Task 26's **Files** list (the Terraform file, the two charts, the devnet2 overlays, the P1 staging file, the two scripts, `test_render.py`, the grant-probe corpus and the workflow), not `docs/storage-integrity-devnet2-stage3-p1-backups.md`. The ledger values: run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool (the ledger tool at the end of contract §19, verbatim; an earlier copy is the same text and is overwritten), then:
+Expected: `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c1`, `urwt/claude/multi-source-s3c1`, `0` (clean), `the branch contains origin/main` (if `main` moved since Task 26, rebase the unpushed branch first, `git -C "$W" rebase origin/main`, and run Task 26's checks again: Step 5's `render-inertness.sh origin/main` compares with the current `main`), Task 26's commits and nothing else, and exactly the production files of Task 26's **Files** list (the Terraform file, the two charts, the devnet2 overlays, the P1 staging file, the two scripts, `test_render.py`, the grant-probe corpus and the workflow), not `docs/storage-integrity-devnet2-stage3-p1-backups.md` and not `docs/storage-integrity-devnet2-multi-source-tracks.md`; then `poetry` and `chen@sentio.xyz` (the global `uranuswch@gmail.com` must never author a commit of this branch, else GitHub adds it as a co-author of the squash merge); exactly one author line, `poetry <chen@sentio.xyz>`; and at most the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Another author: stop and rewrite the authors of Task 26's commits (`git -C "$W" rebase -r origin/main --exec 'git commit --amend --no-edit --reset-author'`, with the identity above set) before anything else; nothing has been pushed yet. Any other co-author trailer: stop and ask.
+
+The ledger lives in Appendix C of the plan files on their ledger copies, never in a local checkout or a pending PR (contract §19, decision D23). Run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of contract §19 (this plan's Appendix A), verbatim, ending with one newline after `    main(sys.argv[1:])`; an existing copy is overwritten. Remote read (housegate fetch), then local reads, under the confirmation above:
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+echo "$ref"
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" && echo "s3-ledger.py is contract §19 of $ref"
 python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_COMMIT_P1 SN_DIGEST_P1 INDEXER_C_ID E_END
 python3 -I "$L/s3-ledger.py" empty "$h" P1_PR
 ```
 
-Expected: seven `NAME=value` lines and `s3-ledger: P1_PR not recorded yet in <ref>`; a `stop`: stop and ask, never type a value in. Prefix every later command with `W=<that path>;` and the first six of those values, copied from that output: `HG_TAG_P1=v…; CORE_TAG_P1=v…; P1_BACKUP_DELETE=none|lock; SN_COMMIT_P1=<40 hex>; SN_DIGEST_P1=sha256:<64 hex>; INDEXER_C_ID=<n>;`. Then check them against the branch (local only):
+Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged); `s3-ledger.py is contract §19 of <that ref>`; seven `NAME=value` lines; `s3-ledger: P1_PR not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`. If `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed (a missing or extra final newline counts) and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask. Never copy the tool from the ledger copy, never edit the plan. A `stop` (`no plan 's3c1'`, a value not recorded, or `P1_PR` recorded already, which means this task ran before): stop and ask, never type a value in. Every later block of this task starts with `W=<worktree path>` and the first six of those values, copied from that output: `HG_TAG_P1=v…; CORE_TAG_P1=v…; P1_BACKUP_DELETE=none|lock; SN_COMMIT_P1=<40 hex>; SN_DIGEST_P1=sha256:<64 hex>; INDEXER_C_ID=<n>`. Then check them against the branch (local only):
 
 ```bash
-cd "$W" && for v in HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_COMMIT_P1 SN_DIGEST_P1 INDEXER_C_ID; do eval "val=\${$v:-}"; [ -n "$val" ] || { echo "set $v from the ledger first"; exit 1; }; done
+W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
+cd "$W" && for v in HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_COMMIT_P1 SN_DIGEST_P1 INDEXER_C_ID; do eval "val=\${$v:-}"; case "$val" in ''|'<'*) echo "set $v from the ledger first"; exit 1 ;; esac; done
 for f in terraform/storage_integrity_devnet2_si_v2_replica.tf charts/sentio-node/templates/si-backup.yaml docs/examples/storage-integrity-p1-staging-chi.yaml scripts/storage-integrity/make-si-backup-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh charts/storage-integrity/tests/clickhouse_grant_probe.tsv; do test -s "$f" && echo "present $f"; done
 test ! -e docs/storage-integrity-devnet2-stage3-p1-backups.md && echo "no P1 runbook yet"
 python3 -I -B -c 'import os, sys
@@ -13312,16 +13566,30 @@ import test_render as t
 print(t.DEVNET2_SI_BACKUP_IMAGE)')" = "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P1@$SN_DIGEST_P1" ] && echo "the reviewed backup image is SN_DIGEST_P1"
 for f in hashes-p1-staging.yaml hashes-si_backup-network.yaml hashes-si_backup-indexer-b.yaml hashes-si_backup-indexer-c.yaml; do test -s "$HOME/si-devnet2-stage3-p1-logins/$f" && echo "present $f"; done
 for d in dynamic-table-set multi-source multi-source-tracks stage3-p0 stage3-lockdown stage3-indexer-c; do printf '%s ' "$(grep -c '^## 0. Session helpers$' "docs/storage-integrity-devnet2-$d.md")"; done; echo
+grep -c '^| 9 | Multi-source stage 3 P0 ' docs/storage-integrity-devnet2-multi-source-tracks.md
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 ```
 
-Expected: six `present …` lines and `no P1 runbook yet`; the image `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>`, the delete right `<P1_BACKUP_DELETE>`, the owners `{'sentio-node-devnet2-indexer-a': 0, 'sentio-node-devnet2-indexer-b': 1, 'sentio-node-devnet2-indexer-c': <INDEXER_C_ID>}`, the schedules `17 3 * * *`, `47 3 * * *`, `17 4 * * *`, every mirror off (`False`, `False`, `()`), the six staging users; `the reviewed backup image is SN_DIGEST_P1`; four `present …` lines for the user's hashes files; `1 1 1 1 1 1` (each earlier runbook has its §0); `Ran <N> tests` and `OK` with the count Task 26's last step printed (record it as `N`). Stop if any differs: the runbook below relies on each.
+Expected: six `present …` lines and `no P1 runbook yet`; the image `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>`, the delete right `<P1_BACKUP_DELETE>`, the owners `{'sentio-node-devnet2-indexer-a': 0, 'sentio-node-devnet2-indexer-b': 1, 'sentio-node-devnet2-indexer-c': <INDEXER_C_ID>}`, the schedules `17 3 * * *`, `47 3 * * *`, `17 4 * * *`, every mirror off (`False`, `False`, `()`), the six staging users; `the reviewed backup image is SN_DIGEST_P1`; four `present …` lines for the user's hashes files; `1 1 1 1 1 1` (each earlier runbook has its §0); `1` (the tracks runbook's stage-3 P0 row, which Step 4 follows); `Ran <N> tests` and `OK` with the count Task 26's last step printed (record it as `N`; `test_render.py` needs PyYAML). Stop if any differs: the runbook below relies on each.
+
+The delete right (K24, the user's decision; read-only, the housegate fetch above):
+
+```bash
+P1_BACKUP_DELETE=<ledger>
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+spec=docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md
+for r in origin/main origin/urwt/claude/ms-si-stage3-plans-cf; do printf '%s: %s\n' "$r" "$(git -C "$h" show "$r:$spec" 2>/dev/null | grep '^| P1 |' | grep -c "not delete, except the backup's own \`.lock\`")"; done
+echo "P1_BACKUP_DELETE=$P1_BACKUP_DELETE"
+```
+
+Expected with `none`: nothing more to decide (no backup key holds a delete; §2 creates no lock remover). With `lock`: a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR), the P1 row of spec §16 amended to "… but not delete, except the backup's own `.lock`" (K24; the phrase Task 26 checks). Stop and ask the user in chat unless they confirm that this amendment is theirs (or approved by them) and stands; never write or open the amendment as an agent, and never go on with `lock` on a count of `0`. The runbook covers both rights: §2 applies the lock remover only for `lock`, and §5 stops P1 when GCS measures another right than the ledger's.
 
 - [ ] **Step 2: The failing conventions check**
 
 The check (not committed) asserts contract §18's section list, exactly one bash block in §0 and that it is §0's first block, `Confirm before running.` in front of every block that writes and only there, no confirmed block in §1, §2 and §3 and a fish block in §2 and §3, no hard-wrapped prose, `bash -n` on every bash block, `fish --no-execute` on every fish block and a compile of every embedded Python program; it writes every block into a directory for `shellcheck` and the self-test:
 
 ```bash
+W=<worktree path>
 mkdir -p -m 700 "$HOME/.cache/s3c1-task27"
 cat > "$HOME/.cache/s3c1-task27/check_runbook.py" <<'EOF'
 import os, py_compile, re, shutil, subprocess, sys, tempfile
@@ -13836,15 +14104,24 @@ si_p1_backup_check() { # $1 a|b|c, $2 n: read-only: backup-<x>-<n>.json is a ful
     si_track "$owner" | jq -c --slurpfile i "$si_backup/backup-$1-$2.json" '{published, applied_promotion_seq, entry_safe_block_seq: ($i[0].entry.safe_block_seq | tonumber), entry_applied_promotion_seq: ($i[0].entry.applied_promotion_seq | tonumber)} | . + {entry_published: (.entry_safe_block_seq <= .published and .entry_applied_promotion_seq <= .applied_promotion_seq)}'
   } 2>&1 | tee "$si_backup/backup-check-$1-$2.txt"
 }
-si_drill() { # $1 a|b|c, mutating (only in a confirmed block): the restore drill of that owner's latest backup on the P1 staging installation: ConfigMap si-p1-drill-config-<x> and Job si-p1-drill-<x> (si_p1_image, as si_restore with the restore-drill key, scratch hg_rstage.p1drill_<x>_<n>), waited for up to 70 minutes; saves the verdict line to drill-<x>.json and the log, once proven free of the drill key, to drill-<x>.log
-  local owner cj job="si-p1-drill-$1" cm="si-p1-drill-config-$1" s="" i hits
+si_drill() { # $1 a|b|c, mutating (only in a confirmed block): the restore drill of that owner's newest backup this runbook made and checked (the last backup-<x>-<n>.json, with its passing backup-check-<x>-<n>.txt; restore-drill --backup <its name>, never "the latest", which a scheduled run may have replaced) on the P1 staging installation: ConfigMap si-p1-drill-config-<x> and Job si-p1-drill-<x> (si_p1_image, as si_restore with the restore-drill key, scratch hg_rstage.p1drill_<x>_<n>), waited for up to 70 minutes; saves the verdict line to drill-<x>.json and the log, once proven free of the drill key, to drill-<x>.log
+  local owner cj job="si-p1-drill-$1" cm="si-p1-drill-config-$1" s="" i hits n=1 name chk
   owner="$(si_p1_owner "$1")" && cj="$(si_p1_cronjob "$1")" || return 2
   [ ! -e "$si_backup/drill-$1.json" ] || { echo "drill-$1.json exists: indexer-$1's drill ran; never re-run it" >&2; return 1; }
+  [ -s "$si_backup/backup-$1-1.json" ] || { echo "no backup-$1-1.json: §8 first" >&2; return 1; }
+  while [ -s "$si_backup/backup-$1-$((n + 1)).json" ]; do n=$((n + 1)); done
+  name="$(jq -r .name "$si_backup/backup-$1-$n.json")" || return 1
+  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z-(full|incr)$ ]] || { echo "backup-$1-$n.json names no backup" >&2; return 1; }
+  chk="$si_backup/backup-check-$1-$n.txt"
+  if ! { grep -q "^backup-$1-$n.json: $name " "$chk" 2>/dev/null && grep -q "^the bucket's index object equals backup-$1-$n.json$" "$chk" && grep -q '^owner ClickHouse: BACKUP_CREATED $' "$chk" && grep -q '"entry_published":true' "$chk"; }; then
+    echo "backup $name (backup-$1-$n.json) has no passing si_p1_backup_check $1 $n: run that check first" >&2
+    return 1
+  fi
   [ -z "$(si_kubectl get job "$job" --ignore-not-found -o name)$(si_kubectl get configmap "$cm" --ignore-not-found -o name)" ] || { echo "Job $job or ConfigMap $cm exists: §13 removes them before another drill" >&2; return 1; }
   si_kubectl get cronjob "$cj" -o json > "$si_backup/drill-$1-cronjob.json" || return 1
   si_kubectl get configmap "$cj" -o 'go-template={{index .data "config.yaml"}}' > "$si_backup/drill-$1-cronjob-config.yaml" || return 1
   si_p1_py drill-config "$si_backup/drill-$1-cronjob-config.yaml" "$owner" "$1" > "$si_backup/drill-config-$1.yaml" || return 1
-  si_p1_py drill-job "$si_backup/drill-$1-cronjob.json" "$1" "$owner" "$(si_p1_rpc_url "$1")" "$(si_p1_image)" > "$si_backup/drill-job-$1.json" || return 1
+  si_p1_py drill-job "$si_backup/drill-$1-cronjob.json" "$1" "$owner" "$(si_p1_rpc_url "$1")" "$(si_p1_image)" "$name" > "$si_backup/drill-job-$1.json" || return 1
   si_kubectl create configmap "$cm" --from-file=config.yaml="$si_backup/drill-config-$1.yaml" || return 1
   si_kubectl create -f "$si_backup/drill-job-$1.json" || return 1
   for i in $(seq 1 420); do
@@ -13854,8 +14131,12 @@ si_drill() { # $1 a|b|c, mutating (only in a confirmed block): the restore drill
   done
   hits="$(si_kubectl logs "job/$job" | si_secret_hits restore-drill)" || hits=unknown
   if [ "$hits" = 0 ]; then si_kubectl logs "job/$job" > "$si_backup/drill-$1.log" 2>&1 || true; else echo "the log of Job $job holds the drill key ($hits lines) or could not be read: it is not saved; rotate the key (§15.3)" >&2; return 1; fi
-  si_p1_job_line si-restore-drill-v1 "$si_backup/drill-$1.log" > "$si_backup/drill-$1.json" || rm -f "$si_backup/drill-$1.json"
-  [ -s "$si_backup/drill-$1.json" ] && cat "$si_backup/drill-$1.json"
+  if ! si_p1_job_line si-restore-drill-v1 "$si_backup/drill-$1.log" > "$si_backup/drill-$1.json"; then
+    rm -f "$si_backup/drill-$1.json"
+    echo "Job $job (succeeded/failed: ${s:-unknown}) left no verdict line: read $si_backup/drill-$1.log" >&2
+    return 1
+  fi
+  cat "$si_backup/drill-$1.json"
   case "$s" in 1/*) ;; *) echo "Job $job did not pass (succeeded/failed: ${s:-unknown}): read $si_backup/drill-$1.log and drill-$1.json" >&2; return 1 ;; esac
 }
 si_p1_active() { # $1 a|b|c: read-only: the owner's SI tables in the registry as its host answers them: every hg_safe table of its source ClickHouse, as <database>.<table> with the host's status, one TSV line each
@@ -14520,7 +14801,9 @@ def cmd_drill_config(path, owner, x):
     sys.stdout.write(yaml.safe_dump(doc, sort_keys=False))
 
 
-def cmd_drill_job(cron_path, x, owner, rpc, image):
+def cmd_drill_job(cron_path, x, owner, rpc, image, backup):
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-(full|incr)", backup):
+        fail(f"{backup!r} is not a backup name")
     cj = json.load(open(cron_path))
     pod = json.loads(json.dumps(cj["spec"]["jobTemplate"]["spec"]["template"]["spec"]))
     [c] = pod["containers"]
@@ -14529,7 +14812,7 @@ def cmd_drill_job(cron_path, x, owner, rpc, image):
     pod["containers"] = [{
         "name": "si-drill",
         "image": image,
-        "command": ["/sentio-node", "storage-integrity", "restore-drill", "--config-path", "/etc/si-drill/config.yaml", "--owner", str(owner), "--owner-rpc", rpc],
+        "command": ["/sentio-node", "storage-integrity", "restore-drill", "--config-path", "/etc/si-drill/config.yaml", "--owner", str(owner), "--owner-rpc", rpc, "--backup", backup],
         "env": [
             {"name": "STORAGE_INTEGRITY_CLICKHOUSE_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "storage-integrity-si-v2-p1-staging-logins", "key": "si_restore"}}},
             {"name": "STORAGE_INTEGRITY_S3_ACCESS_KEY_ID", "valueFrom": {"secretKeyRef": {"name": "storage-integrity-si-v2-restore-drill", "key": "access-id"}}},
@@ -14615,7 +14898,7 @@ COMMANDS = {
     "service-accounts": (cmd_service_accounts, 2), "hmac": (cmd_hmac, 4), "chi-add-user": (cmd_chi_add_user, 2), "values-add-user": (cmd_values_add_user, 2),
     "enable-backup": (cmd_enable_backup, 1), "monitoring": (cmd_monitoring, None), "mirror": (cmd_mirror, 4), "grants-check": (cmd_grants_check, 2),
     "cronjob-check": (cmd_cronjob_check, 5), "job-line": (cmd_job_line, 2), "index-check": (cmd_index_check, None), "same-json": (cmd_same_json, 2),
-    "drill-config": (cmd_drill_config, 3), "drill-job": (cmd_drill_job, 5), "verdict-check": (cmd_verdict_check, 5), "mech-verdict": (cmd_mech_verdict, 3),
+    "drill-config": (cmd_drill_config, 3), "drill-job": (cmd_drill_job, 6), "verdict-check": (cmd_verdict_check, 5), "mech-verdict": (cmd_mech_verdict, 3),
 }
 args = sys.argv[1:]
 if not args or args[0] not in COMMANDS:
@@ -14628,7 +14911,7 @@ PY
 }
 ```
 
-`si_backup_run` and `si_drill` save a Job's log only after `si_secret_hits` found no line of it that holds the key the Job ran with, and take the Job's one result line (`objstore.BackupIndex` or `objstore.DrillVerdict`, which sentio-node prints alone on stdout) out of `kubectl logs`, which interleaves stdout with the logger's stderr, by its `format` field. `si_drill` derives the drill's config from the owner's backup CronJob config (its arbiter peers, network id and bucket) with only the ClickHouse address (the P1 staging installation), the user (`si_restore`) and the scratch prefix (`p1drill_<x>_`) changed, and its pod spec from that CronJob's (image pull secrets, node selector, resources) with the drill's command, its config mount and exactly three Secret env vars: `STORAGE_INTEGRITY_CLICKHOUSE_PASSWORD` from `storage-integrity-si-v2-p1-staging-logins` key `si_restore`, and the `restore-drill` key. `si_p1_active` lists an owner's tables as its host answers them: each `hg_safe` table of its source ClickHouse, named `<database>__<table>` there, with the host's `sentio_getStorageIntegrityTableStatus` status, which the host derives from the table registry it follows.
+`si_backup_run` and `si_drill` save a Job's log only after `si_secret_hits` found no line of it that holds the key the Job ran with, and take the Job's one result line (`objstore.BackupIndex` or `objstore.DrillVerdict`, which sentio-node prints alone on stdout) out of `kubectl logs`, which interleaves stdout with the logger's stderr, by its `format` field. `si_drill` derives the drill's config from the owner's backup CronJob config (its arbiter peers, network id and bucket) with only the ClickHouse address (the P1 staging installation), the user (`si_restore`) and the scratch prefix (`p1drill_<x>_`) changed, and its pod spec from that CronJob's (image pull secrets, node selector, resources) with the drill's command (`--backup` names the owner's newest backup of this runbook, the one `si_p1_backup_check` passed, so a scheduled run between §9 and §10 changes nothing), its config mount and exactly three Secret env vars: `STORAGE_INTEGRITY_CLICKHOUSE_PASSWORD` from `storage-integrity-si-v2-p1-staging-logins` key `si_restore`, and the `restore-drill` key. `si_p1_active` lists an owner's tables as its host answers them: each `hg_safe` table of its source ClickHouse, named `<database>__<table>` there, with the host's `sentio_getStorageIntegrityTableStatus` status, which the host derives from the table registry it follows.
 
 ## 1. Preparation
 
@@ -14820,19 +15103,26 @@ Expected: one line `snapshot … budget to L/4 (134217728 bytes): <n> promotions
 
 ## 2. Bucket and service accounts (user action)
 
-The user applies the replica bucket, the backup writer role, the eight service accounts, the four managed folders of the writer prefixes (`owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/`, `mechanics/`) with each writer's binding on its own folder, and the readers' bucket bindings (`terraform/storage_integrity_devnet2_si_v2_replica.tf`), and nothing else, in their own terminal (fish), from the root of the same production checkout. A writer holds nothing on the bucket itself: an IAM Condition of a bucket binding cannot scope a list to a prefix, a managed folder can (K25). No HMAC key, key file or Secret is a Terraform resource (Terraform Cloud state would hold it). The lock-remover role and bindings exist only when `P1_BACKUP_DELETE` is `lock`. The bucket has `prevent_destroy` and keeps every object version: once applied, it stays.
+The user applies the replica bucket, the backup writer role, the eight service accounts, the four managed folders of the writer prefixes (`owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/`, `mechanics/`) with each writer's binding on its own folder, and the readers' bucket bindings (`terraform/storage_integrity_devnet2_si_v2_replica.tf`), and nothing else, in their own terminal (fish), from the root of the same production checkout: first the plan, which the user reads, then the apply of exactly that plan (`terraform apply` of a saved plan does not ask again). A writer holds nothing on the bucket itself: an IAM Condition of a bucket binding cannot scope a list to a prefix, a managed folder can (K25). No HMAC key, key file or Secret is a Terraform resource (Terraform Cloud state would hold it). The lock-remover role and bindings exist only when `P1_BACKUP_DELETE` is `lock`. The bucket has `prevent_destroy` and keeps every object version: once applied, it stays.
 
 ```fish
 set targets -target=google_storage_bucket.storage_integrity_devnet2_si_v2_replica -target=google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_writer -target=google_service_account.storage_integrity_devnet2_si_v2_backup -target=google_storage_managed_folder.storage_integrity_devnet2_si_v2_backup -target=google_storage_managed_folder_iam_member.storage_integrity_devnet2_si_v2_backup_writer -target=google_service_account.storage_integrity_devnet2_si_v2_restore -target=google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_restore_viewer
 if test (sed -n 5p $HOME/si-devnet2-stage3-p1/pins) = lock
     set -a targets -target=google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_lock_remover -target=google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_backup_lock_remover
 end
+terraform -chdir=terraform init
 terraform -chdir=terraform plan -out=/tmp/si-devnet2-si-v2-replica.tfplan $targets
 terraform -chdir=terraform show -no-color /tmp/si-devnet2-si-v2-replica.tfplan | grep -E '^  # |^Plan:'
-terraform -chdir=terraform apply /tmp/si-devnet2-si-v2-replica.tfplan
 ```
 
-The plan creates and changes nothing else: one bucket, the writer role, four backup service accounts, four managed folders with one writer binding each, four restore service accounts with four viewer bindings (`Plan: 22 to add, 0 to change, 0 to destroy.`), and with `lock` also the lock-remover role and four lock-remover bindings (`Plan: 27 to add, 0 to change, 0 to destroy.`). Anything else in the plan: do not apply; tell the operator.
+The plan creates and changes nothing else: one bucket, the writer role, four backup service accounts, four managed folders with one writer binding each, four restore service accounts with four viewer bindings (`Plan: 22 to add, 0 to change, 0 to destroy.`), and with `lock` also the lock-remover role and four lock-remover bindings (`Plan: 27 to add, 0 to change, 0 to destroy.`), every `# ` line naming a resource of `storage_integrity_devnet2_si_v2_replica.tf`. Anything else in the plan (a change, a destroy, another resource): do not apply, remove the plan file (`rm /tmp/si-devnet2-si-v2-replica.tfplan`) and tell the operator. Only then, in the same terminal, the apply of that plan:
+
+```fish
+terraform -chdir=terraform apply /tmp/si-devnet2-si-v2-replica.tfplan
+rm /tmp/si-devnet2-si-v2-replica.tfplan
+```
+
+Expected: `Apply complete! Resources: 22 added, 0 changed, 0 destroyed.` (27 with `lock`).
 
 Then the operator's read-only checks (gcloud with the user's own login, metadata only):
 
@@ -14989,7 +15279,7 @@ si_p1_py mech-verdict "$si_backup/mechanics-gcs.tsv" "$si_backup/pins" "$si_back
 } | tee "$si_backup/p1-mechanics.txt"
 ```
 
-Expected: `49 rows, 0 failed; measured delete right <P1_BACKUP_DELETE>, P1_BACKUP_DELETE <P1_BACKUP_DELETE>`, then `P1_MECHANICS=<YYYY-MM-DD>` and the stamp line. The verdict exits non-zero, and nothing is recorded, unless every row passed and the measured delete right (from the full backup, the `.lock` versions and the mechanics key's bindings) equals `P1_BACKUP_DELETE`. Plan S3-C1 Task 28 records the date as `P1_MECHANICS`. A failed run is repeated only once its cause is understood and fixed: move `mech-stamp`, `mechanics-gcs.tsv` and `mechanics-gcs.log` aside, drop the run's staging tables in a confirmed block of its own (`si_p1s_ch "DROP TABLE IF EXISTS hg_safe.p1_mech SYNC"`, the same for `hg_safe.p1_mech_bulk` and `hg_rstage.p1mech_restore`), and run this section again with a new stamp; the earlier run's objects stay in the bucket.
+Expected: `49 rows, 0 failed; measured delete right <P1_BACKUP_DELETE>, P1_BACKUP_DELETE <P1_BACKUP_DELETE>`, then `P1_MECHANICS=<YYYY-MM-DD>` and the stamp line. The verdict exits non-zero, and nothing is recorded, unless every row passed and the measured delete right (from the full backup, the `.lock` versions and the mechanics key's bindings) equals `P1_BACKUP_DELETE`. A measured right of `undetermined`, or one that differs from `P1_BACKUP_DELETE`, means GCS and the deployed image need another delete right than mechanics M13 recorded: stop P1 and ask the user (K24 is their decision); never change the pins, the Terraform or a key's binding to make the verdict pass, and write nothing under an owner's prefix. Plan S3-C1 Task 28 records the date as `P1_MECHANICS`. A failed run is repeated only once its cause is understood and fixed: move `mech-stamp`, `mechanics-gcs.tsv` and `mechanics-gcs.log` aside, drop the run's staging tables in a confirmed block of its own (`si_p1s_ch "DROP TABLE IF EXISTS hg_safe.p1_mech SYNC"`, the same for `hg_safe.p1_mech_bulk` and `hg_rstage.p1mech_restore`), and run this section again with a new stamp; the earlier run's objects stay in the bucket.
 
 ## 6. Backup users
 
@@ -15076,6 +15366,7 @@ Confirm before running.
 ```bash
 key_file=/path/to/devuser1-owner.key
 [ "$key_file" != /path/to/devuser1-owner.key ] && [ -r "$key_file" ] || { echo "set key_file to the devuser1 owner's key file"; exit 1; }
+left="$(si_p1_budget_left)" && [ "$left" -ge 16 ] || { echo "the promotion budget left is ${left:-unknown}, less than 16 (K28): run the check above and decide with the user"; exit 1; }
 {
   si_track 1
   si_agent_start "$key_file"
@@ -15296,7 +15587,7 @@ Expected, per owner: `backup-<x>-2.json: <name> incr chain 2 on <first name>, ma
 
 ## 10. Restore drills
 
-One drill per owner against its latest backup, on the P1 staging installation (K27): the Job fetches the manifest S that the backup's index names (never the latest one) through the arbiter and accepts it only if its id is the requested one and its recomputed root, it validates and its ledger holds; it reads each table's schema from the owner host's status RPC and requires its hash to be S's; it restores every partition S lists for the owner's backed-up tables into `hg_rstage.p1drill_<x>_<n>`, keeps each needed part once, drops the unneeded ones inside the scratch and requires the kept parts to sum to the partition root; and it passes only with at least one verified table and every table S lists verified. The drills write only to the staging installation and read the bucket with the read-only `restore-drill` key.
+One drill per owner against its newest backup of this runbook (§9's, or §8's if §9 has not run; `si_drill` passes its name as `--backup` and refuses one without a passing `si_p1_backup_check`, so a scheduled backup between §9 and this section changes nothing), on the P1 staging installation (K27): the Job fetches the manifest S that the backup's index names (never the latest one) through the arbiter and accepts it only if its id is the requested one and its recomputed root, it validates and its ledger holds; it reads each table's schema from the owner host's status RPC and requires its hash to be S's; it restores every partition S lists for the owner's backed-up tables into `hg_rstage.p1drill_<x>_<n>`, keeps each needed part once, drops the unneeded ones inside the scratch and requires the kept parts to sum to the partition root; and it passes only with at least one verified table and every table S lists verified. The drills write only to the staging installation and read the bucket with the read-only `restore-drill` key.
 
 ### 10.1 indexer-b
 
@@ -15379,10 +15670,19 @@ Then, read-only, a few minutes after the sync:
   si_vmalert_groups | jq -c 'select(.group == "storage-integrity-si-v2.backups")'
   si_vm_query 'kube_cronjob_status_last_successful_time{namespace="sentio-network-devnet2", cronjob=~"sentio-node-devnet2-indexer-[abc]-si-backup"}' | jq -c '[.data.result[] | {cronjob: .metric.cronjob, last_success: .value[1]}]'
   si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[].metric | {alertname, alertstate, cronjob, owner_name}]'
+  for x in a b c; do
+    cj="$(si_p1_cronjob "$x")"
+    sel="namespace=\"sentio-network-devnet2\""
+    created="$(si_vm_query "kube_cronjob_created{$sel, cronjob=\"$cj\"}" | jq '.data.result | length')"
+    success="$(si_vm_query "kube_cronjob_status_last_successful_time{$sel, cronjob=\"$cj\"}" | jq '.data.result | length')"
+    failed="$(si_vm_query "max by (cluster, namespace, job_name) (kube_job_status_failed{$sel}) and on (cluster, namespace, job_name) max by (cluster, namespace, job_name) (kube_job_owner{$sel, owner_kind=\"CronJob\", owner_name=\"$cj\"})" | jq '.data.result | length')"
+    echo "$cj: kube_cronjob_created $created, kube_cronjob_status_last_successful_time $success, kube_job_status_failed of its Jobs $failed"
+    [ "$created" -ge 1 ] && [ "$success" -ge 1 ] && [ "$failed" -ge 1 ] || { echo "kube-state-metrics does not export a series the backup alerts read for $cj: an alert would never fire; stop and fix the exporter or the rules"; exit 1; }
+  done
 } 2>&1 | tee "$si_backup/monitoring-backups.txt"
 ```
 
-Expected: the group `storage-integrity-si-v2.backups` with `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed`, both `health` `ok`; three `last_success` values (the manual runs of §8 and §9 count, being the CronJobs' own Jobs); no alert (`[]`). A `StorageIntegrityBackupFailed` here names a failed Job of §8 or §9 that is still kept: read §15.2, delete that Job only once its failure is understood, and check again.
+Expected: the group `storage-integrity-si-v2.backups` with `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed`, both `health` `ok`; three `last_success` values (the manual runs of §8 and §9 count, being the CronJobs' own Jobs); no alert (`[]`); then, per CronJob, `kube_cronjob_created 1, kube_cronjob_status_last_successful_time 1, kube_job_status_failed of its Jobs <n>` with `<n>` at least `1` (the Jobs of §8 and §9 its `successfulJobsHistoryLimit` keeps). Every selector of the two rules thus has a series (Task 26's rules read exactly `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_status_failed` and `kube_job_owner`); a `0` stops here, because that rule could never fire. A `StorageIntegrityBackupFailed` here names a failed Job of §8 or §9 that is still kept: read §15.2, delete that Job only once its failure is understood, and check again.
 
 ## 12. End
 
@@ -15399,20 +15699,26 @@ P1's exit (spec §16 P1): every owner has a full and an incremental backup whose
     grep '^drill of owner' "$si_backup/drill-check-$x.txt"
     si_p1_pods_check "$x" after
   done
-  si_chi_state storage-integrity-si-v2 | diff "$si_backup/chi-network-before.txt" - && echo "network CHI unchanged"
-  si_chi_state storage-integrity-si-v2-indexer-b | diff "$si_backup/chi-indexer-b-before.txt" - && echo "indexer-b CHI unchanged"
-  si_chi_state storage-integrity-si-v2-indexer-c | diff "$si_backup/chi-indexer-c-before.txt" - && echo "indexer-c CHI unchanged"
-  si_images | diff "$si_backup/images-before.txt" - && echo "arbiter and verifier images unchanged"
+  for i in network indexer-b indexer-c; do
+    case "$i" in network) chi=storage-integrity-si-v2 ;; *) chi="storage-integrity-si-v2-$i" ;; esac
+    si_chi_state "$chi" | diff "$si_backup/chi-$i-before.txt" - || { echo "the $i CHI changed since §1.3: stop (§14)"; exit 1; }
+    echo "$i CHI unchanged"
+  done
+  si_images | diff "$si_backup/images-before.txt" - || { echo "an arbiter or verifier image changed since §1.3: stop"; exit 1; }
+  echo "arbiter and verifier images unchanged"
   si_tracks | jq -c '[.indexers[] | {id: .indexer_id, quarantined, published: .published.safe_block_seq}]'
+  si_tracks | jq -e '[.indexers[] | select(.quarantined)] | length == 0' > /dev/null || { echo "a track is quarantined: stop"; exit 1; }
   echo "promotions since §1.3: $(( $(si_show | jq -r .promotion_seq) - $(cat "$si_backup/budget-live-seq") ))"
   grep '^P1_MECHANICS=' "$si_backup/p1-mechanics.txt"
-  echo "alerts: $(si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[].metric.alertname]')"
+  alerts="$(si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[].metric.alertname]')"
+  echo "alerts: $alerts"
+  [ "$alerts" = '[]' ] || { echo "a backup alert is pending or firing: §15.2, then this block again"; exit 1; }
   for f in si-backup-user-indexer-b-commit si-backup-user-indexer-c-commit si-backup-user-network-commit si-backup-b-commit si-backup-c-commit si-backup-a-commit monitoring-backups-commit; do echo "$f $(cat "$si_backup/$f")"; done
   echo "P1_END=$(date -u +%Y-%m-%d)"
 } 2>&1 | tee "$si_backup/p1-end.txt"
 ```
 
-Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; the three CHIs and the images unchanged; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; `alerts: []`; the seven commits; and the last line `P1_END=<YYYY-MM-DD>`. Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
+Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; `network CHI unchanged`, `indexer-b CHI unchanged`, `indexer-c CHI unchanged` and `arbiter and verifier images unchanged`; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; `alerts: []`; the seven commits; and the last line `P1_END=<YYYY-MM-DD>`. A changed pod, CHI or image, a quarantined track or a backup alert stops the block before that line, so no `P1_END` is written for an end that is not clean; promotions above four are reported here and stop Task 28's record (K28). Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
 
 ## 13. Staging cleanup
 
@@ -15556,7 +15862,7 @@ Then the failed Job's log (`si_kubectl logs job/<job>`; it never holds a key, be
 - `Authentication failed` for `si_backup`: its Secret and its installation's hash differ (§15.3).
 - `lock-removal-denied` (`Access denied … while removing object with path …/.lock`): the image's `BACKUP` needs the lock right that `P1_BACKUP_DELETE` `none` withholds; stop the CronJob (§14) and decide with the user (K24).
 - `backup … exists already` or `BACKUP_ALREADY_EXISTS`: two runs started within the same second (a manual run beside a scheduled one); the later one failed and changed nothing.
-- A manifest read that timed out (`storage integrity arbiter client`) or `has no track frontier for indexer`: the arbiter or the owner's track; the next scheduled run retries.
+- An arbiter that could not be reached (`storage integrity arbiter client`), a manifest read that timed out (`storage integrity arbiter: reading … took longer than …`) or `has no track frontier for indexer`: the arbiter or the owner's track; the next scheduled run retries.
 - A Job that hit `activeDeadlineSeconds` (3600): GCS throughput or a large `hg_safe`; the objects it wrote stay without an index and are never used.
 
 Once fixed, run one backup by hand outside the owner's schedule window, in a confirmed block of its own: during P1 with the next run number (`si_backup_run <x> <n>`); after §13 with `si_kubectl create job --from=cronjob/<cronjob> <cronjob>-manual-$(date -u +%Y%m%dt%H%M%S)` and its log read through `si_secret_hits` as above. Delete the failed Job (`si_kubectl delete job <job>`, confirmed) only after its log is read, so the warning clears. A backup older than 26 hours is the critical case because a member's restore (stage 3 P2) and a rebuild (stage 3 P4) take the latest backup and catch up from it.
@@ -15596,9 +15902,10 @@ Then one backup by hand (§15.2's manual run, confirmed) proves the new key, and
 - The drill reads table schemas from the owner host's status RPC and trusts nothing it says: each schema's hash must be the manifest's. Stage 3 P2's members need their own schema source for the gate.
 ````
 
-- [ ] **Step 4: Fill the PR-time values**
+- [ ] **Step 4: Fill the PR-time values and point the tracks runbook here**
 
 ```bash
+W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
 cd "$W" && sed -i '' -e "s/<HG_TAG_P1>/$HG_TAG_P1/g" -e "s/<CORE_TAG_P1>/$CORE_TAG_P1/g" -e "s/<SN_COMMIT_P1>/$SN_COMMIT_P1/g" -e "s/<SN_DIGEST_P1>/$SN_DIGEST_P1/g" -e "s/<P1_BACKUP_DELETE>/$P1_BACKUP_DELETE/g" -e "s/<INDEXER_C_ID>/$INDEXER_C_ID/g" docs/storage-integrity-devnet2-stage3-p1-backups.md
 if grep -nE '<(HG_TAG_P1|CORE_TAG_P1|SN_COMMIT_P1|SN_DIGEST_P1|P1_BACKUP_DELETE|INDEXER_C_ID)>' docs/storage-integrity-devnet2-stage3-p1-backups.md; then echo "a PR-time placeholder is left"; exit 1; fi
 grep -c "sha-$SN_COMMIT_P1@$SN_DIGEST_P1" docs/storage-integrity-devnet2-stage3-p1-backups.md
@@ -15608,16 +15915,39 @@ grep -c "for account in backup-0 backup-1 backup-$INDEXER_C_ID backup-mech resto
 
 Expected: no line from the placeholder check, then `2` (§1.1's pins table and its expected line), `1` (§1.1's pins block) and `1` (§3's fish loop).
 
+The stage table of `docs/storage-integrity-devnet2-multi-source-tracks.md` lists every stage of devnet2-si-v2 since the tracks runbook; Plan S3-B's P0 runbook added row 9, and P1 adds row 10 right after it (one line, not wrapped; Plan S3-C3's P2 row follows this one, contract §27.10 there):
+
+```bash
+W=<worktree path>
+cd "$W" && python3 -I - docs/storage-integrity-devnet2-multi-source-tracks.md <<'EOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+lines = text.split("\n")
+p0 = [i for i, line in enumerate(lines) if line.startswith("| 9 | Multi-source stage 3 P0 (") and line.endswith("| See that runbook (§12) |")]
+row = "| 10 | Multi-source stage 3 P1 (verified object-store backups of every SI owner's `hg_safe` in a versioned GCS bucket, with keys confined to each owner's prefix that cannot delete; one restore drill per owner gated against the manifest its backup names; backup alerts): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |"
+assert len(p0) == 1, "expected one stage-3 P0 row 9 in the stage table: re-anchor the pointer"
+assert row not in lines and not lines[p0[0] + 1].startswith("| 10 | "), "the stage table has a row 10 already: never add a second one"
+lines.insert(p0[0] + 1, row)
+open(path, "w").write("\n".join(lines))
+print("stage row 10 added after the stage-3 P0 row 9")
+EOF
+git -C "$W" diff --stat -- docs/storage-integrity-devnet2-multi-source-tracks.md
+```
+
+Expected: `stage row 10 added after the stage-3 P0 row 9` and `1 file changed, 1 insertion(+)`.
+
 - [ ] **Step 5: Verify**
 
 The conventions check of Step 2, now passing, then `shellcheck` on the blocks it wrote:
 
 ```bash
+W=<worktree path>
 cd "$W" && python3 -I "$HOME/.cache/s3c1-task27/check_runbook.py" docs/storage-integrity-devnet2-stage3-p1-backups.md "$HOME/.cache/s3c1-task27/blocks"
 shellcheck -s bash -S info -e SC2154,SC2034 "$HOME/.cache/s3c1-task27/blocks"/*.bash && echo "shellcheck clean apart from SC2154, SC2034"
 ```
 
-Expected: `sections as listed; one helpers block in §0; 69 bash blocks (36 confirmed, every write confirmed), 3 fish blocks; no hard-wrapped prose; bash -n and fish --no-execute pass; 7 python snippets compile; blocks in <home>/.cache/s3c1-task27/blocks`, then `shellcheck clean apart from SC2154, SC2034` (SC2154 is `si_backup` and the earlier runbooks' names, defined in their §0; SC2034 the loop counters of the wait loops).
+Expected: `sections as listed; one helpers block in §0; 69 bash blocks (36 confirmed, every write confirmed), 4 fish blocks; no hard-wrapped prose; bash -n and fish --no-execute pass; 7 python snippets compile; blocks in <home>/.cache/s3c1-task27/blocks`, then `shellcheck clean apart from SC2154, SC2034` (SC2154 is `si_backup` and the earlier runbooks' names, defined in their §0; SC2034 the loop counters of the wait loops).
 
 The self-test of the §0 helpers (local only: it sources the seven runbooks' §0 blocks from this branch, applies every live commit of §6, §8 and §11 in a clone of the worktree and runs the render tests on that state, builds the drill Job from the CronJob the branch renders, runs `si_s3_sql`'s in-pod script with a stand-in `clickhouse-client`, and checks the index, verdict and mechanics parsers on synthetic objects; it reads the user's `hashes-p1-staging.yaml`, which holds hashes only, and touches no cluster, bucket or ClickHouse). Write `$HOME/.cache/s3c1-task27/selftest.bash` with the Write tool:
 
@@ -15656,6 +15986,7 @@ git clone -q "$W" "$t/repo"
 cd "$t/repo"
 git config user.email selftest@example.invalid
 git config user.name selftest
+git config commit.gpgsign false
 for i in network indexer-b indexer-c; do printf 'passwordSha256:\n  si_backup: "%s"\n' "$(printf 'selftest-%s' "$i" | shasum -a 256 | cut -d' ' -f1)" > "$si_p1_logins_dir/hashes-si_backup-$i.yaml"; done
 for i in indexer-b indexer-c; do
   si_p1_py chi-add-user "k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-$i-source.yaml" "$si_p1_logins_dir/hashes-si_backup-$i.yaml"
@@ -15692,7 +16023,8 @@ PYEOF
 si_p1_py cronjob-check "$t/cronjob-b.json" "$t/cronjob-b-config.yaml" 1 indexer-b "$(si_p1_image)"
 si_p1_py drill-config "$t/cronjob-b-config.yaml" 1 b > "$t/drill-config-b.yaml"
 python3 -I -c 'import sys, yaml; si = yaml.safe_load(open(sys.argv[1]))["storage_integrity"]; print("drill config:", si["clickhouse_dsn"], si["clickhouse_username"], si["backup"])' "$t/drill-config-b.yaml"
-si_p1_py drill-job "$t/cronjob-b.json" b 1 "$(si_p1_rpc_url b)" "$(si_p1_image)" > "$t/drill-job-b.json"
+si_p1_py drill-job "$t/cronjob-b.json" b 1 "$(si_p1_rpc_url b)" "$(si_p1_image)" 20261021T050100Z-incr > "$t/drill-job-b.json"
+if si_p1_py drill-job "$t/cronjob-b.json" b 1 "$(si_p1_rpc_url b)" "$(si_p1_image)" latest > /dev/null 2>&1; then echo "UNEXPECTED: a drill Job without a backup name"; exit 1; fi
 jq -c '[.apiVersion, .kind, .metadata.name, .spec.backoffLimit, .spec.template.spec.restartPolicy, .spec.template.spec.containers[0].image == .spec.template.spec.containers[0].image, .spec.template.spec.containers[0].command, [.spec.template.spec.containers[0].env[] | .valueFrom.secretKeyRef | "\(.name)/\(.key)"], .spec.template.spec.volumes[0].configMap.name]' "$t/drill-job-b.json"
 echo "== si_s3_sql's in-pod script, with a stand-in clickhouse-client"
 mkdir "$t/bin"
@@ -15758,6 +16090,9 @@ PYEOF
 si_p1_py index-check "$si_backup/backup-b-1.json" 1 devuser1.s3_p1
 si_p1_py index-check "$si_backup/backup-b-2.json" 1 devuser1.s3_p1 "$si_backup/backup-b-1.json"
 if si_p1_py index-check "$si_backup/backup-b-2.json" 1 devuser1.s3_p1 2>/dev/null; then echo "UNEXPECTED: an incremental backup passed as a first one"; exit 1; fi
+# shellcheck disable=SC2329 # the stand-in si_kubectl is called by si_drill
+if (si_kubectl() { echo "UNEXPECTED: si_drill reached the cluster" >&2; return 1; }; si_drill b) 2> "$t/drill-refusal.txt"; then echo "UNEXPECTED: a drill of a backup without its check started"; exit 1; fi
+grep -q 'has no passing si_p1_backup_check b 2' "$t/drill-refusal.txt" && echo "ok: si_drill refuses a backup without a passing si_p1_backup_check"
 si_p1_job_line si-restore-drill-v1 "$si_backup/drill-b.log" > "$si_backup/drill-b.json"
 si_p1_py verdict-check "$si_backup/drill-b.json" "$si_backup/backup-b-2.json" 1 "$si_backup/active-b.tsv" devuser1.s3_p1
 printf 'devuser1.s3_p1\tactive\ndevuser1.s3_p2\tactive\n' > "$si_backup/active-b.tsv"
@@ -15779,14 +16114,16 @@ echo "selftest passed"
 Then run it with the pins in its environment:
 
 ```bash
+W=<worktree path>; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; P1_BACKUP_DELETE=<ledger>; SN_COMMIT_P1=<ledger>; SN_DIGEST_P1=<ledger>; INDEXER_C_ID=<ledger>
 cd "$W" && HG_TAG_P1="$HG_TAG_P1" CORE_TAG_P1="$CORE_TAG_P1" SN_COMMIT_P1="$SN_COMMIT_P1" SN_DIGEST_P1="$SN_DIGEST_P1" P1_BACKUP_DELETE="$P1_BACKUP_DELETE" INDEXER_C_ID="$INDEXER_C_ID" bash "$HOME/.cache/s3c1-task27/selftest.bash"
 ```
 
-Expected, in order: `== the seven runbooks' helpers source in order; si_backup is <home>/si-devnet2-stage3-p1`; the `P1 PR state: every si_backup user, backup job and backup alert off; …; delete right <P1_BACKUP_DELETE>` line and the image; `P1 staging CHI: storage-integrity-si-v2-p1-staging, root /storage-integrity/devnet2/p1-staging, users default, si_snode, si_gateway, si_reader, si_backup, si_restore with the hashes of hashes-p1-staging.yaml, default locked, volumes ['2Gi'], image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`; the edit lines of each commit and `render: changed ClickHouseInstallation/storage-integrity-si-v2`, `render: added ConfigMap/sentio-node-devnet2-indexer-<x>-si-backup added CronJob/sentio-node-devnet2-indexer-<x>-si-backup` for `b`, `c` and `a`, and `render: changed VMRule/storage-integrity-si-v2`; `Ran <N> tests` and `OK` (Step 1's count) with every P1 change on; `CronJob sentio-node-devnet2-indexer-b-si-backup: schedule '47 3 * * *', image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>, owner 1, three Secret env vars, config without a secret`; `drill config: storage-integrity-si-v2-p1-staging-source:9000 si_restore {'bucket_url': 'https://storage.googleapis.com/sentio-352722-si-devnet2-si-v2-replica', 'owner_indexer_id': 1, 'scratch_prefix': 'p1drill_b_'}`; `["batch/v1","Job","si-p1-drill-b",0,"Never",true,["/sentio-node","storage-integrity","restore-drill","--config-path","/etc/si-drill/config.yaml","--owner","1","--owner-rpc","http://sentio-node-devnet2-indexer-b:33003"],["storage-integrity-si-v2-p1-staging-logins/si_restore","storage-integrity-si-v2-restore-drill/access-id","storage-integrity-si-v2-restore-drill/secret"],"si-p1-drill-config-b"]`; the stand-in's output with `'SELFTESTACCESSID', '[HIDDEN]'` twice and `si_s3_sql_exit=243`, then `ok: placeholders filled in the pod, the secret masked in every line, the client's status passed on`; the outcomes `ok`, `denied`, `missing`, `exists` and `error`; `1`; `bucket sentio-352722-si-devnet2-si-v2-replica: versioned, uniform access, public access prevented, aborts incomplete uploads after 7 days; writer role without delete; writers 0=owner-0/, 1=owner-1/, <INDEXER_C_ID>=owner-<INDEXER_C_ID>/, mech=mechanics/, each on its own managed folder only; lock remover …; readers restore-a, restore-b, restore-c, restore-drill` and `ok: a writer role on the bucket fails the bucket verdict (K25)`; `backup-b-1.json: 20261020T050100Z-full full chain 1, …`, `backup-b-2.json: 20261021T050100Z-incr incr chain 2 on 20261020T050100Z-full, …`, `drill of owner 1: pass against 20261021T050100Z-incr (…); verified = Active = ['devuser1.s3_p1']; not in the manifest: ['devuser1__s3_p0']`, `ok: an Active table the drill did not verify fails`, `3 rows, 0 failed; measured delete right <P1_BACKUP_DELETE>, P1_BACKUP_DELETE <P1_BACKUP_DELETE>`, `ok: a failed row fails the mechanics verdict` and `selftest passed`. A `FAILED` of the render tests means a live commit of this runbook produces a state Task 26's tests refuse: fix the test or the value on this branch in a commit of its own (its own failing test first) and run this step again; any other failure means the runbook and Task 26's files disagree: fix whichever departs from contract §18.
+Expected, in order: `== the seven runbooks' helpers source in order; si_backup is <home>/si-devnet2-stage3-p1`; the `P1 PR state: every si_backup user, backup job and backup alert off; …; delete right <P1_BACKUP_DELETE>` line and the image; `P1 staging CHI: storage-integrity-si-v2-p1-staging, root /storage-integrity/devnet2/p1-staging, users default, si_snode, si_gateway, si_reader, si_backup, si_restore with the hashes of hashes-p1-staging.yaml, default locked, volumes ['2Gi'], image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`; the edit lines of each commit and `render: changed ClickHouseInstallation/storage-integrity-si-v2`, `render: added ConfigMap/sentio-node-devnet2-indexer-<x>-si-backup added CronJob/sentio-node-devnet2-indexer-<x>-si-backup` for `b`, `c` and `a`, and `render: changed VMRule/storage-integrity-si-v2`; `Ran <N> tests` and `OK` (Step 1's count) with every P1 change on; `CronJob sentio-node-devnet2-indexer-b-si-backup: schedule '47 3 * * *', image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>, owner 1, three Secret env vars, config without a secret`; `drill config: storage-integrity-si-v2-p1-staging-source:9000 si_restore {'bucket_url': 'https://storage.googleapis.com/sentio-352722-si-devnet2-si-v2-replica', 'owner_indexer_id': 1, 'scratch_prefix': 'p1drill_b_'}`; `["batch/v1","Job","si-p1-drill-b",0,"Never",true,["/sentio-node","storage-integrity","restore-drill","--config-path","/etc/si-drill/config.yaml","--owner","1","--owner-rpc","http://sentio-node-devnet2-indexer-b:33003","--backup","20261021T050100Z-incr"],["storage-integrity-si-v2-p1-staging-logins/si_restore","storage-integrity-si-v2-restore-drill/access-id","storage-integrity-si-v2-restore-drill/secret"],"si-p1-drill-config-b"]`; the stand-in's output with `'SELFTESTACCESSID', '[HIDDEN]'` twice and `si_s3_sql_exit=243`, then `ok: placeholders filled in the pod, the secret masked in every line, the client's status passed on`; the outcomes `ok`, `denied`, `missing`, `exists` and `error`; `1`; `bucket sentio-352722-si-devnet2-si-v2-replica: versioned, uniform access, public access prevented, aborts incomplete uploads after 7 days; writer role without delete; writers 0=owner-0/, 1=owner-1/, <INDEXER_C_ID>=owner-<INDEXER_C_ID>/, mech=mechanics/, each on its own managed folder only; lock remover …; readers restore-a, restore-b, restore-c, restore-drill` and `ok: a writer role on the bucket fails the bucket verdict (K25)`; `backup-b-1.json: 20261020T050100Z-full full chain 1, …`, `backup-b-2.json: 20261021T050100Z-incr incr chain 2 on 20261020T050100Z-full, …`, `ok: si_drill refuses a backup without a passing si_p1_backup_check`, `drill of owner 1: pass against 20261021T050100Z-incr (…); verified = Active = ['devuser1.s3_p1']; not in the manifest: ['devuser1__s3_p0']`, `ok: an Active table the drill did not verify fails`, `3 rows, 0 failed; measured delete right <P1_BACKUP_DELETE>, P1_BACKUP_DELETE <P1_BACKUP_DELETE>`, `ok: a failed row fails the mechanics verdict` and `selftest passed`. A `FAILED` of the render tests means a live commit of this runbook produces a state Task 26's tests refuse: fix the test or the value on this branch in a commit of its own (its own failing test first) and run this step again; any other failure means the runbook and Task 26's files disagree: fix whichever departs from contract §18.
 
 The repository's checks (contract §19):
 
 ```bash
+W=<worktree path>
 cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1
@@ -15799,7 +16136,8 @@ Expected: `Ran <N> tests` (Step 1's count) and `OK`; `1 chart(s) linted, 0 chart
 - [ ] **Step 6: Commit**
 
 ```bash
-cd "$W" && git add docs/storage-integrity-devnet2-stage3-p1-backups.md && git commit -m "docs(storage-integrity): devnet2 stage-3 P1 runbook (verified object-store backups)
+W=<worktree path>
+cd "$W" && git add docs/storage-integrity-devnet2-stage3-p1-backups.md docs/storage-integrity-devnet2-multi-source-tracks.md && git commit -m "docs(storage-integrity): devnet2 stage-3 P1 runbook (verified object-store backups)
 
 New runbook docs/storage-integrity-devnet2-stage3-p1-backups.md
 (housegate spec 2026-10-14 §16 row P1, Plan S3-C1 K23-K28): the
@@ -15814,19 +16152,22 @@ backup CronJobs with a full and an incremental backup per owner, one
 restore drill per owner gated against the manifest its backup names,
 the backup alerts, the end record, staging cleanup, rollback and
 operating rules. No step restarts an SI ClickHouse, a host pod, a
-verifier or a voter.
+verifier or a voter. The tracks runbook's stage table points here
+(row 10).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git -C "$W" log --oneline -1
+git -C "$W" show --stat --format='%an <%ae>' HEAD | cat
 ```
 
-Expected: one new commit on top of Task 26's.
+Expected: one new commit on top of Task 26's, authored `poetry <chen@sentio.xyz>` (Step 1's worktree identity), changing exactly `docs/storage-integrity-devnet2-stage3-p1-backups.md` (new) and `docs/storage-integrity-devnet2-multi-source-tracks.md` (one line). Another author: stop and amend the commit's author (`git -C "$W" commit --amend --no-edit --reset-author` with that identity set) before going on.
 
 - [ ] **Step 7: Push (requires explicit user confirmation)**
 
 This step needs explicit user confirmation in chat. It publishes the branch; nothing is applied or synced.
 
 ```bash
+W=<worktree path>
 cd "$W" && git push -u origin HEAD
 ```
 
@@ -15837,6 +16178,7 @@ Expected: `branch 'urwt/claude/multi-source-s3c1' set up to track 'origin/urwt/c
 This step needs explicit user confirmation in chat. The PR carries Tasks 26 and 27: a new bucket, new service accounts and keys, a new ClickHouse user on every SI installation and new jobs widen the blast radius, so it goes through review (the user's production rule).
 
 ```bash
+W=<worktree path>
 cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p')" && [ -n "$count" ] && body="$(mktemp)" && cat > "$body" <<'EOF'
 ## Summary
 - Stage 3 P1 of the multi-source SI network on devnet2-si-v2 (housegate spec 2026-10-14 §16 row P1; Plan S3-C1, clarifications K23-K28): verified, incremental backups of every SI owner's `hg_safe` in one versioned GCS bucket, and one restore drill per owner gated against the published manifest its backup names.
@@ -15845,7 +16187,7 @@ cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&
 - `charts/sentio-node` `siBackup`: a ConfigMap and a CronJob outside the host's config checksum, off on every host; the CronJob runs the reviewed image `DEVNET2_SI_BACKUP_IMAGE` with the ClickHouse password and the HMAC key from Secrets only.
 - The backup alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed`, rendered only once `monitoring.backups.cronJobs` lists the CronJobs.
 - `scripts/storage-integrity/make-si-backup-keys.sh` and the `p1-staging` and `--add-user` modes of `make-clickhouse-logins.sh`: keys and passwords only in the user's terminal and in Secrets, never printed.
-- Runbook `docs/storage-integrity-devnet2-stage3-p1-backups.md`: bucket and keys (user actions), staging installation and grant probe, mechanics on GCS with the deployed image, backup users, drill table, backup jobs, incremental backups, restore drills, monitoring, end record, staging cleanup, rollback and operating rules.
+- Runbook `docs/storage-integrity-devnet2-stage3-p1-backups.md`: bucket and keys (user actions), staging installation and grant probe, mechanics on GCS with the deployed image, backup users, drill table, backup jobs, incremental backups, restore drills, monitoring, end record, staging cleanup, rollback and operating rules; row 10 of the stage table of `docs/storage-integrity-devnet2-multi-source-tracks.md` points to it.
 
 Inert on merge: nothing on sea applies or syncs on merge, and every release renders byte-identically to `origin/main`. Each live change is a single-service commit of the runbook after the merge.
 
@@ -15862,13 +16204,14 @@ gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-so
 gh pr view urwt/claude/multi-source-s3c1 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
 ```
 
-Expected: the PR URL, then `<number> <url>`. Prefix the commands of Steps 9 and 10 with `pr=<number>;` as well.
+Expected: the PR URL, then `<number> <url>`; the blocks of Steps 9 and 10 set `pr=<number>` from it.
 
 - [ ] **Step 9: CI (read-only)**
 
 It reads GitHub: it needs explicit user confirmation in chat before it runs.
 
 ```bash
+W=<worktree path>; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 cd "$W" && gh pr checks "$pr" --repo sentioxyz/production --watch
 ```
@@ -15877,17 +16220,31 @@ Expected: `Storage-integrity chart validation` passes (its paths cover `charts/s
 
 - [ ] **Step 10: Merge and record `P1_PR` (requires explicit user confirmation for the merge, and again for the ledger record's push or docs PR and its merge)**
 
-This step needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
+Before the merge, check that the PR's head is the worktree's checked `HEAD` and that every commit of the PR is the worktree's identity with no co-author but Claude's (a remote read: it needs explicit user confirmation in chat before it runs):
 
 ```bash
+W=<worktree path>; pr=<number>
+[[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] && echo "PR head is HEAD"
+gh pr view "$pr" --repo sentioxyz/production --json commits --jq '.commits[].authors[] | "\(.name) <\(.email)>"' | sort -u
+git -C "$W" log --format=%B origin/main..HEAD | grep -i '^co-authored-by:' | sort -u
+```
+
+Expected: `PR head is HEAD`, exactly `poetry <chen@sentio.xyz>` (Task 26's commits and this task's), and at most `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Anything else: stop; nothing is merged (rewrite the authors as in Step 1, push again after its own confirmation, and repeat this check).
+
+The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 28 runs the runbook.
+
+```bash
+W=<worktree path>; pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 cd "$W" && gh pr merge "$pr" --repo sentioxyz/production --squash
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 ```
 
-Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P1_PR`, the PR number, with the record procedure of contract §19 (decision D23). First write the run record `$HOME/.cache/s3-ledger/record-s3c1-27.md` with the Write tool, one paragraph: `sentioxyz/production#<pr>` (Tasks 26 and 27) squash-merged as `<sha>` at <mergedAt> UTC; `test_render.py` `<N>` tests OK; the three `helm lint --strict` profiles passed; `render-inertness.sh origin/main` printed the eight `identical` lines; the runbook's conventions check (69 bash blocks, 36 confirmed, 3 fish blocks), `shellcheck` and the self-test (every live commit of §6, §8 and §11 in a clone, `<N>` tests OK) passed; CI `Storage-integrity chart validation` passed; `P1_BACKUP_DELETE` `<value>` and `INDEXER_C_ID` `<value>` filled into the runbook. Then R1 (local; its housegate fetch reads a remote, so it needs explicit user confirmation in chat, like every remote read of this task), with `pr=<number>;` as its prefix:
+Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P1_PR`, the PR number, with the record procedure of contract §19 (decision D23). First write the run record `$HOME/.cache/s3-ledger/record-s3c1-27.md` with the Write tool, one paragraph: `sentioxyz/production#<pr>` (Tasks 26 and 27) squash-merged as `<sha>` at <mergedAt> UTC; `test_render.py` `<N>` tests OK; the three `helm lint --strict` profiles passed; `render-inertness.sh origin/main` printed the eight `identical` lines; the runbook's conventions check (69 bash blocks, 36 confirmed, 4 fish blocks), `shellcheck` and the self-test (every live commit of §6, §8 and §11 in a clone, `<N>` tests OK) passed; CI `Storage-integrity chart validation` passed; `P1_BACKUP_DELETE` `<value>` and `INDEXER_C_ID` `<value>` filled into the runbook. Then R1 (local; its housegate fetch reads a remote, so it needs explicit user confirmation in chat, like every remote read of this task):
 
 ```bash
+pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 [ "$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" = MERGED ] || { echo "the P1 PR is not merged: stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=27
@@ -15898,22 +16255,24 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" P1_PR="$pr" || exit 1
 git -C "$d" commit -q -m "docs(plan): record P1_PR of Plan S3-C1 (Task 27)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
 git -C "$d" show --stat --oneline HEAD | cat
+git -C "$d" log -1 --format='%an <%ae>'
 ```
 
-Expected: `s3-ledger: Task 27 recorded P1_PR=<pr> and its run record 'P1 PR' in …`, then one commit of the plan file only (its row and the run-record item). A `stop` writes nothing: report it and ask.
+Expected: `s3-ledger: Task 27 recorded P1_PR=<pr> and its run record 'P1 PR' in …`, then one commit of the plan file only (its row and the run-record item), authored `poetry <chen@sentio.xyz>` (the ledger worktree's own identity; R2 refuses any other). A `stop` writes nothing: report it and ask.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 27's ledger record (Appendix C of Plan S3-C1: P1_PR and the run record 'P1 PR'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=27
 d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
@@ -15941,33 +16300,34 @@ Spec §16 row P1 and its exit criterion, as clarified by K23–K28 and bound by 
 
 No step changes consensus state; the only promotions are the drill table's (at most four, K28). Irreversible: the replica bucket (`prevent_destroy`, versioned) and every object written to it, because no key of this plan deletes (K24) — the mechanics objects under `mechanics/` (Step 6) and the backups under `owner-<id>/` (Steps 11–14); and the drill table `devuser1.s3_p1` with its two INSERTs (Step 10: a registry incarnation and its promotions stay in consensus state). Every commit can be reverted (runbook §14), the HMAC keys and Secrets can be revoked (runbook §15.3), and the staging installation is throwaway (runbook §13).
 
-**Files** (anchors: production `origin/main` once `P1_PR` has merged, that is base `75514e3de` with Plan S3-B's Tasks 13, 15, 16, 18, 19 and 21 and this plan's Tasks 26 and 27 applied; every edit is made by `p1-edit.py`, which finds its anchor by YAML structure or Python AST, refuses none or several, and compares the whole file's parse before and after, so the base line numbers below are guidance only):
-- Modify, commit U-b (Step 7): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml` — the `    users:` block under `spec.configuration` (base lines 85-89 in posture A; posture C since Plan S3-B Task 18 Step 15, ending with `si_reader/grants/query` before `    profiles:`) gains `si_backup/password_sha256_hex` (the hash of `hashes-si_backup-indexer-b.yaml`), `si_backup/networks/ip` (`::/0`), `si_backup/profile` (`default`) and `si_backup/grants/query` (the six `SI_BACKUP_GRANTS`, in order) as its last four keys, in the block's own indentation; `charts/storage-integrity/tests/test_render.py` — `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2-indexer-b"]` `False` → `True` (Task 26's constant).
+**Files** (anchors: production `origin/main` once `P1_PR` has merged; at review time `origin/main` is `7e08b6ea5` (Plan S3-B Tasks 13–14 merged as #743 and Task 15's devnet2 commits on it), and the state this task starts from adds Plan S3-B's Tasks 16–21 (the L and E PRs and their live commits) and this plan's Tasks 26 and 27; every edit is made by `p1-edit.py`, which finds its anchor by YAML structure or Python AST, refuses none or several, and compares the whole file's parse before and after, so the line numbers below are guidance only; the exact diffs each step expects were simulated on that state, see the Expected text of Steps 7–9, 11–13 and 16):
+- Modify, commit U-b (Step 7): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml` — the `    users:` block under `spec.configuration` (lines 85-89 at `7e08b6ea5`, still posture A; posture C since Plan S3-B Task 18 Step 15, ending with `si_reader/grants/query` before `    profiles:`) gains `si_backup/password_sha256_hex` (the hash of `hashes-si_backup-indexer-b.yaml`), `si_backup/networks/ip` (`::/0`), `si_backup/profile` (`default`) and `si_backup/grants/query` (the six `SI_BACKUP_GRANTS`, in order) as its last four keys, in the block's own indentation; `charts/storage-integrity/tests/test_render.py` — `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2-indexer-b"]` `False` → `True` (Task 26's constant).
 - Modify, commit U-c (Step 8): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml` (Plan S3-B Task 19's born-locked CHI) — the same four keys at the end of its `    users:` block; `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2-indexer-c"]` `False` → `True`.
-- Modify, commit U-n (Step 9): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — the top-level `clickhouse:` block (Plan S3-B Task 18 Step 16's posture C block, before `da:` at base line 47): `    backupUser: true` right after `    lockDefault: true` (or its `false` turned `true` if Task 26 wrote the key) and `      si_backup: "<hash>"` after the last entry of `passwordSha256`; `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2"]` `False` → `True`.
-- Modify, commits J-b, J-c, J-a (Steps 11–13): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, `sentio-node-indexer-c-storage-integrity-si-v2.yaml`, `sentio-node-indexer-a-storage-integrity-si-v2.yaml` — `siBackup.enabled: false` → `true` in Task 26's top-level `siBackup` block (appended after base lines 139 and 146 of the indexer-b and indexer-a overlays); `DEVNET2_SI_BACKUP["sentio-node-devnet2-indexer-<x>"]` `False` → `True`.
+- Modify, commit U-n (Step 9): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — the top-level `clickhouse:` block (Plan S3-B Task 18 Step 16's posture C block, before `da:`, line 47 at `7e08b6ea5`): `    backupUser: true` right after `    lockDefault: true` (or its `false` turned `true` if Task 26 wrote the key) and `      si_backup: "<hash>"` after the last entry of `passwordSha256`; `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2"]` `False` → `True`.
+- Modify, commits J-b, J-c, J-a (Steps 11–13): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, `sentio-node-indexer-c-storage-integrity-si-v2.yaml`, `sentio-node-indexer-a-storage-integrity-si-v2.yaml` — `siBackup.enabled: false` → `true` in Task 26's top-level `siBackup` block (appended after the last line of each overlay: line 148 of the indexer-b and line 155 of the indexer-a overlay at `7e08b6ea5`); `DEVNET2_SI_BACKUP["sentio-node-devnet2-indexer-<x>"]` `False` → `True`.
 - Modify, commit M (Step 16): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — `monitoring.backups.cronJobs` empty → `sentio-node-devnet2-indexer-a-si-backup`, `sentio-node-devnet2-indexer-b-si-backup`, `sentio-node-devnet2-indexer-c-si-backup` (Task 26's empty `monitoring.backups`, at the end of Plan S3-B Task 13's `monitoring` block); `DEVNET2_MONITORED_BACKUPS` `()` → the same three names.
 - Modify, the P1 record PR (Step 19, docs only): `docs/storage-integrity-devnet2-stage3-p1-backups.md` — one paragraph `Record of the first run: …` at the end of §12.
 - Modify, housegate (Step 20): Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md` on this plan's ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34) — the rows `P1_MECHANICS` and `P1_END` and the run record `P1 run (Task 28)`, with contract §19's record procedure from the URWT worktree `multi-source-s3c1-ledger-28`.
-- Create (local only, never committed): the session directory `$HOME/si-devnet2-stage3-p1-session` (mode 700) with this task's tools `p1-block.py`, `p1-helpers.py`, `p1-edit.py`, `p1-record.py`, `p1-tools.sh` and `p1-user-block.sh` (Step 1, exact content below), `live-path`, the assembled `helpers.sh`, `ledger.env`, `indexer-c-id` and `blocks/` (every block file, decision D24); the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, verbatim) and the record files `$HOME/.cache/s3-ledger/record-s3c1-28`, `record-s3c1-28.md`, `record-s3c1-28-pr.md`; in the runbook's evidence directory `$HOME/si-devnet2-stage3-p1` (`$si_backup`, created fresh by runbook §1.1, never by this task) this task's `record.env` (one `KEY=value` per line, the last line of a key wins), `msg-*.txt`, `user-7-<k>.{sh,out,done}`, `tests-last.txt` and `task28-*` files.
+- Local only, never committed: the live worktree's commit identity (`git config --worktree user.name poetry` and `user.email chen@sentio.xyz` after `extensions.worktreeConfig true`, Step 1) and the ledger worktree's (Step 20), so no commit of this task carries the global `uranuswch@gmail.com`; every commit is checked to be authored and committed by `poetry <chen@sentio.xyz>` before it is pushed.
+- Create (local only, never committed): the session directory `$HOME/si-devnet2-stage3-p1-session` (mode 700) with this task's tools `p1-block.py`, `p1-helpers.py`, `p1-edit.py`, `p1-record.py`, `p1-tools.sh` and `p1-user-block.sh` (Step 1, exact content below), `live-path`, the assembled `helpers.sh`, `ledger.env`, `indexer-c-id` and `blocks/` (every block file, decision D24); the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, verbatim) and `$HOME/.cache/s3-ledger/s3-ledger.py.plan` (the tool's text as the ledger copy holds it, for `cmp`), and the record files `$HOME/.cache/s3-ledger/record-s3c1-28`, `record-s3c1-28.md`, `record-s3c1-28-pr.md`; in the runbook's evidence directory `$HOME/si-devnet2-stage3-p1` (`$si_backup`, created fresh by runbook §1.1, never by this task) this task's `record.env` (one `KEY=value` per line, the last line of a key wins), `msg-*.txt`, `user-7-<k>.{sh,out,done}`, `tests-last.txt` and `task28-*` files.
 - Test: `python3 -B charts/storage-integrity/tests/test_render.py` at every commit (`p1_commit` refuses to commit on a failing run or on a test count other than Step 2's); `si_render_diff <release>` for every release commit (U-n: exactly `changed ClickHouseInstallation/storage-integrity-si-v2`; J-x: exactly `added ConfigMap/sentio-node-devnet2-indexer-<x>-si-backup` and `added CronJob/sentio-node-devnet2-indexer-<x>-si-backup`; M: exactly `changed VMRule/storage-integrity-si-v2`).
 
 **Interfaces:**
 - Consumes (Appendix C, read with `s3-ledger.py get` from each plan's ledger copy, never predicted, never from a local checkout or a pending PR): `HG_TAG_P1` (Task 22), `CORE_TAG_P1` and `P1_BACKUP_DELETE` (`none` or `lock`, Task 24), `SN_COMMIT_P1` and `SN_DIGEST_P1` (Task 25), `P1_PR` (Task 27); `INDEXER_C_ID`, `E_END`, `L_END`, `SN_COMMIT`, `SN_DIGEST` (Plan S3-B); `ARBITER_TAG`, `ARBITER_DIGEST` (Plan S3-A). `P1_MECHANICS` and `P1_END` must still be empty.
 - Consumes (objects of `P1_PR`, contract §18, verbatim): `terraform/storage_integrity_devnet2_si_v2_replica.tf` with `google_storage_bucket.storage_integrity_devnet2_si_v2_replica`, `google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_writer` (`siDevnet2SiV2BackupWriter`), `google_service_account.storage_integrity_devnet2_si_v2_backup`, `google_storage_managed_folder.storage_integrity_devnet2_si_v2_backup` (the managed folders `owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/` and `mechanics/`, K25), `google_storage_managed_folder_iam_member.storage_integrity_devnet2_si_v2_backup_writer`, `google_service_account.storage_integrity_devnet2_si_v2_restore`, `google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_restore_viewer` and, only with `lock`, `google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_lock_remover` (`siDevnet2SiV2BackupLockRemover`) and `google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_backup_lock_remover`; `scripts/storage-integrity/make-si-backup-keys.sh <account>`; `docs/examples/storage-integrity-p1-staging-chi.yaml` (CHI `storage-integrity-si-v2-p1-staging`, pod `storage-integrity-si-v2-p1-staging-source-0-0-0`, Keeper root `/storage-integrity/devnet2/p1-staging`); the chart values `clickhouse.access.backupUser`, `clickhouse.access.passwordSha256.si_backup`, `siBackup.*`, `monitoring.backups.cronJobs`; the test constants `SI_BACKUP_BUCKET`, `SI_BACKUP_GRANTS`, `DEVNET2_SI_BACKUP_IMAGE`, `DEVNET2_BACKUP_OWNERS`, `DEVNET2_SI_BACKUP_SCHEDULES`, `DEVNET2_SI_BACKUP` (every release `False`), `DEVNET2_SI_BACKUP_USER` (every CHI `False`), `DEVNET2_MONITORED_BACKUPS` (`()`), `DEVNET2_BACKUP_DELETE_RIGHT` (= `P1_BACKUP_DELETE`); the user's logins made before the PR: the Secrets `storage-integrity-si-v2-clickhouse-backup-network`, `-indexer-b`, `-indexer-c` (key `password`) and `storage-integrity-si-v2-p1-staging-logins` (keys `default`, `si_snode`, `si_gateway`, `si_reader`, `si_backup`, `si_restore`), and the hashes files `hashes-p1-staging.yaml` and `hashes-si_backup-<network|indexer-b|indexer-c>.yaml` in `$HOME/si-devnet2-stage3-p1-logins` (mode 700).
-- Consumes (the runbook, Task 27, contract §18–§19): its headings (§0 to §15.5, verbatim as contract §18 lists them); its §0 helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql`, `si_p1s_grant_probe`, `si_index`, `si_host_pods`, `si_backup_run`, `si_drill` and the names `si_backup="$HOME/si-devnet2-stage3-p1"` and `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, all in §0's first bash block (D20), whose prose links the six earlier runbooks of contract §19 in order; the evidence files of contract §19 (`pins`, `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt`, `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv`, `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-backups-commit`, `p1-end.txt`) and §5's `mechanics-verdict.txt` (Task 27's name); and these forms, which this task's tools read (Plan S3-B's runbook forms): a mutating block is preceded by the line `Confirm before running.`; the confirmed block of §6.1, §6.2 and §6.3 that pushes this task's local commit is one call of the runbook's apply helper `si_p1_user_apply b`, `c` or `a`, of §8.1, §8.2 and §8.3 `si_p1_job_apply b`, `c` or `a`, and of §11 `si_p1_monitoring_apply` (each helper, defined in §0, refuses a HEAD that is not one commit on origin/main changing exactly its two files (`si_head_is`), runs `git push origin HEAD:main`, writes that commit to its `-commit` evidence file and then applies the manifest (§6.1, §6.2) or syncs that one release (§6.3, §8.x, §11)), so this task selects each by that call (`--marker 'si_p1_user_apply b'`, never by `HEAD:main`, which only §0 contains); the read-only block before it in §6.x, §8.x and §11 is the runbook's own commit helper (`si_p1_user_commit <x>`; `si_p1_backup_login <x>` and `si_p1_job_commit <x>`; `si_p1_monitoring_commit`), which this task never runs, because its own reviewed commit of the same two files replaces it; §8.x has a confirmed block calling `si_backup_run <x> 1`, §9 one calling `si_backup_run <x> 2` per owner, §10.x one calling `si_drill <x>`; §7's writes are devuser1 blocks whose first line is `key_file=/path/to/devuser1-owner.key`; `budget.txt` holds the line Plan S3-B's §13.4 procedure prints (`… budget to L/4 (<n> bytes): <b> promotions; a drill spends at most <h>`); `staging-grant-probe.tsv` has `si_grant_probe`'s header `row	role	expect	got	code	statement`; `mechanics-gcs.tsv` has the header `check	expect	got` and one `si_p1_check` row per check named in §5 (49; none names the delete right, and the list rows are `mech_lists_*` and `backup-<o>_lists_*` with `expect` `ok` or `denied`); `mechanics-verdict.txt` starts with §5's verdict line `<n> rows, <f> failed; measured delete right <none|lock|undetermined>, P1_BACKUP_DELETE <none|lock>`; `p1-mechanics.txt` starts with the named record `P1_MECHANICS=<YYYY-MM-DD>` (then the stamp line), and `p1-end.txt` starts with `P1 end check <stamp> UTC` and ends with the named record `P1_END=<YYYY-MM-DD>`.
-- Consumes (the §0 helpers of the earlier runbooks, the first bash block of each, in the chain the P1 runbook's §0 names, D20): `si_kubectl`, `si_arbiter`, `si_leader`, `si_show` (dynamic table set); `si_status` (stage 1); `si_tracks`, `si_track` (tracks); `si_vm_query`, `si_vmalert_groups`, `si_head_is`, `si_state_size`, `si_series_value` (stage-3 P0); `si_keeper`, `si_stamp`, `si_ch_pod`, `si_installation`, `si_inpod_client`, `si_ch_exec`, `si_ch_admin`, `si_chi_state`, `si_uptime`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff` and `$si_lockdown_dir` (lockdown, contract §11); `si_rpc_on`, `si_info` and `si_source_ch` over `a`, `b` and `c` (indexer-c).
+- Consumes (the runbook, Task 27, contract §18–§19): its headings (§0 to §15.5, verbatim as contract §18 lists them); its §0 helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql`, `si_p1s_grant_probe`, `si_index`, `si_host_pods`, `si_backup_run`, `si_drill`, `si_p1_check`, `si_p1_py` (its `mech-verdict`), `si_p1_schedule_clear` (read-only; it refuses from 90 minutes before to 70 minutes after an owner's daily schedule) and the names `si_backup="$HOME/si-devnet2-stage3-p1"` and `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, all in §0's first bash block (D20), whose prose links the six earlier runbooks of contract §19 in order; the evidence files of contract §19 (`pins`, `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt`, `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv`, `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-backups-commit`, `p1-end.txt`) and §5's `mechanics-verdict.txt` (Task 27's name); and these forms, which this task's tools read (Plan S3-B's runbook forms): a mutating block is preceded by the line `Confirm before running.`; the confirmed block of §6.1, §6.2 and §6.3 that pushes this task's local commit is one call of the runbook's apply helper `si_p1_user_apply b`, `c` or `a`, of §8.1, §8.2 and §8.3 `si_p1_job_apply b`, `c` or `a`, and of §11 `si_p1_monitoring_apply` (each helper, defined in §0, refuses a HEAD that is not one commit on origin/main changing exactly its two files (`si_head_is`), runs `git push origin HEAD:main`, writes that commit to its `-commit` evidence file and then applies the manifest (§6.1, §6.2) or syncs that one release (§6.3, §8.x, §11)), so this task selects each by that call (`--marker 'si_p1_user_apply b'`, never by `HEAD:main`, which only §0 contains); the read-only block before it in §6.x, §8.x and §11 is the runbook's own commit helper (`si_p1_user_commit <x>`; `si_p1_backup_login <x>` and `si_p1_job_commit <x>`; `si_p1_monitoring_commit`), which this task never runs, because its own reviewed commit of the same two files replaces it; §8.x has a confirmed block calling `si_backup_run <x> 1` followed by the read-only `si_p1_backup_check <x> 1`, §9 one confirmed block calling `si_backup_run <x> 2` per owner and one read-only block running `si_p1_backup_check` for the three, §10.x one confirmed block calling `si_drill <x>` followed by the read-only `si_p1_drill_check <x>`, and §11 a read-only check after the apply calling `si_vmalert_groups` (this task runs each of these read-only blocks by that marker too); §7's writes are devuser1 blocks whose first line is `key_file=/path/to/devuser1-owner.key`; `budget.txt` holds the line Plan S3-B's §13.4 procedure prints (`… budget to L/4 (<n> bytes): <b> promotions; a drill spends at most <h>`); `staging-grant-probe.tsv` has `si_grant_probe`'s header `row	role	expect	got	code	statement`, one row per corpus row, and `got` `skipped` (code `-`) for the rows of a role the P1 staging installation has no login for (`si_verifier`'s); `mechanics-gcs.tsv` has the header `check	expect	got` and one `si_p1_check` row per check named in §5 (49; none names the delete right, and the list rows are `mech_lists_*` and `backup-<o>_lists_*` with `expect` `ok` or `denied`); `mechanics-verdict.txt` starts with §5's verdict line `<n> rows, <f> failed; measured delete right <none|lock|undetermined>, P1_BACKUP_DELETE <none|lock>`; `p1-mechanics.txt` starts with the named record `P1_MECHANICS=<YYYY-MM-DD>` (then the stamp line), and `p1-end.txt` starts with `P1 end check <stamp> UTC` and ends with the named record `P1_END=<YYYY-MM-DD>`.
+- Consumes (the §0 helpers of the earlier runbooks, the first bash block of each, in the chain the P1 runbook's §0 names, D20): `si_kubectl`, `si_arbiter`, `si_leader`, `si_show` (dynamic table set); `si_status` (stage 1); `si_tracks`, `si_track` (tracks); `si_vm_query`, `si_vm_value`, `si_vmalert_groups`, `si_head_is`, `si_state_size`, `si_series_value` (stage-3 P0); `si_keeper`, `si_stamp`, `si_ch_pod`, `si_installation`, `si_inpod_client`, `si_ch_exec`, `si_ch_admin`, `si_chi_state`, `si_uptime`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff` and `$si_lockdown_dir` (lockdown, contract §11); `si_rpc_on`, `si_info` and `si_source_ch` over `a`, `b` and `c` (indexer-c).
 - Consumes (the user's own actions, in the user's own fish terminal): the Terraform plan and apply of runbook §2; the eight runs of `make-si-backup-keys.sh` of runbook §3; devuser1's owner's writes of runbook §7, run with `p1-user-block.sh`, the key only in `HOUSEGATE_AGENT_KEY`.
 - Consumes (Plan S3-B's evidence, read only): `$HOME/si-devnet2-stage3-indexer-c/acceptance-db` (the acceptance database `s3eaccept<n>` of indexer-c, whose table `s3e_e2e` its drill verifies).
 - Produces (Appendix C, Step 20): `P1_MECHANICS` (the UTC date of the passing runbook §5 run, `YYYY-MM-DD`, from `p1-mechanics.txt`) and `P1_END` (the UTC date of runbook §12, from `p1-end.txt`), with the run record `P1 run` (the run's paragraph, then the steady state after P1 for Plan S3-C2 as its sub-items).
 - Produces (production `main`, in order): U-b, U-c, U-n, J-b, J-c, J-a, M (recorded in `record.env` as `USER_COMMIT_B`, `USER_COMMIT_C`, `USER_COMMIT_N`, `JOB_COMMIT_B`, `JOB_COMMIT_C`, `JOB_COMMIT_A`, `MONITORING_COMMIT`), and the docs-only P1 record PR (`RECORD_PR`).
 - Produces (devnet2): the replica bucket and its service accounts (the user's), the eight HMAC keys and Secrets (the user's), `si_backup` on the three SI installations, the drill table `devuser1.s3_p1` (rows 5101–5104, kept for P2), three backup CronJobs with a full and an incremental backup per owner, the backup alerts; the P1 staging installation exists only between Steps 5 and 18.
-- Produces (`record.env` keys, for Steps 19 and 20): `START_UTC`, `TESTS_START`, `BUDGET`, `BUDGET_LIVE_SEQ`, `EPOCH_START` (Step 2); `TERRAFORM_PLAN_ADDS`, `TERRAFORM_UTC` (Step 3); `KEYS_UTC` (Step 4); `STAGING_UTC`, `PROBE_ROWS` (Step 5); `P1_MECHANICS`, `MECHANICS_ROWS` (Step 6); the seven commit keys above; `DRILL_TABLE_UTC`, `DRILL_TABLE_PROMOTIONS` (Step 10); `FULL_B`, `FULL_C`, `FULL_A` (Steps 11–13); `INCR_B`, `INCR_C`, `INCR_A` (Step 14); `DRILL_B_TABLES`, `DRILL_B_SNAPSHOT` and the same for C and A (Step 15); `END_UTC`, `P1_END`, `PROMOTIONS_USED`, `BUDGET_LEFT`, `EPOCH_END` (Step 17); `CLEANUP_UTC` (Step 18); `RECORD_PR` (Step 19).
+- Produces (`record.env` keys, for Steps 19 and 20): `START_UTC`, `TESTS_START`, `BUDGET`, `BUDGET_LIVE_SEQ`, `EPOCH_START` (Step 2); `TERRAFORM_PLAN_ADDS`, `TERRAFORM_UTC` (Step 3); `KEYS_UTC` (Step 4); `STAGING_UTC`, `PROBE_ROWS` (the rows the probe ran, skipped rows not counted) (Step 5); `P1_MECHANICS`, `MECHANICS_ROWS` (Step 6); the seven commit keys above; `DRILL_TABLE_UTC`, `DRILL_TABLE_PROMOTIONS` (Step 10); `FULL_B`, `FULL_C`, `FULL_A` (Steps 11–13); `INCR_B`, `INCR_C`, `INCR_A` (Step 14); `DRILL_B_TABLES`, `DRILL_B_SNAPSHOT` and the same for C and A (Step 15); `END_UTC`, `P1_END`, `PROMOTIONS_USED`, `BUDGET_LEFT`, `EPOCH_END` (Step 17); `CLEANUP_UTC` (Step 18); `RECORD_PR` (Step 19).
 
 Notes:
-- **Cross-task dependency.** Task 26's `test_si_backup_user_follows_the_rollout` and `test_devnet2_backup_jobs_follow_the_rollout` run at every commit here, and so do three Plan S3-B tests that compare the SI installations' users and that Task 26 extends for `si_backup` (a CHI or overlay carries `si_backup` exactly when its `DEVNET2_SI_BACKUP_USER` entry is `True`, and `si_backup` is left out of the comparison by role): `test_devnet2_clickhouse_logins_follow_the_rollout` (the users of each CHI and the network overlay's hashes), `test_indexer_b_source_clickhouse_carries_the_network_source_profile` (indexer-b's and indexer-c's users against the network installation's, through `source_profile`) and `test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk` (indexer-c's hash keys). Commits U-b and U-c leave indexer-b's or indexer-c's installation with `si_backup` while the network installation has none yet, and J-b and J-c leave the hosts at different steps; a simulation of this task's commits on Plan S3-B's merged tests fails exactly these three until they leave `si_backup` out. If one fails, stop: the live task never edits a test.
+- **Cross-task dependency.** Task 26's `test_si_backup_user_follows_the_rollout` and `test_devnet2_backup_jobs_follow_the_rollout` run at every commit here, and so do three Plan S3-B tests that compare the SI installations' users and that Task 26 extends for `si_backup` by following each installation's own `DEVNET2_SI_BACKUP_USER` entry (a CHI or overlay carries `si_backup` exactly when its entry is `True`): `test_devnet2_clickhouse_logins_follow_the_rollout` (the network overlay's hashes gain `si_backup` once its entry is `True`), `test_indexer_b_source_clickhouse_carries_the_network_source_profile` (each source CHI against the network chart rendered at that CHI's own posture and `si_backup` state, through `source_profile`) and `test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk` (indexer-c's hash keys, with `si_backup` once its entry is `True`). Commits U-b and U-c leave indexer-b's or indexer-c's installation with `si_backup` while the network installation has none yet, and J-b and J-c leave the hosts at different steps; the review simulation of all seven commits on Task 26's tree passed the whole suite after each (status §4.2's Task 26 note: equivalent to leaving `si_backup` out of the by-role comparison). If one fails, stop: the live task never edits a test.
 - **Hashes, never passwords.** The `si_backup` hashes come from the user's hashes files (`p1-edit.py` reads only `passwordSha256.si_backup`); no password or key passes through this task's text, a block, argv or a log. Every login check pipes the password from its Secret into `kubectl exec -i` stdin (`p1_backup_login`, the runbook's `si_ch_admin` and `si_s3_sql`), and Secrets are inspected only by key name (`si_secret_keys`).
-- **The drill reference.** A drill gates its owner's latest backup against the manifest that backup's index names (K27), so each owner's two backups and its drill run with no scheduled CronJob run in between: Steps 11–15 check that the next scheduled run is at least 90 minutes away before each run and that the CronJob has not run on its own since it was enabled.
+- **The drill reference.** A drill gates its owner's latest backup against the manifest that backup's index names (K27), so each owner's two backups and its drill run with no scheduled CronJob run in between: Steps 11–15 check, with the runbook's own `si_p1_schedule_clear` (it refuses from 90 minutes before to 70 minutes after the owner's daily schedule, the window in which `si_p1_job_apply` and `si_backup_run` refuse too), that no scheduled run is near before each commit, run and drill, and that the CronJob has not run on its own since it was enabled (`last_schedule` still null). Runbook §10's `si_drill` names the backup it restores (`--backup`, the newest backup of this run with a passing `si_p1_backup_check`), so a scheduled run cannot change what a drill verifies; still, a scheduled run between the backups and the drill is not accepted for the P1 record (status §4.2, settled here): contract §19 binds the incremental backup's base to the first and the drill to the latest backup's manifest, so the step stops and asks.
 
 **Conventions for this task.**
 - **Block files (decision D24).** The agent runs every bash block of this task and of the runbook from a block file, never inside a heredoc: the runbook's blocks and this task's carry their own `<<'PY'` and `<<'EOF'` heredocs, so no wrapping delimiter is safe. Block files live in `$HOME/si-devnet2-stage3-p1-session/blocks/` and are named `<nnn>-<what>.sh`, where `<nnn>` is one more than the number of files already there (a file is never edited or reused once it ran). An agent-written block file is made with the Write tool and starts with the two lines
@@ -15978,12 +16338,14 @@ Notes:
   ```
 
   followed by the block; the agent runs it with the Bash tool as `bash -eo pipefail "$HOME/si-devnet2-stage3-p1-session/blocks/<nnn>-<what>.sh" < /dev/null` (the Bash tool's own shell is zsh, so a block never runs in it directly, and no command of a block can read the tool's stdin). Step 1's first block, which creates that directory, goes into a fresh directory of the agent's session scratchpad, and Step 1's second block, which writes `helpers.sh`, has no `source` and `cd` lines. A block that may wait longer than 10 minutes (every sync, every CHI apply, every backup run and drill) runs with `run_in_background: true`; read its output before the next step.
-- **Runbook blocks run verbatim.** "Run runbook §X's block …" means an agent-written block file whose one command is `p1_run '<heading>' <selector> --confirmed|--read-only`: `p1_run` copies that bash block of the live checkout's runbook, unchanged, into the next block file (with the two session lines and a comment naming its source lines) and runs it in its own `bash -eo pipefail`. The selector is `--marker '<text>'` (the one block of that section containing the text) or `--index <k>` (the k-th bash block of the section, as `p1_list '<heading>'` numbers them). `p1_run` refuses a block whose confirmation differs from the flag, so a confirmed block can only run with `--confirmed`, which the agent writes only after the step's Gate has its yes; it never runs a devuser1 block. A confirmed block that stopped is never re-run as is: report its output. "Run §X's read-only blocks" means `p1_list '<heading>'`, then one `p1_run '<heading>' --index <k> --read-only` per read-only block, in order. A confirmed block that a step does not name is not run: stop and report it. The runbook's own commit blocks (`si_p1_user_commit <x>`, `si_p1_backup_login <x>` with `si_p1_job_commit <x>`, `si_p1_monitoring_commit`; read-only by the runbook's convention, because they only commit locally) are never run either: Steps 7–9, 11–13 and 16 make the same single-service commits with `p1_edit` and `p1_commit`, which the runbook's apply helpers accept (`si_head_is`: exactly one commit on origin/main, changing exactly its two files), and each step names the apply helper's call as its marker (`--marker 'si_p1_user_apply b'`), never text that only §0 holds. If a marker matches no block or more than one, stop and report the `p1_list` output (the runbook's form differs from this task's; Plan S3-C1's consistency pass decides); Step 1's last block checks every marker of this task against the live runbook before anything runs.
+- **Runbook blocks run verbatim.** "Run runbook §X's block …" means an agent-written block file whose one command is `p1_run '<heading>' <selector> --confirmed|--read-only`: `p1_run` copies that bash block of the live checkout's runbook, unchanged, into the next block file (with the two session lines and a comment naming its source lines) and runs it in its own `bash -eo pipefail`. The selector is `--marker '<text>'` (the one block of that section containing the text) or `--index <k>` (the k-th bash block of the section, as `p1_list '<heading>'` numbers them). `p1_run` refuses a block whose confirmation differs from the flag, so a confirmed block can only run with `--confirmed`, which the agent writes only after the step's Gate has its yes; it never runs a devuser1 block. A confirmed block that stopped is never re-run as is: report its output. "Run §X's read-only blocks" means `p1_list '<heading>'`, then one `p1_run '<heading>' --index <k> --read-only` per read-only block, in order. A confirmed block that a step does not name is not run: stop and report it. The runbook's own commit blocks (`si_p1_user_commit <x>`, `si_p1_backup_login <x>` with `si_p1_job_commit <x>`, `si_p1_monitoring_commit`; read-only by the runbook's convention, because they only commit locally) are never run either: Steps 7–9, 11–13 and 16 make the same single-service commits with `p1_edit` and `p1_commit`, which the runbook's apply helpers accept (`si_head_is`: exactly one commit on origin/main, changing exactly its two files), and each step names the apply helper's call as its marker (`--marker 'si_p1_user_apply b'`), never text that only §0 holds. The read-only blocks a step names by marker (`si_p1_backup_check <x> 1` of §8.x, `si_p1_backup_check` of §9, `si_p1_drill_check <x>` of §10.x and `si_vmalert_groups` of §11) run with `--marker '<text>' --read-only`. If a marker matches no block or more than one, stop and report the `p1_list` output (the runbook's form differs from this task's; Plan S3-C1's consistency pass decides); Step 1's last block checks every marker of this task against the live runbook before anything runs.
 - **Explicit user confirmation.** Every remote or live mutation waits for an explicit yes in chat, given for that block only: each `git push`, each `kubectl apply`, `create` or `delete`, each `helmfile sync`, each Keeper write, each backup run and drill, the grant probe and the mechanics blocks (they write to the staging installation and the bucket), the user's own writes, the record PR's push, creation and merge, and the housegate push, PR and merge. Before asking, the agent states the step's Gate sentence, which says exactly what will change. Read-only blocks need none.
 - **The user's terminal.** Terraform, the HMAC keys and devuser1's owner's writes are the user's; the agent never runs them. The agent hands the user fish commands (`bash <script> <args>` included); keys and passwords never enter the chat, argv, a log or a file outside their Secret (HMAC secrets) and the user's own key file (devuser1's owner key).
 - **One window per step.** Steps 5 to 18 are one window each: never two installations, two releases or a release and an installation in one window, and no other sync of `storage-integrity-si-v2` or of a host release during this task. Nothing runs helmfile on `k8s-sea/clickhouse` (Plan S3-B K22).
 - **Stop rules.** Stop on any unexpected output and report it; never improvise a fix on the cluster. Above all: a `CHANGED:` line of `p1_same` (a pod, StatefulSet or CHI changed), a fallen ClickHouse uptime, a user or grant that is not the contract's, a render diff beyond the one named, a backup index or a drill verdict that `p1_edit` refuses, a firing `StorageIntegrityBackup*` alert, or any `stop` printed by a tool. A commit block that stops before its `git commit` leaves its edits in the live checkout: discard them with `git -C "$P" checkout -- .` (local) and report. A local commit whose push the user declined stays on the detached HEAD and makes `p1_fresh_main` stop: report it, and only on the user's word drop it with `git -C "$P" switch -q --detach origin/main` (local; it was never pushed).
 - **Irreversible points.** Step 3's apply (a bucket with `prevent_destroy`); every write to the bucket (Steps 6, 11–14); Step 10's writes. Each Gate says so.
+- **Commit identity (user rule).** GitHub must never show `uranuswch@gmail.com` (the global git identity) as author, committer or co-author. Step 1 sets the live worktree's own identity (`git config --worktree user.name poetry`, `user.email chen@sentio.xyz`, after `extensions.worktreeConfig true`) before anything is committed, and Step 20 the ledger worktree's; `p1_commit` refuses to commit unless the checkout's identity is `poetry <chen@sentio.xyz>` and checks the commit's author and committer after it; Step 19 checks the record commit before its push and every commit of the record PR before its squash merge, and Step 20 the ledger commit before its push and the ledger PR before its merge. Commit messages carry only the Claude `Co-Authored-By` line.
+- **User decisions (stop and ask).** K24 and K25 are the user's (status §3): Step 3 asks the user to confirm both before the Terraform apply (K25: the managed-folder layout that confines each writer's list; K24, only with `P1_BACKUP_DELETE` = `lock`: that their amendment of spec §16 P1 to "… but not delete, except the backup's own `.lock`" stands), and Step 6 stops and asks on any differing list or read row (K25) or a measured delete right other than `P1_BACKUP_DELETE` (K24). The agent never decides either.
 
 - [ ] **Step 1: Live checkout, session tools, ledger and helpers (local only)**
 
@@ -16005,15 +16367,17 @@ git -C "$P" switch -q --detach origin/main
 [ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live worktree is not at origin/main: stop"; exit 1; }
 [ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live worktree is not clean: stop"; exit 1; }
 test -f "$P/docs/storage-integrity-devnet2-stage3-p1-backups.md" || { echo "origin/main has no P1 runbook: P1_PR has not merged; stop"; exit 1; }
+git -C "$P" config extensions.worktreeConfig true && git -C "$P" config --worktree user.name poetry && git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
+[ "$(git -C "$P" config user.name) <$(git -C "$P" config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the live worktree's commit identity is not poetry <chen@sentio.xyz>; stop"; exit 1; }
 mkdir -m 700 "$S" "$S/blocks"
 mkdir -p -m 700 "$HOME/.cache/s3-ledger"
 printf '%s\n' "$P" > "$S/live-path"
-echo "live worktree $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached); session $S"
+echo "live worktree $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached), commits as $(git -C "$P" config user.name) <$(git -C "$P" config user.email)>; session $S"
 ```
 
-Expected: `live worktree …/remotesrc/claude/production/multi-source-s3c1-live at origin/main <sha> (detached); session …/si-devnet2-stage3-p1-session`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/claude/multi-source-s3c1-live` is never used or pushed: the worktree is held detached at `origin/main` (Plan S3-B decision D4) and every commit is pushed as `HEAD:main` by its runbook block.
+Expected: `live worktree …/remotesrc/claude/production/multi-source-s3c1-live at origin/main <sha> (detached), commits as poetry <chen@sentio.xyz>; session …/si-devnet2-stage3-p1-session` (the identity is the worktree's own, so the global `uranuswch@gmail.com` never reaches a commit; commits are signed as the user's git configuration says, and a signing failure stops `p1_commit` before anything is pushed: ask the user to unlock their key, never turn signing off). If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/claude/multi-source-s3c1-live` is never used or pushed: the worktree is held detached at `origin/main` (Plan S3-B decision D4) and every commit is pushed as `HEAD:main` by its runbook block.
 
-Write these six files with exactly this content (Write tool) into `$HOME/si-devnet2-stage3-p1-session/`, and `$HOME/.cache/s3-ledger/s3-ledger.py` with the text at the end of contract §19, verbatim (a copy an earlier task left is the same text and is overwritten).
+Write these six files with exactly this content (Write tool) into `$HOME/si-devnet2-stage3-p1-session/`, and `$HOME/.cache/s3-ledger/s3-ledger.py` with the text at the end of contract §19, verbatim (a copy an earlier task left is the same text and is overwritten; the next block compares it with the ledger copy's contract §19).
 
 `p1-helpers.py`, which assembles the session helpers exactly as each runbook's §0 says to define them:
 
@@ -16301,7 +16665,6 @@ Verdicts (read-only; exit 1 with the reasons on a mismatch):
   mechanics-check TSV VERDICT DELETE_RIGHT
   record-date FILE NAME
   budget BUDGET_TXT LIVE_SEQ_THEN LIVE_SEQ_NOW MINIMUM
-  cron-clear SCHEDULE MINUTES
   index-check FILE OWNER NETWORK KIND TABLE_ID [BASE_FILE]
   same-json FILE FILE
   drill-check FILE OWNER INDEX_FILE TABLE_ID
@@ -16677,27 +17040,33 @@ def cmd_grants_check(tests, host, users_path, grants_path):
 
 
 def cmd_probe_check(path):
+    """Runbook §4's grant-probe table as si_p1s_grant_probe writes it: the header, then one row per corpus row;
+    a row of a role the P1 staging installation has no login for (si_verifier's) has got 'skipped' and code '-'."""
     lines = read(path).rstrip("\n").split("\n")
     if not lines or lines[0] != "row\trole\texpect\tgot\tcode\tstatement":
         fail(f"{path} is not a grant-probe table (header {lines[:1]})")
+    staged = {"default", "si_snode", "si_gateway", "si_reader", "si_backup", "si_restore"}
     rows = [line.split("\t", 5) for line in lines[1:] if line.strip()]
-    bad = [r for r in rows if len(r) != 6 or r[2] != r[3]]
+    skipped = [r for r in rows if len(r) == 6 and r[3] == "skipped" and r[1] not in staged]
+    ran = [r for r in rows if len(r) == 6 and r not in skipped]
+    bad = [r for r in rows if len(r) != 6] + [r for r in ran if r[2] != r[3]]
     per = {}
-    for r in rows:
-        if len(r) == 6:
-            per.setdefault(r[1], {}).setdefault(r[3], 0)
-            per[r[1]][r[3]] += 1
+    for r in ran:
+        per.setdefault(r[1], {}).setdefault(r[3], 0)
+        per[r[1]][r[3]] += 1
     for r in bad:
         print("  differs: " + "\t".join(r))
-    missing = {"default", "si_snode", "si_gateway", "si_reader", "si_backup", "si_restore"} - set(per)
+    missing = staged - set(per)
     if missing:
         print(f"  no rows for {sorted(missing)}")
     thin = [role for role in ("si_backup", "si_restore") if not per.get(role, {}).get("ok") or not per.get(role, {}).get("denied")]
     for role in thin:
         print(f"  {role} needs at least one ok and one denied row")
-    if bad or missing or thin or not rows:
+    if bad or missing or thin or not ran:
         sys.exit(f"p1-edit: {path}: the staging grant probe did not pass; stop")
-    print(f"{path}: {len(rows)} rows as expected; " + "; ".join(f"{k} {v.get('ok', 0)} ok {v.get('denied', 0)} denied" for k, v in sorted(per.items())))
+    print(f"{path}: {len(ran)} rows as expected, {len(skipped)} rows of roles without a P1 staging login skipped; "
+          + "; ".join(f"{k} {v.get('ok', 0)} ok {v.get('denied', 0)} denied" for k, v in sorted(per.items())))
+    print(f"PROBE_ROWS={len(ran)}")
 
 
 MECH_VERDICT = re.compile(r"(\d+) rows, (\d+) failed; measured delete right (none|lock|undetermined), P1_BACKUP_DELETE (none|lock)")
@@ -16769,19 +17138,6 @@ def cmd_budget(path, then, now, minimum):
     print(f"BUDGET_LEFT={left}")
     if left < int(minimum):
         sys.exit("p1-edit: the promotion budget is too small; stop")
-
-
-def cmd_cron_clear(schedule, minutes):
-    m = re.fullmatch(r"([0-9]|[1-5][0-9]) ([0-9]|1[0-9]|2[0-3]) \* \* \*", schedule)
-    if not m or not minutes.isdigit():
-        fail(f"{schedule!r} is not a daily 'M H * * *' schedule, or {minutes!r} is not a number of minutes")
-    now = datetime.datetime.now(datetime.timezone.utc)
-    today = now.replace(hour=int(m.group(2)), minute=int(m.group(1)), second=0, microsecond=0)
-    nxt = today if today > now else today + datetime.timedelta(days=1)
-    left = (nxt - now).total_seconds() / 60
-    print(f"next scheduled run of '{schedule}' at {nxt:%Y-%m-%d %H:%M} UTC, {int(left)} minutes from now")
-    if left < int(minutes):
-        sys.exit(f"p1-edit: the CronJob runs within {minutes} minutes; wait until its scheduled run has ended; stop")
 
 
 RFC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
@@ -16896,7 +17252,7 @@ def main(argv):
         "backup-user-chi": (cmd_backup_user_chi, 4), "backup-user-network": (cmd_backup_user_network, 2),
         "backup-job": (cmd_backup_job, 1), "rollout": (cmd_rollout, 3), "pr-state": (cmd_pr_state, 5),
         "grants-check": (cmd_grants_check, 4), "probe-check": (cmd_probe_check, 1), "budget": (cmd_budget, 4),
-        "cron-clear": (cmd_cron_clear, 2), "same-json": (cmd_same_json, 2), "drill-check": (cmd_drill_check, 4),
+        "same-json": (cmd_same_json, 2), "drill-check": (cmd_drill_check, 4),
         "mechanics-check": (cmd_mechanics_check, 3), "record-date": (cmd_record_date, 2),
     }
     if argv and argv[0] in fixed and len(argv) - 1 == fixed[argv[0]][1]:
@@ -16992,7 +17348,7 @@ def paragraph(r):
     return (
         f"Record of the first run: {r['START_UTC']} to {r['END_UTC']}, every mutating block confirmed by the user in chat; "
         f"the Terraform apply ({r['TERRAFORM_PLAN_ADDS']} resources added, nothing changed or destroyed) and the eight HMAC keys were the user's own actions in their terminal, "
-        f"and no key or password entered the chat, argv or a log. The P1 staging installation was born locked and its grant probe passed ({r['PROBE_ROWS']} rows). "
+        f"and no key or password entered the chat, argv or a log. The P1 staging installation was born locked and its grant probe passed ({r['PROBE_ROWS']} rows run, the rows of roles without a staging login skipped). "
         f"The GCS mechanics on the deployed image passed on {r['P1_MECHANICS']} ({r['MECHANICS_ROWS']} rows; backup delete right `{r['P1_BACKUP_DELETE']}`; each backup key listed and read only its own managed folder). "
         f"`si_backup` reached indexer-b (`{short(r['USER_COMMIT_B'])}`), indexer-c (`{short(r['USER_COMMIT_C'])}`) and the network installation (`{short(r['USER_COMMIT_N'])}`) as users reloads. "
         f"The drill table `devuser1.s3_p1` (rows 5101 to 5104 in two partitions, {r['DRILL_TABLE_PROMOTIONS']} promotions) stays for P2. "
@@ -17121,18 +17477,20 @@ p1_run() { # $1 heading, then --index K | --marker TEXT [--nth N], then --confir
   bash -eo pipefail "$f" < /dev/null
 }
 p1_tests() { python3 -B charts/storage-integrity/tests/test_render.py; } # the production render tests of this checkout
-p1_commit() { # $1 message file, then the exact files of this commit: refuses any other change, runs the render tests, commits on the detached HEAD (local only)
+p1_commit() { # $1 message file, then the exact files of this commit: refuses any other change and any identity but poetry <chen@sentio.xyz>, runs the render tests, commits on the detached HEAD (local only) and checks its author and committer
   local msg=$1 count
   shift
+  [ "$(git config user.name) <$(git config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the checkout would commit as $(git config user.name) <$(git config user.email)>, not poetry <chen@sentio.xyz> (Step 1 sets the worktree identity): nothing committed"; return 1; }
   [ "$(git diff --name-only HEAD | LC_ALL=C sort | tr '\n' ' ')" = "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ] || { echo "the working tree does not change exactly: $*"; git status --short; return 1; }
   [ -z "$(git ls-files --others --exclude-standard)" ] || { echo "untracked files in the checkout:"; git ls-files --others --exclude-standard; return 1; }
   p1_tests > "$si_backup/tests-last.txt" 2>&1 || { tail -n 40 "$si_backup/tests-last.txt"; echo "render tests fail: nothing committed; discard the edits with git -C \"\$P\" checkout -- ."; return 1; }
   count="$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' "$si_backup/tests-last.txt")"
   [ -n "$count" ] && [ "$count" = "$(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1)" ] || { echo "the render tests ran ${count:-no} tests, Step 2 ran $(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1): nothing committed"; return 1; }
   echo "render tests: $count, OK"
-  git add -- "$@"
-  git commit -q -F "$msg"
-  git show --stat --oneline HEAD | cat
+  git add -- "$@" || return 1
+  git commit -q -F "$msg" || { echo "git commit failed (a signing failure?): nothing committed; once reported, discard the staged edits with git -C \"\$P\" reset -q --hard HEAD (local)"; return 1; }
+  [ "$(git log -1 --format='%an <%ae>|%cn <%ce>')" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] || { echo "the commit is not authored and committed by poetry <chen@sentio.xyz>: drop it with git -C \"\$P\" switch -q --detach origin/main (local, never pushed)"; return 1; }
+  git show --stat --format='%h %s (%an <%ae>)' HEAD | cat
 }
 p1_note() { # $1 key, $2 value: one line of $si_backup/record.env (the last line of a key wins)
   case "$2" in *$'\n'*|'') echo "record.env: $1 needs a one-line value"; return 1 ;; esac
@@ -17258,8 +17616,26 @@ Then the ledger and the helpers, from a block file in `$HOME/si-devnet2-stage3-p
 ```bash
 S="$HOME/si-devnet2-stage3-p1-session"; P="$(cat "$S/live-path")"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
+python3 -I -c 'import yaml' 2>/dev/null || { echo "$(command -v python3) has no PyYAML under -I (test_render.py, p1-edit.py and the runbook's checks import it): ask the user which python3 to put first on PATH; stop"; exit 1; }
 git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" ref "$h" s3c1
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+echo "$ref"
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" && echo "s3-ledger.py is contract §19 of $ref"
 python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P1 CORE_TAG_P1 P1_BACKUP_DELETE SN_COMMIT_P1 SN_DIGEST_P1 P1_PR INDEXER_C_ID E_END L_END SN_COMMIT SN_DIGEST ARBITER_TAG ARBITER_DIGEST > "$S/ledger.env"
 python3 -I "$L/s3-ledger.py" empty "$h" P1_MECHANICS P1_END
 . "$S/ledger.env"
@@ -17280,10 +17656,10 @@ python3 -I "$S/p1-helpers.py" "$P/docs" storage-integrity-devnet2-stage3-p1-back
 chmod 600 "$S/helpers.sh"
 bash -n "$S/helpers.sh"
 bash -c 'set -eo pipefail; source "$HOME/si-devnet2-stage3-p1-session/helpers.sh" &&
-  type si_kubectl si_arbiter si_leader si_show si_status si_tracks si_track si_vm_query si_vmalert_groups si_head_is si_state_size si_series_value \
+  type si_kubectl si_arbiter si_leader si_show si_status si_tracks si_track si_vm_query si_vm_value si_vmalert_groups si_head_is si_state_size si_series_value \
     si_keeper si_stamp si_ch_pod si_installation si_ch_exec si_ch_admin si_chi_state si_uptime si_runtime_uids si_secret_keys si_render_diff \
     si_rpc_on si_info si_source_ch \
-    si_p1_image si_p1s_ch si_s3_sql si_p1s_grant_probe si_index si_host_pods si_backup_run si_drill \
+    si_p1_image si_p1s_ch si_s3_sql si_p1s_grant_probe si_index si_host_pods si_backup_run si_drill si_p1_check si_p1_py si_p1_schedule_clear \
     p1_fresh_main p1_edit p1_list p1_run p1_tests p1_commit p1_note p1_owner p1_table p1_pods p1_chi3 p1_same p1_cron \
     p1_wait_backup_user p1_backup_user_check p1_backup_login p1_wait_published p1_scratch_left >/dev/null &&
   [ -n "$si_inpod_client" ] && [ "$si_backup" = "$HOME/si-devnet2-stage3-p1" ] && [ "$si_p1_logins_dir" = "$HOME/si-devnet2-stage3-p1-logins" ] &&
@@ -17292,9 +17668,9 @@ grep '^# --- ' "$S/helpers.sh"
 cat "$S/ledger.env"
 ```
 
-Expected: `ref` prints this plan's ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`); `s3-ledger: P1_MECHANICS P1_END not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`; on stderr `# --- end of runbook helpers: storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md storage-integrity-devnet2-multi-source-tracks.md storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md storage-integrity-devnet2-stage3-indexer-c.md storage-integrity-devnet2-stage3-p1-backups.md` (the chain the P1 runbook's §0 names, each runbook once, earliest first); `helpers ok: si_backup=$HOME/si-devnet2-stage3-p1 P=…/multi-source-s3c1-live`; seven `# --- §0 of docs/…` lines; `ledger.env` with the 13 names and their recorded values. A `stop` of `ref` naming `no plan 's3c1'` means the plans branch is not on origin: ask the user to push it (contract §19), never record into a local checkout. Any other `stop` of the ledger means a value is missing or malformed on its ledger copy (its task's R4 did not pass) or `P1_MECHANICS` / `P1_END` is recorded already (P1 ran before): ask the user, never type a value in. A missing helper means a runbook on `main` spreads its §0 over more than one bash block (D20) or is not the one this plan names: stop and report; never define a helper by hand. From here on every block file starts with the two session lines.
+Expected: no PyYAML message; this plan's ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`); `s3-ledger.py is contract §19 of <that ref>` (if `cmp` reports a difference, rewrite `$L/s3-ledger.py` once from contract §19 of the plan being executed, a missing or extra final newline counts, and run the block again; if it still differs, the ledger copy holds another text of this plan: stop and ask; never copy the tool from the ledger copy); `s3-ledger: P1_MECHANICS P1_END not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`; on stderr `# --- end of runbook helpers: storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md storage-integrity-devnet2-multi-source-tracks.md storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md storage-integrity-devnet2-stage3-indexer-c.md storage-integrity-devnet2-stage3-p1-backups.md` (the chain the P1 runbook's §0 names, each runbook once, earliest first); `helpers ok: si_backup=$HOME/si-devnet2-stage3-p1 P=…/multi-source-s3c1-live`; seven `# --- §0 of docs/…` lines; `ledger.env` with the 13 names and their recorded values. A `stop` of `ref` naming `no plan 's3c1'` means the plans branch is not on origin: ask the user to push it (contract §19), never record into a local checkout. Any other `stop` of the ledger means a value is missing or malformed on its ledger copy (its task's R4 did not pass) or `P1_MECHANICS` / `P1_END` is recorded already (P1 ran before): ask the user, never type a value in. A missing helper means a runbook on `main` spreads its §0 over more than one bash block (D20) or is not the one this plan names: stop and report; never define a helper by hand. From here on every block file starts with the two session lines.
 
-Then this task's markers and verdicts against the live runbook, before any of them is used (local and read-only: it copies runbook blocks into a temporary directory of the session, runs the runbook's own `si_p1_check` and `si_p1_py mech-verdict` and the record lines of §5 and §12 on synthetic input there, and touches no cluster, bucket, Secret or checkout file). Each selector must name exactly one block of its kind, and this task's `mechanics-check` and `record-date` must read what the runbook's producers write:
+Then this task's markers and verdicts against the live runbook, before any of them is used (local and read-only: it copies runbook blocks into a temporary directory of the session, runs the runbook's own `si_p1_check` and `si_p1_py mech-verdict`, the record lines of §5 and §12 and `si_p1s_grant_probe` (over the committed corpus, with a stand-in for its per-row login) on synthetic input there, and touches no cluster, bucket, Secret or checkout file). Each selector must name exactly one block of its kind, and this task's `mechanics-check` and `record-date` must read what the runbook's producers write:
 
 ```bash
 t="$(mktemp -d "$p1_session/selfcheck.XXXXXX")"
@@ -17313,18 +17689,25 @@ done <<'EOF'
 ### 8.1 indexer-b|si_p1_job_commit b|read-only
 ### 8.1 indexer-b|si_p1_job_apply b|confirmed
 ### 8.1 indexer-b|si_backup_run b 1|confirmed
+### 8.1 indexer-b|si_p1_backup_check b 1|read-only
 ### 8.2 indexer-c|si_p1_job_commit c|read-only
 ### 8.2 indexer-c|si_p1_job_apply c|confirmed
 ### 8.2 indexer-c|si_backup_run c 1|confirmed
+### 8.2 indexer-c|si_p1_backup_check c 1|read-only
 ### 8.3 indexer-a|si_p1_job_commit a|read-only
 ### 8.3 indexer-a|si_p1_job_apply a|confirmed
 ### 8.3 indexer-a|si_backup_run a 1|confirmed
+### 8.3 indexer-a|si_p1_backup_check a 1|read-only
 ## 9. Incremental backups|si_backup_run b 2|confirmed
 ## 9. Incremental backups|si_backup_run c 2|confirmed
 ## 9. Incremental backups|si_backup_run a 2|confirmed
+## 9. Incremental backups|si_p1_backup_check|read-only
 ### 10.1 indexer-b|si_drill b|confirmed
+### 10.1 indexer-b|si_p1_drill_check b|read-only
 ### 10.2 indexer-c|si_drill c|confirmed
+### 10.2 indexer-c|si_p1_drill_check c|read-only
 ### 10.3 indexer-a|si_drill a|confirmed
+### 10.3 indexer-a|si_p1_drill_check a|read-only
 ## 11. Monitoring|si_p1_monitoring_commit|read-only
 ## 11. Monitoring|si_p1_monitoring_apply|confirmed
 ## 11. Monitoring|si_vmalert_groups|read-only
@@ -17366,10 +17749,24 @@ eval "$(grep -F 'echo "P1_MECHANICS=$(date -u +%Y-%m-%d)"' "$t/record-5.sh")" > 
 printf '%s\n' "$today" > "$t/bare-date.txt"
 if p1_edit record-date "$t/bare-date.txt" P1_END > /dev/null 2>&1; then echo "UNEXPECTED: a bare date passed as a named record"; exit 1; fi
 echo "record dates: P1_MECHANICS and P1_END read from the runbook's own record lines ($today)"
+(
+  # The runbook's own grant probe over the committed corpus, with si_p1s_as replaced in this subshell only by a
+  # stand-in that answers each row as its expect column says (497 for a denied row); no ClickHouse is reached.
+  # shellcheck disable=SC2329  # si_p1s_grant_probe calls it
+  si_p1s_as() {
+    if grep -qxF "$(printf '%s\tdenied\t%s' "$1" "$2")" charts/storage-integrity/tests/clickhouse_grant_probe.tsv; then echo "Code: 497. DB::Exception: self-check stand-in"; return 1; fi
+    echo "$1"
+  }
+  si_p1s_grant_probe > "$t/probe.tsv" 2> "$t/probe.err"
+  p1_edit probe-check "$t/probe.tsv" | tail -n 1
+  awk 'BEGIN { FS = OFS = "\t" } NR > 1 && $2 == "si_backup" && !done { $4 = "skipped"; done = 1 } { print }' "$t/probe.tsv" > "$t/probe-skipped.tsv"
+  if p1_edit probe-check "$t/probe-skipped.tsv" > /dev/null 2>&1; then echo "UNEXPECTED: this task's probe check passed a skipped si_backup row"; exit 1; fi
+  echo "ok: probe-check reads the runbook's grant-probe table ($(cat "$t/probe.err"))"
+)
 echo "self-check passed"
 ```
 
-Expected: `selectors: 24 markers, each exactly one block of its kind in the live runbook`; `…/mechanics/mechanics-gcs.tsv: 7 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)`; `ok: a granted cross-prefix list fails the runbook's verdict and this task's check (K25)`; `record dates: P1_MECHANICS and P1_END read from the runbook's own record lines (<today, UTC>)`; `self-check passed`. A marker that names no block or several, or a verdict or record line this task cannot read, means the runbook on `main` and this task disagree: stop and report, before any step runs; never adjust a marker or a parser on the fly.
+Expected: `selectors: 31 markers, each exactly one block of its kind in the live runbook`; `…/mechanics/mechanics-gcs.tsv: 7 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)`; `ok: a granted cross-prefix list fails the runbook's verdict and this task's check (K25)`; `record dates: P1_MECHANICS and P1_END read from the runbook's own record lines (<today, UTC>)`; `PROBE_ROWS=<n>` and `ok: probe-check reads the runbook's grant-probe table (every row of <n> is as expected; <s> rows of roles without a P1 staging login skipped)` (on the P1 PR's corpus `<n>` 113 and `<s>` 30); `self-check passed`. A marker that names no block or several, or a verdict or record line this task cannot read, means the runbook on `main` and this task disagree: stop and report, before any step runs; never adjust a marker or a parser on the fly.
 
 - [ ] **Step 2: Preparation, pins, budget and the P1 PR state (read-only)** — runbook §1.
 
@@ -17389,13 +17786,16 @@ for heading in '## 0. Session helpers' '## 1. Preparation' '### 1.1 Pins' '### 1
 done
 image="ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P1@$SN_DIGEST_P1"
 [ "$(si_p1_image)" = "$image" ] || { echo "si_p1_image prints $(si_p1_image), not $image; stop"; exit 1; }
+[ "$(cat "$si_backup/pins")" = "$(printf '%s\n' "$HG_TAG_P1" "$CORE_TAG_P1" "$SN_COMMIT_P1" "$SN_DIGEST_P1" "$P1_BACKUP_DELETE" "$INDEXER_C_ID")" ] || { echo "runbook §1.1's pins are not the ledger's HG_TAG_P1, CORE_TAG_P1, SN_COMMIT_P1, SN_DIGEST_P1, P1_BACKUP_DELETE and INDEXER_C_ID; stop"; exit 1; }
+k8s="$(si_kubectl version -o json | jq -r '.serverVersion | "\(.major).\(.minor)"' | tr -d '+')"
+case "$k8s" in 1.2[7-9]|1.[3-9][0-9]) ;; *) echo "the cluster runs Kubernetes ${k8s:-unknown}: the backup CronJob's timeZone (Etc/UTC) needs 1.27 or later; stop"; exit 1 ;; esac
 p1_edit pr-state charts/storage-integrity/tests . "$INDEXER_C_ID" "$P1_BACKUP_DELETE" "$image"
 p1_tests > "$si_backup/task28-tests-start.txt" 2>&1 || { tail -n 40 "$si_backup/task28-tests-start.txt"; echo "the render tests fail on origin/main; stop"; exit 1; }
 tests="$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' "$si_backup/task28-tests-start.txt")"
 [ -n "$tests" ] && [ "$(tail -n 1 "$si_backup/task28-tests-start.txt")" = OK ] || { echo "the render tests printed no count or no OK; stop"; exit 1; }
 seq_now="$(si_show | jq -r .promotion_seq)"
 {
-  echo "P1_PR #$P1_PR merged as $merge; checkout at $(git rev-parse --short=9 HEAD); render tests: $tests, OK"
+  echo "P1_PR #$P1_PR merged as $merge; checkout at $(git rev-parse --short=9 HEAD); render tests: $tests, OK; pins = ledger; Kubernetes $k8s"
   for s in storage-integrity-si-v2-clickhouse-backup-network storage-integrity-si-v2-clickhouse-backup-indexer-b storage-integrity-si-v2-clickhouse-backup-indexer-c storage-integrity-si-v2-p1-staging-logins; do
     printf '%s keys: %s\n' "$s" "$(si_secret_keys "$s")"
   done
@@ -17426,11 +17826,13 @@ p1_note BUDGET_LIVE_SEQ "$(cat "$si_backup/budget-live-seq")"
 p1_note EPOCH_START "$(si_show | jq -r .epoch)"
 ```
 
-Expected: no output from the heading loop; `P1 PR state: every si_backup user, backup job and backup alert off; owners {'sentio-node-devnet2-indexer-a': 0, 'sentio-node-devnet2-indexer-b': 1, 'sentio-node-devnet2-indexer-c': <INDEXER_C_ID>}; delete right <P1_BACKUP_DELETE>; image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>`; then `P1_PR #<n> merged as <40 hex>; checkout at <sha>; render tests: <count>, OK`; the three backup-password Secrets with exactly `password ` and the staging logins with `default si_backup si_gateway si_reader si_restore si_snode ` (key names only); every `storage-integrity-si-v2-<account> present: 0` (the keys are made in Step 4); the four hashes files `present`; `backup CronJobs: 0`, `P1 staging CHI: 0`, `lockdown staging CHI: 0` (Plan S3-B deleted it), `replica bucket: 0`, `replica service accounts: 0`; `indexer-c acceptance table: s3eaccept<n>.s3e_e2e`; hosts `a`, `b` and `c` with their own `si_indexer_id` and `self_indexer_id` `0`, `1` and `<INDEXER_C_ID>`, `enrolled` `true`, `quarantined` `false`; three tracks, none quarantined, each `published` equal to its `prefix` or behind by the blocks of the last publication interval; `max_writers` `"3"` and `si_indexers` `["0","1","<INDEXER_C_ID>"]` (the epoch is recorded: P1 must leave it unchanged); `budget <b> promotions at promotion <s>; <m> made since; <left> left (at least 16 needed)`, `BUDGET=<b>`, `BUDGET_LEFT=<left>` (K28); `pods P1 must never restart: <n>` (the four ClickHouse pods of the network installation, indexer-b's and indexer-c's ClickHouse pods, the three hosts and their DinD pods, three voters and three verifiers). Stop on anything else: a present key Secret, bucket or service account means an earlier attempt that must be explained first; a missing login Secret or hashes file means Task 26's user steps did not run; a budget below 16 stops P1 (report it; P2 needs more than P1 leaves).
+Expected: no output from the heading loop; `P1 PR state: every si_backup user, backup job and backup alert off; owners {'sentio-node-devnet2-indexer-a': 0, 'sentio-node-devnet2-indexer-b': 1, 'sentio-node-devnet2-indexer-c': <INDEXER_C_ID>}; delete right <P1_BACKUP_DELETE>; image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>`; then `P1_PR #<n> merged as <40 hex>; checkout at <sha>; render tests: <count>, OK; pins = ledger; Kubernetes 1.<minor>` (`pins` holds exactly the six ledger values in §1.1's order; the CronJob's `timeZone: Etc/UTC` needs 1.27 or later, status §4.2's Task 26 question, checked here read-only); the three backup-password Secrets with exactly `password ` and the staging logins with `default si_backup si_gateway si_reader si_restore si_snode ` (key names only); every `storage-integrity-si-v2-<account> present: 0` (the keys are made in Step 4); the four hashes files `present`; `backup CronJobs: 0`, `P1 staging CHI: 0`, `lockdown staging CHI: 0` (Plan S3-B deleted it), `replica bucket: 0`, `replica service accounts: 0`; `indexer-c acceptance table: s3eaccept<n>.s3e_e2e`; hosts `a`, `b` and `c` with their own `si_indexer_id` and `self_indexer_id` `0`, `1` and `<INDEXER_C_ID>`, `enrolled` `true`, `quarantined` `false`; three tracks, none quarantined, each `published` equal to its `prefix` or behind by the blocks of the last publication interval; `max_writers` `"3"` and `si_indexers` `["0","1","<INDEXER_C_ID>"]` (the epoch is recorded: P1 must leave it unchanged); `budget <b> promotions at promotion <s>; <m> made since; <left> left (at least 16 needed)`, `BUDGET=<b>`, `BUDGET_LEFT=<left>` (K28); `pods P1 must never restart: <n>` (the four ClickHouse pods of the network installation, indexer-b's and indexer-c's ClickHouse pods, the three hosts and their DinD pods, three voters and three verifiers). Stop on anything else: a present key Secret, bucket or service account means an earlier attempt that must be explained first; a missing login Secret or hashes file means Task 26's user steps did not run; a budget below 16 stops P1 (report it; P2 needs more than P1 leaves).
 
 - [ ] **Step 3: Replica bucket and service accounts (user action in the user's own terminal; irreversible: the bucket has `prevent_destroy`)** — runbook §2.
 
-Requires explicit user confirmation in chat. Gate: "the user applies, from the live checkout, only the replica resources of terraform/storage_integrity_devnet2_si_v2_replica.tf to the Terraform Cloud workspace prod: bucket sentio-352722-si-devnet2-si-v2-replica (versioned, uniform access, public access prevention enforced, prevent_destroy, incomplete multipart uploads aborted after 7 days), the custom role siDevnet2SiV2BackupWriter without any delete, the backup service accounts si-devnet2-si-v2-backup-0, -1, -<INDEXER_C_ID> and -mech, the managed folders owner-0/, owner-1/, owner-<INDEXER_C_ID>/ and mechanics/ of the bucket, each backup service account bound to the writer role on its own managed folder only, and the restore service accounts si-devnet2-si-v2-restore-a, -b, -c and -drill with roles/storage.objectViewer; the bucket can never be destroyed by Terraform" (with `P1_BACKUP_DELETE` = `lock` it adds: "and the custom role siDevnet2SiV2BackupLockRemover with storage.objects.delete, bound per backup service account to its own prefix's /.lock objects only"). After a yes, ask the user to run in their own fish terminal the variant for the recorded `P1_BACKUP_DELETE` (`terraform init` only reads the backend and the providers). For `none`:
+First the user decisions this step depends on, stop and ask (status §3; the agent never takes them): K25, the user confirms the list-confinement layout this apply creates (one managed folder per writer prefix, each backup service account holding the writer role on its own folder only and nothing on the bucket, and §5 accepting no residual); and, only with `P1_BACKUP_DELETE` = `lock`, K24, the user confirms that their amendment of spec §16 P1 ("backup keys may list, read and create on their own prefix but not delete, except the backup's own `.lock`", the decision Task 24's release step stopped for) stands. Without that answer (both, with `lock`), stop: nothing of this step runs.
+
+Requires explicit user confirmation in chat. Gate: "the user applies, from the live checkout, only the replica resources of terraform/storage_integrity_devnet2_si_v2_replica.tf to the Terraform Cloud workspace prod: bucket sentio-352722-si-devnet2-si-v2-replica (versioned, uniform access, public access prevention enforced, prevent_destroy, incomplete multipart uploads aborted after 7 days), the custom role siDevnet2SiV2BackupWriter without any delete, the backup service accounts si-devnet2-si-v2-backup-0, -1, -<INDEXER_C_ID> and -mech, the managed folders owner-0/, owner-1/, owner-<INDEXER_C_ID>/ and mechanics/ of the bucket, each backup service account bound to the writer role on its own managed folder only, and the restore service accounts si-devnet2-si-v2-restore-a, -b, -c and -drill with roles/storage.objectViewer; the bucket can never be destroyed by Terraform" (with `P1_BACKUP_DELETE` = `lock` it adds: "and the custom role siDevnet2SiV2BackupLockRemover with storage.objects.delete, bound per backup service account to its own prefix's /.lock objects only"). After a yes, ask the user to run in their own fish terminal the variant for the recorded `P1_BACKUP_DELETE` (`terraform init` only reads the backend and the providers; runbook §2's two fish blocks, the plan with `init` and then the apply, are the same commands with the same targets). For `none`:
 
 ```fish
 cd (cat ~/si-devnet2-stage3-p1-session/live-path)
@@ -17484,9 +17886,10 @@ if [ "$P1_BACKUP_DELETE" = lock ]; then
 elif gcloud iam roles describe siDevnet2SiV2BackupLockRemover --project=sentio-352722 --format=json > /dev/null 2>&1; then
   echo "the lock-remover role exists although P1_BACKUP_DELETE is none; stop"; exit 1
 fi
-gcloud iam service-accounts list --project=sentio-352722 --format='value(email)' | grep '^si-devnet2-si-v2-' | LC_ALL=C sort > "$si_backup/task28-service-accounts.txt"
+gcloud iam service-accounts list --project=sentio-352722 --format='value(email)' | { grep -E '^si-devnet2-si-v2-(backup|restore)-' || true; } | LC_ALL=C sort > "$si_backup/task28-service-accounts.txt"
 python3 -I - "$si_backup" "$INDEXER_C_ID" "$P1_BACKUP_DELETE" <<'PY' | tee "$si_backup/task28-bucket-verdict.txt"
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17555,7 +17958,8 @@ for k, prefix in writers.items():
     bindings = [(b.get("role"), sorted(b.get("members") or []), b.get("condition")) for b in load(f"task28-folder-iam-{prefix.rstrip('/')}.json").get("bindings") or []]
     if bindings != [(WRITER, [member(f"backup-{k}")], None)]:
         p.append(f"managed folder {prefix} binds {bindings}, expected only {WRITER} for {member(f'backup-{k}')} without a condition")
-project = [b for b in load("task28-project-iam.json").get("bindings") or [] if any("si-devnet2-si-v2-" in m for m in b.get("members") or [])]
+# the replica accounts only: si-devnet2-si-v2-da of the payload buckets keeps its own project binding (serviceUsageConsumer)
+project = [b for b in load("task28-project-iam.json").get("bindings") or [] if any(re.match(r"serviceAccount:si-devnet2-si-v2-(backup|restore)-", m) for m in b.get("members") or [])]
 if project:
     p.append(f"project-level bindings name a replica service account: {project}")
 for x in p:
@@ -17570,7 +17974,7 @@ p1_note TERRAFORM_PLAN_ADDS "$([ "$P1_BACKUP_DELETE" = lock ] && echo 27 || echo
 p1_note TERRAFORM_UTC "$(date -u '+%Y-%m-%dT%H:%MZ')"
 ```
 
-Expected: §2's expected paragraphs; then `bucket verdict: sentio-352722-si-devnet2-si-v2-replica versioned, uniform access, public access prevention enforced, abort incomplete uploads after 7 days; 8 service accounts; writer role without delete; 4 managed folders, each binding only its writer; 4 bucket-wide readers; no project-level grant` (with `, 4 lock-remover bindings` for `lock`). The bucket and its managed folders are read with `--raw` (the JSON API form, so the field names are the API's) and the policies at version 3 (gcloud asks for it), so the conditions are visible. A writer role on the bucket, a condition on a folder binding, or a folder that binds anything but its writer is a refusal (K25: only the folder confines a list). A refusal: stop; the fix is a reviewed change of Task 26's file in a new PR and a new apply by the user, never a console edit. The bucket stays whatever happens (`prevent_destroy`).
+Expected: §2's expected paragraphs; then `bucket verdict: sentio-352722-si-devnet2-si-v2-replica versioned, uniform access, public access prevention enforced, abort incomplete uploads after 7 days; 8 service accounts; writer role without delete; 4 managed folders, each binding only its writer; 4 bucket-wide readers; no project-level grant` (with `, 4 lock-remover bindings` for `lock`). The service-account list and the project-level check take only the replica accounts `si-devnet2-si-v2-backup-*` and `si-devnet2-si-v2-restore-*`: `si-devnet2-si-v2-da` (the payload buckets' account of `terraform/storage_integrity_devnet2_si_v2.tf`) exists and holds `roles/serviceusage.serviceUsageConsumer` on the project, which is not this plan's. The bucket and its managed folders are read with `--raw` (the JSON API form, so the field names are the API's) and the policies at version 3 (gcloud asks for it), so the conditions are visible. A writer role on the bucket, a condition on a folder binding, or a folder that binds anything but its writer is a refusal (K25: only the folder confines a list). A refusal: stop; the fix is a reviewed change of Task 26's file in a new PR and a new apply by the user, never a console edit. The bucket stays whatever happens (`prevent_destroy`).
 
 - [ ] **Step 4: HMAC keys (user action in the user's own terminal)** — runbook §3.
 
@@ -17649,10 +18053,10 @@ p1_same "$si_backup/task28-chi-start.txt" p1_chi3
 echo "staging: $(si_kubectl get chi storage-integrity-si-v2-p1-staging -o jsonpath='{.status.status}') on $(si_kubectl get pod storage-integrity-si-v2-p1-staging-source-0-0-0 -o jsonpath='{.spec.nodeName}')"
 echo "staging users: $(si_p1s_ch "SELECT arrayStringConcat(groupArray(name), ' ') FROM (SELECT name FROM system.users ORDER BY name)")"
 p1_note STAGING_UTC "$(date -u '+%Y-%m-%dT%H:%MZ')"
-p1_note PROBE_ROWS "$(($(wc -l < "$si_backup/staging-grant-probe.tsv") - 1))"
+p1_note PROBE_ROWS "$(sed -n 's/^PROBE_ROWS=//p' "$si_backup/task28-probe-verdict.txt")"
 ```
 
-Expected: §4's expected paragraphs (the Keeper root empty before the apply; the dry run naming the root `/storage-integrity/devnet2/p1-staging` and the six users; `Completed`; `default` with `['sha256_password']` and loopback only, without access management; every staging login `ok`; `every row of <n> is as expected` on the probe's stderr); then `…/staging-grant-probe.tsv: <n> rows as expected; default <k> ok 0 denied; si_backup <k> ok <m> denied; si_gateway …; si_reader …; si_restore <k> ok <m> denied; si_snode …` (every row's `got` equals its `expect`, and `si_backup` and `si_restore` each have positive and negative rows, contract §18), `unchanged: p1_pods`, `unchanged: p1_chi3` (no live installation changed), `staging: Completed on <node>` and `staging users: clickhouse_operator default si_backup si_gateway si_reader si_restore si_snode`. A probe row that differs: stop; the grants or the corpus are wrong, and a fix changes `SI_BACKUP_GRANTS` or `SI_RESTORE_GRANTS` in both copies in one reviewed step (contract §18), never on the cluster. The staging installation stays until Step 18.
+Expected: §4's expected paragraphs (the Keeper root empty before the apply; the dry run naming the root `/storage-integrity/devnet2/p1-staging` and the six users; `Completed`; `default` with `['sha256_password']` and loopback only, without access management; every staging login `ok`; `every row of <n> is as expected` on the probe's stderr); then `…/staging-grant-probe.tsv: <n> rows as expected, <s> rows of roles without a P1 staging login skipped; default <k> ok 0 denied; si_backup <k> ok <m> denied; si_gateway …; si_reader …; si_restore <k> ok <m> denied; si_snode …` and `PROBE_ROWS=<n>` (on the P1 PR's corpus: 113 rows run and 30 `si_verifier` rows skipped; `default 12 ok 0 denied; si_backup 7 ok 6 denied; si_gateway 15 ok 12 denied; si_reader 3 ok 5 denied; si_restore 14 ok 8 denied; si_snode 28 ok 3 denied`, runbook §4's counts; every row that ran has `got` equal to its `expect`, only rows of a role without a staging login may be `skipped`, and `si_backup` and `si_restore` each have positive and negative rows, contract §18), `unchanged: p1_pods`, `unchanged: p1_chi3` (no live installation changed), `staging: Completed on <node>` and `staging users: clickhouse_operator default si_backup si_gateway si_reader si_restore si_snode`. A probe row that differs: stop; the grants or the corpus are wrong, and a fix changes `SI_BACKUP_GRANTS` or `SI_RESTORE_GRANTS` in both copies in one reviewed step (contract §18), never on the cluster. The staging installation stays until Step 18.
 
 - [ ] **Step 6: Mechanics on GCS and the deployed image (each confirmed block requires explicit user confirmation; writes the bucket's `mechanics/` prefix for good)** — runbook §5. Records `P1_MECHANICS`.
 
@@ -17672,7 +18076,7 @@ p1_note MECHANICS_ROWS "$(($(wc -l < "$si_backup/mechanics-gcs.tsv") - 1))"
 echo "P1_MECHANICS=$d"
 ```
 
-Expected: §5's expected paragraphs; then `…/mechanics-gcs.tsv: 49 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)` (M12 to M14 on GCS with the deployed image: the incremental BACKUP and RESTORE keep `hash_of_all_files`; every secret masked as `[HIDDEN]` in `system.query_log`, `system.backups`, `system.processes` and the server log; an overwrite of a backup object refused; the measured delete right equal to `P1_BACKUP_DELETE`; the mechanics key lists inside `mechanics/` and is refused a list and a read of `owner-0/`; each owner key lists and reads its own prefix and is refused a list and a read of another owner's prefix; the restore key reads), `unchanged: p1_pods`, `unchanged: p1_chi3`, `P1_MECHANICS=<today, UTC>`. A row that differs (`differs: …` lines), a verdict line that counts another run, or a measured delete right other than `P1_BACKUP_DELETE`: stop. In each case §5's own verdict stopped too and wrote no `p1-mechanics.txt`, so `record-date` refuses as well and nothing is recorded. A differing list or read row of the keys is never accepted as a residual (K25): an own-prefix list GCS refuses means the managed folder's grant does not reach the XML API's list, and a cross-prefix list it grants means the layout does not confine; report the rows and the bucket verdict of Step 3, and the user decides the layout. A measured delete right other than `P1_BACKUP_DELETE` means the bucket's roles and the M13 record disagree (K24).
+Expected: §5's expected paragraphs; then `…/mechanics-gcs.tsv: 49 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)` (M12 to M14 on GCS with the deployed image: the incremental BACKUP and RESTORE keep `hash_of_all_files`; every secret masked as `[HIDDEN]` in `system.query_log`, `system.backups`, `system.processes` and the server log; an overwrite of a backup object refused; the measured delete right equal to `P1_BACKUP_DELETE`; the mechanics key lists inside `mechanics/` and is refused a list and a read of `owner-0/`; each owner key lists and reads its own prefix and is refused a list and a read of another owner's prefix; the restore key reads), `unchanged: p1_pods`, `unchanged: p1_chi3`, `P1_MECHANICS=<today, UTC>`. A row that differs (`differs: …` lines), a verdict line that counts another run, or a measured delete right other than `P1_BACKUP_DELETE`: stop. In each case §5's own verdict stopped too and wrote no `p1-mechanics.txt`, so `record-date` refuses as well and nothing is recorded. A differing list or read row of the keys is never accepted as a residual (K25): an own-prefix list GCS refuses means the managed folder's grant does not reach the XML API's list, and a cross-prefix list it grants means the layout does not confine; report the rows and the bucket verdict of Step 3 and ask: the user decides the layout (K25). A measured delete right other than `P1_BACKUP_DELETE` means the bucket's roles and the M13 record disagree: stop and ask the user (K24); nothing reaches an owner's prefix before they decide.
 
 - [ ] **Step 7: `si_backup` on indexer-b's installation, commit U-b (local; push and apply require explicit user confirmation)** — runbook §6.1.
 
@@ -17697,10 +18101,50 @@ users change reloads in place, so no pod restarts.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-user-indexer-b.txt" charts/storage-integrity/tests/test_render.py "$f"
-git show HEAD -- "$f" | cat
+git show --format= HEAD | cat
 ```
 
 Expected: `…: si_backup added to storage-integrity-si-v2-indexer-b (4 keys, 6 grants, hash <12 hex>...)`, `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2-indexer-b"]: False -> True`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files, and a diff that adds only the 11 lines of the four `si_backup` keys (the hash, `networks/ip` with its one address, `profile`, and `grants/query` with its six grants) at the end of the `users:` block (the hash is the user's `hashes-si_backup-indexer-b.yaml` value, not secret).
+
+The exact diff of commit U-b (`chore(devnet2): si_backup on indexer-b's ClickHouse (stage-3 P1)`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP = {
+ # single-service commit each, as a users reload that restarts nothing.
+ DEVNET2_SI_BACKUP_USER = {
+     "storage-integrity-si-v2": False,
+-    "storage-integrity-si-v2-indexer-b": False,
++    "storage-integrity-si-v2-indexer-b": True,
+     "storage-integrity-si-v2-indexer-c": False,
+ }
+ # The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
+diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml
++++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml
+@@ -<l>,6 +<l>,17 @@ spec:
+         - "GRANT SELECT ON hg_safe.*"
+         - "GRANT SELECT ON hg_unsafe.*"
+         - "GRANT SELECT(database, table, name, active, rows, partition_id, hash_of_all_files) ON system.parts"
++      si_backup/password_sha256_hex: "<si_backup in hashes-si_backup-indexer-b.yaml>"
++      si_backup/networks/ip:
++        - "::/0"
++      si_backup/profile: "default"
++      si_backup/grants/query:
++        - "GRANT BACKUP ON hg_safe.*"
++        - "GRANT READ, WRITE ON S3"
++        - "GRANT CREATE TEMPORARY TABLE ON *.*"
++        - "GRANT SELECT ON system.parts"
++        - "GRANT SELECT ON system.tables"
++        - "GRANT SELECT ON system.backups"
+     profiles:
+       default/query_cache_nondeterministic_function_handling: ignore
+       default/enable_json_type: "1"
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit U-b (si_backup on indexer-b's ClickHouse) to production main and kubectl apply storage-integrity-si-v2-indexer-b after a server dry run: si_backup appears on indexer-b's source ClickHouse by a users reload; no pod restarts, no client changes, nothing else of the installation changes". After a yes, run §6.1's confirmed block (`p1_run '### 6.1 indexer-b' --marker 'si_p1_user_apply b' --confirmed`; §6.1 has no read-only block after it, because `si_p1_user_apply` itself compares the pods with §1.3 and writes `host-pods-b-si-backup-user.txt`), then:
 
@@ -17743,10 +18187,50 @@ users change reloads in place, so no pod restarts.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-user-indexer-c.txt" charts/storage-integrity/tests/test_render.py "$f"
-git show HEAD -- "$f" | cat
+git show --format= HEAD | cat
 ```
 
 Expected: as Step 7 for `storage-integrity-si-v2-indexer-c` (`hashes-si_backup-indexer-c.yaml`).
+
+The exact diff of commit U-c (`chore(devnet2): si_backup on indexer-c's ClickHouse (stage-3 P1)`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP = {
+ DEVNET2_SI_BACKUP_USER = {
+     "storage-integrity-si-v2": False,
+     "storage-integrity-si-v2-indexer-b": True,
+-    "storage-integrity-si-v2-indexer-c": False,
++    "storage-integrity-si-v2-indexer-c": True,
+ }
+ # The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
+ # three in one commit once every owner's restore drill passed (§11).
+diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml
++++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml
+@@ -<l>,6 +<l>,17 @@ spec:
+         - "GRANT SELECT ON hg_safe.*"
+         - "GRANT SELECT ON hg_unsafe.*"
+         - "GRANT SELECT(database, table, name, active, rows, partition_id, hash_of_all_files) ON system.parts"
++      si_backup/password_sha256_hex: "<si_backup in hashes-si_backup-indexer-c.yaml>"
++      si_backup/networks/ip:
++        - "::/0"
++      si_backup/profile: "default"
++      si_backup/grants/query:
++        - "GRANT BACKUP ON hg_safe.*"
++        - "GRANT READ, WRITE ON S3"
++        - "GRANT CREATE TEMPORARY TABLE ON *.*"
++        - "GRANT SELECT ON system.parts"
++        - "GRANT SELECT ON system.tables"
++        - "GRANT SELECT ON system.backups"
+     profiles:
+       default/query_cache_nondeterministic_function_handling: ignore
+       default/enable_json_type: "1"
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit U-c (si_backup on indexer-c's ClickHouse) to production main and kubectl apply storage-integrity-si-v2-indexer-c after a server dry run: si_backup appears on indexer-c's source ClickHouse by a users reload; no pod restarts, no client changes, nothing else of the installation changes (its member disk included)". After a yes, run §6.2's confirmed block (`p1_run '### 6.2 indexer-c' --marker 'si_p1_user_apply c' --confirmed`; §6.2 has no read-only block after it), then:
 
@@ -17789,12 +18273,49 @@ sync renders only the CHI differently, whose users reload in place.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-user-network.txt" charts/storage-integrity/tests/test_render.py "$f"
-git show HEAD -- "$f" | cat
+git show --format= HEAD | cat
 si_render_diff storage-integrity-si-v2 | tee "$si_backup/task28-render-user-network.txt"
 [ "$(cat "$si_backup/task28-render-user-network.txt")" = "changed ClickHouseInstallation/storage-integrity-si-v2" ] || { echo "commit U-n renders more than the network CHI differently; stop"; exit 1; }
 ```
 
 Expected: `…: clickhouse.access.backupUser true, passwordSha256.si_backup <12 hex>...`, `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2"]: False -> True`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files with a two-line diff, and exactly `changed ClickHouseInstallation/storage-integrity-si-v2`.
+
+The exact diff of commit U-n (`chore(devnet2): si_backup on the network ClickHouse installation (stage-3 P1)`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP = {
+ # runbook adds it to indexer-b's, then indexer-c's, then the network's (§6), one
+ # single-service commit each, as a users reload that restarts nothing.
+ DEVNET2_SI_BACKUP_USER = {
+-    "storage-integrity-si-v2": False,
++    "storage-integrity-si-v2": True,
+     "storage-integrity-si-v2-indexer-b": True,
+     "storage-integrity-si-v2-indexer-c": True,
+ }
+diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
++++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+@@ -<l>,12 +<l>,14 @@ clickhouse:
+   access:
+     users: true
+     lockDefault: true
++    backupUser: true
+     passwordSha256:
+       default: <default's hash>
+       si_snode: <si_snode's hash>
+       si_gateway: <si_gateway's hash>
+       si_verifier: <si_verifier's hash>
+       si_reader: <si_reader's hash>
++      si_backup: "<si_backup in hashes-si_backup-network.yaml>"
+     bootstrapPasswordSecret:
+       name: storage-integrity-si-v2-clickhouse-bootstrap
+       key: password
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit U-n (si_backup on the network installation) to production main and sync release storage-integrity-si-v2 only: its CHI is the only rendered object that changes; si_backup appears on indexer-a's source and the three verifier ClickHouses by a users reload; no pod restarts, the arbiter and verifier pods stay the same, and the bootstrap-source hook runs once more as on every sync of this release". After a yes, run §6.3's confirmed block in the background (`p1_run '### 6.3 network' --marker 'si_p1_user_apply a' --confirmed`; §6.3 has no read-only block after it), then:
 
@@ -17834,7 +18355,7 @@ Requires explicit user confirmation in chat. Gate (one per devuser1 block `<k>`)
 bash ~/si-devnet2-stage3-p1-session/p1-user-block.sh 1 /path/to/devuser1-owner.key
 ```
 
-and for the second and third blocks the same command with `2` and `3` in place of `1` (and so on, if `p1_list` shows more devuser1 blocks). The user runs it from the live checkout's helpers (the script sources `helpers.sh` and changes into `$P` itself) and reports that it printed `devuser1 block <k> of §7 ended without an error`; the agent reads `$si_backup/user-7-<k>.out` against the runbook's expected paragraph for that block before the next block. A block that ends with an error: stop, report its output, and never run it again (a write is never re-run). Once every block of §7 has run:
+and for the second and third blocks the same command with `2` and `3` in place of `1` (and so on, if `p1_list` shows more devuser1 blocks). The user runs it from the live checkout's helpers (the script sources `helpers.sh` and changes into `$P` itself; their terminal needs `kubectl` access to `sentio-sea`, because §7's CREATE block checks `si_p1_budget_left` itself and every block reads `si_status`) and reports that it printed `devuser1 block <k> of §7 ended without an error`; the agent reads `$si_backup/user-7-<k>.out` against the runbook's expected paragraph for that block before the next block. A block that ends with an error: stop, report its output, and never run it again (a write is never re-run). Once every block of §7 has run:
 
 ```bash
 last="$(p1_list '## 7. Drill table' | awk -F'\t' '$2 ~ /^user / {n = substr($2, 6)} END {print n}')"
@@ -17864,7 +18385,8 @@ r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-nod
 p1_fresh_main
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
 p1_backup_login "$x"
-p1_edit cron-clear "$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")" 90
+si_p1_schedule_clear "$x"
+echo "indexer-$x: no scheduled backup from 90 minutes before to 70 minutes after now"
 p1_wait_published "$(p1_owner "$x")"
 p1_sts "$r" > "$si_backup/task28-sts-$x-before.txt"
 p1_edit backup-job "$f"
@@ -17883,11 +18405,43 @@ byte-identically and does not restart
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-$x.txt" charts/storage-integrity/tests/test_render.py "$f"
+git show --format= HEAD | cat
 si_render_diff "$r" | tee "$si_backup/task28-render-job-$x.txt"
 [ "$(cat "$si_backup/task28-render-job-$x.txt")" = "$(printf 'added ConfigMap/%s-si-backup\nadded CronJob/%s-si-backup' "$r" "$r")" ] || { echo "commit J-$x renders more than the backup ConfigMap and CronJob of $r; stop"; exit 1; }
 ```
 
-Expected: `unchanged: p1_pods`; `host b: si_backup ok`; `next scheduled run of '47 3 * * *' at <date> 03:47 UTC, <m> minutes from now` with `<m>` at least 90 (else wait until the scheduled time has passed: a CronJob that is not enabled yet does not run, but its first scheduled run must not race the manual one); `track 1: {…"prefix":<p>,"published":<p>…}`; `…: siBackup.enabled true`, `DEVNET2_SI_BACKUP["sentio-node-devnet2-indexer-b"]: False -> True`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files; exactly `added ConfigMap/sentio-node-devnet2-indexer-b-si-backup` and `added CronJob/sentio-node-devnet2-indexer-b-si-backup`.
+Expected: `unchanged: p1_pods`; `host b: si_backup ok`; `indexer-b: no scheduled backup from 90 minutes before to 70 minutes after now` (`si_p1_schedule_clear` reads `DEVNET2_SI_BACKUP_SCHEDULES` while the CronJob does not exist; if it refuses, wait until 70 minutes after 03:47 UTC: `si_p1_job_apply` and `si_backup_run` refuse in the same window, and the first scheduled run must not race the manual one); `track 1: {…"prefix":<p>,"published":<p>…}`; `…: siBackup.enabled true`, `DEVNET2_SI_BACKUP["sentio-node-devnet2-indexer-b"]: False -> True`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files; exactly `added ConfigMap/sentio-node-devnet2-indexer-b-si-backup` and `added CronJob/sentio-node-devnet2-indexer-b-si-backup`.
+
+The exact diff of commit J-b (`chore(devnet2): indexer-b's stage-3 P1 backup CronJob`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP_SCHEDULES = {
+ # changes this mirror too, and only once the host's installation has si_backup.
+ DEVNET2_SI_BACKUP = {
+     "sentio-node-devnet2-indexer-a": False,
+-    "sentio-node-devnet2-indexer-b": False,
++    "sentio-node-devnet2-indexer-b": True,
+     "sentio-node-devnet2-indexer-c": False,
+ }
+ # Whether each SI ClickHouse installation of devnet2-si-v2 has si_backup. The P1
+diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
++++ b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml
+@@ -<l>,7 +<l>,7 @@ housegateSidecar:
+ # turning it on restarts nothing. The runbook enables it in its own commit once
+ # the installation has si_backup (§6).
+ siBackup:
+-  enabled: false
++  enabled: true
+   image: "ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>"
+   schedule: "47 3 * * *"
+   ownerIndexerID: 1
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit J-b (indexer-b's backup CronJob) to production main and sync release sentio-node-devnet2-indexer-b only: it adds ConfigMap and CronJob sentio-node-devnet2-indexer-b-si-backup (daily at 03:47 UTC); the host StatefulSet and pod do not change". After a yes, run §8.1's push block (`p1_run '### 8.1 indexer-b' --marker 'si_p1_job_apply b' --confirmed`, in the background), then:
 
@@ -17909,7 +18463,7 @@ printf 'JOB_COMMIT_%s=%s\n' "$(printf '%s' "$x" | tr '[:lower:]' '[:upper:]')" "
 
 Expected: §8.1's expected paragraphs for the sync; then the CronJob line with `"schedule":"47 3 * * *"`, `"suspend":false`, `"concurrency":"Forbid"`, the `si_p1_image` image and `"last_schedule":null`; `unchanged: p1_sts sentio-node-devnet2-indexer-b`, `unchanged: p1_pods`, `unchanged: p1_chi3`.
 
-Requires explicit user confirmation in chat. Gate: "run indexer-b's first backup by hand: one Job sentio-node-devnet2-indexer-b-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-b's source ClickHouse into owner-1/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket (no key of P1 deletes); nothing restarts". After a yes, run §8.1's run block (`p1_run '### 8.1 indexer-b' --marker 'si_backup_run b 1' --confirmed`, in the background), then §8.1's remaining read-only block (`si_p1_backup_check b 1`), then:
+Requires explicit user confirmation in chat. Gate: "run indexer-b's first backup by hand: one Job sentio-node-devnet2-indexer-b-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-b's source ClickHouse into owner-1/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket (no key of P1 deletes); nothing restarts". After a yes, run §8.1's run block (`p1_run '### 8.1 indexer-b' --marker 'si_backup_run b 1' --confirmed`, in the background), then §8.1's remaining read-only block (`p1_run '### 8.1 indexer-b' --marker 'si_p1_backup_check b 1' --read-only`), then:
 
 ```bash
 x=b
@@ -17936,7 +18490,8 @@ r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-nod
 p1_fresh_main
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
 p1_backup_login "$x"
-p1_edit cron-clear "$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")" 90
+si_p1_schedule_clear "$x"
+echo "indexer-$x: no scheduled backup from 90 minutes before to 70 minutes after now"
 p1_wait_published "$(p1_owner "$x")"
 p1_sts "$r" > "$si_backup/task28-sts-$x-before.txt"
 p1_edit backup-job "$f"
@@ -17955,11 +18510,43 @@ byte-identically and does not restart
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-$x.txt" charts/storage-integrity/tests/test_render.py "$f"
+git show --format= HEAD | cat
 si_render_diff "$r" | tee "$si_backup/task28-render-job-$x.txt"
 [ "$(cat "$si_backup/task28-render-job-$x.txt")" = "$(printf 'added ConfigMap/%s-si-backup\nadded CronJob/%s-si-backup' "$r" "$r")" ] || { echo "commit J-$x renders more than the backup ConfigMap and CronJob of $r; stop"; exit 1; }
 ```
 
-Expected: as Step 11 for indexer-c: `host c: si_backup ok`; the next run of `17 4 * * *` at least 90 minutes away; `track <INDEXER_C_ID>: {…"prefix":<p>,"published":<p>…}`; the two edits; `render tests: <TESTS_START>, OK`; exactly `added ConfigMap/sentio-node-devnet2-indexer-c-si-backup` and `added CronJob/sentio-node-devnet2-indexer-c-si-backup`.
+Expected: as Step 11 for indexer-c: `host c: si_backup ok`; `indexer-c: no scheduled backup from 90 minutes before to 70 minutes after now` (its schedule `17 4 * * *`); `track <INDEXER_C_ID>: {…"prefix":<p>,"published":<p>…}`; the two edits; `render tests: <TESTS_START>, OK`; exactly `added ConfigMap/sentio-node-devnet2-indexer-c-si-backup` and `added CronJob/sentio-node-devnet2-indexer-c-si-backup`.
+
+The exact diff of commit J-c (`chore(devnet2): indexer-c's stage-3 P1 backup CronJob`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP_SCHEDULES = {
+ DEVNET2_SI_BACKUP = {
+     "sentio-node-devnet2-indexer-a": False,
+     "sentio-node-devnet2-indexer-b": True,
+-    "sentio-node-devnet2-indexer-c": False,
++    "sentio-node-devnet2-indexer-c": True,
+ }
+ # Whether each SI ClickHouse installation of devnet2-si-v2 has si_backup. The P1
+ # runbook adds it to indexer-b's, then indexer-c's, then the network's (§6), one
+diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml
++++ b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml
+@@ -<l>,7 +<l>,7 @@ housegateSidecar:
+ # turning it on restarts nothing. The runbook enables it in its own commit once
+ # the installation has si_backup (§6).
+ siBackup:
+-  enabled: false
++  enabled: true
+   image: "ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>"
+   schedule: "17 4 * * *"
+   ownerIndexerID: <INDEXER_C_ID>
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit J-c (indexer-c's backup CronJob) to production main and sync release sentio-node-devnet2-indexer-c only: it adds ConfigMap and CronJob sentio-node-devnet2-indexer-c-si-backup (daily at 04:17 UTC); the host StatefulSet and pod do not change". After a yes, run §8.2's push block (`p1_run '### 8.2 indexer-c' --marker 'si_p1_job_apply c' --confirmed`, in the background), then:
 
@@ -17981,7 +18568,7 @@ printf 'JOB_COMMIT_%s=%s\n' "$(printf '%s' "$x" | tr '[:lower:]' '[:upper:]')" "
 
 Expected: §8.2's expected paragraphs for the sync; then the CronJob line with `"schedule":"17 4 * * *"`, `"suspend":false`, `"concurrency":"Forbid"`, the `si_p1_image` image and `"last_schedule":null`; the three `unchanged:` lines.
 
-Requires explicit user confirmation in chat. Gate: "run indexer-c's first backup by hand: one Job sentio-node-devnet2-indexer-c-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-c's source ClickHouse into owner-<INDEXER_C_ID>/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket; nothing restarts". After a yes, run §8.2's run block (`p1_run '### 8.2 indexer-c' --marker 'si_backup_run c 1' --confirmed`, in the background), then §8.2's remaining read-only block (`si_p1_backup_check c 1`), then:
+Requires explicit user confirmation in chat. Gate: "run indexer-c's first backup by hand: one Job sentio-node-devnet2-indexer-c-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-c's source ClickHouse into owner-<INDEXER_C_ID>/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket; nothing restarts". After a yes, run §8.2's run block (`p1_run '### 8.2 indexer-c' --marker 'si_backup_run c 1' --confirmed`, in the background), then §8.2's remaining read-only block (`p1_run '### 8.2 indexer-c' --marker 'si_p1_backup_check c 1' --read-only`), then:
 
 ```bash
 x=c
@@ -18008,7 +18595,8 @@ r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-nod
 p1_fresh_main
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
 p1_backup_login "$x"
-p1_edit cron-clear "$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")" 90
+si_p1_schedule_clear "$x"
+echo "indexer-$x: no scheduled backup from 90 minutes before to 70 minutes after now"
 p1_wait_published "$(p1_owner "$x")"
 p1_sts "$r" > "$si_backup/task28-sts-$x-before.txt"
 p1_edit backup-job "$f"
@@ -18027,11 +18615,43 @@ byte-identically and does not restart
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-si-backup-$x.txt" charts/storage-integrity/tests/test_render.py "$f"
+git show --format= HEAD | cat
 si_render_diff "$r" | tee "$si_backup/task28-render-job-$x.txt"
 [ "$(cat "$si_backup/task28-render-job-$x.txt")" = "$(printf 'added ConfigMap/%s-si-backup\nadded CronJob/%s-si-backup' "$r" "$r")" ] || { echo "commit J-$x renders more than the backup ConfigMap and CronJob of $r; stop"; exit 1; }
 ```
 
-Expected: as Step 11 for indexer-a: `host a: si_backup ok`; the next run of `17 3 * * *` at least 90 minutes away; `track 0: {…"prefix":<p>,"published":<p>…}`; the two edits; `render tests: <TESTS_START>, OK`; exactly `added ConfigMap/sentio-node-devnet2-indexer-a-si-backup` and `added CronJob/sentio-node-devnet2-indexer-a-si-backup`.
+Expected: as Step 11 for indexer-a: `host a: si_backup ok`; `indexer-a: no scheduled backup from 90 minutes before to 70 minutes after now` (its schedule `17 3 * * *`); `track 0: {…"prefix":<p>,"published":<p>…}`; the two edits; `render tests: <TESTS_START>, OK`; exactly `added ConfigMap/sentio-node-devnet2-indexer-a-si-backup` and `added CronJob/sentio-node-devnet2-indexer-a-si-backup`.
+
+The exact diff of commit J-a (`chore(devnet2): indexer-a's stage-3 P1 backup CronJob`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,7 @@ DEVNET2_SI_BACKUP_SCHEDULES = {
+ # indexer-c's, then indexer-a's (§8), each in a single-service commit that
+ # changes this mirror too, and only once the host's installation has si_backup.
+ DEVNET2_SI_BACKUP = {
+-    "sentio-node-devnet2-indexer-a": False,
++    "sentio-node-devnet2-indexer-a": True,
+     "sentio-node-devnet2-indexer-b": True,
+     "sentio-node-devnet2-indexer-c": True,
+ }
+diff --git a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
++++ b/k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml
+@@ -<l>,7 +<l>,7 @@ housegateSidecar:
+ # turning it on restarts nothing. The runbook enables it in its own commit once
+ # the installation has si_backup (§6).
+ siBackup:
+-  enabled: false
++  enabled: true
+   image: "ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>"
+   schedule: "17 3 * * *"
+   ownerIndexerID: 0
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit J-a (indexer-a's backup CronJob) to production main and sync release sentio-node-devnet2-indexer-a only: it adds ConfigMap and CronJob sentio-node-devnet2-indexer-a-si-backup (daily at 03:17 UTC); the host StatefulSet and pod do not change". After a yes, run §8.3's push block (`p1_run '### 8.3 indexer-a' --marker 'si_p1_job_apply a' --confirmed`, in the background), then:
 
@@ -18053,7 +18673,7 @@ printf 'JOB_COMMIT_%s=%s\n' "$(printf '%s' "$x" | tr '[:lower:]' '[:upper:]')" "
 
 Expected: §8.3's expected paragraphs for the sync; then the CronJob line with `"schedule":"17 3 * * *"`, `"suspend":false`, `"concurrency":"Forbid"`, the `si_p1_image` image and `"last_schedule":null`; the three `unchanged:` lines.
 
-Requires explicit user confirmation in chat. Gate: "run indexer-a's first backup by hand: one Job sentio-node-devnet2-indexer-a-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-a's source ClickHouse (the network installation's source) into owner-0/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket; nothing restarts". After a yes, run §8.3's run block (`p1_run '### 8.3 indexer-a' --marker 'si_backup_run a 1' --confirmed`, in the background), then §8.3's remaining read-only block (`si_p1_backup_check a 1`), then:
+Requires explicit user confirmation in chat. Gate: "run indexer-a's first backup by hand: one Job sentio-node-devnet2-indexer-a-si-backup-p1-1 from its CronJob, which runs BACKUP DATABASE hg_safe as si_backup on indexer-a's source ClickHouse (the network installation's source) into owner-0/<UTC name>-full/ of the replica bucket and writes its index object beside it; IRREVERSIBLE: the objects stay in the bucket; nothing restarts". After a yes, run §8.3's run block (`p1_run '### 8.3 indexer-a' --marker 'si_backup_run a 1' --confirmed`, in the background), then §8.3's remaining read-only block (`p1_run '### 8.3 indexer-a' --marker 'si_p1_backup_check a 1' --read-only`), then:
 
 ```bash
 x=a
@@ -18075,13 +18695,13 @@ Expected: §8.3's expected paragraphs for the run; then `backup-a-1.json: owner 
 
 ```bash
 x=b
-f="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$x-storage-integrity-si-v2.yaml"
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
-p1_edit cron-clear "$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")" 90
+si_p1_schedule_clear "$x"
+echo "indexer-$x: no scheduled backup from 90 minutes before to 70 minutes after now"
 p1_cron "$x" | jq -e '.last_schedule == null' > /dev/null || { echo "the CronJob of indexer-$x ran on its schedule since it was enabled, so its next backup would not be based on backup-$x-1: stop and ask"; exit 1; }
 ```
 
-Expected: `unchanged: p1_pods` and the next scheduled run at least 90 minutes away. (For `c` and `a` the block's first line is `x=c` and `x=a`.)
+Expected: `unchanged: p1_pods` and `indexer-<x>: no scheduled backup from 90 minutes before to 70 minutes after now`; a refusal of `si_p1_schedule_clear` means wait (its message names the window), a `last_schedule` that is set means the CronJob ran on its own: stop and ask. (For `c` and `a` the block's first line is `x=c` and `x=a`.)
 
 Requires explicit user confirmation in chat. Gate (one per owner): "run indexer-<x>'s second backup by hand: one Job sentio-node-devnet2-indexer-<x>-si-backup-p1-2 from its CronJob, an incremental BACKUP DATABASE hg_safe with base_backup = its first backup <FULL_X>, into owner-<id>/<UTC name>-incr/ of the replica bucket with its index object; IRREVERSIBLE: the objects stay in the bucket; nothing restarts". After a yes, run that owner's block in the background: `p1_run '## 9. Incremental backups' --marker 'si_backup_run b 2' --confirmed` for indexer-b, `p1_run '## 9. Incremental backups' --marker 'si_backup_run c 2' --confirmed` for indexer-c and `p1_run '## 9. Incremental backups' --marker 'si_backup_run a 2' --confirmed` for indexer-a. Then:
 
@@ -18097,7 +18717,7 @@ p1_same "$si_backup/task28-chi-start.txt" p1_chi3
 p1_note "INCR_$X" "$name"
 ```
 
-Expected (for each owner, with its first line `x=b`, `x=c`, `x=a`): §9's expected paragraph for that owner; `backup-<x>-2.json: owner <id> incr backup <yyyymmddThhmmssZ>-incr, chain_length 2, base <FULL_X>; manifest 0x… (entry safe_block_seq <s'>, …); …` (`<s'>` not below the full backup's), `backup-<x>-2.json equals task28-stored-<x>-2.json`, both `unchanged:` lines. Every owner now has a chain of one full and one incremental backup (spec §16 P1).
+Expected (for each owner, with its first line `x=b`, `x=c`, `x=a`): §9's expected paragraph for that owner; `backup-<x>-2.json: owner <id> incr backup <yyyymmddThhmmssZ>-incr, chain_length 2, base <FULL_X>; manifest 0x… (entry safe_block_seq <s'>, …); …` (`<s'>` not below the full backup's), `backup-<x>-2.json equals task28-stored-<x>-2.json`, both `unchanged:` lines. After the third owner's checks, run §9's read-only block (`p1_run '## 9. Incremental backups' --marker 'si_p1_backup_check' --read-only`): its expected paragraph, `si_p1_backup_check` for `b`, `c` and `a` with each `backup-check-<x>-2.txt` (an `incr` on the owner's first backup, the bucket listing both names, `owner ClickHouse: BACKUP_CREATED`, the entry published). Every owner now has a chain of one full and one incremental backup (spec §16 P1).
 
 - [ ] **Step 15: One restore drill per owner b, c, a (each drill requires explicit user confirmation)** — runbook §10.
 
@@ -18105,16 +18725,16 @@ For each owner in the order indexer-b (§10.1, `p1_list '### 10.1 indexer-b'`, i
 
 ```bash
 x=b
-f="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$x-storage-integrity-si-v2.yaml"
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
-p1_edit cron-clear "$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")" 90
+si_p1_schedule_clear "$x"
+echo "indexer-$x: no scheduled backup from 90 minutes before to 70 minutes after now"
 p1_cron "$x" | jq -e '.last_schedule == null' > /dev/null || { echo "the CronJob of indexer-$x ran on its schedule, so its latest backup is no longer backup-$x-2: stop and ask"; exit 1; }
 echo "drill scratch tables of indexer-$x on staging before: $(p1_scratch_left "$x")"
 ```
 
-Expected: `unchanged: p1_pods`, the next scheduled run at least 90 minutes away, `… before: 0`. (For `c` and `a` the first line is `x=c` and `x=a`.)
+Expected: `unchanged: p1_pods`, `indexer-<x>: no scheduled backup from 90 minutes before to 70 minutes after now` (a drill takes up to 70 minutes and must end before the next scheduled run starts a newer backup), `… before: 0`. (For `c` and `a` the first line is `x=c` and `x=a`.)
 
-Requires explicit user confirmation in chat. Gate (one per owner): "run the restore drill of indexer-<x>: ConfigMap si-p1-drill-config-<x> and Job si-p1-drill-<x> on si_p1_image restore its latest backup <INCR_X>, partition by partition, into hg_rstage on the P1 staging installation as si_restore with the read-only restore-drill key, and gate it against the manifest that backup's index names (fetched from the arbiter and checked by the §8.4 accept rule) with the table schemas from indexer-<x>'s status RPC; it writes only to the staging installation and reads the bucket". After a yes, run that owner's drill block in the background (`p1_run '### 10.1 indexer-b' --marker 'si_drill b' --confirmed`; for indexer-c `p1_run '### 10.2 indexer-c' --marker 'si_drill c' --confirmed`; for indexer-a `p1_run '### 10.3 indexer-a' --marker 'si_drill a' --confirmed`), then that subsection's remaining read-only blocks (the comparison of the verified tables with the owner's Active tables in the registry), then:
+Requires explicit user confirmation in chat. Gate (one per owner): "run the restore drill of indexer-<x>: ConfigMap si-p1-drill-config-<x> and Job si-p1-drill-<x> on si_p1_image restore its newest checked backup <INCR_X>, named with --backup (si_drill refuses a backup without a passing si_p1_backup_check), partition by partition, into hg_rstage on the P1 staging installation as si_restore with the read-only restore-drill key, and gate it against the manifest that backup's index names (fetched from the arbiter and checked by the §8.4 accept rule) with the table schemas from indexer-<x>'s status RPC; it writes only to the staging installation and reads the bucket". After a yes, run that owner's drill block in the background (`p1_run '### 10.1 indexer-b' --marker 'si_drill b' --confirmed`; for indexer-c `p1_run '### 10.2 indexer-c' --marker 'si_drill c' --confirmed`; for indexer-a `p1_run '### 10.3 indexer-a' --marker 'si_drill a' --confirmed`), then that subsection's read-only check (`p1_run '### 10.1 indexer-b' --marker 'si_p1_drill_check b' --read-only`; for indexer-c `p1_run '### 10.2 indexer-c' --marker 'si_p1_drill_check c' --read-only`; for indexer-a `p1_run '### 10.3 indexer-a' --marker 'si_p1_drill_check a' --read-only`: the comparison of the verified tables with the owner's Active tables in the registry, written to `drill-check-<x>.txt`, which §12 reads), then:
 
 ```bash
 x=b
@@ -18131,12 +18751,29 @@ Expected (for each owner): that subsection's expected paragraphs (the Job succee
 
 - [ ] **Step 16: Backup alerts, commit M (local; push and sync require explicit user confirmation)** — runbook §11.
 
-`p1_list '## 11. Monitoring'`: one read-only block, the runbook's own commit helper `si_p1_monitoring_commit`, then one confirmed block, `si_p1_monitoring_apply`, then the read-only alert check; anything else: stop and report. The commit block is not run: this step's commit below changes the same two files, and running both would leave two commits on `HEAD`, which `p1_fresh_main` and `si_p1_monitoring_apply`'s `si_head_is` refuse. Then, in `$P`, one commit (local):
+`p1_list '## 11. Monitoring'`: one read-only block, the runbook's own commit helper `si_p1_monitoring_commit`, then one confirmed block, `si_p1_monitoring_apply`, then the read-only alert check (`si_vmalert_groups`); a read-only check the runbook places before its commit helper runs, in order, before this step's commit, and one after the apply runs after it; any other confirmed block: stop and report. The commit block is not run: this step's commit below changes the same two files, and running both would leave two commits on `HEAD`, which `p1_fresh_main` and `si_p1_monitoring_apply`'s `si_head_is` refuse.
+
+First the series the two alerts read (read-only; status §4.2's Task 26 question): `StorageIntegrityBackupStale` reads `kube_cronjob_status_last_successful_time` and `kube_cronjob_created`, `StorageIntegrityBackupFailed` `kube_job_status_failed` joined on `kube_job_owner`; a series kube-state-metrics does not export would leave its alert silently unarmed, so the commit waits until devnet2 exports all four for the three CronJobs and their six manual Jobs:
+
+```bash
+cj='sentio-node-devnet2-indexer-(a|b|c)-si-backup'
+k_created="$(si_vm_value "count(kube_cronjob_created{namespace=\"sentio-network-devnet2\",cronjob=~\"$cj\"})")"
+k_success="$(si_vm_value "count(kube_cronjob_status_last_successful_time{namespace=\"sentio-network-devnet2\",cronjob=~\"$cj\"})")"
+k_owner="$(si_vm_value "count(kube_job_owner{namespace=\"sentio-network-devnet2\",owner_kind=\"CronJob\",owner_name=~\"$cj\"})")"
+k_failed="$(si_vm_value "count(kube_job_status_failed{namespace=\"sentio-network-devnet2\",job_name=~\"$cj-p1-(1|2)\"})")"
+echo "kube-state-metrics: kube_cronjob_created $k_created, kube_cronjob_status_last_successful_time $k_success, kube_job_owner $k_owner, kube_job_status_failed $k_failed" | tee "$si_backup/task28-backup-series.txt"
+[ "$k_created" = 3 ] && [ "$k_success" = 3 ] && [ "$k_failed" = 6 ] && [ "$k_owner" != none ] && [ "$k_owner" -ge 6 ] || { echo "devnet2 does not export every series the backup alerts read: the alerts would be silently unarmed; stop and report (nothing is committed)"; exit 1; }
+```
+
+Expected: `kube-state-metrics: kube_cronjob_created 3, kube_cronjob_status_last_successful_time 3, kube_job_owner <at least 6>, kube_job_status_failed 6` (each CronJob's two manual Jobs carry its controller reference, so the CronJob controller records their success and kube-state-metrics their owner). `none` or a smaller count: stop and report; the alerts are not committed until the series exist (a scrape interval or two after the last Job).
+
+Then, in `$P`, one commit (local):
 
 ```bash
 p1_fresh_main
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
 for x in a b c; do [ -s "$si_backup/drill-$x.json" ] && [ "$(jq -r .pass "$si_backup/drill-$x.json")" = true ] || { echo "the drill of indexer-$x has not passed; the monitoring commit comes after every drill; stop"; exit 1; }; done
+[ -s "$si_backup/task28-backup-series.txt" ] || { echo "the series check above has not run; stop"; exit 1; }
 f=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
 p1_edit monitor-backups "$f" sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup
 p1_edit rollout-tuple charts/storage-integrity/tests DEVNET2_MONITORED_BACKUPS sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup
@@ -18155,11 +18792,47 @@ sync changes only the VMRule.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-monitoring-backups.txt" charts/storage-integrity/tests/test_render.py "$f"
+git show --format= HEAD | cat
 si_render_diff storage-integrity-si-v2 | tee "$si_backup/task28-render-monitoring.txt"
 [ "$(cat "$si_backup/task28-render-monitoring.txt")" = "changed VMRule/storage-integrity-si-v2" ] || { echo "commit M renders more than the VMRule differently; stop"; exit 1; }
 ```
 
 Expected: `unchanged: p1_pods`; `…: monitoring.backups.cronJobs sentio-node-devnet2-indexer-a-si-backup, sentio-node-devnet2-indexer-b-si-backup, sentio-node-devnet2-indexer-c-si-backup`, `DEVNET2_MONITORED_BACKUPS: () -> (sentio-node-devnet2-indexer-a-si-backup, sentio-node-devnet2-indexer-b-si-backup, sentio-node-devnet2-indexer-c-si-backup)`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files, and exactly `changed VMRule/storage-integrity-si-v2`.
+
+The exact diff of commit M (`chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
+
+```diff
+diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
+index <old>..<new> 100644
+--- a/charts/storage-integrity/tests/test_render.py
++++ b/charts/storage-integrity/tests/test_render.py
+@@ -<l>,7 +<l>,11 @@ DEVNET2_SI_BACKUP_USER = {
+ }
+ # The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
+ # three in one commit once every owner's restore drill passed (§11).
+-DEVNET2_MONITORED_BACKUPS = ()
++DEVNET2_MONITORED_BACKUPS = (
++    "sentio-node-devnet2-indexer-a-si-backup",
++    "sentio-node-devnet2-indexer-b-si-backup",
++    "sentio-node-devnet2-indexer-c-si-backup",
++)
+ # P1_BACKUP_DELETE (Plan S3-C1 Appendix C, K24): the delete right a ClickHouse
+ # BACKUP needs, as mechanics M13 measured it: "none", or "lock" (each backup's
+ # own .lock only, once the user amended spec §16 P1).
+diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+index <old>..<new> 100644
+--- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
++++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+@@ -<l>,4 +<l>,7 @@ monitoring:
+   # The SI owners' backup CronJobs (docs/storage-integrity-devnet2-stage3-p1-backups.md
+   # §11): all three are listed in one commit once every owner's restore drill passed.
+   backups:
+-    cronJobs: []
++    cronJobs:
++      - sentio-node-devnet2-indexer-a-si-backup
++      - sentio-node-devnet2-indexer-b-si-backup
++      - sentio-node-devnet2-indexer-c-si-backup
+```
 
 Requires explicit user confirmation in chat. Gate: "push commit M (the backup alerts) to production main and sync release storage-integrity-si-v2 only: the VMRule storage-integrity-si-v2 gains the rule group storage-integrity-si-v2.backups with StorageIntegrityBackupStale and StorageIntegrityBackupFailed over the three backup CronJobs; no pod restarts, the bootstrap-source hook runs once more as on every sync of this release". After a yes, run §11's confirmed block (`p1_run '## 11. Monitoring' --marker 'si_p1_monitoring_apply' --confirmed`, in the background), then §11's remaining read-only block (the alert check, `p1_run '## 11. Monitoring' --marker 'si_vmalert_groups' --read-only`), then:
 
@@ -18182,11 +18855,11 @@ p1_same "$si_backup/task28-chi-start.txt" p1_chi3
 p1_note MONITORING_COMMIT "$c"
 ```
 
-Expected: §11's expected paragraphs; then `[]` (no `StorageIntegrityBackup*` series), three CronJob lines with `"suspend":false` and `"active":0`, both `unchanged:` lines. The group `storage-integrity-si-v2.backups` with both rules `health` `ok` and an empty `lastError` within five minutes of the sync; Grafana's `Arbiter.*|SentioNode.*|StorageIntegrity.*` rule (Plan S3-B K13) delivers both alerts without a change.
+Expected: §11's expected paragraphs (the group with both rules `health` `ok`, three `last_success` values, no alert, then one line per CronJob `<cronjob>: kube_cronjob_created 1, kube_cronjob_status_last_successful_time 1, kube_job_status_failed of its Jobs <n>` with `<n>` at least 1; a `0` stops that block, because a rule could never fire); then `[]` (no `StorageIntegrityBackup*` series), three CronJob lines with `"suspend":false` and `"active":0`, both `unchanged:` lines. The group `storage-integrity-si-v2.backups` with both rules `health` `ok` and an empty `lastError` within five minutes of the sync; Grafana's `Arbiter.*|SentioNode.*|StorageIntegrity.*` rule (Plan S3-B K13) delivers both alerts without a change.
 
 - [ ] **Step 17: End (read-only)** — runbook §12. Records `P1_END`.
 
-Run §12's read-only blocks (`p1_list '## 12. End'`; they write `p1-end.txt`; §12 holds no confirmed block, else stop and report). Then:
+Run §12's read-only blocks (`p1_list '## 12. End'`; they write `p1-end.txt`; §12 holds no confirmed block, else stop and report). §12's block stops before its `P1_END=` line on a CHI or image that changed since §1.3, a quarantined track or a backup alert; `record-date` below then refuses too, and nothing is recorded: report and stop. Then:
 
 ```bash
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
@@ -18219,7 +18892,7 @@ Expected: §12's expected paragraphs (`p1-end.txt` from `P1 end check <stamp> UT
 
 - [ ] **Step 18: Staging cleanup (each block requires explicit user confirmation; deletes the throwaway staging data for good)** — runbook §13.
 
-`p1_list '## 13. Staging cleanup'`; run §13's blocks in the runbook's order, each read-only block with `--index <k> --read-only` and each confirmed block with `--index <k> --confirmed` after its own Gate and yes. §13 holds four confirmed blocks and no read-only one, in this order: the drill Jobs and their ConfigMaps (`si-p1-drill-a`, `-b`, `-c` and `si-p1-drill-config-a`, `-b`, `-c`) with the CHI `storage-integrity-si-v2-p1-staging` (one block, which then lists the CHI's PVCs into `staging-pvcs.txt`), those PVCs, the Keeper root, and the staging logins Secret `storage-integrity-si-v2-p1-staging-logins`; any other block, another order, or a confirmed block that names a live installation, a host release, the bucket or another Secret: stop and report.
+`p1_list '## 13. Staging cleanup'`; run §13's blocks in the runbook's order, each read-only block with `--index <k> --read-only` and each confirmed block with `--index <k> --confirmed` after its own Gate and yes (the first, which waits for the CHI's deletion, and the second, which waits for each PVC's, with `run_in_background: true`). §13 holds four confirmed blocks and no read-only one, in this order: the drill Jobs and their ConfigMaps (`si-p1-drill-a`, `-b`, `-c` and `si-p1-drill-config-a`, `-b`, `-c`) with the CHI `storage-integrity-si-v2-p1-staging` (one block, which then lists the CHI's PVCs into `staging-pvcs.txt`), those PVCs, the Keeper root, and the staging logins Secret `storage-integrity-si-v2-p1-staging-logins`; any other block, another order, or a confirmed block that names a live installation, a host release, the bucket or another Secret: stop and report.
 
 Requires explicit user confirmation in chat. Gate (one per confirmed block of §13; the agent names what the block deletes, as `p1_list` and the block show it): "run runbook §13's confirmed block <k>: delete <the drill Jobs and their ConfigMaps and the ClickHouseInstallation storage-integrity-si-v2-p1-staging | its PersistentVolumeClaims listed in staging-pvcs.txt, which deletes the staging installation's data for good | the Keeper root /storage-integrity/devnet2/p1-staging | the staging logins Secret storage-integrity-si-v2-p1-staging-logins (every HMAC key Secret stays)>, as the block says; no live installation, host or bucket object is touched".
 
@@ -18267,6 +18940,7 @@ no restart of any SI ClickHouse, host, verifier or voter.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-p1-record.txt" "$p1_runbook"
+[ "$(git log -1 --format='%an <%ae>|%cn <%ce>')" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] && [ "$(git rev-list --count origin/main..HEAD)" = 1 ] || { echo "the record branch is not one commit by poetry <chen@sentio.xyz> on origin/main; stop"; exit 1; }
 cat > "$si_backup/record-pr-body.md" <<BODY
 Records the first run of docs/storage-integrity-devnet2-stage3-p1-backups.md (housegate Plan S3-C1, Task 28) at the end of its §12: every SI owner of devnet2-si-v2 has a full and an incremental backup in sentio-352722-si-devnet2-si-v2-replica and passed one restore drill against the manifest its latest backup names (spec §16 P1 exit).
 
@@ -18280,6 +18954,7 @@ git show --stat HEAD | cat
 Expected: `record written: docs/storage-integrity-devnet2-stage3-p1-backups.md §12`; a diff that adds one paragraph `Record of the first run: …` at the end of §12; `render tests: <TESTS_START>, OK`; one commit touching only the runbook. A `stop` writes nothing: a record already in §12 means an earlier attempt. Requires explicit user confirmation in chat. Gate: "push branch urwt/claude/multi-source-s3c1-p1-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P1 run' against production main". After a yes:
 
 ```bash
+[ "$(git rev-parse --abbrev-ref HEAD)" = urwt/claude/multi-source-s3c1-p1-record ] && [ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "HEAD is not the record commit by poetry <chen@sentio.xyz>; stop"; exit 1; }
 git push -u origin urwt/claude/multi-source-s3c1-p1-record
 gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3c1-p1-record --title "docs(storage-integrity): record the devnet2 stage-3 P1 run" --body-file "$si_backup/record-pr-body.md" | tee "$si_backup/record-pr.txt"
 printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/record-pr.txt" | tail -n 1)" >> "$si_backup/record.env"
@@ -18288,13 +18963,15 @@ printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup
 Expected: the PR URL. Requires explicit user confirmation in chat. Gate: "squash-merge the record PR #<RECORD_PR> into production main (docs only)", asked only after the user has reviewed the PR. After a yes:
 
 ```bash
-gh pr merge "$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)" --repo sentioxyz/production --squash
+pr="$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)"
+[ "$(gh pr view "$pr" --repo sentioxyz/production --json commits --jq '[.commits[].authors[].email] | unique | join(" ")')" = chen@sentio.xyz ] || { echo "a commit of the record PR #$pr is not authored by chen@sentio.xyz alone: rewrite its authors first (user rule); stop"; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash
 git fetch -q origin main
 git switch -q --detach origin/main
 git log --oneline -1 | cat
 ```
 
-Expected: the merge, and the live checkout detached at the new `origin/main`.
+Expected: no author message, the merge, and the live checkout detached at the new `origin/main`.
 
 - [ ] **Step 20: Appendix C record of `P1_MECHANICS` and `P1_END` (local commit; the push, or the docs PR and its merge, require explicit user confirmation)**
 
@@ -18316,22 +18993,24 @@ out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-sour
 d="$(printf '%s\n' "$out" | jq -r .path)"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c1-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c1-$n.md" P1_MECHANICS="$P1_MECHANICS" P1_END="$P1_END" || exit 1
 git -C "$d" commit -q -m "docs(plan): record P1_MECHANICS and P1_END of Plan S3-C1 (Task 28)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
 git -C "$d" show --stat --oneline HEAD | cat
+git -C "$d" log -1 --format='%an <%ae>'
 ```
 
-Expected: `s3-ledger: Task 28 recorded P1_MECHANICS=<date>, P1_END=<date> and its run record 'P1 run' in …`, then one commit of the plan file only (its two rows and the run-record item with its seven sub-items). A `stop` writes nothing: report it and ask.
+Expected: `s3-ledger: Task 28 recorded P1_MECHANICS=<date>, P1_END=<date> and its run record 'P1 run' in …`, then one commit of the plan file only (its two rows and the run-record item with its seven sub-items), authored `poetry <chen@sentio.xyz>` (the ledger worktree's own identity; R2 refuses any other). A `stop` writes nothing: report it and ask.
 
 R2 (remote write): requires explicit user confirmation in chat. Gate: "push Task 28's ledger record (Appendix C of Plan S3-C1: P1_MECHANICS, P1_END and the run record 'P1 run'; docs only) to housegate, straight to the plans branch urwt/claude/ms-si-stage3-plans-cf when it is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
 L="$HOME/.cache/s3-ledger"; n=28
 d="$(sed -n 1p "$L/record-s3c1-$n")"; ref="$(sed -n 2p "$L/record-s3c1-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
@@ -18341,7 +19020,7 @@ else
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 28's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 28's ledger record"); after a yes, first `gh pr view <number> --repo housegate/housegate --json commits --jq '[.commits[].authors[].email] | unique'` must print `["chen@sentio.xyz"]` (else stop: the authors are rewritten first, user rule), then `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -18924,6 +19603,157 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - **244-2 (P2): Task 28 read a delete-right row that §5 never writes.** Wrong: `cmd_mechanics_check` required exactly one `mechanics-gcs.tsv` row naming the delete right, while §5's 49 rows name none (its verdict measures the right from the full backup, the `.lock` versions and the mechanics key's bindings and prints it on its first line), so 49 passing rows stopped with `expected one delete-right row expecting <right> … found []`; its residual matching (`\blist\b`, `expect` starting with `refus`) matched none of §5's `*_lists_*` rows with `expect` `denied` either. Changed: `p1-edit.py mechanics-check TSV VERDICT DELETE_RIGHT` reads the table and §5's `mechanics-verdict.txt` (`<n> rows, <f> failed; measured delete right <x>, P1_BACKUP_DELETE <y>`), requires every row as expected, the verdict's counts equal to the table's and the measured right equal to the ledger's; Step 6, its Expected text and the Interfaces block follow; Step 1 gains a self-check that runs the live runbook's own `si_p1_check` and `si_p1_py mech-verdict` and feeds their output to `mechanics-check`. Verified: the old check on 49 passing rows in §5's form stops with the reviewer's message; the new one passes them, and refuses a verdict line of another run (48 rows), a measured right `none` against `lock`, and a granted cross-prefix list; the Step 1 self-check passes on the runbook extracted from Task 27 with both delete rights.
 - **244-3 (P2): selectors named text that only §0 holds.** Wrong: §6.x, §8.x and §11's confirmed blocks are one call each of `si_p1_user_apply`, `si_p1_job_apply` and `si_p1_monitoring_apply`; `git push origin HEAD:main` is inside those §0 helpers, so `--marker 'HEAD:main'` matched no block (`0 confirmed bash blocks contain 'HEAD:main'`) in all seven subsections. The same mismatch made Steps 7–9, 11–13 and 16 run the read-only block before each confirmed one, which is the runbook's own commit helper, on top of the task's own commit (two commits on HEAD, refused by `p1_fresh_main` and `si_head_is`), and name evidence files those helpers never write (`host-pods-<x>-after.txt`); Step 18 expected three cleanup blocks where §13 has four (the first also deletes the CHI, the last the staging logins Secret). Changed: the markers are the helper calls (`si_p1_user_apply b`, `si_p1_job_apply b`, `si_p1_monitoring_apply`, …); the steps name the runbook's commit blocks and say they are not run, Steps 11–13 run `p1_backup_login` instead of §8.x's login line, the Expected texts quote the helpers' own lines, Step 18 lists §13's four blocks and checks the Secret, the Task 28 notes and the Interfaces block describe the runbook's real forms, and Step 1's self-check requires each of the 24 markers to name exactly one block of its kind. Verified: the old markers fail on the extracted runbook exactly as reported; the new ones each name one block, and the self-check passes; every bash block of Task 28 passes `bash -n` (bash 5 and 3.2) and `shellcheck` with the task's exclusions, its fish blocks `fish -n`.
 - **244-4 (P2): the date parsers expected bare dates.** Wrong: §5 writes `P1_MECHANICS=<date>` as the first line of `p1-mechanics.txt`, and §12's `p1-end.txt` starts with `P1 end check …` and ends with `P1_END=<date>`, while Steps 6 and 17 took a bare date from the first line, so both returned empty and stopped successful runs. Changed: `p1-edit.py record-date FILE NAME` returns the date of the one `NAME=<YYYY-MM-DD>` line and refuses none, several or a malformed date; Steps 6 and 17 use it; Step 1's self-check produces both record lines with the live runbook's own `echo` lines and reads them back, and refuses a bare date. Verified: the old `sed` returns empty on both producer shapes; `record-date` returns the dates, refuses `P1_END=2026-13-40`, two `P1_END=` lines and a bare date; p1-record.py (its residual code removed) still writes the §12 paragraph and the ledger record from a synthetic `record.env` and refuses a second record.
+
+### Adversarial review (Track B, 2026-10-17; the plan consistency pass consolidates these into the per-task entries above)
+
+#### Task 22
+
+- **Base:** re-anchored to `ed24705` (= `v0.20.0` `bc92f91` plus plan documents). New anchors: `sitable.go:175-179`, `sitable_test.go:259-268`, integration BUILD `:92`.
+- **Ledger tool:** contract §19's `KEY` treated the s3cf files as a plan and stopped every command. Fixed to `s3[a-z][0-9]*`; verified on the real clone and in a test origin.
+- **Step 1:** rewrites the tool once, then stops if the ledger copy holds another text of the plan.
+- **Commit identity:** worktree identity `poetry <chen@sentio.xyz>` with author checks in Steps 2, 20, 21 and R1/R2; every commit block now sets `W`.
+- **Docker:** `DOCKER_HOST` and ryuk notes; Step 22 uses `gh run watch --exit-status`.
+- **Verified:** TDD as stated; offline `bazel build //...` and `bazel test //...` (67 tests); 11/11 integration tests on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1; content greps `1 2 1 2 1 1`; four new mutations killed.
+- **Settled:** status §4.2's four Task 22 questions (`:565-601`, the File Structure additions, offline Bazel, marker uniqueness).
+
+#### Task 23
+
+- **Base:**
+  - Re-anchored to arbiter-core `cfd4f42` (`CORE_TAG` v0.15.0, Plan S3-A merged as arbiter-core#50). `snode/parts.go`, `intake.go` and `promote_ch.go` are byte-identical to `8f0bc43`; `promote_replace.go` differs only by the 3-line `auditBeforeShadow` call (`:42-44`).
+  - New anchors: `partsInLogicalPartition` `:192-200`, `partitionContentScan` with its comment `:223-254`, `ci.yml` `data-plane integration` `:102-122` (targets `:108-113`, chtest `:109`), README rows `:21`/`:23`, pinned example `:43-58`, `go.mod:45`, `MODULE.bazel:9-12`/`:18-23`.
+  - The merged owner audit calls `activeParts`, `partInfo`, `partsInLogicalPartition`, `logicalPartitionID`, `escapeSQLString` and `(*Role).exec`.
+- **gazelle:** run on a package that holds only tests (Steps 5 and 10), gazelle writes a `go_test`-only BUILD file and later appends the `go_library` after it. Steps 6 and 11 now delete that file first, so the quoted library-first files are what gazelle writes.
+- **Commit identity:** Step 1 sets the worktree identity `poetry <chen@sentio.xyz>`. Every commit block prints the author, and Step 13 checks every commit of the branch. Task 24 checks again before its squash merge.
+- **Verified:**
+  - TDD exactly as stated with `go test` and offline Bazel 9.1.0, also `-race`. `bazel build //...` and `bazel test //...` (19 targets) pass, also with the race detector.
+  - Tested against housegate `ed24705` + Task 22 as the `HG_TAG_P1` stand-in.
+  - chparts ClickHouse tests pass on 25.8.33.6, 26.3.37.3 and the deployed 26.3.12.1, and fail without credentials against the CI overlay.
+  - The `snode` suite gives 403 PASS + 1 SKIP, identical before and after the delegation.
+  - The owner-audit restart repair passes on `26.3.37.3` (grep `3`).
+  - The six `integration-clickhouse` targets pass as CI runs them.
+  - Twenty gate and chparts mutations each fail a named test.
+  - The fixed text, applied afresh, reproduces the verified tree.
+- **Settled (status §4.2):**
+  - The gate's refusal formatting (abbreviated roots and `gate: <what>:` wrapping) stays, recorded as names beyond the contract; no consumer parses those texts.
+  - `ci.yml:97-101` is stale; the target goes before `chtest_test` at `:109` (contract §17 anchor to update).
+  - S3-D already spells `gate.PlanPartition` (§34 and Task 50).
+  - Bazel and gazelle were run offline, which found the BUILD order defect above.
+  - The restart repair was verified on the pinned `26.3.37.3`.
+
+#### Task 24
+
+- **Base:** re-anchored to arbiter-core `cfd4f42` (v0.15.0, `CORE_TAG`, Plan S3-A merged). Every runner anchor holds there. `wire.ManifestFromPB` is at `wire/convert.go:324`.
+- **MinIO image:** `minio/minio` is gone from Docker Hub (404) and `quay.io/minio/minio` needs authentication, so the drafted pin stopped the runner, the CI job and Cut Release. The runner now pins `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` (the same RELEASE.2024-12-18T13-15-44Z, multi-arch, bundled `mc`). It starts with `--entrypoint minio … server /bitnami/minio/data`, and the numstat is `169 8`. Plan S3-A's jobs start no MinIO.
+- **Measured in review:** with real MinIO, M13 logs `lock` on `26.3.37.3` and on the deployed 26.3.12.1. Masking holds on both, and `docker logs` plus the log files carry no secret.
+- **Tests added:** M13 checks that the index `si_backup` wrote lists the table and its four parts, and that `objstore.Drill` passes as `si_restore` (`mechSchemas`). `TestS3_RestoreAndGateKeepsOnlyTheManifestsPartsFromABackupAheadOfPublication` asserts that the scratch keeps `hg_safe`'s merge pin. RESTORE recreates the backed-up `CREATE`, so `RestoreAndGate` needs no `SYSTEM STOP MERGES` (settles the Task 27 question).
+- **gazelle:** Step 5 deletes the test-only `dataplane/objstore/BUILD.bazel` before gazelle, so the quoted library-first file is what gazelle writes. Step 7 uses `--keep_going`.
+- **Commit identity:** worktree identity and author checks in Step 1, after every commit, before the squash merge (PR head = `HEAD`, every author `poetry <chen@sentio.xyz>`) and in R1/R2.
+- **Ledger and release:** Step 2 checks the tool against contract §19 as Task 22 does. Step 16 watches with `--exit-status`. With `lock`, Step 17 stops and asks the user (K24), never decides.
+- **Verified:**
+  - TDD as stated (go test and offline Bazel 9.1.0).
+  - `bazel build //...`, `bazel test //...` (20) and the race run.
+  - The whole runner on 26.3.37.3: 16/16, `lock`, snode, objstore 7/7, no secret, 2 min 56 s.
+  - The S3 mechanics on the deployed image.
+- **Settled:** status §4.2 Task 24 items.
+  - The `mc` syntax and real MinIO delete behaviour were observed.
+  - The 26.3.37.3 measurement was taken.
+  - Delete-right line on every run: kept.
+  - Stricter name refusals and drill naming: kept as Appendix B names.
+  - Index listing scale: still a follow-up.
+  - The Task 27 merge-pin question is now asserted.
+  - K24 pre-amendment and the public credential literals remain user decisions.
+
+#### Task 25
+
+- **Base:**
+  - Re-anchored to sentio-node `origin/main` `0828f21`, which is `SN_COMMIT` itself (Plan S3-B Task 12, sentio-node#197). It pins housegate `v0.20.0`, arbiter-core `v0.15.0` and arbiter-proto `v0.12.0`, and holds:
+    - `StorageIntegrityClickhousePasswordEnv` `config/config.go:43`, `StorageIntegrityConfig` `:58-69` (`ClickhouseUsername`, `SNode` last), `ClickhouseOptions` `:78`, `decodeConfigYAML` `:436-450`, `refuseStorageIntegrityClickhousePasswordKey` `:456`, `yamlMappingValues` `:474`;
+    - `storageIntegrityReadOnlyMethods` `standalone/storage_integrity_bootstrap_test.go:1879`;
+    - `commands/storage_integrity.go` (47 lines) and its 19-line test;
+    - README `### Storage-integrity enrolment` `:103`, `### Dynamic storage-integrity table set` `:113`;
+    - the CI acceptance filter `ci.yml:140` (PASS count 6, `:155-157`) and the `snode` step `:169-180`.
+  - New anchors:
+    - `config/BUILD.bazel` go_test srcs `:27`;
+    - `standalone/BUILD.bazel` library deps `:38-39`, `:59-61`, test srcs `:81-82`, test deps `:114-115`.
+- **Commit identity:**
+  - Step 1 sets the worktree identity `poetry <chen@sentio.xyz>`, and every commit block prints the author.
+  - Step 10 checks every commit of the branch. Step 11 checks the PR's head and commit emails before the squash merge.
+  - R1 sets the identity in the ledger worktree; R2 and R3 refuse another author.
+- **Ledger tool:** Step 1 checks the written tool against contract §19 of the ledger copy (`cmp`, Task 22's form) and stops on an older `KEY` text.
+- **PR body:** the file is `<scratchpad>/sn-s3c1-pr.md`. Step 11 reads the merge commit and time for the run record.
+- **Release check:** the image is `linux/amd64` only. OrbStack runs its `--help` under Rosetta; without emulation, the digest, label and `go.mod` checks stand.
+- **Verified:**
+  - **Setup:** applied verbatim to `0828f21` against housegate `ed24705` + Task 22 and arbiter-core `cfd4f42` + Tasks 23–24 (current text) as `replace` stand-ins.
+  - **TDD:** Steps 3, 5 and 7 fail and Steps 4, 6 and 8 pass exactly as stated. `go test ./...`, `go vet ./...`, `gofmt` and `-race` are clean. Step 9 prints `1 1 4 1`.
+  - **Step checks:** Step 1's checks print the stated lines on scratch tags. Step 2's `MODULE.bazel` script gives six lines and is idempotent. Step 10's smoke output is byte-identical.
+  - **Mutations:** eight, each failing a named test.
+  - **Cross-checks:** the job config matches Task 26's ConfigMap and CronJob and Task 27's drill Job. S3-D Task 52's and S3-C4 Task 46's anchors match.
+  - **Bazel:** not run offline (sentio-core's and gazelle's Go dependencies are not cached). `buildifier` is clean, and the BUILD hunks follow gazelle's order.
+- **Settled (status §4.2):**
+  - `config` gains no arbiter-core import.
+  - The five-minute arbiter read bound stays (S3-D Task 52 reuses it).
+  - The owner and http(s) refusals stay.
+  - Task 27's `si_p1_job_line` picks the one JSON line out of the merged log.
+  - Task 27's `si_drill` sets `owner_indexer_id` equal to `--owner`.
+  - The drill Job's 3600 s deadline leaves room for the bound.
+  - The amd64 image check runs under Rosetta, with the fallback above.
+
+#### Task 26
+
+- **Base:** production `origin/main` is `e21190b06`. Its SI paths equal `7e08b6ea5`: Plan S3-B's P0 PR #743 (Tasks 13–14) and all of Task 15's devnet2 commits are merged; Tasks 16–21 are not. The review replayed S3-B Tasks 16, 19 and 20 from their text and the live states of Tasks 18 and 21 as stand-ins (the `E_END` state). Every hunk of this task applied there with offsets only; the diffs now carry the measured line numbers.
+- **Test count:** `origin/main` runs 103 tests, one more than S3-B Task 13's text, so N at `E_END` is 128. The measured outputs quote 130, 123, 137 and 145, and Step 18's stat reads `2092 insertions`. The host `checksum/config` line is `node.yaml:503` at `origin/main` and `:555` at `E_END`.
+- **Step 1:**
+  - It reads `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` with Python's `ast`. S3-B Task 21's edit tool writes one item per line, so a one-line grep never matched.
+  - It checks the K24 amendment on `origin/main` and on the plans branch, as Task 27 does, and stops for `lock` unless the user confirms the amendment.
+  - It asks the user to confirm K25's managed-folder layout before Step 4.
+- **Commit identity:** Step 1 sets the worktree identity `poetry <chen@sentio.xyz>`. Every commit block prints the author, and Step 18 checks every commit of the branch. Task 27 checks again before the squash merge.
+- **Key script:** `make-si-backup-keys.sh` allows owner ids of up to 6 digits (24 + 6 = 30 characters).
+- **Grant probe:** measured on `26.3.37.3` and on the deployed image: 143 rows and 0 mismatches on each, `si_backup` 7 and `si_restore` 13 `system.grants` rows. A single stalled `docker exec` is re-run once before it counts as a hang. The probe block's loop variable is `_` (SC2034).
+- **Open questions settled:**
+  - `timeZone` is fine on sea's Kubernetes 1.33.5.
+  - The backup alerts' four kube-state-metrics series come from sea's `victoria-metrics-k8s-stack`, and runbook §11 checks them.
+  - Task 28's `si_render_diff` expectations hold: a job adds exactly its ConfigMap and CronJob, `backupUser` changes only the CHI, and the monitoring list changes only the VMRule.
+- **Verified:**
+  - The drafted and the fixed text were each replayed verbatim by a script. Every red and green as stated with N = 128, `Ran 147 tests` / `OK` at the end. Four `helm lint --strict` runs pass, `render-inertness.sh` prints eight `identical`, and no token is left.
+  - `terraform fmt -check` passes. `terraform validate` passes offline with the cached google 4.77.0 provider, the managed-folder resources left out and checked against provider 7.3.0's documentation, for `none`, `lock` and a bad value.
+  - Task 28's seven commits, made with its own `p1-edit.py`, keep the suite green at each step.
+  - Fifteen mutations each fail their named test.
+  - `bash -n` (bash 5 and 3.2), `shellcheck` and `fish -n` pass on every block.
+- **Not run:** `terraform validate` with provider 7.3.0, which is not available offline. Nothing ran against GCS or the cluster.
+
+#### Task 27
+
+- Review (2026-10-17, review-27): twelve fixes. Identity (BRIEF §1.8): Step 1 sets `poetry <chen@sentio.xyz>` on the worktree and checks Task 26's authors and co-author trailers, Step 6 the new commit, Step 10 every PR commit before the squash merge (`gh pr view --json commits`), R1/R2 the ledger worktree (Task 24's form); Step 1 compares the Write-tool ledger tool with contract §19 of the ledger copy (`cmp`); K24 is a stop-and-ask gate in Step 1 (spec §16 P1 row grepped on `origin/main` and the plans branch for Task 26's phrase) and in §5's verdict text (measured right `undetermined` or ≠ `P1_BACKUP_DELETE`: stop and ask); §2's fish block split so `terraform apply` of the saved plan runs only after the user read it, with `terraform init` first; `si_drill` restores the newest `backup-<x>-<n>.json` with a passing `si_p1_backup_check` by name (`restore-drill --backup`, `si_p1_py drill-job` arity 6), so a daily scheduled run between §9 and §10 no longer stops `si_p1_drill_check`, and fails when the Job left no verdict line (the draft returned 0); §11's post-sync check requires the four kube-state-metrics series the two backup rules read per CronJob; §12 stops before `P1_END=` on a changed CHI or image, a quarantined track or a backup alert (record lines unchanged, 244-4 kept); §7's `CREATE TABLE` block enforces the K28 budget itself; §15.2 names Task 25's timeout text; Step 4 adds stage row 10 to the tracks runbook (S3-C3 contract §27.10, S3-C4's row-11 anchor); every agent block sets `W` and the values it uses; Step 1 checks the branch contains `origin/main`; the self-test clone sets `commit.gpgsign false`. Counts: 69 bash blocks, 36 confirmed, 4 fish blocks.
+- Verified: on draft-83's chain (production `febc6c4ac` + S3-B 15–21 stand-ins + C1 Task 26, plus S3-B Task 17's lockdown runbook from its plan text; `origin/main` now `7e08b6ea5`), Steps 2–5 extracted verbatim: conventions check, shellcheck (SC2154, SC2034), `bash -n` on bash 5.3 and 3.2, `fish -n`, the self-test (also under bash 3.2 and with `lock`), `test_render.py` 147 tests OK, three `helm lint --strict`, `render-inertness.sh` eight `identical`; Task 28's 24 selectors and two record markers each name exactly one block; §5's backups, keys and masking helpers against ClickHouse 26.3.37.3 and MinIO (bitnamilegacy pin): every row as expected except the overwrite (MinIO overwrites without delete; GCS needs `storage.objects.delete`), and a key without delete fails the full backup with `Access Denied … while removing object with path …/.lock` (`lock-removal-denied`, K24); the in-pod script under the deployed image's `dash`/`mawk`; `system.users` JSON, `system.parts.partition` and `system.grants` columns on 26.3.12.1; the §14 revert order conflict-free over all seven live commits; S3-C3 Task 39's edit adds row 11 after the new row 10. Not run: anything against GCS, the cluster or GitHub.
+- Settled (status §4.2, Task 27): render tests accept every live state (self-test, 147 OK); grant-probe retries (Task 26's rows carry the settings); `P1_BACKUP_DELETE` measured `lock` again on 26.3.37.3 (K24 stays the user's, now gated); `si_index` after §13 and per-step `host-pods` files as designed; gcloud flags (`buckets describe --raw`, `managed-folders list --raw`, `managed-folders get-iam-policy`, `ls -a`) confirmed in gcloud 589.0.0, JSON fields stay fail-closed; manual Jobs and `lastSuccessfulTime` proved live by §11; `backup-mech` kept, §15.3 says when to deactivate it; Task 25's drill `owner_indexer_id` equals `--owner`; Task 28's staging-logins Secret deleted by §13's fourth block; the S3-C3 pointer row.
+
+#### Task 28
+
+- Adversarial review, 2026-10-17. Scratch world:
+  - production `origin/main` `7e08b6ea5`;
+  - the P1 PR state: draft-83's chain at `62b4946` (S3-B Tasks 15–21 stand-ins plus C1 Task 26), S3-B Task 17's lockdown runbook from its text, and Task 27's runbook from the current text, filled with `INDEXER_C_ID` 2, `none` or `lock`;
+  - bare origins, a fake housegate ledger (S3-A and S3-B on `main`, S3-C1 on `urwt/claude/ms-si-stage3-plans-cf`), a stub `urwt-create.sh` and `gh`, a scratch `HOME`, and the 3.11 `python3` with PyYAML.
+
+  Step 1's blocks ran as written; the self-check passed with 31 markers on Task 27's reviewed text (`none`, `lock`). The seven live commits ran verbatim with stubbed cluster reads: `test_render.py` 147 OK after each, `si_head_is` accepted each, and the render diffs were exactly the named ones. Step 19's record PR and Step 20's R1, R2 and R4 ran end to end with author `poetry <chen@sentio.xyz>`. 43 bash blocks plus the two shell tools pass `bash -n` under bash 5.3 and 3.2 and shellcheck 0.11 (the task's exclusions); 5 fish blocks pass `fish -n`.
+- Fixes:
+  - Commit identity: Step 1 and Step 20 set the worktree identity; `p1_commit`, Step 19 and Step 20 check authors before every push and merge (user rule).
+  - `probe-check` accepts the runbook's `skipped` rows for roles without a staging login, and records `PROBE_ROWS` as the rows run (113 of 143). The original stopped every passing probe.
+  - The Step 3 verdict filters the replica accounts `si-devnet2-si-v2-(backup|restore)-`. The original stopped on `si-devnet2-si-v2-da` and its project `serviceUsageConsumer` binding.
+  - Steps 11–15 use the runbook's `si_p1_schedule_clear`, which refuses from 90 minutes before to 70 minutes after the schedule; `cron-clear` is removed.
+  - Explicit read-only runs of §8.x `si_p1_backup_check <x> 1`, §9 `si_p1_backup_check` (required before the drill) and §10.x `si_p1_drill_check <x>`.
+  - Step 2 checks that the pins equal the ledger and that Kubernetes is 1.27 or later (the CronJob's `timeZone`).
+  - Step 1 checks PyYAML under `-I` and compares the ledger tool with the ledger copy (`s3-ledger.py.plan`).
+  - Step 3 asks the user for K25 (and K24 with `lock`) before the apply; Step 6 stops and asks on either.
+  - Step 16 checks `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_owner` and `kube_job_status_failed` before commit M.
+  - The exact diffs of the seven commits are in the Expected texts.
+  - review-27's Task 28 notes are applied: the drill names its backup with `--backup`, §11's series lines, §12's fail-closed end, `kubectl` in the user's terminal for §7, and §2's two fish blocks.
+  - Anchors are re-read at `7e08b6ea5`.
+- Settled from status §4.2:
+  - A scheduled run between the backups and the drill is not accepted: stop and ask.
+  - The lifecycle verdict reads only `action` and `condition.age`.
+  - The staging logins Secret is deleted by §13 and checked by Step 18.
+  - Task 26's S3-B test extensions pass all seven commits.
+  - Commit subjects stay Task 28's; Task 27's helpers should adopt them.
 
 ## Appendix C: execution record
 

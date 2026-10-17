@@ -52,7 +52,9 @@ The drafts are in six stacked PRs. They replace housegate#243, which held all of
 
 Merge them in order, 1 first. The repository squash-merges and deletes the merged branch, so GitHub then retargets the next PR to `main`. Before merging that PR, merge `main` into its branch: no conflicts are expected, and its diff shrinks to its own files.
 
-64 of 68 tasks are drafted. Every drafted task was verified only by its drafter, in scratch exports. No task has had its adversarial review, and no plan has had its consistency or cross-plan pass. Every plan file says so in a status banner.
+58 of 68 tasks were drafted on 2026-10-16 (the ten of the table below were missing). Every drafted task was verified only by its drafter, in scratch exports. No task had had its adversarial review, and no plan its consistency or cross-plan pass. Every plan file says so in a status banner.
+
+**Track B progress (2026-10-17):** see `2026-10-15-multi-source-si-s3cf-status.md` §5 — Tasks 78, 79, 82 and 83 drafted; S3-C1 Tasks 22–28 and S3-C2 Tasks 29–31 reviewed and fixed; the ledger tool's `KEY` fixed; new binding conventions (commit identity, the MinIO image); the notes waiting for the remaining reviews; how to resume.
 
 | Plan | Phase | Tasks | Drafted | Missing |
 |---|---|---|---|---|
@@ -207,6 +209,10 @@ Per plan:
 - Never-edit rules hold (D25).
 - The activation model holds: no consensus change before P5 except D26.
 - Runbook acceptance values are disjoint across every runbook.
+
+### 3.5a Conventions added by the Track B run (2026-10-17)
+
+Status §5.3 is binding for every remaining task: the commit identity `poetry <chen@sentio.xyz>` in every worktree a task creates, with author checks before every push and squash merge; the MinIO image pinned by digest (`bitnamilegacy/minio`, started with `--entrypoint minio … server /bitnami/minio/data`); commit blocks that set every variable they use; `gh run watch --exit-status`. The ledger tool's `KEY` is `s3[a-z][0-9]*` (S3-C1 contract §19).
 
 ### 3.6 Throughput
 
