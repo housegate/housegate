@@ -139,6 +139,8 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 - The si-member pod must mount the member state volume read-only into the `si-member-reconciler` container, which reads `quiescence.json` (S3-F Task 83, the S3-C2 K30 layout).
 - The owner's Keeper audit covers the scoped root to the incarnation level and the legacy root only at table level; a replicated-table root nested under a legacy path is not detected until per-path Keeper ACLs or a dedicated Keeper (spec §18).
 - Listing a third party's member stays an operating rule until `operator_id` exists (spec §12; S3-F); `shared_rmt=false` with `verify=true` stays refused until the per-operator transport (P8).
+**Current C2 integration correction.** Task62's extraction is anchored on the accepted complete425→447→469 local source chain and preserves the private legacy memo/schema/job/terminal boundaries and post-C4 query adapter. This bounded review repair does not complete plan consistency, create a release/ledger value or change Task57/D25.
+
 
 ---
 
@@ -2334,8 +2336,6 @@ Expected: `PROTO_TAG_P5=<the value written>`. Anything else (for example the sta
 
 ---
 
----
-
 ## Task 58: housegate — pin PROTO_TAG_P5, admission codes 12 and 13 at the ingress, release HG_TAG_P5 (S3-E1)
 
 Spec §7.3 (`VERIFIERS_UNAVAILABLE`: retryable, state unchanged, like `SOURCE_UNAVAILABLE`), §9.3 (strict mode answers a retryable refusal), §15 (the housegate line) and §16 P5; contract §40, clarification K59. Plan S3-E1 Task 57 releases arbiter-proto `PROTO_TAG_P5` with `ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12` and `ADMISSION_CODE_COPIES_BACKPRESSURE = 13` (contract §39). housegate still pins arbiter-proto `v0.11.0` (`go.mod:15`, unchanged through `HG_TAG_P3`), and `SubmitOutcomeFromSequencedAck` sends every code it does not list to `OutcomeUnknown` (`pkg/storageintegrity/arbiter_proto.go:426-427`): a host on an older HouseGate would record such a refusal as an indeterminate submit that converges through the arbiter's status probe, keep the prepared parts until then, and give the client a generic did-not-reach-ACK2 error that also ends the agent's deferred-lane session. The FSM returns code 12 only with `stage3.owner_aware_selection` on (S3-E2 Task 70, switch 3) and code 13 only with `stage3.strict_copies` on (S3-E4 Task 76), so `HG_TAG_P5` must be on every SI host before switch 3 (S3-F checks it). This task:
@@ -3386,8 +3386,6 @@ python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P5
 ```
 
 Expected: `HG_TAG_P5=<the tag written>`, equal to `$W.hg-tag-p5`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints it. Task 63 reads `HG_TAG_P5` from there only (`bash scripts/update-housegate.sh $HG_TAG_P5`), as do Plan S3-E2 Task 64 and Plan S3-E4 Task 79. For the user in fish, the R4 lines run as `set h /Users/uranuswch/Dev/projects/sentio-network/housegate; set L "$HOME/.cache/s3-ledger"`, then the last two unchanged, and R3 as `set L "$HOME/.cache/s3-ledger"; gh pr merge (basename (cat "$L/record-58-pr-url")) --repo housegate/housegate --squash`.
-
----
 
 ---
 
@@ -12502,7 +12500,7 @@ Expected: `0`. The branch now carries Tasks 59–61; Task 62 continues on it (it
 
 Spec §8.1 (the si-member contains the verifier role: replay, byte scan, evidence), §8.2 (`si_member_ddl` creates and drops the member's replicas and nothing else; `si_member` does everything else; neither holds `SYSTEM DROP REPLICA`; a leaked `si_member_ddl` can drop a table above a later incarnation's path), §8.3 (the member intent set, "checked like `hg_unsafe`", the group-scoped reconciler that creates replicas as `si_member_ddl` only while the node is registered, not evicted and the purge rule is on), §8.5 last paragraph (replay scratch in `hg_rstage` under the member's prefix), §8.8 (a member drops its `hg_member_unsafe` replica only at Purging, after its quiescence hook confirms that no unresolved block of its verify sets references the table), §10.4 steps 4 and 6, §15 (the arbiter-core line), §17 (the member users' confinement); contract §42.2 and the Task 62 part of §42.3; clarification K66; decisions D30 and D36. This task, in arbiter-core on the branch of Tasks 59–61:
 
-- extracts the network verifier's evidence path into the new package `dataplane/evidence` — the replay and byte-side scan handler with its submissions and log lines, the ClickHouse scanner over a named database, the replay core over a given materializer, the durable `registration_seq` and the signed VERIFIER registration — and makes `verifier` delegate to it byte for byte (the same submitted bytes, log texts and fields, `registration.json` name and shape), pinned against bytes captured from the verifier at arbiter-core `v0.15.0`;
+- extracts the network verifier's evidence path into the new package `dataplane/evidence` — the replay and byte-side scan handler with its submissions and log lines, the ClickHouse scanner over a named database, the replay core over a given materializer (the fixed legacy verifier retains its private constructor-owned memo), the durable `registration_seq` and the signed VERIFIER registration — and makes `verifier` delegate to it byte for byte (the same submitted bytes, log texts and fields, `registration.json` name and shape), pinned against bytes captured from the verifier at arbiter-core `v0.15.0`;
 - adds the package `member/consensus`: `Config` and `ReconcilerConfig` with the defaults and file names of contract §42.3; the verify role, which registers the member as a VERIFIER only with `Config.Register` (S3-F step 4) and answers its dispatch through an `evidence.Handler` that scans `hg_member_unsafe`, replays into `hg_rstage` under `install.ScratchPrefix(NodeID, bootNonce) + "v"`, refuses a job whose tables have no verified local replica at their incarnation's Keeper path, and writes the quiescence ledger before every replay; the quiescence ledger itself (`quiescence.json`, durable, resolved through `GetBlockVerification`); and the `hg_member_unsafe` reconciler that runs as `si_member_ddl`, creates a replica only with `CreateReplicas` (S3-F step 6), registration, the purge switch and placement, keeps it through Retiring, drops it at Purging or after a released Leaving record only once its table is quiet, stops on `REPLICA_ALREADY_EXISTS` and never runs `SYSTEM DROP REPLICA`;
 - replaces Plan S3-C2's guard `TestMemberUnsafeIntentHasNoCallerInP2` (Task 30 says Task 62 does, when it adds the first caller) with a guard that `ddl.MemberUnsafeIntent` is named only by this reconciler and the verify role's readiness check;
 - proves on the fenced 26.3 server of Plan S3-C2's confinement harness (with `table_engines_require_grant`, the embedded Keeper and the `si_member_ddl` profile) that the replay scratch lives in `hg_rstage` under the member prefix with no refusal as `si_member`, that the reconciler's replica as `si_member_ddl` fetches the owner's parts byte for byte at the incarnation path and is dropped at Purging leaving the owner's table and Keeper replica intact, and that a stale replica named after the member stops the reconciler and is left in place; the runner `scripts/ci/clickhouse-member-confinement.sh` now also requires these `TestMember*` tests.
@@ -12510,23 +12508,26 @@ Spec §8.1 (the si-member contains the verifier role: replay, byte scan, evidenc
 Nothing here is wired into `member.Role` or runs on a host: Task 63 sets `member.Config.Consensus` and wires the verify role, and Plan S3-E4 Task 79 runs the reconciler process (decision D30). Task 63 pushes the branch and opens the one PR of Tasks 59–63.
 
 Notes:
-- **Base and anchors.** The worktree is Task 59's, `$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1` on `urwt/claude/multi-source-s3e1`, after Task 61's last commit; under it is `CORE_TAG_P4` (Plan S3-D Task 50). Line anchors are those of arbiter-core `origin/main` `cfd4f42` (`v0.15.0`, Plan S3-A); its `verifier/*.go` sources equal the header's `8f0bc43`, and no plan between them and this task changes a `verifier` source file (Plans S3-C1, S3-C2 and S3-C4 add packages and leave `verifier/backends.go:21-41` as the model of their own replay cores), so every `verifier` hunk below applies as written. `dataplane/ddl/member_test.go` and `dataplane/ddl/BUILD.bazel` are Plan S3-C2 Task 30's text, and `member/confinement/` and `scripts/ci/clickhouse-member-confinement.sh` Plan S3-C2 Task 34's; their anchors are that text (hunk rule).
-- **Byte for byte (contract §42.2).** `evidence.Handler` is `verifier/verifier.go:327-347` and `:413-448` moved verbatim: the same `ReplayJobFromPB`, the add gate before the replay, the same `SubmitAttestation` and `SubmitByteSideScan` requests, the same `CanonicalDigest(arbiter.DomainByteSideScan, …)` scan hash and ed25519 signature, and the same four warn lines with the same fields; `evidence.NewReplayCore` is `backends.go:20-42` with the materializer passed in (the verifier passes `chexec.NewMaterializer`, unchanged: arbiter's `cmd/arbiter-verifier` relies on its unqualified scratch); `evidence.CHScanner` is `backends.go:71-162` with the database a field; `evidence.RegistrationSeq` is `registration_state.go:10-92` with its error texts and temp-file name; `VerifierRegistrationRequests` is `claims.go:37-56`. `TestEvidenceHandlerSubmitsWhatTheVerifierSubmitted` and `TestVerifierRoleDelegatesToTheEvidenceHandler` pin the two submissions to bytes captured from the unmodified verifier of `v0.15.0` (`proto.MarshalOptions{Deterministic: true}`, hex), and `TestVerifierRegistrationFileKeepsItsShape` pins `{"registration_seq":N}` and that a file the old verifier wrote stays the floor.
+- **Base and anchors.** Use Task 59's retained actual JSON path (`$HOME/.cache/s3e1-task59/worktree.json`) on the executing Codex branch after Task 61, over the verified coherent post-C4 chain and final C2 memo. The historical `origin/main` `cfd4f42`/`v0.15.0` line numbers identify old symbols, not an unchanged whole verifier file: C4 added the snapshot-query ports/adapter and C2 added the private legacy memo. The final backends body and Replay handler below preserve those additions; all other replacements use exact symbol/content anchors. Keep the complete accepted Task 34 confinement runner and the Task 30 guard being intentionally replaced. Refuse a missing/divergent predecessor instead of applying historical whole-file bodies over it.
+- **Observable compatibility (contract §42.2).** The shared handler preserves the legacy submitted bytes, scan digest/signature, four refusal/submission log texts and fields, registration signature purpose, and `registration.json` name/shape. The two deterministic frozen submission constants remain immutable. This is not a literal move of the old complete function bodies: the coherent post-C4/C2 input also contains the snapshot-query adapter and a private constructor-owned legacy execution memo. `verifier.NewReplayCore` still clones the caller config, delegates its fixed materializer to the generic factory, wraps only the actual concrete composite executor, and supplies a second independent schema clone. The generic injected evidence/member materializer has no memo. The private `memoEvidenceCore` carries the complete original protobuf into Verify only; its per-dispatch instance observes successful Verify before terminal Submit invalidation. Submit retains the original context and real leader retry. Role.Run still owns one private generation and one synchronous receive callback; these helpers do not promise a generic parallel invalidation barrier. Preserve all sixteen accepted memo tests, every existing post-C4 snapshot-query test and the frozen vectors unchanged. Independent auditor tests remain verification-only.
 - **Why the verify role, not the reconciler, verifies the replica.** As `si_member_ddl` ClickHouse 26.3 shows `system.tables` (name, comment, `engine_full`) for `hg_member_unsafe`, answers `system.columns` with no rows, and refuses `system.replicas`, `system.zookeeper` and `system.detached_tables` with 497 (measured on 26.3.51.7 with `table_engines_require_grant` and `SI_MEMBER_DDL_GRANTS`, Appendix B), so `ddl.VerifyProtocolTable` cannot run as that user. The reconciler therefore attributes a table by its `hg_incarnation=` comment and the head of its `engine_full` (`ReplicatedMergeTree('<incarnation path>', '<node id>')`), and the verify role's gate runs the full `ddl.VerifyProtocolTable` against `ddl.MemberUnsafeIntent` at the incarnation's path as `si_member` (which holds `SELECT ON hg_member_unsafe.*` and `SELECT ON system.replicas`) before every attestation, so a scan never reads a missing, stale-incarnation, wrong-path or drifted replica. The gate covers every statement's table and every table a table-set transition adds, like the verifier's add gate, and never waits (the arbiter re-dispatches every `dispatch.retry_interval`).
 - **The quiescence ledger (spec §8.8).** The handler runs `Observe` before the gate and the replay: the role writes (block, table, live incarnation) for every table the job names into `quiescence.json` (temp file, fsync, rename, directory fsync) before anything reads the replica, so the reconciler process, which reads the file through the member state volume, never drops a replica a dispatched block may still scan. A block resolves once `GetBlockVerification` shows `verdict_evaluated` (the quorum latched) or the node is no longer in its `verifier_set` (re-selected away); `Run` resolves every `ResolveInterval`, also without `Register`, so a ledger an earlier registered run left still drains. A block the arbiter cannot serve stays in the ledger.
 - **What the reconciler never drops.** A table it cannot attribute — no incarnation comment, an unknown incarnation, or an `engine_full` that is not this member's replica at that incarnation's exact path — is logged once and left for an operator: dropping the last replica of a table above a later incarnation's path would delete that incarnation's Keeper subtree (spec §8.2). It drops its own replicas only with `DROP TABLE … SYNC`, never `SYSTEM DROP REPLICA` (it holds no such right), and only once `ReadQuiescence(StateDir).Quiet(table, seq)`; an unreadable ledger keeps every replica. On `REPLICA_ALREADY_EXISTS` (253) it stops that incarnation for the life of the process with `ErrReplicaAlreadyExists` and the contract's text, counts it, logs it at error level, and goes on with the other tables; the owner's sweep removes such a replica after the member is evicted (spec §8.8).
 - **The replay prefix.** `ReplayScratchPrefix(nodeID, bootNonce)` is `install.ScratchPrefix(nodeID, bootNonce) + "v"`: under `install.NodePrefix`, so S3-C2's startup drop removes every earlier boot's replay scratch, and distinct from the shadow's `…r` and from every `install.ScratchName` (`…<decimal>`). The materializer issues only `CREATE TABLE … ENGINE = MergeTree ORDER BY tuple()`, a batch `INSERT`, a `SELECT` and `DROP TABLE IF EXISTS` on it, all inside `si_member`'s `hg_rstage` rights (decision D36), which `TestMemberReplayScratchLivesInRstageUnderTheMemberPrefix` records statement by statement.
 - **Beyond contract §42.2–§42.3** (recorded in Appendix B, Task 62): `evidence.Deps.NotReadyLog` (the warn text of a `TablesReady` refusal; empty is the verifier's `table-set transition adds a table this verifier has not created; refusing to attest`), `(*evidence.CHScanner).Database`, `Registry` and `SchemaFor` (the verifier's `checkScannerRegistry` and its existing tests reach the scanner through them now that `verifier.CHScanner` is an alias); `consensus.VerifyDeps.BootNonce` (`member.Role`'s boot nonce, which the contract's prefix needs and neither `Config` nor `VerifyDeps` carried); `consensus.ReconcilerConfig.NetworkID`, `Tables` and `StoragePolicy` (the reconciler resolves each incarnation's schema with `dataplane.IncarnationSchema` and creates its replica with the member storage policy; Plan S3-E4 Task 79 sets them from the member configuration it already reads); `consensus.Config.StoragePolicy` (the member's pinned storage policy, bound by Task 63 to `member.Config.Pinned.StoragePolicy`), `consensus.ReplayScratchPrefix` and `consensus.NewReplayMaterializer` (the verify role's own policy-aware materializer, which the confinement test drives as `si_member`); the unexported `errRegisterOff` text `member consensus: Register is off`; the tests named in **Interfaces**; the guard `TestMemberUnsafeIntentIsCalledOnlyByTheMemberConsensusMode` replacing Plan S3-C2's `TestMemberUnsafeIntentHasNoCallerInP2`; the pre-existing `verifier` tests `TestNewScanner_DefaultsUnsafeDatabaseAndMapsTableName` (`scanner.Database()` for `scanner.cfg.UnsafeDatabase`), the nine `.schemaFor(` calls of `registry_test.go` (now `.SchemaFor(`) and its helper `newGateRoleV` (`withEvidenceV`), each edited only where it reached a field that moved; and the runner's required list.
-- **Member replay storage (spec §8.1).** `Config.StoragePolicy` is required by `NewReplayMaterializer` and comes from the member's actual `Pinned.StoragePolicy` through Task 63 and the Task 79 loader, never a guessed fallback. The exported helper now takes `storagePolicy` as its last argument and calls C1 Task 22's `chexec.NewMaterializerInWithStoragePolicy`. Empty/malformed policies refuse construction; unknown policies fail ClickHouse CREATE without a default-disk retry. `TestNewVerifyRoleRefusesAnIncompleteConfig` covers both refusal cases and `TestReplayMaterializerKeepsExplicitPolicyAndDoesNotFallBack` checks the exact CREATE boundary. Generic confinement fixtures explicitly select their server's provisioned `default` policy. This follow-up does not certify the unreviewed remainder of Task 62.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` plus stand-ins for exactly the names this task consumes — Plan S3-C2 Tasks 29, 30, 32 and 34 (`GetBlockVerification`, `wire.BlockVerification`, `dataplane.IncarnationSchema`, `dataplane/ddl/member.go` and `member_test.go` as Task 30 writes them, `member/install`'s scratch names, `member/confinement` and its runner as Task 34 writes them) and this plan's Tasks 59–61 (`arbiter.Stage3Params`, `authoritytest.MemberNodeIDB`/`MemberKeyB`, the registry's groups, `Stage3`, `ScopedKeeperPath` and `PurgeMembers`, `ddl.KeeperScope`, `ddl.ZooKeeperPathFor`, `tableset.KeeperScopeOf`) spelled as contracts §21–§23 and §41–§42.1 give them — and housegate `v0.20.0` with Plan S3-C1's `chexec.NewMaterializerIn` and `sitable.CopyTable` (a `replace` to a local tree), this task applied step by step with its own files: every failing step failed with the messages given; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` (Go 1.27.1) passed (without Step 12's replacement, Plan S3-C2's old guard fails as soon as `verify_role.go` names `MemberUnsafeIntent`: `MemberUnsafeIntent has callers in P2 (Plan S3-E1 Task 62 is its first): [… member/consensus/verify_role.go:…]`); `dataplane/evidence`, `member/consensus` and `verifier` also passed under `-race -count=3`; each named test failed with its rule reverted (the observer dropped, the purge or registration condition dropped, the stop not recorded, the quiet check, Retiring or the released flag ignored, the unscoped path forced, the engine-head check dropped, `hg_unsafe` scanned, `Register` or the subscription ungated, either resolve rule dropped, the readiness check skipped, the verifier's text, replica id, add gate or features changed, the state file renamed); with Bazel 9.1.0 and its Go 1.26.3 SDK offline (`--repository_disable_download`, the local module cache as `GOPROXY`, a `local_path_override` of housegate) `bazel run //:gazelle` wrote exactly the four `BUILD.bazel` files below and later runs changed none of this task's (only the stand-ins' own), `bazel build //...` passed and `bazel test //...` passed; the three `TestMember*` ClickHouse tests and the 13 non-S3 confinement tests passed against a fenced `clickhouse/clickhouse-server:26.3` (26.3.51.7) with `scripts/ci/clickhouse-member-access-control.xml`, the embedded Keeper and an unfenced peer, started as the runner starts them (no MinIO, so `TestConfinement_SIMemberRestoreNeedsReadOnS3` was not run); the runner passes `bash -n`, `/bin/bash -n` and `shellcheck`.
+- **Quiescence lifetime and corruption.** Each successful observation, including an identical redelivery that needs no disk rewrite, gets a private process token. Resolve may remove only the exact observations it queried; a dispatch observed while its old selection's RPC returns stays held until a later query. Tokens are not persisted or part of the version-1 JSON shape. Missing/null blocks, nonascending/zero block records, empty table lists, blank/zero table identities and duplicate/unsorted table entries refuse a ledger read, so corrupt JSON objects cannot silently permit a replica drop. Missing files retain the specified initial empty-ledger behavior.
+- **Member replay storage (spec §8.1).** `Config.StoragePolicy` is required by `NewReplayMaterializer` and comes from the member's actual `Pinned.StoragePolicy` through Task 63 and the Task 79 loader, never a guessed fallback. The exported helper now takes `storagePolicy` as its last argument and calls C1 Task 22's `chexec.NewMaterializerInWithStoragePolicy`. Empty/malformed policies refuse construction; unknown policies fail ClickHouse CREATE without a default-disk retry. `TestNewVerifyRoleRefusesAnIncompleteConfig` covers both refusal cases and `TestReplayMaterializerKeepsExplicitPolicyAndDoesNotFallBack` checks the exact CREATE boundary. Generic confinement fixtures explicitly select their server's provisioned `default` policy. The same policy is pinned in the actual local-replica readiness intent: a wrong live storage_policy refuses before replay or Submit, and a matching non-default policy succeeds.
+- **Historical drafting measurement (2026-10-16; not current acceptance proof).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` plus stand-ins for exactly the names this task consumes — Plan S3-C2 Tasks 29, 30, 32 and 34 (`GetBlockVerification`, `wire.BlockVerification`, `dataplane.IncarnationSchema`, `dataplane/ddl/member.go` and `member_test.go` as Task 30 writes them, `member/install`'s scratch names, `member/confinement` and its runner as Task 34 writes them) and this plan's Tasks 59–61 (`arbiter.Stage3Params`, `authoritytest.MemberNodeIDB`/`MemberKeyB`, the registry's groups, `Stage3`, `ScopedKeeperPath` and `PurgeMembers`, `ddl.KeeperScope`, `ddl.ZooKeeperPathFor`, `tableset.KeeperScopeOf`) spelled as contracts §21–§23 and §41–§42.1 give them — and housegate `v0.20.0` with Plan S3-C1's `chexec.NewMaterializerIn` and `sitable.CopyTable` (a `replace` to a local tree), this task applied step by step with its own files: every failing step failed with the messages given; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` (Go 1.27.1) passed (without Step 12's replacement, Plan S3-C2's old guard fails as soon as `verify_role.go` names `MemberUnsafeIntent`: `MemberUnsafeIntent has callers in P2 (Plan S3-E1 Task 62 is its first): [… member/consensus/verify_role.go:…]`); `dataplane/evidence`, `member/consensus` and `verifier` also passed under `-race -count=3`; each named test failed with its rule reverted (the observer dropped, the purge or registration condition dropped, the stop not recorded, the quiet check, Retiring or the released flag ignored, the unscoped path forced, the engine-head check dropped, `hg_unsafe` scanned, `Register` or the subscription ungated, either resolve rule dropped, the readiness check skipped, the verifier's text, replica id, add gate or features changed, the state file renamed); with Bazel 9.1.0 and its Go 1.26.3 SDK offline (`--repository_disable_download`, the local module cache as `GOPROXY`, a `local_path_override` of housegate) `bazel run //:gazelle` wrote exactly the four `BUILD.bazel` files below and later runs changed none of this task's (only the stand-ins' own), `bazel build //...` passed and `bazel test //...` passed; the three `TestMember*` ClickHouse tests and the 13 non-S3 confinement tests passed against a fenced `clickhouse/clickhouse-server:26.3` (26.3.51.7) with `scripts/ci/clickhouse-member-access-control.xml`, the embedded Keeper and an unfenced peer, started as the runner starts them (no MinIO, so `TestConfinement_SIMemberRestoreNeedsReadOnS3` was not run); the runner passes `bash -n`, `/bin/bash -n` and `shellcheck`.
+- **Current independent review boundary (2026-10-17).** Implementation replay used the complete controller-approved coherent425-core post45→50→59→60→61 plus final memo v3.1, actual44/P3 housegate and frozen P5 proto; the initial404 preMemo/preC4 copy is only historical preparation. Whole Go31 packages and Bazel31 race targets pass, with exact-image ClickHouse/confinement/MinIO gates still pending. Local unit/fake-RPC proof and environment-gated skips do not satisfy those live gates or C2's500-block acceptance. No Task58 Housegate pin is applied before its owning Task63.
 - **Remote actions.** None but Step 21's confinement runner, which pulls `clickhouse/clickhouse-server:26.3.37.3` and the MinIO image when they are not cached: it needs explicit user confirmation in chat before running. Nothing is pushed here; Task 63 pushes the branch and opens the PR.
 - **Values across commands.** The Bash tool keeps no variables between calls, so every command sets `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"` itself.
 
 **Files:**
 - Create: `dataplane/evidence/handler.go` (package doc, `ReplayCore`, `Scanner`, `Config`, `Deps`, `Handler`, `NewHandler`, `HandleReplayJob`, `HandleScanRequest`; from `verifier/verifier.go:29-31`, `:47-49`, `:327-347`, `:413-448`), `dataplane/evidence/scanner.go` (`CHScanner`, `NewCHScanner`; from `verifier/backends.go:71-162`), `dataplane/evidence/replay_core.go` (`ReplayCoreConfig`, `NewReplayCore`; from `verifier/backends.go:20-42`), `dataplane/evidence/registration.go` (`RegistrationStateFile`, `RegistrationSeq`, `NewRegistrationSeq`, `Next`, `VerifierRegistrationRequests`; from `verifier/registration_state.go:10-92` and `verifier/claims.go:37-56`), `dataplane/evidence/BUILD.bazel` (gazelle)
 - Test: `dataplane/evidence/fakes_test.go`, `handler_test.go`, `scanner_test.go`, `registration_test.go`
-- Modify: `verifier/verifier.go` (imports `:3-12`, `:22-25`; the ports `:29-31`, `:47-49`; `Role` fields `:77-80`; `New` `:105`, `:117-120`; `handleReplayJob` `:327-347`; `handleScanRequest` `:413-433`), `verifier/backends.go` (whole file, 162 lines → 70), `verifier/registration_state.go` (whole file, 92 lines → 10), `verifier/claims.go` (imports `:3-12`; `registrationRequests` `:40-56`), `verifier/registry.go` (`checkScannerRegistry` `:115-119`), `verifier/BUILD.bazel` (gazelle)
+- Modify: `verifier/verifier.go` (imports `:3-12`, `:22-25`; the ports `:29-31`, `:47-49`; `Role` fields `:77-80`; `New` `:105`, `:117-120`; `handleReplayJob` and private `memoEvidenceCore` Verify-only adapter; `handleScanRequest` `:413-433`), `verifier/backends.go` (whole current file: retain the post-C4 `SnapshotQueryReplayCore` and constructor-owned legacy memo; replace only the scanner with the shared alias), `verifier/registration_state.go` (whole file, 92 lines → 10), `verifier/claims.go` (imports `:3-12`; `registrationRequests` `:40-56`), `verifier/registry.go` (`checkScannerRegistry` `:115-119`), `verifier/BUILD.bazel` (gazelle)
 - Test: create `verifier/evidence_delegation_test.go`; modify `verifier/backends_test.go` (`:89-91`), `verifier/registry_test.go` (the nine `.schemaFor(` calls at `:193`, `:197`, `:200`, `:209`, `:224`, `:231`, `:245`, `:273`, `:282`; `newGateRoleV` `:409-412`)
+- Create: `member/consensus/policy_readiness_test.go`, `member/consensus/quiescence_regression_test.go` (actual policy and durable-hold regressions).
 - Create: `member/consensus/config.go` (package doc, the five constants, `Config`, `ReconcilerConfig`), `member/consensus/quiescence.go` (`QuiescentTable`, `Quiescence`, `OpenQuiescence`, `Observe`, `Resolve`, `QuiescenceLedger`, `ReadQuiescence`, `Quiet`), `member/consensus/verify_role.go` (`ErrMemberTableNotReady`, `VerifyDeps`, `VerifyRole`, `NewVerifyRole`, `ReplayScratchPrefix`, `NewReplayMaterializer`, `Register`, `Run`), `member/consensus/unsafe_reconciler.go` (`ErrReplicaAlreadyExists`, `ReconcilerDeps`, `ReconcilerStats`, `UnsafeReconciler`, `NewUnsafeReconciler`, `Run`, `Stats`), `member/consensus/BUILD.bazel` (gazelle)
 - Test: `member/consensus/fakes_test.go`, `verify_role_test.go`, `quiescence_test.go`, `unsafe_reconciler_test.go`
 - Modify: `dataplane/ddl/member_test.go` (Plan S3-C2 Task 30's `TestMemberUnsafeIntentHasNoCallerInP2` and its comment, up to the comment of `moduleRoot`), `dataplane/ddl/BUILD.bazel` (the comment above `ddl_test`'s `data`)
@@ -12538,7 +12539,7 @@ Notes:
 - Policy-aware replay prerequisite: C1 Task 22 `chexec.NewMaterializerInWithStoragePolicy(networkID string, conn clickhouse.Conn, database, prefix, storagePolicy string) (*chexec.Materializer, error)`; no legacy member-replay constructor is accepted.
 - Consumes:
   - arbiter-core at the base: `dataplane.Client` (`WithLeaderRetry`, `RunVerifierSubscription`), `dataplane.RegistryView`, `dataplane.RegistrySchema`, `tableset.Arbiter` (`PurgeNodeSet`), `ddl.CHTableName`, `ddl.IncarnationComment`, `ddl.ParseIncarnationComment`, `ddl.ValidatePhysicalTableNames`, `ddl.VerifyProtocolTable`, `ddl.ReconcileBackoff`, `ddl.DefaultReconcileInterval`, `ddl.EngineReplicatedMergeTree`, `ddl.Intents`, `ddl.TableIntent.SQL`, `authority.MessageContext`, `authority.SignVerifierMessage`, `authority.VerifyVerifierMessage`, `authority.VerifierMessageRegistration`, `authority.VerifierMessageMarkActive`, `authority.MarkActiveBody`, `arbiter.LocalNodeFeatures`, `arbiter.ByteSideScanMsg`, `arbiter.DomainByteSideScan`, `arbiter.NodeRoleVerifier`, `wire.ReplayJobFromPB`/`ToPB`, `wire.AttestationToPB`, `wire.ScanToPB`/`ScanFromPB`, `wire.PartRefsFromPB`, `wire.RegisterNodeToRequest`, `wire.MarkActiveToRequest`, `wire.ByteSideScanDispatch`, `wire.ReplayJobDispatch`, `wire.TableRegistrySnapshot.Live`/`Owner`, `wire.TableIncarnation.HasPhysicalTables`/`Key`, `authoritytest.VerifierNodeID`, `VerifierKey`, `RegistrationSeq`, `VerifierRegistrationSignature`, `VerifierMarkActiveSignature`, `Context`; the `verifier` test helpers `testConfigV`, `testSeedV`, `newVerifierFakeServer`, `startVerifierFakeServer`, `fakeReplayCore`, `fakeScanner`, `waitVerifier`, `newGateRoleV`, `addTransitionJob`, `membershipFakeV`, `startMembershipFakeV`, `signingConfigV`, `newSigningVerifier`, `fixtureMillisV`.
-  - housegate (`HG_TAG_P1` and later, Plan S3-C1 contract §16): `chexec.NewMaterializerIn(networkID, conn, database, prefix)`, `chexec.NewMaterializer`, `chexec.ScanParts`, `payloadexec.NewDynamic`, `NewEd25519Signer`, `SchemaHashes`, `TableSchemaHash`, `RowElementHash`, `PayloadFormatCSVWithNames`, `NewMemSnapshotStore`, `NewMemPayloadStore`, `snapshotquery.NewCompositeExecutor`, `replay.Verifier`, `replay.CanonicalDigest`, `lthash`.
+  - housegate (`HG_TAG_P1` and later, Plan S3-C1 contract §16): `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)`, `chexec.NewMaterializer`, `chexec.ScanParts`, `payloadexec.NewDynamic`, `NewEd25519Signer`, `SchemaHashes`, `TableSchemaHash`, `RowElementHash`, `PayloadFormatCSVWithNames`, `NewMemSnapshotStore`, `NewMemPayloadStore`, `snapshotquery.NewCompositeExecutor`, `replay.Verifier`, `replay.CanonicalDigest`, `lthash`.
   - Plan S3-C2 (contract §21–§23): `dataplane.Client.GetBlockVerification`, `dataplane.ErrBlockNotSealed`, `wire.BlockVerification` (`VerifierSet`, `VerdictEvaluated`), `dataplane.IncarnationSchema`, `ddl.MemberUnsafeIntent(m, t, incarnationSeq, zooKeeperPath)`, `ddl.DefaultMemberPinned`, `ddl.ValidateMemberPinned`, `ddl.MemberUnsafeDatabase`, `ddl.StageDatabase`, `install.ScratchPrefix`, `install.NodePrefix`, `install.NewBootNonce`, the confinement suite's `setup`, `suite` (`admin`, `member`, `sfx`, `exec`, `count`, `tableExists`, `name`, `ddlUser`), `memberNodeID`, `memberUser`, `pinned`, `protocol`, `testSchema`, `rowID`, `qualified`, `literal`, and the runner `scripts/ci/clickhouse-member-confinement.sh`; the guard `TestMemberUnsafeIntentHasNoCallerInP2` and the helper `moduleRoot` of `dataplane/ddl/member_test.go`.
   - This plan: Task 59 `arbiter.Stage3Params` (`Purge`), `authoritytest.MemberNodeIDB` (`member-b`), `authoritytest.MemberKeyB()`; Task 60 `wire.TableRegistrySnapshot.Groups`/`Stage3`/`Group`, `wire.DatabaseGroup`, `wire.GroupMember`, `wire.LeavingMember` (`Released`), `wire.TableIncarnation.ScopedKeeperPath`; Task 61 `ddl.KeeperScope`, `ddl.ZooKeeperPathFor(keeperShardID, tableID, scope)`, `tableset.KeeperScopeOf(inc)`.
 - Produces (contract §42.2–§42.3, verbatim):
@@ -12546,16 +12547,29 @@ Notes:
   - `verifier`: `type CHScanner = evidence.CHScanner`; `NewScanner`, `NewRegistryScanner`, `NewReplayCore` keep their signatures; `Role` answers replay jobs and scans through an `evidence.Handler` with `NotReady: ErrAddedTableNotReady`; `registration.json` keeps its name and `{"registration_seq":N}`.
   - `member/consensus`: `DefaultReadinessInterval` (10 s), `DefaultCheckpointInterval` (30 s), `DefaultResolveInterval` (5 s), `CheckpointSeqFile = "checkpoint_seq.json"`, `QuiescenceFile = "quiescence.json"`; `type Config struct { NodeID, NetworkID, GenesisSnapshotID, StateDir string; Ed25519Seed []byte; ReplicaSignerKeyHex string; KeeperShardID uint32; Tables []payloadexec.TableSchema; StoragePolicy string; Register bool; ReadinessInterval, CheckpointInterval, ResolveInterval time.Duration }`; `type ReconcilerConfig struct { NodeID, StateDir string; KeeperShardID uint32; CreateReplicas bool; Interval time.Duration; NetworkID string; Tables []payloadexec.TableSchema; StoragePolicy string }`; `var ErrMemberTableNotReady = errors.New("member consensus: hg_member_unsafe table is not ready")`; `type VerifyDeps struct { Client *dataplane.Client; Registry dataplane.RegistryView; Conn clickhouse.Conn; Manifests replay.SnapshotStore; Payloads replay.PayloadStore; Logger *slog.Logger; Now func() time.Time; BootNonce string }`; `type VerifyRole`; `func NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`; `func (v *VerifyRole) Register(ctx context.Context) error` (`member consensus: Register is off` unless `cfg.Register`); `func (v *VerifyRole) Run(ctx context.Context) error`; `func ReplayScratchPrefix(nodeID, bootNonce string) string`; `func NewReplayMaterializer(networkID string, conn clickhouse.Conn, nodeID, bootNonce, storagePolicy string) (*chexec.Materializer, error)`; `type QuiescentTable struct { TableID string; IncarnationSeq uint64 }`; `type Quiescence`; `func OpenQuiescence(stateDir string) (*Quiescence, error)`; `func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error`; `func (q *Quiescence) Resolve(ctx context.Context, client *dataplane.Client, nodeID string) error`; `type QuiescenceLedger`; `func ReadQuiescence(stateDir string) (QuiescenceLedger, error)`; `func (l QuiescenceLedger) Quiet(tableID string, incarnationSeq uint64) bool`; `var ErrReplicaAlreadyExists = errors.New("member consensus: replica already exists")` with the stop text `member consensus: hg_member_unsafe.%s: replica %s already exists at %s; not dropping it (si_member_ddl holds no SYSTEM DROP REPLICA); the owner's sweep removes it after an eviction`; `type ReconcilerDeps struct { DDLConn clickhouse.Conn; Registry dataplane.RegistryView; Arbiter tableset.Arbiter; Logger *slog.Logger }`; `type ReconcilerStats struct { Replicas int; ReplicaAlreadyExists uint64; Failures map[string]uint64 }`; `type UnsafeReconciler`; `func NewUnsafeReconciler(cfg ReconcilerConfig, d ReconcilerDeps) (*UnsafeReconciler, error)`; `func (r *UnsafeReconciler) Run(ctx context.Context) error`; `func (r *UnsafeReconciler) Stats() ReconcilerStats`. File `quiescence.json`: `{"version":1,"blocks":[{"block_seq":N,"tables":[{"table_id":"<db>.<table>","incarnation_seq":S}]}]}`.
   - Tests (contract §42 names): `TestEvidenceHandlerSubmitsWhatTheVerifierSubmitted`, `TestVerifierRoleDelegatesToTheEvidenceHandler`, `TestVerifierRegistrationFileKeepsItsShape`, `TestMemberVerifyRoleRegistersAsAVerifierWithARegistrationSeq`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`, `TestMemberVerifyRoleScansItsMemberUnsafeReplica`, `TestMemberReplayScratchLivesInRstageUnderTheMemberPrefix` (ClickHouse), `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerUsesTheIncarnationKeeperPath`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestUnsafeReconcilerDropsAReleasedLeavingMembersReplicas`, `TestQuiescenceLedgerIsDurableBeforeTheJobRuns`, `TestQuiescenceResolvesALatchedOrReselectedBlock`, `TestMemberUnsafeReplicaAsSIMemberDDLReplicatesTheOwnersParts` (ClickHouse and Keeper).
-  - Added tests (Appendix B): `TestEvidenceHandlerRunsObserveFirstAndRefusesWhenItFails`, `TestEvidenceHandlerGatesTheReplayOnTablesReady`, `TestEvidenceHandlerLogsWhatItRefusesAndWhatTheArbiterRejects`, `TestNewHandlerRefusesAnIncompleteConfig`, `TestRegistrationSeqIsDurableAndNeverGoesBack`, `TestVerifierRegistrationRequestsAreSignedWithTheEvidenceKey`, `TestCHScannerScansItsDatabaseThroughTheRegistry` (evidence); `TestMemberVerifyRoleRefusesAJobWithoutItsReplica`, `TestReplayScratchPrefixIsTheMembersOwnAndNotTheShadows`, `TestNewVerifyRoleRefusesAnIncompleteConfig`, `TestReadQuiescenceRefusesACorruptOrUnknownLedger`, `TestUnsafeReconcilerLeavesATableItCannotAttribute`, `TestUnsafeReconcilerRecreatesASameNameTableAfterThePurge`, `TestUnsafeReconcilerRunsAtEveryRegistryChange`, `TestNewUnsafeReconcilerRefusesAnIncompleteConfig` (consensus); `TestMemberUnsafeReconcilerStopsOnAStaleReplicaAndDropsNothing` (confinement, ClickHouse and Keeper); `TestMemberUnsafeIntentIsCalledOnlyByTheMemberConsensusMode` (ddl, replacing `TestMemberUnsafeIntentHasNoCallerInP2`).
+  - Added tests (Appendix B): `TestEvidenceHandlerRunsObserveFirstAndRefusesWhenItFails`, `TestEvidenceHandlerGatesTheReplayOnTablesReady`, `TestEvidenceHandlerLogsWhatItRefusesAndWhatTheArbiterRejects`, `TestNewHandlerRefusesAnIncompleteConfig`, `TestRegistrationSeqIsDurableAndNeverGoesBack`, `TestVerifierRegistrationRequestsAreSignedWithTheEvidenceKey`, `TestCHScannerScansItsDatabaseThroughTheRegistry` (evidence); `TestMemberVerifyRoleRefusesAJobWithoutItsReplica`, `TestReplayScratchPrefixIsTheMembersOwnAndNotTheShadows`, `TestNewVerifyRoleRefusesAnIncompleteConfig`, `TestReadQuiescenceRefusesACorruptOrUnknownLedger`, `TestMemberReadinessChecksTheConfiguredStoragePolicy`, `TestQuiescenceResolveCannotEraseAnOverlappingRedelivery`, `TestQuiescenceRejectsStructurallyCorruptRecords`, `TestUnsafeReconcilerLeavesATableItCannotAttribute`, `TestUnsafeReconcilerRecreatesASameNameTableAfterThePurge`, `TestUnsafeReconcilerRunsAtEveryRegistryChange`, `TestNewUnsafeReconcilerRefusesAnIncompleteConfig` (consensus); `TestMemberUnsafeReconcilerStopsOnAStaleReplicaAndDropsNothing` (confinement, ClickHouse and Keeper); `TestMemberUnsafeIntentIsCalledOnlyByTheMemberConsensusMode` (ddl, replacing `TestMemberUnsafeIntentHasNoCallerInP2`).
 - Consumed by: Task 63 (`consensus.Config`, `CheckpointSeqFile`, `DefaultReadinessInterval`, `DefaultCheckpointInterval`, `NewVerifyRole` with `VerifyDeps.BootNonce` = `member.Role`'s boot nonce, `VerifyRole.Register`/`Run` wired into `member.Role` under `member.Config.Consensus`, `ReadQuiescence`/`Quiet` for its purge reports, `evidence.RegistrationStateFile`); Plan S3-E4 Task 79 (`NewUnsafeReconciler` with `ReconcilerConfig{NodeID, StateDir, KeeperShardID, CreateReplicas, Interval, NetworkID, Tables, StoragePolicy}` — the last three from the member configuration's network id, genesis tables and `ddl.MemberPinned.StoragePolicy` — and `ReconcilerDeps{DDLConn, Registry, Arbiter, Logger}`, its `Stats()` for `sentio_node_si_member_unsafe_replicas` and `sentio_node_si_member_replica_already_exists_total`); Plan S3-F Task 83 (the reconciler container reads `quiescence.json` from the read-only member state volume).
 
 - [ ] **Step 1: Base check**
 
-Every command below is local and read-only.
+Every command below is local and read-only. Verify the complete final accepted predecessor, including the final Task34 private verifier memo and the coherent post-C4 chain, before applying any implementation hunk. The independent preMemo/preC4 source candidate does not satisfy that gate; do not replace verifier/backends.go or handleReplayJob verbatim over the memo. Preserve its private constructor, double-clone, run scope, full-wire Verify-only binding, invalidation and all existing tests while extracting evidence. No generic/member materializer gains memoization.
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && git status --short && git branch --show-current && git log --oneline -1 && test ! -e dataplane/evidence && test ! -e member/consensus && echo 'dataplane/evidence and member/consensus are absent'
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && while IFS='|' read -r dir needle; do
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1
+s3e1_read_091="$(git branch --show-current)" || exit 1
+[ "${s3e1_read_091}" = urwt/codex/multi-source-s3e1 ] || exit 1
+dirty="$(git status --porcelain)" || exit 1
+[ -z "$dirty" ] || exit 1
+s3e1_read_092="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${s3e1_read_092}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+git log --oneline -1 || exit 1
+test ! -e dataplane/evidence || exit 1
+test ! -e member/consensus || exit 1
+echo 'dataplane/evidence and member/consensus are absent'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; while IFS='|' read -r dir needle; do
   n="$(grep -lF -- "$needle" "$dir"/*.go | grep -cv '_test\.go$')"
   echo "$n $dir: $needle"
 done <<'EOF'
@@ -12573,7 +12587,7 @@ dataplane/tableset|func KeeperScopeOf(
 member/install|func ScratchPrefix(
 authority/authoritytest|func MemberKeyB(
 EOF
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && grep -c '^func TestConfinement_' member/confinement/confinement_test.go && grep -c '^func TestMemberUnsafeIntentHasNoCallerInP2' dataplane/ddl/member_test.go && GOWORK=off go doc github.com/housegate/housegate/pkg/replay/chexec NewMaterializerInWithStoragePolicy | grep '^func '
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; grep -c '^func TestConfinement_' member/confinement/confinement_test.go && grep -c '^func TestMemberUnsafeIntentHasNoCallerInP2' dataplane/ddl/member_test.go && GOWORK=off go doc github.com/housegate/housegate/pkg/replay/chexec NewMaterializerInWithStoragePolicy | grep '^func '
 ```
 
 Expected: a clean tree on `urwt/claude/multi-source-s3e1` whose last commit is Task 61's last commit; `dataplane/evidence and member/consensus are absent`; thirteen lines each starting with `1 ` (each consumed name defined once, outside tests: Tasks 59–61 of this plan and Plan S3-C2 are on the branch); `14` (Plan S3-C2 Task 34's suite); `1` (Plan S3-C2 Task 30's guard, which Step 12 replaces); `func NewMaterializerInWithStoragePolicy(networkID string, conn clickhouse.Conn, database, prefix, storagePolicy string) (*Materializer, error)` (housegate at `HG_TAG_P1` or later, Plan S3-C1 contract §16). A `0` line, or a missing guard or materializer, means an earlier task is not on this branch: stop and report it; never write a stand-in for a consumed name.
@@ -13184,7 +13198,7 @@ func TestVerifierRegistrationRequestsAreSignedWithTheEvidenceKey(t *testing.T) {
 
 - [ ] **Step 3: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && GOWORK=off go test ./dataplane/evidence/`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./dataplane/evidence/`
 
 Expected: the build fails, starting
 ```
@@ -13521,7 +13535,7 @@ type ReplayCoreConfig struct {
 
 // NewReplayCore assembles the real replay verifier over the materializer m:
 // the verifier passes chexec.NewMaterializer (scratch in its connection's
-// default database), a member chexec.NewMaterializerIn (scratch in hg_rstage
+// default database), a member chexec.NewMaterializerInWithStoragePolicy (scratch in hg_rstage
 // under its prefix).
 func NewReplayCore(cfg ReplayCoreConfig, m payloadexec.Materializer, manifests replay.SnapshotStore, payloads replay.PayloadStore) (*replay.Verifier, error) {
 	signer, err := payloadexec.NewEd25519Signer(cfg.ReplicaID, cfg.Ed25519Seed)
@@ -13689,7 +13703,7 @@ func VerifierRegistrationRequests(priv ed25519.PrivateKey, nodeID string, seq ui
 
 - [ ] **Step 5: Generate the BUILD file and run the tests**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel run //:gazelle && git status --short && GOWORK=off go vet ./dataplane/evidence/ && GOWORK=off go test ./dataplane/evidence/ -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel test //dataplane/evidence:evidence_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git status --short && GOWORK=off go vet ./dataplane/evidence/ && GOWORK=off go test ./dataplane/evidence/ -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //dataplane/evidence:evidence_test --test_output=errors`
 
 Expected: `git status --short` prints only `?? dataplane/evidence/`, and gazelle wrote `dataplane/evidence/BUILD.bazel` as exactly:
 
@@ -13756,8 +13770,13 @@ then `--- PASS:` for `TestEvidenceHandlerSubmitsWhatTheVerifierSubmitted`, `Test
 - [ ] **Step 6: Commit the package**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
-git -C "$W" add dataplane/evidence
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1
+s3e1_read_093="$(git -C "$W" branch --show-current)" || exit 1
+[ "${s3e1_read_093}" = urwt/codex/multi-source-s3e1 ] || exit 1
+git -C "$W" add dataplane/evidence || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(evidence): shared replay and byte-side scan evidence handling
 
 dataplane/evidence is the network verifier's evidence path moved out of
@@ -13772,7 +13791,13 @@ replay (the stage-3 member's quiescence ledger, spec 2026-10-14 §8.8).
 The handler's submissions are pinned to the bytes the verifier of
 v0.15.0 submits (plan S3-E1 contract §42.2).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+s3e1_read_094="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_094}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "uncommitted changes remain; stop"; exit 1; }
 ```
 
 - [ ] **Step 7: Write the failing delegation tests of `verifier`**
@@ -13933,7 +13958,7 @@ func (syncBufferV) Write(p []byte) (int, error) { return len(p), nil }
 
 - [ ] **Step 8: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && GOWORK=off go test ./verifier/`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./verifier/`
 
 Expected:
 ```
@@ -13947,7 +13972,7 @@ FAIL
 
 - [ ] **Step 9: Delegate the verifier's evidence to `dataplane/evidence`**
 
-Replace the whole of `verifier/backends.go` with:
+Replace the whole current `verifier/backends.go` with the following final form. Its post-C4 query adapter and accepted private memo constructor are intentionally retained; applying the earlier 70-line draft would erase both:
 
 ```go
 package verifier
@@ -13960,19 +13985,27 @@ import (
 
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/chexec"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/replay/snapshotquery"
 
 	"github.com/sentioxyz/arbiter-core/dataplane"
 	"github.com/sentioxyz/arbiter-core/dataplane/evidence"
 )
 
-// NewReplayCore assembles the real replay verifier for this verifier role:
-// evidence.NewReplayCore over chexec.NewMaterializer, whose scratch tables
-// live in the connection's default database.
+// NewReplayCore assembles the real replay verifier for this verifier role.
 func NewReplayCore(cfg Config, conn clickhouse.Conn, manifests replay.SnapshotStore, payloads replay.PayloadStore) (*replay.Verifier, error) {
-	return evidence.NewReplayCore(evidence.ReplayCoreConfig{
-		NetworkID: cfg.NetworkID, ReplicaID: cfg.ReplicaID, Ed25519Seed: cfg.Ed25519Seed, Tables: cfg.Tables,
-	}, chexec.NewMaterializer(cfg.NetworkID, conn), manifests, payloads)
+	cfg = cloneReplayConfig(cfg)
+	core, err := evidence.NewReplayCore(evidence.ReplayCoreConfig{NetworkID: cfg.NetworkID, ReplicaID: cfg.ReplicaID, Ed25519Seed: cfg.Ed25519Seed, Tables: cfg.Tables}, chexec.NewMaterializer(cfg.NetworkID, conn), manifests, payloads)
+	if err != nil {
+		return nil, err
+	}
+	dispatcher, ok := core.Executor.(*snapshotquery.CompositeExecutor)
+	if !ok {
+		return nil, fmt.Errorf("verifier: unexpected replay dispatcher %T", core.Executor)
+	}
+	core.Executor = newReplayExecutorMemo(cfg, dispatcher)
+	core.SchemaHashes = payloadexec.SchemaHashes{NetworkID: cfg.NetworkID, Tables: cloneReplayConfig(cfg).Tables}
+	return core, nil
 }
 
 // SnapshotQueryReplayCore adapts the query-only verifier to the role's
@@ -14181,9 +14214,37 @@ func (r *Role) newEvidenceHandler() (*evidence.Handler, error) {
 In `verifier/verifier.go`, replace the whole function `handleReplayJob` (from `func (r *Role) handleReplayJob(` to its closing brace) (`:327-347`) with:
 
 ```go
-// handleReplayJob answers a replay job through the evidence handler.
+// handleReplayJob delegates through a private adapter; only Verify sees the
+// original wire job. Role.Run delivers one synchronous callback per generation.
 func (r *Role) handleReplayJob(ctx context.Context, m *pb.ReplayJob) error {
-	return r.evidence.HandleReplayJob(ctx, m)
+	bound := &memoEvidenceCore{core: r.d.Replay, original: m}
+	handler, err := evidence.NewHandler(evidence.Config{ReplicaID: r.cfg.ReplicaID, Ed25519Seed: r.cfg.Ed25519Seed}, evidence.Deps{
+		Client: r.d.Client, Replay: bound, Scanner: r.d.Scanner,
+		TablesReady: r.requireAddedTablesReady, NotReady: ErrAddedTableNotReady, Logger: r.d.Logger,
+	})
+	if err != nil {
+		return err
+	}
+	err = handler.HandleReplayJob(ctx, m)
+	if bound.verified && err != nil {
+		switch status.Code(err) {
+		case codes.InvalidArgument, codes.Unauthenticated, codes.PermissionDenied:
+			forgetReplayMemoRun(ctx)
+		}
+	}
+	return err
+}
+
+type memoEvidenceCore struct {
+	core     replayCore
+	original *pb.ReplayJob
+	verified bool
+}
+
+func (c *memoEvidenceCore) Verify(ctx context.Context, job replay.ReplayJob) (replay.ReplayAttestation, error) {
+	att, err := c.core.Verify(withReplayMemoJob(ctx, c.original), job)
+	c.verified = err == nil
+	return att, err
 }
 ```
 
@@ -14299,7 +14360,7 @@ with:
 
 In `verifier/registry_test.go`, rename the nine method calls (they keep their `schemaFor(…)` failure texts) and give the hand-assembled role of `newGateRoleV` the evidence handler `New` builds:
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && perl -pi -e 's/\.schemaFor\(/.SchemaFor(/g' verifier/registry_test.go && grep -c '\.SchemaFor(' verifier/registry_test.go && ! grep -n '\.schemaFor(' verifier/*.go && echo 'no .schemaFor( call left'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; perl -pi -e 's/\.schemaFor\(/.SchemaFor(/g' verifier/registry_test.go && grep -c '\.SchemaFor(' verifier/registry_test.go && ! grep -n '\.schemaFor(' verifier/*.go && echo 'no .schemaFor( call left'`
 
 Expected: `9` and `no .schemaFor( call left` (seven `t.Fatalf` texts keep the spelling `schemaFor(…)`).
 
@@ -14324,15 +14385,20 @@ with:
 
 - [ ] **Step 10: Regenerate the BUILD file and run the tests**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel run //:gazelle && git status --short && git diff verifier/BUILD.bazel && GOWORK=off go vet ./verifier/ && GOWORK=off go test ./verifier/ ./dataplane/evidence/ -count=1 && GOWORK=off go test ./verifier/ -count=1 -run 'TestVerifierRoleDelegatesToTheEvidenceHandler|TestVerifierRegistrationFileKeepsItsShape' -v 2>&1 | grep -E '^(--- |ok)' && bazel test //verifier:verifier_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git status --short && git diff verifier/BUILD.bazel && GOWORK=off go vet ./verifier/ && GOWORK=off go test ./verifier/ ./dataplane/evidence/ -count=1 && GOWORK=off go test ./verifier/ -count=1 -run 'TestVerifierRoleDelegatesToTheEvidenceHandler|TestVerifierRegistrationFileKeepsItsShape' -v 2>&1 | grep -E '^(--- |ok)' && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //verifier:verifier_test --test_output=errors`
 
-Expected: `git status --short` lists the seven modified `verifier` Go files, `M verifier/BUILD.bazel` and `?? verifier/evidence_delegation_test.go`, and gazelle's change of `verifier/BUILD.bazel` is exactly: the library drops `"//:arbiter-core"` and gains `"//dataplane/evidence"`; the test gains `"evidence_delegation_test.go"` in `srcs` and `"//dataplane/evidence"` and `"@org_golang_google_protobuf//proto"` in `deps`. Then `ok` for both packages, `--- PASS: TestVerifierRoleDelegatesToTheEvidenceHandler`, `--- PASS: TestVerifierRegistrationFileKeepsItsShape`, and `//verifier:verifier_test PASSED`. Every pre-existing `verifier` test passes unchanged in behaviour: the replay, scan, snapshot-query, add-gate, registration and protocol-table tests all run through the delegated paths.
+Expected: `git status --short` lists the seven modified `verifier` Go files, `M verifier/BUILD.bazel` and `?? verifier/evidence_delegation_test.go`, and gazelle's change of `verifier/BUILD.bazel` is exactly: the library drops `"//:arbiter-core"` and gains `"//dataplane/evidence"`; the test gains `"evidence_delegation_test.go"` in `srcs` and `"//dataplane/evidence"` and `"@org_golang_google_protobuf//proto"` in `deps`. Then `ok` for both packages, `--- PASS: TestVerifierRoleDelegatesToTheEvidenceHandler`, `--- PASS: TestVerifierRegistrationFileKeepsItsShape`, and `//verifier:verifier_test PASSED`. The generated `verifier/BUILD.bazel` must retain its existing post-C4/memo source/dependency entries, add the shared evidence dependency and this new test (do not replace it with a historical whole-file listing). Every pre-existing `verifier` test passes unchanged in behaviour: the replay, scan, snapshot-query, add-gate, registration and protocol-table tests all run through the delegated paths.
 
 - [ ] **Step 11: Commit the delegation**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
-git -C "$W" add verifier
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1
+s3e1_read_095="$(git -C "$W" branch --show-current)" || exit 1
+[ "${s3e1_read_095}" = urwt/codex/multi-source-s3e1 ] || exit 1
+git -C "$W" add verifier || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "refactor(verifier): delegate replay and scan evidence to dataplane/evidence
 
 The verifier answers replay jobs and byte-side scans through an
@@ -14345,7 +14411,13 @@ Byte for byte: TestVerifierRoleDelegatesToTheEvidenceHandler pins both
 submissions to the bytes v0.15.0 submitted, and registration.json keeps
 its name and shape. Two tests that read moved fields follow them.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+s3e1_read_096="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_096}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "uncommitted changes remain; stop"; exit 1; }
 ```
 
 - [ ] **Step 12: Write the failing tests of the verify role and the quiescence ledger, and replace the P2 guard**
@@ -14734,15 +14806,16 @@ type gatewayFake struct {
 	pb.UnimplementedMembershipServer
 	pb.UnimplementedSafeStateServer
 
-	mu           sync.Mutex
-	regs         []*pb.NodeRegistration
-	marks        []*pb.NodeRef
-	hellos       []string
-	attestations []*pb.ReplayAttestation
-	scans        []*pb.ByteSideScanMsg
-	blocks       map[uint64]*pb.BlockVerification
-	reads        []uint64
-	dispatch     chan *pb.VerifierDispatch
+	mu             sync.Mutex
+	regs           []*pb.NodeRegistration
+	marks          []*pb.NodeRef
+	hellos         []string
+	attestations   []*pb.ReplayAttestation
+	scans          []*pb.ByteSideScanMsg
+	blocks         map[uint64]*pb.BlockVerification
+	reads          []uint64
+	dispatch       chan *pb.VerifierDispatch
+	afterBlockRead func()
 }
 
 func newGatewayFake() *gatewayFake {
@@ -14795,11 +14868,15 @@ func (f *gatewayFake) SubmitByteSideScan(_ context.Context, m *pb.ByteSideScanMs
 
 func (f *gatewayFake) GetBlockVerification(_ context.Context, ref *pb.L3BlockRef) (*pb.BlockVerification, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.reads = append(f.reads, ref.GetL3BlockSeq())
 	bv, ok := f.blocks[ref.GetL3BlockSeq()]
+	hook := f.afterBlockRead
+	f.mu.Unlock()
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "no sealed block %d", ref.GetL3BlockSeq())
+	}
+	if hook != nil {
+		hook()
 	}
 	return bv, nil
 }
@@ -14894,6 +14971,12 @@ func swapsJob(seq uint64) replay.ReplayJob {
 	return replay.ReplayJob{BlockSeq: seq, PrevSafeSnapshotID: "snap-1", PrevStateRoot: "0xprev", SchemaSnapshotID: "schema",
 		ExecutorProfileID: "housegate-replay-mvp-v0", SourceClaimRoot: "0xsource",
 		Statements: []replay.Statement{{StatementID: "st-1", StatementSeq: 1, TargetTableID: "dex.swaps"}}}
+}
+
+func testMemberPinned() ddl.MemberPinned {
+	p := ddl.DefaultMemberPinned(testNodeID, 0, "")
+	p.StoragePolicy = "default"
+	return p
 }
 ```
 
@@ -15091,11 +15174,11 @@ func TestMemberVerifyRoleScansItsMemberUnsafeReplica(t *testing.T) {
 
 func TestMemberVerifyRoleRefusesAJobWithoutItsReplica(t *testing.T) {
 	inc := chainIncarnation(t, 3, swapsSchema, wire.TableStatusActive, true)
-	intent, err := ddl.MemberUnsafeIntent(ddl.DefaultMemberPinned(testNodeID, 0, ""), swapsSchema, 3, "/sentio/0/unsafe_inc/dex__swaps/3")
+	intent, err := ddl.MemberUnsafeIntent(testMemberPinned(), swapsSchema, 3, "/sentio/0/unsafe_inc/dex__swaps/3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale, err := ddl.MemberUnsafeIntent(ddl.DefaultMemberPinned(testNodeID, 0, ""), swapsSchema, 2, "/sentio/0/unsafe_inc/dex__swaps/2")
+	stale, err := ddl.MemberUnsafeIntent(testMemberPinned(), swapsSchema, 2, "/sentio/0/unsafe_inc/dex__swaps/2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -15247,7 +15330,7 @@ func readLedgerFile(t *testing.T, dir string) string {
 func TestQuiescenceLedgerIsDurableBeforeTheJobRuns(t *testing.T) {
 	cfg := testConfig(t)
 	inc := chainIncarnation(t, 3, swapsSchema, wire.TableStatusActive, true)
-	intent, err := ddl.MemberUnsafeIntent(ddl.DefaultMemberPinned(testNodeID, 0, ""), swapsSchema, 3, "/sentio/0/unsafe_inc/dex__swaps/3")
+	intent, err := ddl.MemberUnsafeIntent(testMemberPinned(), swapsSchema, 3, "/sentio/0/unsafe_inc/dex__swaps/3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -15486,9 +15569,151 @@ with:
     # keeps Bazel from caching its result across changes in other packages.
 ```
 
+Create `member/consensus/policy_readiness_test.go` (a new Task 62 regression; against the previous Step 14 draft with an empty readiness policy it fails with `wrong policy attested`, while the final implementation below passes):
+
+```go
+package consensus
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/housegate/housegate/pkg/replay"
+	"github.com/sentioxyz/arbiter-core/dataplane/ddl"
+	"github.com/sentioxyz/arbiter-core/wire"
+)
+
+func TestMemberReadinessChecksTheConfiguredStoragePolicy(t *testing.T) {
+	for _, policy := range []string{"member_policy", "other_policy"} {
+		t.Run(policy, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.StoragePolicy = "member_policy"
+			inc := chainIncarnation(t, 3, swapsSchema, wire.TableStatusActive, true)
+			pin := ddl.DefaultMemberPinned(testNodeID, 0, "")
+			pin.StoragePolicy = policy
+			intent, err := ddl.MemberUnsafeIntent(pin, swapsSchema, 3, "/sentio/0/unsafe_inc/dex__swaps/3")
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn := newCHFake()
+			conn.addIntent(intent)
+			gw := newGatewayFake()
+			core := &replayFake{att: replay.ReplayAttestation{ReplicaID: testNodeID}}
+			v := newTestRole(t, cfg, VerifyDeps{Client: startGatewayFake(t, gw), Registry: newViewFake(groupSnapshot(true, []string{testNodeID}, nil, inc)), Conn: conn}, core)
+			err = v.handler.HandleReplayJob(context.Background(), wire.ReplayJobToPB(swapsJob(5)))
+			_, _, _, atts, _ := gw.snapshot()
+			if policy == cfg.StoragePolicy {
+				if err != nil || core.count() != 1 || len(atts) != 1 {
+					t.Fatalf("valid policy rejected: err=%v replays=%d submits=%d", err, core.count(), len(atts))
+				}
+			} else if !errors.Is(err, ErrMemberTableNotReady) || core.count() != 0 || len(atts) != 0 {
+				t.Fatalf("wrong policy attested: err=%v replays=%d submits=%d", err, core.count(), len(atts))
+			}
+		})
+	}
+}
+```
+
+Create `member/consensus/quiescence_regression_test.go` (new Task 62 regressions; the previous Step 14 draft fails both overlapping-redelivery cases and all seven structural-corruption cases, while the final implementation below passes):
+
+```go
+package consensus
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestQuiescenceResolveCannotEraseAnOverlappingRedelivery(t *testing.T) {
+	for _, same := range []bool{true, false} {
+		name := "same tables"
+		if !same {
+			name = "additional incarnation"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			q, err := OpenQuiescence(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := QuiescentTable{TableID: "dex.swaps", IncarnationSeq: 3}
+			next := first
+			if !same {
+				next.IncarnationSeq = 4
+			}
+			if err := q.Observe(5, []QuiescentTable{first}); err != nil {
+				t.Fatal(err)
+			}
+			gw := newGatewayFake()
+			gw.blocks[5] = blockView(5, []string{"another-verifier"}, false)
+			entered, release := make(chan struct{}), make(chan struct{})
+			gw.afterBlockRead = func() { close(entered); <-release }
+			client := startGatewayFake(t, gw)
+			done := make(chan error, 1)
+			go func() { done <- q.Resolve(context.Background(), client, testNodeID) }()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Resolve did not reach its RPC")
+			}
+			// A new dispatch is recorded before its replay starts while the prior
+			// selection's resolving RPC is still returning an obsolete view.
+			if err := q.Observe(5, []QuiescentTable{next}); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("Resolve did not return")
+			}
+			l, err := ReadQuiescence(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if l.Quiet(next.TableID, next.IncarnationSeq) {
+				t.Fatal("an obsolete resolve erased a redelivery's durable hold")
+			}
+		})
+	}
+}
+
+func TestQuiescenceRejectsStructurallyCorruptRecords(t *testing.T) {
+	for _, body := range []string{
+		`{"version":1}`,
+		`{"version":1,"blocks":null}`,
+		`{"version":1,"blocks":[{"block_seq":1,"tables":[]}]}`,
+		`{"version":1,"blocks":[{"block_seq":0,"tables":[{"table_id":"dex.swaps","incarnation_seq":3}]}]}`,
+		`{"version":1,"blocks":[{"block_seq":1,"tables":[{"table_id":"","incarnation_seq":3}]}]}`,
+		`{"version":1,"blocks":[{"block_seq":1,"tables":[{"table_id":"dex.swaps","incarnation_seq":0}]}]}`,
+		`{"version":1,"blocks":[{"block_seq":1,"tables":[{"table_id":"dex.swaps","incarnation_seq":3}]},{"block_seq":1,"tables":[{"table_id":"dex.swaps","incarnation_seq":4}]}]}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, QuiescenceFile), []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadQuiescence(dir); err == nil {
+				t.Fatal("corrupt ledger was accepted as a quiet table")
+			}
+			if _, err := OpenQuiescence(dir); err == nil {
+				t.Fatal("corrupt ledger was opened for replay")
+			}
+		})
+	}
+}
+```
+
 - [ ] **Step 13: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && GOWORK=off go test ./member/consensus/ ./dataplane/ddl/`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./member/consensus/ ./dataplane/ddl/`
 
 Expected: `member/consensus` fails to build, starting
 ```
@@ -15683,6 +15908,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/sentioxyz/arbiter-core/dataplane"
@@ -15717,10 +15943,15 @@ type quiescenceFile struct {
 // table at that incarnation, so a block the member may still be asked to
 // byte-scan never loses the replica it scans. Safe for concurrent use.
 type Quiescence struct {
-	dir    string
-	mu     sync.Mutex
-	blocks []quiescenceBlock
+	dir          string
+	mu           sync.Mutex
+	blocks       []quiescenceBlock
+	observations map[uint64]*quiescenceObservation
 }
+
+// A non-zero-size token identifies each successful observation, including
+// identical redelivery. It is private process state, not a persisted field.
+type quiescenceObservation struct{ marker byte }
 
 // OpenQuiescence opens the ledger in stateDir (QuiescenceFile); a missing
 // file is an empty ledger.
@@ -15732,7 +15963,7 @@ func OpenQuiescence(stateDir string) (*Quiescence, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Quiescence{dir: stateDir, blocks: l.blocks}, nil
+	return &Quiescence{dir: stateDir, blocks: l.blocks, observations: map[uint64]*quiescenceObservation{}}, nil
 }
 
 // Observe records that block blockSeq names tables. It is durable in
@@ -15756,6 +15987,7 @@ func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error {
 	}
 	merged := mergeTables(next[i].Tables, tables)
 	if found && slices.Equal(merged, next[i].Tables) {
+		q.observations[blockSeq] = &quiescenceObservation{}
 		return nil
 	}
 	next[i].Tables = merged
@@ -15763,6 +15995,7 @@ func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error {
 		return err
 	}
 	q.blocks = next
+	q.observations[blockSeq] = &quiescenceObservation{}
 	return nil
 }
 
@@ -15774,8 +16007,10 @@ func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error {
 func (q *Quiescence) Resolve(ctx context.Context, client *dataplane.Client, nodeID string) error {
 	q.mu.Lock()
 	pending := make([]uint64, 0, len(q.blocks))
+	observed := make(map[uint64]*quiescenceObservation, len(q.blocks))
 	for _, b := range q.blocks {
 		pending = append(pending, b.BlockSeq)
+		observed[b.BlockSeq] = q.observations[b.BlockSeq]
 	}
 	q.mu.Unlock()
 	resolved := map[uint64]bool{}
@@ -15795,10 +16030,17 @@ func (q *Quiescence) Resolve(ctx context.Context, client *dataplane.Client, node
 	}
 	if len(resolved) > 0 {
 		q.mu.Lock()
-		next := slices.DeleteFunc(slices.Clone(q.blocks), func(b quiescenceBlock) bool { return resolved[b.BlockSeq] })
+		next := slices.DeleteFunc(slices.Clone(q.blocks), func(b quiescenceBlock) bool {
+			return resolved[b.BlockSeq] && observed[b.BlockSeq] == q.observations[b.BlockSeq]
+		})
 		err := writeQuiescence(q.dir, next)
 		if err == nil {
 			q.blocks = next
+			for seq := range resolved {
+				if observed[seq] == q.observations[seq] {
+					delete(q.observations, seq)
+				}
+			}
 		}
 		q.mu.Unlock()
 		if err != nil {
@@ -15830,6 +16072,27 @@ func ReadQuiescence(stateDir string) (QuiescenceLedger, error) {
 	}
 	if f.Version != quiescenceVersion {
 		return QuiescenceLedger{}, fmt.Errorf("member consensus: %s has version %d, want %d", QuiescenceFile, f.Version, quiescenceVersion)
+	}
+	if f.Blocks == nil {
+		return QuiescenceLedger{}, fmt.Errorf("member consensus: %s is corrupt: missing blocks", QuiescenceFile)
+	}
+	var prior uint64
+	for _, block := range f.Blocks {
+		if block.BlockSeq == 0 || block.BlockSeq <= prior || len(block.Tables) == 0 {
+			return QuiescenceLedger{}, fmt.Errorf("member consensus: %s is corrupt: invalid block record", QuiescenceFile)
+		}
+		prior = block.BlockSeq
+		for i, table := range block.Tables {
+			if strings.TrimSpace(table.TableID) == "" || table.IncarnationSeq == 0 {
+				return QuiescenceLedger{}, fmt.Errorf("member consensus: %s is corrupt: invalid table record", QuiescenceFile)
+			}
+			if i > 0 {
+				prev := block.Tables[i-1]
+				if cmp.Or(cmp.Compare(prev.TableID, table.TableID), cmp.Compare(prev.IncarnationSeq, table.IncarnationSeq)) >= 0 {
+					return QuiescenceLedger{}, fmt.Errorf("member consensus: %s is corrupt: unordered table records", QuiescenceFile)
+				}
+			}
+		}
 	}
 	return QuiescenceLedger{blocks: f.Blocks}, nil
 }
@@ -16008,9 +16271,11 @@ func newVerifyRole(cfg Config, d VerifyDeps, core evidence.ReplayCore, scanner e
 	if log == nil {
 		log = slog.Default()
 	}
+	pinned := ddl.DefaultMemberPinned(cfg.NodeID, cfg.KeeperShardID, "")
+	pinned.StoragePolicy = cfg.StoragePolicy
 	v := &VerifyRole{
 		cfg: cfg, d: d, log: log, priv: ed25519.NewKeyFromSeed(cfg.Ed25519Seed),
-		pinned: ddl.DefaultMemberPinned(cfg.NodeID, cfg.KeeperShardID, ""),
+		pinned: pinned,
 		seq:    evidence.NewRegistrationSeq(cfg.StateDir), quiet: quiet,
 	}
 	v.handler, err = evidence.NewHandler(evidence.Config{ReplicaID: cfg.NodeID, Ed25519Seed: cfg.Ed25519Seed}, evidence.Deps{
@@ -16236,7 +16501,7 @@ func (v *VerifyRole) nowMillis() uint64 {
 
 - [ ] **Step 15: Generate the BUILD file and run the tests**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel run //:gazelle && git status --short && GOWORK=off go vet ./member/consensus/ ./dataplane/ddl/ && GOWORK=off go test ./member/consensus/ ./dataplane/ddl/ -count=1 && GOWORK=off go test ./member/consensus/ -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel test //member/consensus:consensus_test //dataplane/ddl:ddl_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git status --short && GOWORK=off go vet ./member/consensus/ ./dataplane/ddl/ && GOWORK=off go test ./member/consensus/ ./dataplane/ddl/ -count=1 && GOWORK=off go test ./member/consensus/ -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test //dataplane/ddl:ddl_test --test_output=errors`
 
 Expected: `git status --short` prints `M dataplane/ddl/BUILD.bazel`, `M dataplane/ddl/member_test.go` and `?? member/consensus/`, and gazelle wrote `member/consensus/BUILD.bazel` as exactly:
 
@@ -16248,6 +16513,7 @@ go_library(
     srcs = [
         "config.go",
         "quiescence.go",
+        "unsafe_reconciler.go",
         "verify_role.go",
     ],
     importpath = "github.com/sentioxyz/arbiter-core/member/consensus",
@@ -16259,6 +16525,7 @@ go_library(
         "//dataplane/evidence",
         "//dataplane/tableset",
         "//member/install",
+        "//wire",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@housegate//pkg/replay",
@@ -16272,7 +16539,10 @@ go_test(
     name = "consensus_test",
     srcs = [
         "fakes_test.go",
+        "policy_readiness_test.go",
+        "quiescence_regression_test.go",
         "quiescence_test.go",
+        "unsafe_reconciler_test.go",
         "verify_role_test.go",
     ],
     embed = [":consensus"],
@@ -16297,13 +16567,18 @@ go_test(
 )
 ```
 
-then `ok` for both packages; `--- PASS:` for `TestQuiescenceLedgerIsDurableBeforeTheJobRuns`, `TestQuiescenceResolvesALatchedOrReselectedBlock`, `TestReadQuiescenceRefusesACorruptOrUnknownLedger`, `TestMemberVerifyRoleRegistersAsAVerifierWithARegistrationSeq`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`, `TestMemberVerifyRoleScansItsMemberUnsafeReplica`, `TestMemberVerifyRoleRefusesAJobWithoutItsReplica`, `TestReplayScratchPrefixIsTheMembersOwnAndNotTheShadows` and `TestNewVerifyRoleRefusesAnIncompleteConfig`; and both Bazel targets `PASSED` (`ddl_test` carries the `external` tag, so it reran the guard against the new package).
+then `ok` for both packages; `--- PASS:` for `TestQuiescenceLedgerIsDurableBeforeTheJobRuns`, `TestQuiescenceResolvesALatchedOrReselectedBlock`, `TestReadQuiescenceRefusesACorruptOrUnknownLedger`, `TestMemberReadinessChecksTheConfiguredStoragePolicy`, `TestQuiescenceResolveCannotEraseAnOverlappingRedelivery`, `TestQuiescenceRejectsStructurallyCorruptRecords`, `TestMemberVerifyRoleRegistersAsAVerifierWithARegistrationSeq`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`, `TestMemberVerifyRoleScansItsMemberUnsafeReplica`, `TestMemberVerifyRoleRefusesAJobWithoutItsReplica`, `TestReplayScratchPrefixIsTheMembersOwnAndNotTheShadows` and `TestNewVerifyRoleRefusesAnIncompleteConfig`; and both Bazel targets `PASSED` (`ddl_test` carries the `external` tag, so it reran the guard against the new package).
 
 - [ ] **Step 16: Commit the verify role**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
-git -C "$W" add member/consensus dataplane/ddl/member_test.go dataplane/ddl/BUILD.bazel
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1
+s3e1_read_097="$(git -C "$W" branch --show-current)" || exit 1
+[ "${s3e1_read_097}" = urwt/codex/multi-source-s3e1 ] || exit 1
+git -C "$W" add member/consensus dataplane/ddl/member_test.go dataplane/ddl/BUILD.bazel || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/consensus): the member verify role and the quiescence ledger
 
 The stage-3 member's consensus mode (plan S3-E1 contract §42.3, K66),
@@ -16320,7 +16595,13 @@ latched or the member was re-selected away (spec 2026-10-14 §8.8).
 ddl.MemberUnsafeIntent now has callers, so Plan S3-C2's no-caller
 guard becomes a guard that only member/consensus names it.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+s3e1_read_098="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_098}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "uncommitted changes remain; stop"; exit 1; }
 ```
 
 - [ ] **Step 17: Write the failing tests of the reconciler, unit and ClickHouse**
@@ -17080,7 +17361,7 @@ func TestMemberUnsafeReconcilerStopsOnAStaleReplicaAndDropsNothing(t *testing.T)
 
 - [ ] **Step 18: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && GOWORK=off go test ./member/consensus/ ./member/confinement/`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./member/consensus/ ./member/confinement/`
 
 Expected: both packages fail to build, the first with lines starting `member/consensus/unsafe_reconciler_test.go:27:9: undefined: UnsafeReconciler`, `member/consensus/unsafe_reconciler_test.go:42:12: undefined: NewUnsafeReconciler`, `member/consensus/unsafe_reconciler_test.go:43:3: undefined: ReconcilerDeps`, the second with
 ```
@@ -17518,7 +17799,7 @@ with:
 
 - [ ] **Step 20: Regenerate the BUILD files and run the unit tests**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bazel run //:gazelle && git status --short && git diff member/consensus/BUILD.bazel member/confinement/BUILD.bazel && GOWORK=off go vet ./member/... && GOWORK=off go test ./member/consensus/ ./member/confinement/ ./dataplane/ddl/ -count=1 -race && GOWORK=off go test ./member/consensus/ -count=1 -run 'TestUnsafeReconciler|TestNewUnsafeReconciler' -v 2>&1 | grep -E '^(--- |ok)' && bash -n scripts/ci/clickhouse-member-confinement.sh && /bin/bash -n scripts/ci/clickhouse-member-confinement.sh && { ! command -v shellcheck >/dev/null || shellcheck scripts/ci/clickhouse-member-confinement.sh; } && echo 'runner ok'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git status --short && git diff member/consensus/BUILD.bazel member/confinement/BUILD.bazel && GOWORK=off go vet ./member/... && GOWORK=off go test ./member/consensus/ ./member/confinement/ ./dataplane/ddl/ -count=1 -race && GOWORK=off go test ./member/consensus/ -count=1 -run 'TestUnsafeReconciler|TestNewUnsafeReconciler' -v 2>&1 | grep -E '^(--- |ok)' && bash -n scripts/ci/clickhouse-member-confinement.sh && /bin/bash -n scripts/ci/clickhouse-member-confinement.sh && { ! command -v shellcheck >/dev/null || shellcheck scripts/ci/clickhouse-member-confinement.sh; } && echo 'runner ok'`
 
 Expected: `git status --short` lists `M member/consensus/BUILD.bazel`, `M member/confinement/BUILD.bazel`, `M scripts/ci/clickhouse-member-confinement.sh`, `?? member/confinement/consensus_test.go`, `?? member/consensus/unsafe_reconciler.go` and `?? member/consensus/unsafe_reconciler_test.go`; gazelle added `"unsafe_reconciler.go"` and `"//wire"` to the library and `"unsafe_reconciler_test.go"` to the test of `member/consensus` (the file is then exactly the one below), and to `member/confinement`'s test `"consensus_test.go"` in `srcs` and `"//:arbiter-core"`, `"//member/consensus"`, `"//member/install"`, `"//wire"`, `"@com_github_clickhouse_clickhouse_go_v2//lib/driver"` and `"@housegate//pkg/replay"` in `deps`. `member/consensus/BUILD.bazel` is now:
 
@@ -17526,58 +17807,34 @@ Expected: `git status --short` lists `M member/consensus/BUILD.bazel`, `M member
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "consensus",
-    srcs = [
-        "config.go",
-        "quiescence.go",
-        "unsafe_reconciler.go",
-        "verify_role.go",
-    ],
-    importpath = "github.com/sentioxyz/arbiter-core/member/consensus",
+    name = "confinement",
+    srcs = ["doc.go"],
+    importpath = "github.com/sentioxyz/arbiter-core/member/confinement",
     visibility = ["//visibility:public"],
-    deps = [
-        "//authority",
-        "//dataplane",
-        "//dataplane/ddl",
-        "//dataplane/evidence",
-        "//dataplane/tableset",
-        "//member/install",
-        "//wire",
-        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-        "@com_github_sentioxyz_arbiter_proto//gen/pb",
-        "@housegate//pkg/replay",
-        "@housegate//pkg/replay/chexec",
-        "@housegate//pkg/replay/payloadexec",
-        "@org_golang_google_grpc//:grpc",
-    ],
 )
 
 go_test(
-    name = "consensus_test",
+    name = "confinement_test",
     srcs = [
-        "fakes_test.go",
-        "quiescence_test.go",
-        "unsafe_reconciler_test.go",
-        "verify_role_test.go",
+        "confinement_test.go",
+        "consensus_test.go",
     ],
-    embed = [":consensus"],
+    embed = [":confinement"],
     deps = [
         "//:arbiter-core",
-        "//authority",
-        "//authority/authoritytest",
-        "//dataplane",
+        "//dataplane/chrestart",
+        "//dataplane/chtest",
         "//dataplane/ddl",
-        "//dataplane/evidence",
+        "//member/consensus",
+        "//member/install",
+        "//member/sources",
         "//wire",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
-        "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@housegate//pkg/lthash",
         "@housegate//pkg/replay",
+        "@housegate//pkg/replay/chexec",
         "@housegate//pkg/replay/payloadexec",
-        "@org_golang_google_grpc//:grpc",
-        "@org_golang_google_grpc//codes",
-        "@org_golang_google_grpc//status",
     ],
 )
 ```
@@ -17624,20 +17881,32 @@ Then `ok` for the three packages under `-race` (the confinement tests skip witho
 
 - [ ] **Step 21: Run the ClickHouse tests through the confinement runner**
 
-The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `minio/minio:RELEASE.2024-12-18T13-15-44Z` from Docker Hub when they are not on the host (`docker image inspect <image>` shows whether each is present): a download, so it needs explicit user confirmation in chat before running.
+The runner pulls `clickhouse/clickhouse-server:26.3.37.3` and `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` from Docker Hub when they are not on the host (`docker image inspect <image>` shows whether each is present): a download, so it needs explicit user confirmation in chat before running.
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && ARBITER_CH_MEMBER_CONFINEMENT_FILTER='^TestMember' bash scripts/ci/clickhouse-member-confinement.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3; echo "exit $?"
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && bash scripts/ci/clickhouse-member-confinement.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3 > "$W.confinement.log" 2>&1; echo "exit $?"; grep -E '^(confinement|sources)[: ]|member hg_member_unsafe replica (created|dropped)|already exists at /sentio' "$W.confinement.log"
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1
+ARBITER_CH_MEMBER_CONFINEMENT_FILTER='^TestMember' bash scripts/ci/clickhouse-member-confinement.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3 || { rc=$?; echo "exit $rc"; exit "$rc"; }
+echo 'exit 0'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1
+bash scripts/ci/clickhouse-member-confinement.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3 > "$W.confinement.log" 2>&1 || { rc=$?; cat "$W.confinement.log"; echo "exit $rc"; exit "$rc"; }
+echo 'exit 0'
+grep -E '^(confinement|sources)[: ]|member hg_member_unsafe replica (created|dropped)|already exists at /sentio' "$W.confinement.log"
 ```
 
-Expected, first: `//member/confinement:confinement_test PASSED`, the test log's `member hg_member_unsafe replica created table=confdb_<sfx>__swaps incarnation=7 zookeeper_path=/sentio/0/unsafe_inc/confdb_<sfx>__swaps/7`, `member hg_member_unsafe replica dropped table=confdb_<sfx>__swaps incarnation=7 status=purging placed=true` and the error line `member consensus: hg_member_unsafe.confdb_<sfx>__pools: replica member-conf already exists at /sentio/0/unsafe_inc/confdb_<sfx>__pools/8; not dropping it (si_member_ddl holds no SYSTEM DROP REPLICA); the owner's sweep removes it after an eviction`, then `confinement: 3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, no `member/sources` run (the filter skips it) and `exit 0`. Second (the full log is `$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1.confinement.log`, beside the worktree, never inside it): `exit 0`, then the two `confinement server` lines, Plan S3-C2 Task 34's measured `confinement:` lines, the three log lines above, `confinement: 17 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` (Task 34's fourteen and these three) and the same `sources:` line as Task 34's run. A failing `TestMember*` test stops the task: report the failing test's log lines (`bazel info bazel-testlogs` names the directory).
+Expected, first: `//member/confinement:confinement_test PASSED`, the test log's `member hg_member_unsafe replica created table=confdb_<sfx>__swaps incarnation=7 zookeeper_path=/sentio/0/unsafe_inc/confdb_<sfx>__swaps/7`, `member hg_member_unsafe replica dropped table=confdb_<sfx>__swaps incarnation=7 status=purging placed=true` and the error line `member consensus: hg_member_unsafe.confdb_<sfx>__pools: replica member-conf already exists at /sentio/0/unsafe_inc/confdb_<sfx>__pools/8; not dropping it (si_member_ddl holds no SYSTEM DROP REPLICA); the owner's sweep removes it after an eviction`, then `confinement: 3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, no `member/sources` run (the filter skips it) and `exit 0`. Second (the full log is `"$W.confinement.log"`, beside the exact persisted Task 59 worktree, never inside it): `exit 0`, then the two `confinement server` lines, Plan S3-C2 Task 34's measured `confinement:` lines, the three log lines above, a `confinement:` count equal to the actual complete required list (including these three; do not hard-code the historical fourteen-test base) and the same `sources:` line as Task 34's run. A failing `TestMember*` test stops the task: report the failing test's log lines (`bazel info bazel-testlogs` names the directory).
 
 - [ ] **Step 22: Commit the reconciler**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"
-git -C "$W" add member/consensus member/confinement scripts/ci/clickhouse-member-confinement.sh
+set -eo pipefail
+export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1
+s3e1_read_099="$(git -C "$W" branch --show-current)" || exit 1
+[ "${s3e1_read_099}" = urwt/codex/multi-source-s3e1 ] || exit 1
+git -C "$W" add member/consensus member/confinement scripts/ci/clickhouse-member-confinement.sh || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/consensus): the hg_member_unsafe reconciler as si_member_ddl
 
 The member's group-scoped reconciler (spec 2026-10-14 §8.2, §8.3,
@@ -17657,16 +17926,22 @@ member consensus mode's ClickHouse tests: the replay scratch as
 si_member, and the replica as si_member_ddl fetching the owner's parts,
 dropped at Purging, and stopped by a stale replica.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+s3e1_read_100="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_100}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "uncommitted changes remain; stop"; exit 1; }
 ```
 
 - [ ] **Step 23: Full verification**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && echo 'gofmt clean' && GOWORK=off go vet ./... && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(git ls-files -z '*.go' | xargs -0 gofmt -l)" || exit 1; [ -z "$formatting" ] || exit 1; echo 'gofmt clean' && GOWORK=off go vet ./... && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git status --short && bazel build --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //... && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //... --test_output=errors`
 
-Expected: `gofmt clean`; `go vet` prints nothing; gazelle changes nothing and `git status --short` prints nothing; the build passes and every test passes (the ClickHouse-gated targets skip without their env; Step 21 ran the confinement suite). A red test outside this task's packages and `dataplane/ddl` stops the task: report it (contract §38: no other behaviour changes).
+Expected: `gofmt clean`; `go vet` prints nothing; gazelle changes nothing and `git status --short` prints nothing; the build passes and every test passes (the ClickHouse-gated targets skip without their env; Step 21 must separately run the confinement suite on the exact image; local environment-gated skips do not establish that gate). A red test outside this task's packages and `dataplane/ddl` stops the task: report it (contract §38: no other behaviour changes).
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; git -C "$W" log --oneline -4 | cat && git -C "$W" diff --stat HEAD~4 -- go.mod go.sum MODULE.bazel MODULE.bazel.lock | cat && echo 'no dependency change'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; git -C "$W" log --oneline -4 | cat && git -C "$W" diff --quiet HEAD~4 -- go.mod go.sum MODULE.bazel MODULE.bazel.lock || exit 1; echo 'no dependency change'`
 
 Expected, newest first: `feat(member/consensus): the hg_member_unsafe reconciler as si_member_ddl`, `feat(member/consensus): the member verify role and the quiescence ledger`, `refactor(verifier): delegate replay and scan evidence to dataplane/evidence`, `feat(evidence): shared replay and byte-side scan evidence handling`; then only `no dependency change` (the stat is empty). The branch stays local: Task 63 adds its commits, pushes it and opens the PR of Tasks 59–63.
 
@@ -23769,7 +24044,7 @@ func NewRegistrationSeq(stateDir string) *RegistrationSeq
 func (r *RegistrationSeq) Next(nowMillis uint64) (uint64, error) // max(last + 1, nowMillis), durable before return
 func VerifierRegistrationRequests(priv ed25519.PrivateKey, nodeID string, seq uint64, ctx authority.MessageContext) (*pb.NodeRegistration, *pb.NodeRef, error)
 ```
-`verifier` delegates byte for byte: `type CHScanner = evidence.CHScanner`, `NewScanner`/`NewRegistryScanner`/`NewReplayCore` keep their signatures, `Role` handles replay jobs and scans through an `evidence.Handler` with `NotReady: ErrAddedTableNotReady`, and `registration.json` keeps its file name and JSON shape (`{"registration_seq":N}`); every log message keeps its text and fields (`replay verify failed; refusing to attest`, `byte-side scan failed; refusing to attest`, `table-set transition adds a table this verifier has not created; refusing to attest`, `arbiter did not accept verifier evidence`).
+`verifier` preserves the legacy submitted bytes, signing/log and registration behavior while delegating through evidence. Its fixed constructor clones caller config, wraps only the concrete `snapshotquery.CompositeExecutor` in private `newReplayExecutorMemo`, and supplies a second independent public schema clone. `handleReplayJob` uses per-dispatch private `memoEvidenceCore`: only Verify receives `withReplayMemoJob(ctx, originalPB)`; successful Verify followed by terminal InvalidArgument/Unauthenticated/PermissionDenied submission invalidates that private Run through `forgetReplayMemoRun(ctx)`. Submit retains its original context/leader retry; Role.Run retains one private generation and synchronous callback. Post-C4 SnapshotQueryReplayCore and all inherited memo/schema tests remain. Generic injected evidence/member materializers stay uncached; none of these private helpers is an exported evidence API. Scanner aliases, public signatures, registration.json and observable legacy log texts remain unchanged.
 
 **42.3 Member consensus mode (Tasks 62–63, K66).** New package `member/consensus` (import `github.com/sentioxyz/arbiter-core/member/consensus`). Plan S3-C2's member role config (`member.Config` of contract §20–§24) gains `Consensus *consensus.Config`; nil keeps the P2/P3 member byte for byte (`TestConsensusConfigNilKeepsTheP2Role`).
 ```go
@@ -23848,12 +24123,12 @@ type GroupStatus struct {
 **Consumed names (spelled as their source gives them).**
 - Plan S3-A: §1 `BlockVerification` fields 1–13, `L3BlockRef`, `SafeState.GetBlockVerification`, the hold RPCs (method counts only), the conformance helpers `stage3Fields`, `stage3MessageFiles()`, `stage3LedgerType`, `reachableTypes` (and `populateSnapshotField`, `assertSnapshotVariant`, which exist at arbiter-proto `1c6ae67`); §3 `dataplane/chtest` (`Open`, `OpenAs`, `EnvUser`, `EnvPassword`); §6 the release and pin commands.
 - Plan S3-B: §15 the record procedure (D23) and the Appendix C shape.
-- Plan S3-C1: §16 `chexec.NewMaterializerIn(networkID, conn, database, prefix)`, `chexec.ScanAllParts`, `payloadexec.VerifyLedger`, `replay.OwnerEntry`, `sitable.CopyTable`; §19 `s3-ledger.py`.
+- Plan S3-C1: §16 `chexec.NewMaterializerIn(networkID, conn, database, prefix)` and compatible `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)`, `chexec.ScanAllParts`, `payloadexec.VerifyLedger`, `replay.OwnerEntry`, `sitable.CopyTable`; §19 `s3-ledger.py`.
 - Plan S3-C2: §20–§24 `dataplane.Client.GetSafeWatermark`, `GetManifest`, `GetBlockVerification`, `wire.BlockVerification`, `wire.BlockVerificationFromPB`, `wire.TableRegistrySnapshot.ManifestOwner`, `ddl.MemberPinned`, `ddl.CopyIntent`, `ddl.MemberUnsafeIntent(m, t, incarnationSeq, zooKeeperPath)`, `ddl.ListMemberTables`, `copyset.Reconciler`, `sources.Source` (`Name()`, `Fetch(ctx, need, schema, scratch) Result`), `sources.NewOwnerPull`, `sources.NewPeerUnsafePull`, `sources.NewRestore`, `install.Installer` and its per-owner journal (`install.Journal`, `install.OwnerJournal`, `install.JournalFile`), `install.NodePrefix` (`<node_id>_`), `install.ScratchPrefix` (`<node_id>_<boot_nonce>_`), `install.ScratchName` (`<node_id>_<boot_nonce>_<n>`), `shadow.ReplayPrefix`, the `si_member` grant list `SI_MEMBER_GRANTS` of §23.2 (with spec §8.2's explicit `hg_rstage` rights, D36), `member.Role`, `member.Config`, `member.Stats`, the `simember` metrics collector of §24.4, the Task 34 confinement suite (`member/confinement`, `scripts/ci/clickhouse-member-confinement.sh`), `CORE_TAG_P2`; K29 member ids `member-a`, `member-b`, `member-c`; K30 the pod's `si-member` container and `si-member-reconciler` slot.
 - Plan S3-C4: §29–§32 `member/serve` (`serve.ServingView` and its authenticated `GET /v1/serving`), `HG_TAG_P3`, `CORE_TAG_P3`.
 - Plan S3-D: §33–§37 `CORE_TAG_P4`, `PROTO_TAG_P4` (unconditional, D26) and its settle surface (`ConsensusAdmin.SettleTrack` at method 14, `GetTrackSettle` at 15, the non-Raft stream fields `PromotionCommand.settle = 3` and `SNodeHello.settle = 2`, §33.2), `conformance/p4_settle_test.go` (not edited here).
 
-**Produced for later plans.** S3-E2–E4 and S3-F consume §39 (every proto name; `GroupMember.host_indexer_id` is filled by S3-E3 Task 71's `groupsToPB` and read by S3-E4 Task 79's `replica_hosts`, D27), §41 (canonical types, `Stage3Params.Validate`, the purposes and their functions, the wire converters and `Command` fields), §42 (`ddl.KeeperScope`, `ZooKeeperPathFor`, `tableset.KeeperScopeOf`, `KnownKeeperReplica`, the `consensus` package, `ErrStage3SwitchOff`, `Stage3Feature`), the K67 refusal texts, and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`. Facts for the first arbiter pin (S3-E2 Task 64): arbiter's `TestTableRegistryMirrorsProto` (`server/table_registry_test.go:26`) compares `fsm.TableIncarnation` json tags with `pb.TableIncarnation`, so it needs `scoped_keeper_path` and `purge_members` json tags (both `omitempty`) at that pin; `TestL3BlockHeaderMirrorsProto` (`server/safestate_l3block_test.go:65`) compares only the header's top-level fields, and `fsm.L3BlockTrack` gains `group_key` (`omitempty`) with S3-E3 Task 72; every arbiter golden that hashes a `ConsensusParamsUpdate` or a `VerifierEntry` passes unchanged because the new canonical fields of §41 are `omitempty`, provided arbiter's `cloneVerifiers` (`fsm/signed_claims.go:93-102`) copies them (S3-E2 Task 64).
+**Produced for later plans.** S3-E2–E4 and S3-F consume §39 (every proto name; `GroupMember.host_indexer_id` is filled by S3-E3 Task 71's `groupsToPB` and read by S3-E4 Task 79's `replica_hosts`, D27), §41 (canonical types, `Stage3Params.Validate`, the purposes and their functions, the wire converters and `Command` fields), §42 (`ddl.KeeperScope`, `ZooKeeperPathFor`, `tableset.KeeperScopeOf`, `KnownKeeperReplica`, the `consensus` package, `ErrStage3SwitchOff`, `Stage3Feature`), the K67 refusal texts, and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`. Facts for the first arbiter pin (S3-E2 Task 64): arbiter's `TestTableRegistryMirrorsProto` (`server/table_registry_test.go:26`) compares `fsm.TableIncarnation` json tags with `pb.TableIncarnation`, so Task64 records those two wire-only fields as Task69-owned pending fields while its FSM remains18 fields. The inherited manifest-owner adapter retains all18 mappings and explicitly requires exactly20 wire fields with both pending values exactly zero (including rejecting allocated-empty purge_members); Task69 later adds the owning FSM fields and complete20-field adapter. No new FSM JSON tag is introduced early at the pin; `TestL3BlockHeaderMirrorsProto` (`server/safestate_l3block_test.go:65`) compares only the header's top-level fields, and `fsm.L3BlockTrack` gains `group_key` (`omitempty`) with S3-E3 Task 72; every arbiter golden that hashes a `ConsensusParamsUpdate` or a `VerifierEntry` passes unchanged because the new canonical fields of §41 are `omitempty`, provided arbiter's `cloneVerifiers` (`fsm/signed_claims.go:93-102`) copies them (S3-E2 Task 64).
 
 **Repositories, worktrees, commands.** Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. One URWT worktree per repository, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/<repo> claude multi-source-s3e1` (its JSON `path` is `$W`; agents prefix each Bash call with `W=<path>;`), branch `urwt/claude/multi-source-s3e1`, from a freshly fetched `origin/main`: arbiter-proto (Task 57), housegate (Task 58), arbiter-core (Tasks 59–63 on one branch, one PR, merged in Task 63 before the release).
 - arbiter-proto checks: `make tools && make proto && git diff --exit-code -- gen/` (after the commit), `make lint`, `make test`, `buf breaking --against ".git#tag=$PROTO_TAG_P4"` with `PROTO_TAG_P4` read by `s3-ledger.py get` (D26; never `make breaking`, which compares a stale local `main`), and `git diff "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go`, whose hunks touch only D25's count lines (§39). Release: `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main -f dry_run=true`, then `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main`, watched with `gh run watch`; the tag from `gh release view --repo sentioxyz/arbiter-proto --json tagName --jq .tagName`, verified by content (`git show <tag>:proto/raftlog.proto | grep -c 'MarkMemberLaggingCmd mark_member_lagging = 42;'` prints `1`). PR title `feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`.
@@ -23862,6 +24137,10 @@ type GroupStatus struct {
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; merges squash. TDD in every step (failing test → run, fail → minimal implementation → run, pass → commit). Code comments in English; markdown never hard-wrapped.
 - Remote actions — pushes, PRs, merges, release workflows, tags, ledger records — require explicit user confirmation in chat, each for its own step; commands handed to the user are fish.
 
+
+**Current C2 integration ownership (Task62).** The complete post-C4→61→private-memo425 predecessor is required before evidence extraction; Task62's accepted447 result and Task63's coherent469 successor retain the same constructor-only memo, full-wire Verify binding, two schema-isolation boundaries and terminal invalidation. Preserve the16 original memo tests and C4 snapshot-query tests. `TestMemberReadinessChecksTheConfiguredStoragePolicy`, `TestQuiescenceResolveCannotEraseAnOverlappingRedelivery` and `TestQuiescenceRejectsStructurallyCorruptRecords` are accepted Task62 tests, not permission to cache member/evidence/query execution or alter a frozen vector.
+
+The local-replica readiness intent also pins the member's actual `Config.StoragePolicy`: a wrong live policy refuses before replay/Submit; a matching non-default policy accepts. Quiescence Observe/Resolve retains per-entry token identity across overlapping redelivery, and malformed ledger records remain holds. These are the accepted owning Task62 boundaries, with the existing public signatures/files; member/evidence materializers remain uncached.
 ## Appendix B: drafting decisions and cross-task facts
 
 Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
@@ -23983,6 +24262,12 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - (1) Plan S3-C4's review fix 3 made `serve.Deps.StateDir` required (`serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`), so Step 15's `TestServingViewCarriesTheConsensusStatus` gives its second `New` the S3-C4 harness's `StateDir: h.stateDir`, and the Files line cites the lines of S3-C4's fixed `serve.go`. Checked on S3-C4's fixed `member/serve` package with this task's eight `serve.go`/`conditions.go` hunks (each anchor once), a stub `member/consensus` holding this task's status types, and the test: without the field it fails with that refusal, with it `go test -race ./member/serve/` passes (every S3-C4 test too), gofmt and vet clean; this task's fifteen `member/` hunks each occur once on S3-C2's fixed Tasks 29–34 code with S3-C4's fixed Task 45 scripts and `member/serving.go` applied. (2) Plan S3-C2's review fix 245-4 (the bootstrap restore probe): a Notes bullet and contract §42.3's source-order sentence say the probe moves the restore right before the owner pull for the first fetch of each copy while its owner has no journaled entry, and keeps the hard-link source first; this task's code is unchanged. (3) Plan S3-E4's review finding 2: the Follow-ups line says Task 79's `replica_hosts` lists every current member, never filtered by `MemberReady`. (4) Plan S3-C4's review fix 4 grew Task 44's `upstreamToClient` read hunk of `pkg/proxy/relay.go` by three lines, so Task 58's `HG_TAG_P3` anchors of `isSessionPreservingIngressException` are now `:2326-2330` (doc) and `:2348-2349` (733 case), measured by replaying S3-C4's fixed relay hunks on housegate `862a7a8` (the result equals S3-C4's fixer's verified tree); both anchor texts still occur once, and no other file Task 58 edits changed line counts there (S3-C4's `CLAUDE.md` and `README.md` edits replace within one line). (5) Plan S3-C2's review fixes 245-1 and 245-2 moved lines of `member/role.go` (34 lines more in `member/role_test.go` before `TestLocalNodeFeaturesAreUnchangedThroughP2`), so the Files line's `member/role.go` and `member/role_test.go` numbers and Step 17's expected `role_test.go:411` are re-measured on S3-C2's fixed Tasks 29–34 text with S3-C4's fixed Task 45 applied (the run of Step 17's red test there prints exactly that line); every anchor text is unchanged.
 
 - **Tasks 62–63, member replay policy follow-up (sibling of the confirmed PR #245 finding).** The verify-role replay helper used legacy `NewMaterializerIn`, leaving its scratch on the server default policy. Added `consensus.Config.StoragePolicy`, sourced from the existing pinned member configuration, and the fifth `storagePolicy` argument to `NewReplayMaterializer`, which now calls C1's compatible `NewMaterializerInWithStoragePolicy`. The real Role requires equality with its actual `Pinned.StoragePolicy` before constructing Mode; actual `Mode.prepare` passes the complete config to Task 62's VerifyRole. Empty/malformed policy subcases fail against the old call and pass with the corrected path. The new actual CREATE-boundary test requires exactly one CREATE with the requested policy and propagates a missing-policy error without a default-disk retry, while permitting normal deferred DROP cleanup. Real Mode/VerifyRole and Role-binding regressions pass, as do consensus/member/shadow/confinement unit/race and vet. Consensus-off/shadow-off empty-policy compatibility stays unchanged. This bounded fix does not constitute the remaining E1 adversarial review or a new full integration run.
+
+### Review fixes (AgentConnect currentC2integration)
+
+Revision4c5f877cd415d1c972a4ec5b817c5ced0d958e51 had two real inherited-C2 conflicts. Task62 now carries the complete accepted extraction over coherent post-C4/private-memo425→447→469, retaining constructor-only memo, two independent schema clones, original-wire Verify-only binding, synchronous private Run lifecycle, terminal submission invalidation and uncached member/evidence execution. Task64's actual pin fallout includes the inherited manifest-owner failure and explicit18-FSM/20-wire exact-zero ownership; Task69 performs the complete20-field adapter/test/BUILD migration. Accepted Task68's rule6 delisting correction is included as the coherent633 predecessor of69. All imported runtime/test/BUILD fences are literal accepted owner bodies; current checked Git/format/signing/head/receipt procedures remain protected by the accepted procedural candidates.
+
++This is publication of already accepted local fixes, not a new product/control campaign. Prior source/TDD/race/Bazel/mutation/replay evidence remains scoped to its owning reports:62's447/63's469 chain,64's615,68's633 and69's637. Root e970 retains69's original full-race FAIL, UNKNOWN cause and unquantified liveness risk; later isolated PASS is not reliability/nonregression proof. Task70 qualification, formal consistency, release/live/ledger and existing user execution stops remain separate. Task57/D25 and every unlisted task are byte-identical to the resynced published base; no vector/count decision is taken here.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
