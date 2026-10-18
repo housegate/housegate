@@ -2172,7 +2172,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_2="$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
@@ -2337,7 +2338,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
@@ -8154,7 +8156,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_2="$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
@@ -8319,7 +8322,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
@@ -10617,7 +10621,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_2="$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
@@ -10781,7 +10786,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
@@ -17182,7 +17188,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_7="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_7" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
@@ -17314,7 +17321,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_15="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_15" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
@@ -20114,7 +20122,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_43="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_43" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
@@ -20235,7 +20244,8 @@ for c in commits:
  parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
-print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 git_read_48="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
 [ "$git_read_48" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
@@ -21065,6 +21075,12 @@ Task27's production runbook is a documentation overlay: SHA256 changes from `ab5
 ### Bounded optional gazelle diff-status follow-up (2026-10-18)
 
 Task25 Step10 now distinguishes Git diff status0 (no change),1 (legitimate reviewed differences) and fatal statuses, stopping before configuration, staging or commit on a fatal result. The complete original fence reproduced fatal73 dispatch into commit on both Bash versions under direct and conditional callers;56 old/new inert outcomes preserve valid optional behavior and existing commit/new-HEAD/identity/signature refusal paths. Independent sibling audit binds the same original body; the controller verified39 output hashes. One procedural Bash fence changes;413 other fences, all10 canonical REST readers and the adopted Task27 runbook6d76d0d6 remain exact. Historical implementation/source/session evidence stays within its original scope; no actual build/source/remote/GPG/ledger action or formal review/consistency increment follows.
+
+## Raw REST reader serialization follow-up (2026-10-18)
+
+The merged plan serialized ten inline Python readers without the source artifact's terminal LF: actual quoted arguments were1497 bytes/SHA256 `0b1bf23bbab0bc6cd20d4de4bc339115e8734b7574390ad451008e264e572191`, while prior LF-restoring comparisons established reconstructed1498-byte source identity. This documentation follow-up adds exactly one LF at each site, so the actual quoted body now directly hashes to canonical `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`. Static AST equality, unchanged surrounding shell arguments and complete inverse recovery were independently verified. All other code and runbooks remain byte-identical; no validator or product suite was rerun and no Python behavior defect is inferred from the old missing LF.
+
+PR244 remains merged. This follow-up is carried by the next stacked documentation PR and does not change the separately owned C1 implementation session, release/ledger outcomes, existing user decisions or local C1 consistency result. Earlier frozen reports retain their historical representation and execution scopes.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
