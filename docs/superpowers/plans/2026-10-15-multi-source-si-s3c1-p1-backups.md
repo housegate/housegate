@@ -10460,9 +10460,11 @@ Only if the reviewed gazelle diff changed BUILD files, make this local commit; a
 
 ```bash
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
-if git -C "$W" diff --quiet -- '*BUILD.bazel'; then
+gazelle_diff_status=0
+git -C "$W" diff --quiet -- '*BUILD.bazel' || gazelle_diff_status=$?
+if [ "$gazelle_diff_status" -eq 0 ]; then
   echo 'no optional gazelle commit needed'
-else
+elif [ "$gazelle_diff_status" -eq 1 ]; then
   git -C "$W" config --worktree commit.gpgsign true || exit 1
   workflow_commit_before="$(git -C "$W" rev-parse HEAD)" || exit 1
   git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m 'chore(build): gazelle' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' || { echo 'commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback' >&2; exit 1; }
@@ -10471,6 +10473,9 @@ else
   workflow_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
   [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo 'new HEAD must be poetry <chen@sentio.xyz> G; stop' >&2; exit 1; }
   git -C "$W" verify-commit HEAD || exit 1
+else
+  echo "git diff failed while checking optional gazelle changes (status $gazelle_diff_status); stop" >&2
+  exit "$gazelle_diff_status"
 fi
 ```
 
@@ -21056,6 +21061,10 @@ Required Git/GitHub reads in Appendix A and Tasks22/24/25/27/28 now capture comm
 Bounded verification comprises1496 complete inert workflow outcomes (372 original false completions;132 corrected positives and616 corrected injected refusals),120 complete-wrapper controls for the second GH head read at all10 REST gates,48 helper/formatter controls and148 exact contiguous procedural-phase controls. Both Bash versions, direct/conditional callers,76 changed-fence syntax outcomes, no-new-diagnostic ShellCheck comparison, Markdown and byte roundtrip checks pass. Phase controls cover only their explicit boundaries; no source, cluster or ledger producer ran.144 non-Bash payloads and223 unchanged Bash fences retain their exact bytes.
 
 Task27's production runbook is a documentation overlay: SHA256 changes from `ab5f212755f41eafce1cbb695c14a60166d569522bd407883f33cf614ad31e46` to `6d76d0d6997c5fb8244d9d033fa167e394d9b272c3abad938cfcc09d877f09be`. Its freshness helper now checks Git status and canonical HEAD/base reads. Historical whole-tree/helper/session hashes describe their original bytes; future execution must bind the adopted document and freshly derived source/session identity. Unchanged implementation evidence is retained within its original scope; this procedural follow-up adds no runtime, live, ledger, formal-review or consistency count and leaves every pending user decision in place.
+
+### Bounded optional gazelle diff-status follow-up (2026-10-18)
+
+Task25 Step10 now distinguishes Git diff status0 (no change),1 (legitimate reviewed differences) and fatal statuses, stopping before configuration, staging or commit on a fatal result. The complete original fence reproduced fatal73 dispatch into commit on both Bash versions under direct and conditional callers;56 old/new inert outcomes preserve valid optional behavior and existing commit/new-HEAD/identity/signature refusal paths. Independent sibling audit binds the same original body; the controller verified39 output hashes. One procedural Bash fence changes;413 other fences, all10 canonical REST readers and the adopted Task27 runbook6d76d0d6 remain exact. Historical implementation/source/session evidence stays within its original scope; no actual build/source/remote/GPG/ledger action or formal review/consistency increment follows.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
