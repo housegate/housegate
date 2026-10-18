@@ -9469,8 +9469,6 @@ Expected: `HG_TAG_P3=<the tag written>` and `HG_DIGEST_P3=<the digest written>`,
 
 ---
 
----
-
 ## Task 45: arbiter-core — `member/serve`: serving view, owner probe, serving leases and the install hold; release `CORE_TAG_P3` (S3-C4)
 
 Spec §11 ("Reads from members"), clarifications K44 and K45, contract §30. A member host serves a peer owner's database read-only from the member's copy only while the member says it may: the owner is quarantined, or its HouseGate has been unreachable from the member for `t_unreach`; the owner's `track_frontiers` entry in the latest published manifest, read from the arbiter in the same poll, has not moved over two polls; the copy equals that entry, the audits are clean, and the copy holds exactly the registry's Active incarnations of the database, none Foreign, Diverged or excluded; serving is enabled. The member grants its host one lease per served database, and before any install of that database it revokes the lease and waits until the host released it or it expired, so the host never reads a copy that is changing (K44). This task adds the package `member/serve` (the serving view, the owner probe, the leases, the bearer-token endpoint `GET /v1/serving` / `POST /v1/serving/{acquire,renew,release}` and its client `serve.Client`, the `sentio_node_si_member_serve_*` series), gives Plan S3-C2's installer the pair `install.Deps.AfterInstall` of its `BeforeInstall` seam, wires both into `member.Role` through `member.Config.Serve` (nil: byte for byte the P2 member), and releases arbiter-core as `CORE_TAG_P3`.
@@ -22633,7 +22631,7 @@ In `charts/storage-integrity/tests/test_render.py`, replace (`:1449`):
 
 ```python
         if key.endswith("/grants/query"):
-            value = [grant for grant in value if not grant.startswith("GRANT TABLE ENGINE ON ")]
+            value = [grant for grant in value if not grant.startswith("GRANT TABLE ENGINE ON ") and grant != SI_P2_READER_METADATA_GRANT]
         stripped[key] = value
 ```
 
@@ -22643,7 +22641,7 @@ with:
         if key.endswith("/grants/query"):
             # Stage 3 P3's si_gateway grant (Plan S3-C4 K48) is not one of
             # Plans S3-B's and S3-C1's either.
-            value = [grant for grant in value if not grant.startswith("GRANT TABLE ENGINE ON ") and grant != SI_GATEWAY_REPLICA_GRANT]
+            value = [grant for grant in value if not grant.startswith("GRANT TABLE ENGINE ON ") and grant != SI_P2_READER_METADATA_GRANT and grant != SI_GATEWAY_REPLICA_GRANT]
         stripped[key] = value
 ```
 
@@ -22674,13 +22672,13 @@ with:
 In `charts/storage-integrity/tests/test_render.py`, replace (`:1572`):
 
 ```python
-        if in_users and re.fullmatch(r'\s+- "?GRANT TABLE ENGINE ON [A-Za-z0-9]+"?', line):
+        if in_users and re.fullmatch(r'\s+- "?(?:GRANT TABLE ENGINE ON [A-Za-z0-9]+|GRANT SHOW COLUMNS ON system\.parts)"?', line):
 ```
 
 with:
 
 ```python
-        if in_users and re.fullmatch(r'\s+- "?(GRANT TABLE ENGINE ON [A-Za-z0-9]+|GRANT SELECT ON hg_replica\.\*)"?', line):
+        if in_users and re.fullmatch(r'\s+- "?(?:GRANT TABLE ENGINE ON [A-Za-z0-9]+|GRANT SHOW COLUMNS ON system\.parts|GRANT SELECT ON hg_replica\.\*)"?', line):
 ```
 
 In `charts/storage-integrity/tests/test_render.py`, replace (`:1603`):
@@ -28862,6 +28860,9 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 
 - K50's last resolution bullet and the Follow-ups' placement-era bullet now say that from placement on S3-E4 Task 79 lists the hosts of every current `DatabaseGroup` member, never filtered by `MemberReady` (S3-E4 contract §56, its review finding 2: the drafted "plus readiness", read as `MemberReady`, would have emptied every list from `PLACEMENT_EPOCH` until P6 step 6). F45.7 notes that after Plan S3-C2's review fix 245-1 a ready copy no audit covered since the start or the last ClickHouse restart is `Diverged` and keeps `AuditClean` false until `Apply` audits it. No code of this plan changes; Task 45's two hunk scripts were re-run on S3-C2's fixed Tasks 29–34 code and both apply.
 
+
+
+**Review fixes (PR246, 2026-10-18 14:45):** Task47's published P3 test-helper replacements now retain C3's reader metadata-grant exclusion in both dictionary and manifest normalizers, together with P3's replica exclusion. Both old-context snippets match the accepted C3 metadata rule. Isolated exact-function fixtures reproduce the former duplicate after repeated generation and verify corrected idempotence and four-stage rollback with quoted/unquoted text and replica grants. All other Task47 text and fences are unchanged. The already-correct accepted cleanup Task47 remains a byte-exact secondary for later consistency adoption. This bounded document follow-up adds no new source, render, runtime, live or formal acceptance.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
