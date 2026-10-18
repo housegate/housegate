@@ -2151,7 +2151,8 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
 expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_1="$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_1" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 gh api --paginate --slurp "repos/housegate/housegate/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
@@ -2172,7 +2173,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_2="$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" housegate/housegate <n> "$expected_head" "$W" || exit 1
@@ -2187,8 +2189,10 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-housegate.json")" || exit 1
 merge_receipt="$HOME/.cache/s3-worktrees/task-22-merge-check.json"
 expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" housegate/housegate <n> "$W")" || exit 1
-[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
-[ "$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$git_read_3" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+git_read_4="$(gh pr view <n> --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_4" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge <n> --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo housegate/housegate --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
@@ -2201,7 +2205,7 @@ Remote write (release workflow): needs explicit user confirmation in chat before
 
 ```bash
 gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto
-bash -c 'gh run watch --exit-status --repo housegate/housegate "$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
+bash -c 'release_run="$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq ".[0].databaseId")" || exit 1; gh run watch --exit-status --repo housegate/housegate "$release_run"' || exit 1
 ```
 
 Both lines run unchanged in fish and in the agent's shell. The new run can take a few seconds to appear: if the watched run is not the one just dispatched (its `createdAt` in `gh run list --repo housegate/housegate --workflow release.yml --limit 2` predates the dispatch), wait and run the second line again. Expected: the run succeeds (`--exit-status` makes the watcher exit non-zero otherwise: stop, nothing is recorded) and its log prints the new annotated tag. `bump=auto` cuts a minor version on the first cut of a UTC day and a patch version otherwise (`.github/workflows/release.yml:11-15`); record what the run prints, never a predicted tag. The workflow also publishes the GitHub Release (linux/amd64 and darwin/arm64 binaries plus `SHA256SUMS`), `ghcr.io/housegate/housegate:<tag>` and `:latest`, and the Homebrew formula; if only the Homebrew job fails, re-run that job alone, because re-running the whole workflow cuts another tag.
@@ -2290,11 +2294,15 @@ workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
 [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
 git -C "$d" verify-commit HEAD || exit 1
 ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
+git_read_5="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+git_read_6="$(git -C "$d" status --porcelain)" || exit 1
+git_read_7="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_5" = 1 ] && [ -z "$git_read_6" ] && [ "$git_read_7" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
+  ledger_subject="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "$ledger_subject: Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$ledger_subject" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -2310,7 +2318,8 @@ pr=<number>
 [[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_8="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_8" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -2329,7 +2338,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
@@ -8123,7 +8133,8 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
 expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_1="$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_1" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
@@ -8144,7 +8155,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_2="$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/arbiter-core <n> "$expected_head" "$W" || exit 1
@@ -8159,8 +8171,10 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-arbiter-core.json")" || exit 1
 merge_receipt="$HOME/.cache/s3-worktrees/task-24-merge-check.json"
 expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/arbiter-core <n> "$W")" || exit 1
-[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
-[ "$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$git_read_3" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+git_read_4="$(gh pr view <n> --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_4" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge <n> --repo sentioxyz/arbiter-core --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo sentioxyz/arbiter-core --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
@@ -8173,7 +8187,7 @@ Releases are annotated `vX.Y.Z` tags cut by the **Cut Release** workflow from `m
 
 ```bash
 gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main
-bash -c 'gh run watch --exit-status --repo sentioxyz/arbiter-core "$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
+bash -c 'release_run="$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")" || exit 1; gh run watch --exit-status --repo sentioxyz/arbiter-core "$release_run"' || exit 1
 gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq '.[0].tagName'
 ```
 
@@ -8262,11 +8276,15 @@ workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
 [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
 git -C "$d" verify-commit HEAD || exit 1
 ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
+git_read_5="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+git_read_6="$(git -C "$d" status --porcelain)" || exit 1
+git_read_7="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_5" = 1 ] && [ -z "$git_read_6" ] && [ "$git_read_7" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
+  ledger_subject="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "$ledger_subject: Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$ledger_subject" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -8282,7 +8300,8 @@ pr=<number>
 [[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_8="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_8" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -8301,7 +8320,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
@@ -8464,8 +8484,8 @@ Expected: HEAD is `SN_COMMIT` or a descendant (`SN_COMMIT is in HEAD`; at review
 
 ```bash
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; HG_TAG_P1=<ledger>; CORE_TAG_P1=<ledger>; PROTO_TAG=<ledger>
-HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P1^{commit}")"
-CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P1^{commit}")"
+HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P1^{commit}")" || exit 1
+CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P1^{commit}")" || exit 1
 echo "$HG_SHA $CORE_SHA"
 cd "$W" && GOWORK=off go get "github.com/housegate/housegate@$HG_TAG_P1" "github.com/sentioxyz/arbiter-core@$CORE_TAG_P1" && GOWORK=off go mod tidy
 grep -nE "housegate/housegate $HG_TAG_P1\$|sentioxyz/arbiter-core $CORE_TAG_P1\$|sentioxyz/arbiter-proto $PROTO_TAG\$" "$W/go.mod"
@@ -10432,7 +10452,7 @@ Expected: `poetry <chen@sentio.xyz>` (Step 1's worktree identity). Any other aut
 
 - [ ] **Step 10: Full verification**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
+Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1; cd "$W" && go_files="$(git ls-files '*.go')" || exit 1; go_format_changes="$(while IFS= read -r go_file; do [ -z "$go_file" ] || gofmt -l "$go_file" || exit 1; done <<< "$go_files")" || exit 1; test -z "$go_format_changes" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
 Expected: no unformatted file; gazelle leaves the tree clean (`git status --short` prints nothing: Steps 4, 6 and 8 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then the optional signed commit block immediately below, and rerun this command); the build succeeds; every test PASSES (the ClickHouse-gated ones skip).
 
@@ -10571,7 +10591,8 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
 expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_1="$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_1" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
 gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
@@ -10592,7 +10613,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_2="$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_2" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/sentio-node <n> "$expected_head" "$W" || exit 1
@@ -10607,8 +10629,10 @@ set -eo pipefail
 W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c1-sentio-node.json")" || exit 1
 merge_receipt="$HOME/.cache/s3-worktrees/task-25-merge-check.json"
 expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/sentio-node <n> "$W")" || exit 1
-[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
-[ "$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$git_read_3" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+git_read_4="$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_4" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge <n> --repo sentioxyz/sentio-node --squash --match-head-commit "$expected_head" || exit 1
 gh pr view <n> --repo sentioxyz/sentio-node --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv'
 ```
@@ -10620,7 +10644,7 @@ Expected: `MERGED`, the 40-hex squash-merge commit (`SN_COMMIT_P1` in Step 12) a
 Remote read (PR, workflow runs): needs explicit user confirmation in chat before running.
 
 ```bash
-SN_COMMIT_P1="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid)"; echo "$SN_COMMIT_P1"
+SN_COMMIT_P1="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid)" || exit 1; echo "$SN_COMMIT_P1"
 gh run list --repo sentioxyz/sentio-node --branch main --workflow 'CI Build' --limit 3 --json databaseId,headSha,status,conclusion
 ```
 
@@ -10710,11 +10734,15 @@ workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
 [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
 git -C "$d" verify-commit HEAD || exit 1
 ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
+git_read_5="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+git_read_6="$(git -C "$d" status --porcelain)" || exit 1
+git_read_7="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_5" = 1 ] && [ -z "$git_read_6" ] && [ "$git_read_7" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
+  ledger_subject="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "$ledger_subject: Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$ledger_subject" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -10729,7 +10757,8 @@ set -eo pipefail
 pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_8="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_8" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -10748,7 +10777,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_9="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
@@ -14792,8 +14822,14 @@ si_p1_servers() { # $1 a|b|c: the ClickHouse servers of that owner's installatio
 }
 si_p1_fresh_main() { # fails unless the checkout is at a freshly fetched origin/main with no uncommitted change
   git fetch -q origin main || return 1
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the checkout is not at origin/main: git checkout --detach origin/main first" >&2; return 1; }
-  [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "the checkout has uncommitted changes" >&2; return 1; }
+  local git_read_1 git_read_2
+  git_read_1="$(git rev-parse HEAD)" || return 1
+  git_read_2="$(git rev-parse origin/main)" || return 1
+  [[ "$git_read_1" =~ ^[0-9a-f]{40}$ && "$git_read_2" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "$git_read_1" = "$git_read_2" ] || { echo "the checkout is not at origin/main: git checkout --detach origin/main first" >&2; return 1; }
+  local git_read_3
+  git_read_3="$(git status --porcelain --untracked-files=no)" || return 1
+  [ -z "$git_read_3" ] || { echo "the checkout has uncommitted changes" >&2; return 1; }
 }
 si_p1_tests() { # $1 log name: runs the render tests into $si_backup/tests-<name>.txt and fails unless they pass
   python3 -B charts/storage-integrity/tests/test_render.py > "$si_backup/tests-$1.txt" 2>&1 || { tail -n 30 "$si_backup/tests-$1.txt" >&2; echo "the render tests fail: git reset --hard origin/main and stop" >&2; return 1; }
@@ -15870,7 +15906,10 @@ Expected: the six staging hashes and the three `si_backup` hashes, each 64 hex c
 test -s "$HOME/si-devnet2-stage3-indexer-c/e-end.txt" || { echo "the indexer-c runbook has not recorded its end (its §9); stop"; exit 1; }
 for i in network indexer-b indexer-c; do test -e "$si_lockdown_dir/locked-$i" || { echo "no lock record locked-$i: the lockdown is not done; stop"; exit 1; }; done
 git fetch -q origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the checkout is not at origin/main"; exit 1; }
+git_read_4="$(git rev-parse HEAD)" || exit 1
+git_read_5="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_4" =~ ^[0-9a-f]{40}$ && "$git_read_5" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$git_read_4" = "$git_read_5" ] || { echo "the checkout is not at origin/main"; exit 1; }
 for f in docs/storage-integrity-devnet2-stage3-p1-backups.md docs/examples/storage-integrity-p1-staging-chi.yaml terraform/storage_integrity_devnet2_si_v2_replica.tf scripts/storage-integrity/make-si-backup-keys.sh charts/sentio-node/templates/si-backup.yaml; do test -s "$f" || { echo "$f is missing: the P1 PR is not on this checkout"; exit 1; }; done
 {
   si_kubectl get cronjobs -o name | grep -c -- '-si-backup$' | sed 's/^/backup CronJobs: /' || true
@@ -17118,7 +17157,8 @@ W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isi
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_6="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_6" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 echo "PR head is HEAD"
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
@@ -17138,7 +17178,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_7="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_7" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
 mkdir -p "$(dirname "$merge_receipt")" || exit 1
 python3 -I -c 'import json,os,sys,tempfile; p,repo,pr,head,w=sys.argv[1:]; fd,tmp=tempfile.mkstemp(dir=os.path.dirname(p)); f=os.fdopen(fd,"w"); json.dump({"repository":repo,"pr":pr,"head":head,"worktree":w},f); f.write("\n"); f.close(); os.replace(tmp,p)' "$merge_receipt" sentioxyz/production "$pr" "$expected_head" "$W" || exit 1
@@ -17154,8 +17195,10 @@ W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isi
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
 merge_receipt="$HOME/.cache/s3-worktrees/task-27-merge-check.json"
 expected_head="$(python3 -I -c 'import json,re,sys; d=json.load(open(sys.argv[1])); repo,pr,w=sys.argv[2:]; assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree"}; assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w); h=d["head"]; assert isinstance(h,str) and re.fullmatch("[0-9a-f]{40}",h); print(h)' "$merge_receipt" sentioxyz/production "$pr" "$W")" || exit 1
-[ "$(git -C "$W" rev-parse HEAD)" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_8="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$git_read_8" = "$expected_head" ] || { echo "local head changed since review; repeat the author check; stop"; exit 1; }
+git_read_9="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_9" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 ```
@@ -17165,7 +17208,8 @@ Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P1_PR`, the PR 
 ```bash
 pr=<number>
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 8 first"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" = MERGED ] || { echo "the P1 PR is not merged: stop"; exit 1; }
+git_read_10="$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" || exit 1
+[ "$git_read_10" = MERGED ] || { echo "the P1 PR is not merged: stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=27
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md
 git -C "$h" fetch -q origin
@@ -17222,11 +17266,15 @@ workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
 [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
 git -C "$d" verify-commit HEAD || exit 1
 ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
+git_read_11="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+git_read_12="$(git -C "$d" status --porcelain)" || exit 1
+git_read_13="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_11" = 1 ] && [ -z "$git_read_12" ] && [ "$git_read_13" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
+  ledger_subject="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "$ledger_subject: Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$ledger_subject" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -17242,7 +17290,8 @@ pr=<number>
 [[ "$pr" =~ ^[1-9][0-9]*$ ]] || exit 1
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_14="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_14" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -17261,7 +17310,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_15="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_15" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
@@ -17358,19 +17408,27 @@ common_w="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || e
 common_repo="$(git -C /Users/uranuswch/Dev/projects/sentio-network/production rev-parse --path-format=absolute --git-common-dir)" || exit 1
 python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"restored URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
 git -C "$P" switch -q --detach origin/main
-[ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = HEAD ] || { echo "the live worktree is not detached: stop"; exit 1; }
-[ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live worktree is not at origin/main: stop"; exit 1; }
-[ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live worktree is not clean: stop"; exit 1; }
+git_read_1="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$git_read_1" = HEAD ] || { echo "the live worktree is not detached: stop"; exit 1; }
+git_read_2="$(git -C "$P" rev-parse HEAD)" || exit 1
+git_read_3="$(git -C "$P" rev-parse origin/main)" || exit 1
+[[ "$git_read_2" =~ ^[0-9a-f]{40}$ && "$git_read_3" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$git_read_2" = "$git_read_3" ] || { echo "the live worktree is not at origin/main: stop"; exit 1; }
+git_read_4="$(git -C "$P" status --porcelain)" || exit 1
+[ -z "$git_read_4" ] || { echo "the live worktree is not clean: stop"; exit 1; }
 test -f "$P/docs/storage-integrity-devnet2-stage3-p1-backups.md" || { echo "origin/main has no P1 runbook: P1_PR has not merged; stop"; exit 1; }
 git -C "$P" config extensions.worktreeConfig true || exit 1
 git -C "$P" config --worktree user.name poetry || exit 1
 git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
 git -C "$P" config --worktree commit.gpgsign true || exit 1
-[ "$(git -C "$P" config user.name) <$(git -C "$P" config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the live worktree's commit identity is not poetry <chen@sentio.xyz>; stop"; exit 1; }
+git_read_5="$(git -C "$P" config user.name)" || exit 1
+git_read_6="$(git -C "$P" config user.email)" || exit 1
+[ "$git_read_5 <$git_read_6>" = 'poetry <chen@sentio.xyz>' ] || { echo "the live worktree's commit identity is not poetry <chen@sentio.xyz>; stop"; exit 1; }
 mkdir -m 700 "$S" "$S/blocks"
 mkdir -p -m 700 "$HOME/.cache/s3-ledger"
 printf '%s\n' "$P" > "$S/live-path"
-echo "live worktree $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached), commits as $(git -C "$P" config user.name) <$(git -C "$P" config user.email)>; session $S"
+live_short_head="$(git -C "$P" rev-parse --short=9 HEAD)" || exit 1
+echo "live worktree $P at origin/main $live_short_head (detached), commits as poetry <chen@sentio.xyz>; session $S"
 ```
 
 Expected: `live worktree <the exact absolute path retained in s3c1-production-live.json> at origin/main <sha> (detached), commits as poetry <chen@sentio.xyz>; session …/si-devnet2-stage3-p1-session` (the identity is the worktree's own, so the global `uranuswch@gmail.com` never reaches a commit; worktree commit.gpgsign is explicitly true and every new commit is required to verify as poetry <chen@sentio.xyz> G, and a signing failure stops `p1_commit` before anything is pushed: ask the user to unlock their key, never turn signing off). If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/codex/multi-source-s3c1-live` is never used or pushed: the worktree is held detached at `origin/main` (Plan S3-B decision D4) and every commit is pushed as `HEAD:main` by its runbook block.
@@ -18462,11 +18520,21 @@ if __name__ == "__main__":
 p1_runbook=docs/storage-integrity-devnet2-stage3-p1-backups.md
 p1_fresh_main() { # before every commit: the live checkout fast-forwarded to a freshly fetched origin/main, detached and clean
   git -C "$P" fetch -q origin main || return 1
-  [ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live checkout has local changes: stop"; return 1; }
+  local git_read_7
+  git_read_7="$(git -C "$P" status --porcelain)" || return 1
+  [ -z "$git_read_7" ] || { echo "the live checkout has local changes: stop"; return 1; }
   git -C "$P" merge -q --ff-only origin/main || { echo "the live checkout cannot fast-forward to origin/main: stop"; return 1; }
-  [ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live checkout is not at origin/main (an unpushed local commit?): stop"; return 1; }
-  [ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = HEAD ] || { echo "the live checkout is on a branch, not a detached HEAD: stop"; return 1; }
-  echo "live checkout at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached)"
+  local git_read_8 git_read_9
+  git_read_8="$(git -C "$P" rev-parse HEAD)" || return 1
+  git_read_9="$(git -C "$P" rev-parse origin/main)" || return 1
+  [[ "$git_read_8" =~ ^[0-9a-f]{40}$ && "$git_read_9" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "$git_read_8" = "$git_read_9" ] || { echo "the live checkout is not at origin/main (an unpushed local commit?): stop"; return 1; }
+  local git_read_10
+  git_read_10="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || return 1
+  [ "$git_read_10" = HEAD ] || { echo "the live checkout is on a branch, not a detached HEAD: stop"; return 1; }
+  local live_short_head
+  live_short_head="$(git -C "$P" rev-parse --short=9 HEAD)" || return 1
+  echo "live checkout at origin/main $live_short_head (detached)"
 }
 p1_edit() { python3 -I -B "$p1_session/p1-edit.py" "$@"; } # the edits and verdicts of p1-edit.py, run from the live checkout
 p1_list() { python3 -I "$p1_session/p1-block.py" list "$P/$p1_runbook" "$1"; } # $1 heading: the bash blocks of that section, numbered: confirmed, read-only or user <k>
@@ -18483,9 +18551,17 @@ p1_commit() { # $1 message file, then the exact files of this commit: refuses an
   local workflow_commit_before workflow_commit_after workflow_identity
   local msg=$1 count
   shift
-  [ "$(git config user.name) <$(git config user.email)>" = 'poetry <chen@sentio.xyz>' ] || { echo "the checkout would commit as $(git config user.name) <$(git config user.email)>, not poetry <chen@sentio.xyz> (Step 1 sets the worktree identity): nothing committed"; return 1; }
-  [ "$(git diff --name-only HEAD | LC_ALL=C sort | tr '\n' ' ')" = "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ] || { echo "the working tree does not change exactly: $*"; git status --short; return 1; }
-  [ -z "$(git ls-files --others --exclude-standard)" ] || { echo "untracked files in the checkout:"; git ls-files --others --exclude-standard; return 1; }
+  local git_read_11 git_read_12
+  git_read_11="$(git config user.name)" || return 1
+  git_read_12="$(git config user.email)" || return 1
+  [ "$git_read_11 <$git_read_12>" = 'poetry <chen@sentio.xyz>' ] || { echo "the checkout would commit as $git_read_11 <$git_read_12>, not poetry <chen@sentio.xyz> (Step 1 sets the worktree identity): nothing committed"; return 1; }
+  local git_read_13_raw git_read_13
+  git_read_13_raw="$(git diff --name-only HEAD)" || return 1
+  git_read_13="$(printf '%s' "$git_read_13_raw" | LC_ALL=C sort | tr '\n' ' ')" || return 1
+  [ "$git_read_13" = "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ] || { echo "the working tree does not change exactly: $*"; git status --short; return 1; }
+  local git_read_14
+  git_read_14="$(git ls-files --others --exclude-standard)" || return 1
+  [ -z "$git_read_14" ] || { echo "untracked files in the checkout:"; git ls-files --others --exclude-standard; return 1; }
   p1_tests > "$si_backup/tests-last.txt" 2>&1 || { tail -n 40 "$si_backup/tests-last.txt"; echo "render tests fail: nothing committed; discard the edits with git -C \"\$P\" checkout -- ."; return 1; }
   count="$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' "$si_backup/tests-last.txt")"
   [ -n "$count" ] && [ "$count" = "$(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1)" ] || { echo "the render tests ran ${count:-no} tests, Step 2 ran $(sed -n 's/^TESTS_START=//p' "$si_backup/record.env" | tail -n 1): nothing committed"; return 1; }
@@ -18499,7 +18575,9 @@ p1_commit() { # $1 message file, then the exact files of this commit: refuses an
   workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
   [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
   git verify-commit HEAD || return 1
-  [ "$(git log -1 --format='%an <%ae>|%cn <%ce>')" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] || { echo "the commit is not authored and committed by poetry <chen@sentio.xyz>: drop it with git -C \"\$P\" switch -q --detach origin/main (local, never pushed)"; return 1; }
+  local git_read_15
+  git_read_15="$(git log -1 --format='%an <%ae>|%cn <%ce>')" || return 1
+  [ "$git_read_15" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] || { echo "the commit is not authored and committed by poetry <chen@sentio.xyz>: drop it with git -C \"\$P\" switch -q --detach origin/main (local, never pushed)"; return 1; }
   git show --stat --format='%h %s (%an <%ae>)' HEAD | cat
 }
 p1_note() { # $1 key, $2 value: one line of $si_backup/record.env (the last line of a key wins)
@@ -18785,7 +18863,7 @@ Run §1's read-only blocks in order (`p1_list '## 1. Preparation'`, then `p1_run
 ```bash
 python3 -I -c 'import ast; from pathlib import Path; import sys; p=Path(sys.argv[1])/"charts/storage-integrity/tests/test_render.py"; found=[ast.literal_eval(n.value) for n in ast.parse(p.read_text()).body if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == "DEVNET2_MONITORING_ENABLED" for v in n.targets)]; assert found == [True], "S3-B monitoring is not enabled: stop before P1"; print("S3-B monitoring enabled")' "$P" || exit 1
 [ -d "$si_backup" ] && [ "$(stat -f %Lp "$si_backup")" = 700 ] || { echo "$si_backup is missing or not mode 700: run runbook §1.1 first; stop"; exit 1; }
-merge="$(gh pr view "$P1_PR" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
+merge="$(gh pr view "$P1_PR" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')" || exit 1
 [ -n "$merge" ] || { echo "P1_PR #$P1_PR is not merged; stop"; exit 1; }
 git merge-base --is-ancestor "$merge" HEAD || { echo "P1_PR's merge commit $merge is not in the live checkout; stop"; exit 1; }
 for heading in '## 0. Session helpers' '## 1. Preparation' '### 1.1 Pins' '### 1.2 Identities, bucket and Secrets' '### 1.3 Preconditions and promotion budget' \
@@ -19162,8 +19240,12 @@ Requires explicit user confirmation in chat. Gate: "push commit U-b (si_backup o
 ```bash
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-user-indexer-b-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-user-indexer-b.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_16="$(git rev-parse HEAD)" || exit 1
+git_read_17="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_16" =~ ^[0-9a-f]{40}$ && "$git_read_17" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_16" ] && [ "$c" = "$git_read_17" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_18="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_18" = "$(head -n 1 "$si_backup/msg-si-backup-user-indexer-b.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 if si_kubectl diff -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml > "$si_backup/task28-chi-diff-b.txt"; then echo "indexer-b's CHI matches git"; else cat "$si_backup/task28-chi-diff-b.txt"; echo "indexer-b's CHI differs from git; stop"; exit 1; fi
 p1_wait_backup_user b
 p1_backup_user_check b
@@ -19248,8 +19330,12 @@ Requires explicit user confirmation in chat. Gate: "push commit U-c (si_backup o
 ```bash
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-user-indexer-c-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-user-indexer-c.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_19="$(git rev-parse HEAD)" || exit 1
+git_read_20="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_19" =~ ^[0-9a-f]{40}$ && "$git_read_20" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_19" ] && [ "$c" = "$git_read_20" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_21="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_21" = "$(head -n 1 "$si_backup/msg-si-backup-user-indexer-c.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 if si_kubectl diff -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml > "$si_backup/task28-chi-diff-c.txt"; then echo "indexer-c's CHI matches git"; else cat "$si_backup/task28-chi-diff-c.txt"; echo "indexer-c's CHI differs from git; stop"; exit 1; fi
 p1_wait_backup_user c
 p1_backup_user_check c
@@ -19333,8 +19419,12 @@ Requires explicit user confirmation in chat. Gate: "push commit U-n (si_backup o
 ```bash
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-user-network-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-user-network.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_22="$(git rev-parse HEAD)" || exit 1
+git_read_23="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_22" =~ ^[0-9a-f]{40}$ && "$git_read_23" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_22" ] && [ "$c" = "$git_read_23" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_24="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_24" = "$(head -n 1 "$si_backup/msg-si-backup-user-network.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 for h in a v1 v2 v3; do p1_wait_backup_user "$h"; p1_backup_user_check "$h"; done
 p1_backup_login a
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
@@ -19461,8 +19551,12 @@ x=b
 r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$x-storage-integrity-si-v2.yaml"
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-$x-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_25="$(git rev-parse HEAD)" || exit 1
+git_read_26="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_25" =~ ^[0-9a-f]{40}$ && "$git_read_26" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_25" ] && [ "$c" = "$git_read_26" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_27="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_27" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 p1_cron "$x" | tee "$si_backup/task28-cron-$x.json"
 s="$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")"
 jq -e --arg img "$(si_p1_image)" --arg s "$s" '.schedule == $s and .suspend == false and .concurrency == "Forbid" and .image == $img and .last_schedule == null' "$si_backup/task28-cron-$x.json" > /dev/null || { echo "the CronJob of $r is not the reviewed one, or ran already; stop"; exit 1; }
@@ -19566,8 +19660,12 @@ x=c
 r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$x-storage-integrity-si-v2.yaml"
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-$x-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_28="$(git rev-parse HEAD)" || exit 1
+git_read_29="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_28" =~ ^[0-9a-f]{40}$ && "$git_read_29" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_28" ] && [ "$c" = "$git_read_29" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_30="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_30" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 p1_cron "$x" | tee "$si_backup/task28-cron-$x.json"
 s="$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")"
 jq -e --arg img "$(si_p1_image)" --arg s "$s" '.schedule == $s and .suspend == false and .concurrency == "Forbid" and .image == $img and .last_schedule == null' "$si_backup/task28-cron-$x.json" > /dev/null || { echo "the CronJob of $r is not the reviewed one, or ran already; stop"; exit 1; }
@@ -19671,8 +19769,12 @@ x=a
 r="sentio-node-devnet2-indexer-$x"; f="k8s-sea/sentio-network-devnet2/sentio-node-indexer-$x-storage-integrity-si-v2.yaml"
 git fetch -q origin main
 c="$(cat "$si_backup/si-backup-$x-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_31="$(git rev-parse HEAD)" || exit 1
+git_read_32="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_31" =~ ^[0-9a-f]{40}$ && "$git_read_32" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_31" ] && [ "$c" = "$git_read_32" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_33="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_33" = "$(head -n 1 "$si_backup/msg-si-backup-$x.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 p1_cron "$x" | tee "$si_backup/task28-cron-$x.json"
 s="$(python3 -I -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["siBackup"]["schedule"])' "$f")"
 jq -e --arg img "$(si_p1_image)" --arg s "$s" '.schedule == $s and .suspend == false and .concurrency == "Forbid" and .image == $img and .last_schedule == null' "$si_backup/task28-cron-$x.json" > /dev/null || { echo "the CronJob of $r is not the reviewed one, or ran already; stop"; exit 1; }
@@ -19850,8 +19952,12 @@ Requires explicit user confirmation in chat. Gate: "push commit M (the backup al
 ```bash
 git fetch -q origin main
 c="$(cat "$si_backup/monitoring-backups-commit")"
-[ "$c" = "$(git rev-parse HEAD)" ] && [ "$c" = "$(git rev-parse origin/main)" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-[ "$(git log -1 --format=%s "$c")" = "$(head -n 1 "$si_backup/msg-monitoring-backups.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
+git_read_34="$(git rev-parse HEAD)" || exit 1
+git_read_35="$(git rev-parse origin/main)" || exit 1
+[[ "$git_read_34" =~ ^[0-9a-f]{40}$ && "$git_read_35" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$c" = "$git_read_34" ] && [ "$c" = "$git_read_35" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
+git_read_36="$(git log -1 --format=%s "$c")" || exit 1
+[ "$git_read_36" = "$(head -n 1 "$si_backup/msg-monitoring-backups.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
 for _ in $(seq 1 30); do
   si_vmalert_groups > "$si_backup/task28-vmalert-groups.jsonl"
   jq -s -e '[.[] | select(.group == "storage-integrity-si-v2.backups")] | length == 1' "$si_backup/task28-vmalert-groups.jsonl" > /dev/null && break
@@ -19934,7 +20040,8 @@ Local:
 ```bash
 git fetch -q origin main
 git switch -q --detach origin/main
-[ -z "$(git status --porcelain)" ] || { echo "the live checkout has local changes; stop"; exit 1; }
+git_read_37="$(git status --porcelain)" || exit 1
+[ -z "$git_read_37" ] || { echo "the live checkout has local changes; stop"; exit 1; }
 git switch -q -c urwt/codex/multi-source-s3c1-p1-record
 python3 -I "$p1_session/p1-record.py" runbook "$p1_runbook" "$si_backup/record.env" "$p1_session/ledger.env"
 git diff | cat
@@ -19951,7 +20058,9 @@ no restart of any SI ClickHouse, host, verifier or voter.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 p1_commit "$si_backup/msg-p1-record.txt" "$p1_runbook"
-[ "$(git log -1 --format='%an <%ae>|%cn <%ce>')" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] && [ "$(git rev-list --count origin/main..HEAD)" = 1 ] || { echo "the record branch is not one commit by poetry <chen@sentio.xyz> on origin/main; stop"; exit 1; }
+git_read_38="$(git log -1 --format='%an <%ae>|%cn <%ce>')" || exit 1
+git_read_39="$(git rev-list --count origin/main..HEAD)" || exit 1
+[ "$git_read_38" = 'poetry <chen@sentio.xyz>|poetry <chen@sentio.xyz>' ] && [ "$git_read_39" = 1 ] || { echo "the record branch is not one commit by poetry <chen@sentio.xyz> on origin/main; stop"; exit 1; }
 cat > "$si_backup/record-pr-body.md" <<BODY
 Records the first run of docs/storage-integrity-devnet2-stage3-p1-backups.md (housegate Plan S3-C1, Task 28) at the end of its §12: every SI owner of devnet2-si-v2 has a full and an incremental backup in sentio-352722-si-devnet2-si-v2-replica and passed one restore drill against the manifest its latest backup names (spec §16 P1 exit).
 
@@ -19965,7 +20074,9 @@ git show --stat HEAD | cat
 Expected: `record written: docs/storage-integrity-devnet2-stage3-p1-backups.md §12`; a diff that adds one paragraph `Record of the first run: …` at the end of §12; `render tests: <TESTS_START>, OK`; one commit touching only the runbook. A `stop` writes nothing: a record already in §12 means an earlier attempt. Requires explicit user confirmation in chat. Gate: "push branch urwt/codex/multi-source-s3c1-p1-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P1 run' against production main". After a yes:
 
 ```bash
-[ "$(git rev-parse --abbrev-ref HEAD)" = urwt/codex/multi-source-s3c1-p1-record ] && [ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "HEAD is not the record commit by poetry <chen@sentio.xyz>; stop"; exit 1; }
+git_read_40="$(git rev-parse --abbrev-ref HEAD)" || exit 1
+git_read_41="$(git log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_40" = urwt/codex/multi-source-s3c1-p1-record ] && [ "$git_read_41" = 'poetry <chen@sentio.xyz>' ] || { echo "HEAD is not the record commit by poetry <chen@sentio.xyz>; stop"; exit 1; }
 git push -u origin urwt/codex/multi-source-s3c1-p1-record
 gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3c1-p1-record --title "docs(storage-integrity): record the devnet2 stage-3 P1 run" --body-file "$si_backup/record-pr-body.md" | tee "$si_backup/record-pr.txt"
 printf 'RECORD_PR=%s\n' "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/record-pr.txt" | tail -n 1)" >> "$si_backup/record.env"
@@ -19979,7 +20090,8 @@ set -eo pipefail
 pr="$(sed -n 's/^RECORD_PR=//p' "$si_backup/record.env" | tail -n 1)"
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_42="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_42" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -19998,7 +20110,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_43="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_43" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 git fetch -q origin main
 git switch -q --detach origin/main
@@ -20075,11 +20188,15 @@ workflow_identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
 [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger HEAD must be poetry <chen@sentio.xyz> G; stop"; exit 1; }
 git -C "$d" verify-commit HEAD || exit 1
 ref="$(sed -n 2p "$L/record-s3c1-$n")" || exit 1
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
+git_read_44="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+git_read_45="$(git -C "$d" status --porcelain)" || exit 1
+git_read_46="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "$git_read_44" = 1 ] && [ -z "$git_read_45" ] && [ "$git_read_46" = 'poetry <chen@sentio.xyz>' ] || { echo "the ledger worktree $d is not one clean record commit by poetry <chen@sentio.xyz> ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
+  ledger_subject="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "$ledger_subject: Appendix C of Plan S3-C1 only, docs only (contract §19, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c1-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$ledger_subject" --body-file "$L/record-s3c1-$n-pr.md") | tee "$L/record-s3c1-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -20094,7 +20211,8 @@ set -eo pipefail
 pr=<number>
 expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 [[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_47="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_47" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
 import json,re,subprocess,sys
 head=sys.argv[1]
@@ -20113,7 +20231,8 @@ for c in commits:
  if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
 if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
 print("PR commit identities and pinned head verified")' "$expected_head" || exit 1
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+git_read_48="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$git_read_48" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
 gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
@@ -20292,7 +20411,7 @@ Repositories and commands:
 - Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Worktrees (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> codex <name>`; its retained JSON `path` is `$W`; agents restore `$W` from that task's producing JSON in every fresh Bash call, preserving its exact absolute spelling rather than filling a path template): housegate, arbiter-core, sentio-node and production `multi-source-s3c1` (branch `urwt/codex/multi-source-s3c1`, from `origin/main`; production's created after `E_PR` merged and `E_END` recorded); the live task's `multi-source-s3c1-live` (production, held at a detached, freshly fetched `origin/main`, checked clean before every commit and revert, commits pushed as `HEAD:main`; S3-B D4); the ledger's `multi-source-s3c1-ledger-<N>`.
 - housegate: `bazel build //... && bazel test //...`; the ClickHouse-gated `pkg/integration` tests with `POLYGLOT_SQL_FFI_PATH` from `bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0` as Plan S3-A Task 2; after dependency changes `bazel mod tidy && bazel run //:gazelle`.
 - arbiter-core: `bazel build //... && bazel test //...`; `bash scripts/ci/clickhouse-mechanics.sh clickhouse/clickhouse-server:26.3.37.3 26.3.37.3` (expected: `mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`, `objstore: 7 S3 test(s) passed on …`, `mechanics: S3 backup delete right: <none|lock>`, the SNode restart test line); the user's deployed-image run `bash scripts/ci/clickhouse-mechanics.sh us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16 26.3.` (K9).
-- sentio-node: `test -z "$(gofmt -l $(git ls-files '*.go'))"`, `bazel run //:gazelle`, `bazel build //...`, `bazel test //... --test_output=errors` (Plan S3-B §15).
+- sentio-node: `go_files="$(git ls-files '*.go')" || exit 1; go_format_changes="$(while IFS= read -r go_file; do [ -z "$go_file" ] || gofmt -l "$go_file" || exit 1; done <<< "$go_files")" || exit 1; test -z "$go_format_changes"`, `bazel run //:gazelle`, `bazel build //...`, `bazel test //... --test_output=errors` (Plan S3-B §15).
 - production: Plan S3-B §15's checks (`python3 -B charts/storage-integrity/tests/test_render.py` with its printed count recorded, the three `helm lint --strict` profiles, `bash scripts/storage-integrity/render-inertness.sh <base-ref>` with no `--new`); `terraform -chdir=terraform fmt -check -diff` on the new file where Terraform is installed.
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; markdown is never hard-wrapped; code comments and runbook text in English; TDD in every code task (failing test → run → minimal implementation → run → commit).
 - Remote and live actions — pushes, PRs, merges, release workflows, `terraform apply`, `gcloud storage hmac create`, `helmfile sync`, `kubectl apply`/`create`/`delete`/`exec` that writes, Grafana actions — require explicit user confirmation in chat, each for its own step; Terraform, the keys, the logins and the drill table's writes are the user's own actions; commands handed to the user are fish (`bash <script> <args>` allowed).
@@ -20929,6 +21048,14 @@ Drafting facts below preserve the original measurements and extra names at their
 ### Canonical REST identity and checked-head follow-up (2026-10-18)
 
 Tasks22/24/25/27/28 now use the same exact FINALv2 paginated REST Python body at all10 ordinary/record merge gates (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`), invoked with the already checked `expected_head` and success output `PR commit identities and pinned head verified`. It refuses missing/non-string/invalid/uppercase or duplicate commit SHA values (including JSON numeric40-digit values), malformed/empty/oversized pages,250-total truncation and a final listed SHA different from that head, while preserving primary-author/coauthor semantics. Nine actual baseline acceptance REDs become refusals; two numeric40 regressions also show priorv1 accepts what FINALv2 refuses.522 actual full-workflow Bash3.2/5 fakeCLI executions cover all40 shared parser fixtures plus head/API/merge/receipt failures;100 additional conditional-context executions verify fail-closed behavior with errexit suppressed.42 full-workflow syntax/lint checks and mdcheck pass. All306 other task fences and every task byte outside the authorized parser/invocation/output-prose edits are unchanged; Task27's1225-line§0 helper remains SHA95c5ecca62fd8a3866b78fe51233a6c12b874b91846d45b72ffbc156536967d7 and AppendixA's ledger Python is byte-identical. Before/after remote-head checks, checked-head receipts, atomic `--match-head-commit`, confirmations, signed/new-HEAD gates and all runtime/ledger text remain intact. No real remote/GPG/URWT/Docker/ledger action or canonical write occurred; no formal task-review or plan-consistency count is advanced by this bounded follow-up.
+
+### Bounded failed Git and GitHub read follow-up (2026-10-18)
+
+Required Git/GitHub reads in Appendix A and Tasks22/24/25/27/28 now capture command status before predicates, formatter input, PR publication input and release watchers. Failed reads stop even when stdout looks valid or a conditional caller suppresses errexit; both release watcher callers propagate inner Bash failure. The complete ledger Python, implementation payloads, confirmations and all10 canonical REST FINALv2 bodies remain unchanged. Independent controller edit replay reconstructs all11 candidate parts from85 exact original-line edits, and all111 declared output hashes match.
+
+Bounded verification comprises1496 complete inert workflow outcomes (372 original false completions;132 corrected positives and616 corrected injected refusals),120 complete-wrapper controls for the second GH head read at all10 REST gates,48 helper/formatter controls and148 exact contiguous procedural-phase controls. Both Bash versions, direct/conditional callers,76 changed-fence syntax outcomes, no-new-diagnostic ShellCheck comparison, Markdown and byte roundtrip checks pass. Phase controls cover only their explicit boundaries; no source, cluster or ledger producer ran.144 non-Bash payloads and223 unchanged Bash fences retain their exact bytes.
+
+Task27's production runbook is a documentation overlay: SHA256 changes from `ab5f212755f41eafce1cbb695c14a60166d569522bd407883f33cf614ad31e46` to `6d76d0d6997c5fb8244d9d033fa167e394d9b272c3abad938cfcc09d877f09be`. Its freshness helper now checks Git status and canonical HEAD/base reads. Historical whole-tree/helper/session hashes describe their original bytes; future execution must bind the adopted document and freshly derived source/session identity. Unchanged implementation evidence is retained within its original scope; this procedural follow-up adds no runtime, live, ledger, formal-review or consistency count and leaves every pending user decision in place.
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
