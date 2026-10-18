@@ -2,12 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-16): draft.** Tasks 42, 43, 44, 45, 46, 47, 48 are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet, and the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
-
 **Goal:** A member host serves a quarantined or unreachable owner's SI databases read-only, in safe mode, from its member's copy, with no consensus change. The member decides when it may serve a database: the owner is quarantined, or the owner's HouseGate has been unreachable from the member for `t_unreach`; every copy of the database equals the owner's entry in the latest published manifest, unchanged over two polls; the audits are clean and no table is Foreign, Diverged, excluded or missing; serving is enabled on that member. It grants its host a lease per database and revokes it, waiting for the host's release or the lease's expiry, before any install. The host answers those tables with a new read-only status `Replica`, keeps sessions on a replica-served database local, rewrites their reads to the copy, and refuses writes, DDL and `unsafe_latest` for them. The agent fails reads, never writes, over to a replica host when the owner refuses them as quarantined or cannot be reached. production grants `si_gateway` read on `hg_replica`, upgrades every SI host and its agent sidecar in one planned window, and devnet2 proves the P3 exit: a client of a quarantined indexer-c reads safe from a member through the upgraded agent.
 
 **Architecture:**
-- **Task 42 (housegate)** adds the status `sitable.Replica`. `sitable.Table` gains `CopyTable` and `ReplicaOf`, `Snapshot` gains `Served()`, and an in-flight counter `sitable.ReplicaReads` is added. `sitablestate` gets explicit Replica rows (reads and metadata allowed, everything else 392 naming the owner) and counts in-flight replica reads per database. `pkg/registry` and `pkg/network` accept the wire status `replica` and its additive status fields.
+- **Task 42 (housegate)** adds the status `sitable.Replica`. `sitable.Table` gains `CopyTable` and `ReplicaOf`, `Snapshot` gains `Served()`, and an in-flight counter `sitable.ReplicaReads` is added. `sitablestate` gets explicit Replica rows (reads and metadata allowed, writes/DDL are refused392 naming the owner at the gate, with earlier engine403 possible) and counts in-flight replica reads per database. `pkg/registry` and `pkg/network` accept the wire status `replica` and its additive status fields.
 - **Task 43 (housegate)** gives `forward.Plugin` a table-state port: a hello or `USE` of a replica-served database stays local, and a marked session whose database stops being served gets a retryable reconnect refusal. `buildStorageIntegrityArgs` maps Replica tables to the copy (`SafeTable` = `UnsafeTable` = `hg_replica.<copy>`). The rewriter refuses `unsafe_latest` for them before anything reaches ClickHouse, and the scrubber maps the copy name back. `sireserved` refuses computed carrier arguments on peer sessions, which closes the follow-up that K48 reopens. Parity tests pin that both engines resolve SI tables before remote mapping.
 - **Task 44 (housegate)** adds the read-side quarantine matcher to `chproto`, `replica_hosts` discovery to `pkg/registry` and `pkg/network`, and an upstream-failover hook in the relay. The agent's replica tier `agent.ReplicaFailover` fails over only at hello or at an eligible read's first answer, and has its own metrics and log line. It releases `HG_TAG_P3` and records the image digest `HG_DIGEST_P3`.
 - **Task 45 (arbiter-core)** adds `member/serve`: the serving view, the owner probe, the lease protocol, the authenticated HTTP endpoint and its client, and the hooks that pause installs of a served database (S3-C2's `install.Deps.BeforeInstall` seam and a new `AfterInstall`). It releases `CORE_TAG_P3`.
@@ -56,18 +54,21 @@ Prerequisites, all in force here: Plans S3-A (`2026-10-14-multi-source-si-s3a-p0
 - the member names of §20–§24: `member.Role`, `member/install`, `member/copyset`, `manifestfeed.Follower`, `ddl.CopyIntent`, `sentio-node si-member`, member ids (K29) and the process layout (K30);
 - the P2 production names of §25–§28: `siMember`, `MEMBER_IDS`, the member scrape and alerts, the P2 runbook.
 
-**Base revisions.** Line anchors refer to these revisions at origin/main:
-- housegate `66d4df7` (v0.19.0); arbiter-core `8f0bc43` (v0.14.1); sentio-node `5d2f169`;
-- production `75514e3de`, where every SI path is byte-identical to Plan S3-B's base `9d3d0326b`: `git diff --stat 9d3d0326b origin/main -- charts/storage-integrity charts/sentio-node k8s-sea/sentio-network-devnet2 k8s-sea/clickhouse terraform docs scripts/storage-integrity k8s-sea/gateway.yaml k8s-sea/gateway-routes.yaml` prints nothing;
-- rewriter `b56ae37` (v0.17.0) and rewriter-go `1a140d8` (v0.18.0), read for the engine order only;
-- arbiter `fb42260` (v0.12.0) and arbiter-proto `1c6ae67` (v0.11.0), read only, since this plan changes neither.
+**Base revisions and source custody (historical reviewed source, 2026-10-17; current qualification below).** The pinned locally observed main bases used by the retained reviews are housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, arbiter-core `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455`, sentio-node `0828f212c9ff6fee311701f9b14d8df8c7817a64`, production `efe5c77859e98d0465838cb5763c7f1fcbd89ee3` and arbiter-proto `7a73f256865c333332f0ac28b17806b1e2bfcbd1`. These are source bases, never predicted P3 release pins. Rewriter draft anchors remain navigation only; native FFI v0.17.0 was actually tested, while final digest-pinned gRPC/ClickHouse parity remains an execution gate.
 
-None of Plans S3-A to S3-C3 is executed yet. Their edits to the same files land on top of these anchors under the hunk rule below:
-- S3-A Tasks 1–2: `pkg/sitable`, `sireserved`;
-- S3-B Task 12: sentio-node `config` and `tablestate`;
-- S3-C1 Task 22: `sitable.CopyTable`, `replay.OwnerEntry`;
-- S3-C2: `member/*`, `sentio-node si-member`;
-- S3-C3: `siMember`, P2 grants and monitoring.
+S3-A and S3-B have actual main records, including Task21 `E_END=2026-10-17`, indexer-c ID2, source host `sea-dg-6` / CHI `sea-dg-3`, existing SNode3/next4, member PVC10GiB and keep-free100GiB. Actual production main still has monitoring disabled. Do not replay historical pending enrolment intent or a synthetic monitoring waiver over those facts. C1/C2/C3 runtime and P1/P2 release/END prerequisites remain separate gates.
+
+Historical reviewed C4 source copies preserve the real prerequisite chain: HG42→44 ends at935 files, core45 at379 and SN46 at228. Production Task47 consumes the safe future C3 chain through `cf3a86887d4c29dbc4cdf8cdc1732aaab3c3b615`; the current combined C3 candidate changes only its P2 runbook, with chart/value/script/CI bytes unchanged. Task47's final1765-file source-only fixture is not a released deployment; its separate1773-file upstream preservation manifest has a different scope. Task48 binds Task47's exact final runbook and editor. Frozen literal TSV/config equality supports only the qualified C3 historical230/33 reuse; actual reader readonly0 and the limited log-scan scope do not become P3 live evidence.
+
+Hunks land in task order on the actual reviewed producers: S3-C1 Task22 `CopyTable` / `OwnerEntry`; S3-C2 member/install/config and full500; S3-C3 staging/member grants, chart and P2 runbook; then42→48. Historical line numbers and drafting test counts are navigation/history, not current proof. No source-only fixture commit is a ledger value or a valid published release.
+
+**Current measured predecessor qualification (2026-10-18).** Root accepts current Task36 baseline f8924677 (63PASS/five exact SKIP/0FAIL) and affected race 74f918f1 (764PASS/16 exact SKIP/0FAIL), on source2b6c920f and corrected memo74875928; local source review75d77690 accepts that bounded chain. Old full500 f34c9ee7 retains its original source/observer scope and is not retagged to source2b6c920f.
+
+Root Task45 source-stage receipt56c90cee binds freshly composed corrected34 core381/HG923 (HG_TAG_P1 boundary), source manifest b8e8d7646e660089cf43dddec056d3c6d6a0f3433b2c7ff5318845e70e8237a7: 1304 files, 30 literal payload intents and1274 unchanged checkpoint rows. BUILD receipt30e0ba6f binds newly built binaries and selected SDK actions. TEST receipt0eff9e5b accepts exactly three targets, plain and one race: each62PASS/25 exact opt-in SKIP/0FAIL. Root actual receipt `6547fa229c43b6744441dd58f0fcca2ab804c2f7c8e39cf2f9c72a1cc52d8c56` accepts the original three CH tests, two invocations, noSKIP, measured26.3.37.3/image46a501c3, posthashes and actual cleanup (21 known host groups; three container absences spanning30.1588s, one180s cleanup budget). Initial ready exit210 is retained as a transient within the original60s readiness budget. No causal conclusion follows. That root receipt's independent_actual_observer_final_pending=true remains historical and immutable. Separate final root receipt4fc391b77e9a0fdb83ddc65bd2e50f6dbe797e7de88db152bd61ae96d1da4e0d closes the wait and accepts all three independent observer packages: BUILD3424ae98, TEST5044bd0b, ACTUAL76a0b66f/report535f1d08. Actual Docker/test/inspect raw diagnostics were intentionally memory-only: retained SHA/count/EOF and safe classifications plus source-bound control flow support the bounded verdict; unavailable nonempty raw bytes were not independently replayed. BUILD/TEST named SDK leaves and selected actions do not prove a universal SDK/cache closure.
+
+Task45 source approval is bounded local corrected34 core381/HG923 source review, not the later fullP3 HG42–44 composition, Task46, full-core500, release, real registry/CI, production or live execution. Old379-file source/binaries and pre-test/loader/port failures remain historical, with causes UNKNOWN. New success creates no retrospective cause, TDD/mutation/reliability proof or released pin. Current E1 Task62 already preserves the memo/post-C4 constructor/wrappers. Future separately approved fresh full-chain composition remains necessary.
+
+Task47 final procedure is the accepted complete secondary d0f8627f06239a1d6c221c9adcd58731fb629dbfcf4ee2a8e15fb1ad260c4946, paired with the retained full Task42 producer through43/44 and the release/ledger consumer chain. The published primary e4541ce4 is only the four-line CI repair against its earlier published branch; it is not substituted for this full procedure. Production EFE and cf3 fixtures remain historical; root remote86805572 plus its11-safe-blob overlay requires separately approved fresh composition. The old Task70 mutable-tool custody HOLD remains preserved as historical evidence and is not revoked. Separately, root536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d accepts the fixed-tool-qualified638-file source and bounded plain/one-race identity oracles (3990 identities and19 exact SKIP per mode;22 uncached Bazel targets per mode). Typed Task71 input receiptd4da39b62d90bb32e6559fbb502cecf27586574036f66a718b1dd006ef962381 permits source input only and explicitly grants no Task71 actual launch; owning-text receipt6892a3628e15d4cfe4fd4babf6990af396c2c2227d152a6325ae3ae3888dd85f accepts the qualification for final E2 consistency. The selected configured Go-action/ten-SDK-leaf proof is not universal action/input closure; old69 risk and historical31-mutant scope remain unchanged. No downstream actual grant, release, live, ledger or production approval follows. No execution, canonical adoption, formal count or ledger value is produced here.
 
 **devnet2 when this plan starts**, as the earlier plans' exit records leave it. Task 48 checks each item in §2 of its runbook and never assumes one.
 
@@ -118,9 +119,9 @@ Other state:
   - On devnet2 the order is: grants → the agent window (indexer-b → indexer-c → indexer-a; per host, the member image with serving off, then the host image with the agent sidecar, one sync each) → serving on, one member at a time → the drill.
   - No member serves before every SI host and the user's local agent run `HG_TAG_P3`. The local agent's upgrade is the user's action (D40); the runbook only checks it.
 - **Irreversible steps: none.** The drill's quarantine and release of indexer-c are the plan's only consensus writes. They are two authority-signed commands outside the consensus update, each confirmed. They leave indexer-c's `quarantine_generation` two higher for good (harmless). Every other step is reverted by its commit's revert.
-- **Read modes.** A copy never answers `unsafe_latest`. It is refused with the safe-mode message before anything reaches ClickHouse, and no component switches a read's mode silently (K46). Writes, DDL and INSERT … SELECT never fail over and are refused 392 on a replica-served table.
+- **Read modes.** A copy never answers `unsafe_latest`. It is refused with the safe-mode message before anything reaches ClickHouse, and no component switches a read's mode silently (K46). Writes, DDL and INSERT … SELECT never fail over. The explicit Replica gate refuses392 naming the owner; a pinned engine can refuse earlier403 without accessed-table metadata. The integration oracle accepts that documented ordering.
 - **production rule (S3-B contract §15):**
-  - One PR, Task 47 (`P3_PR`). It is inert on merge, proven by `render-inertness.sh` against `origin/main`.
+  - One PR, Task 47 (`P3_PR`). It is inert on merge, checked by the audited direct-Helm equivalent with the exact release/values/namespace and byte/object equality against the safe source base. The canonical Helmfile wrapper was not executed in this review.
   - After it merges, every live change is a single-service commit pushed to `main` and synced at once: one installation's grant, one host's member, one host's host pod, one member's serving, the monitoring flip.
   - The agent-sidecar pin never merges without its sync (stage-1 runbook §11 rule).
   - CHI manifests are applied by hand (`kubectl apply --dry-run=server` first). No helmfile runs on `k8s-sea/clickhouse` (K22).
@@ -225,7 +226,7 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
 | `HG_TAG`, `PROTO_TAG`, `CORE_TAG`, `ARBITER_TAG` / `ARBITER_DIGEST` | Plan S3-A's releases. The voters keep `ARBITER_DIGEST` through this plan | Plan S3-A, Appendix C |
 | `SN_COMMIT` / `SN_DIGEST`, `L_END`, `E_END`, `INDEXER_C_ID`, `ENROLMENT_EPOCH`, `OPERATOR_CHART_VERSION` | Plan S3-B's host release; the lockdown and enrolment end dates; indexer-c's id (the drill's owner, K49, and a key of `DEVNET2_OWNER_HOUSEGATE`); the epoch devnet2 is in; the frozen operator | Plan S3-B, Appendix C |
 | `HG_TAG_P1`, `CORE_TAG_P1`, `P1_END` | P1's housegate release (`sitable.CopyTable`, `replay.OwnerEntry`), its arbiter-core release, and the P1 end date | Plan S3-C1, Appendix C |
-| `CORE_TAG_P2`, `SN_COMMIT_P2` / `SN_DIGEST_P2`, `ARBITER_PIN_P2` | `CORE_TAG_P2` is the arbiter-core base of Task 45 (`member.Role`, `member/install`). `SN_DIGEST_P2` is the member image before Task 48 §4 and its rollback target. `ARBITER_PIN_P2` is the arbiter commit whose Task 36 run record (`arbiter pin and integration run`, the release-path run that also carries the full soak, D38) holds the PASS line of `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement`, P3's entry criterion | Plan S3-C2, Appendix C |
+| `CORE_TAG_P2`, `SN_COMMIT_P2` / `SN_DIGEST_P2`, `ARBITER_PIN_P2`, `P2_INTEGRATION_SOAK` | `CORE_TAG_P2` is the arbiter-core base of Task 45 (`member.Role`, `member/install`). `SN_DIGEST_P2` is the member image before Task 48 §4 and its rollback target. `ARBITER_PIN_P2` is the arbiter commit whose Task 36 run record (`arbiter pin and integration run`, the release-path run that also carries the full soak, D38) holds the PASS line of `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement`, P3's entry criterion. `P2_INTEGRATION_SOAK` must be at least500 and the complete release record must pass `si_p2_release_record` on the exact pin | Plan S3-C2, Appendix C |
 | `P2_PR`, `ENGINE_CENSUS`, `P2_RESTART_END`, `UNSAFE_INC_ROOT`, `MEMBER_IDS`, `P2_END` | P2's production PR, the engine census, the end of the restart windows, the `unsafe_inc` root, the member ids per host, and the P2 end date (members running, copies equal for 24 h) | Plan S3-C3, Appendix C |
 | `HG_TAG_P3` | housegate release containing Tasks 42–44 | Task 44, release step |
 | `HG_DIGEST_P3` | Digest of `ghcr.io/housegate/housegate:<HG_TAG_P3>`: the agent-sidecar pin `DEVNET2_P3_AGENT_SIDECAR_IMAGE` | Task 44, release step |
@@ -257,7 +258,7 @@ Every produced value is written into this plan's Appendix C by the task that mak
    - Tests: Task 43 `TestForward_ReplicaServedHelloStaysLocal`, `TestForward_USEOfAReplicaServedDatabaseRebindsAForwardedSessionToLocal`, `TestForward_ServingEndedIsARetryableRefusal`, `TestForward_WithoutTableStateBehavesAsToday`, `TestBuildStorageIntegrityArgsMapsReplicaTablesToTheCopy`, `TestNativeEngineReplicaTableResolvesBeforeRemoteMapping`, `TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping`, `TestReplicaReads_OrdinaryTablesOfTheDatabaseStillGoToTheOwner`; check: runbook §2 (`rewriter-parity.txt`).
 4. **A copy answers something it must not.**
    - *Read mode:* `unsafe_latest` on a Replica table is refused after the rewriter's first pass with the safe-mode text, before anything reaches ClickHouse. The copy is never `UNION ALL`'d with itself.
-   - *Writes and DDL:* writes, DDL, `CREATE … AS SELECT`, and materialized views targeting a Replica table are refused 392 naming the owner. The signed ingress refuses a Replica target.
+   - *Writes and DDL:* writes, DDL, `CREATE … AS SELECT`, and materialized views targeting a Replica table are refused by the engine403 or the explicit gate392 naming the owner; no accessed-table metadata is invented on engine failure. The signed ingress refuses a Replica target.
    - *Grant:* `si_gateway` gains exactly `SELECT ON hg_replica.*`.
    - *Computed names:* on a peer-trusted, non-forwarded session, a computed carrier argument such as `merge(concat('hg_', 'replica'), '.*')`, and any identifier argument, which ClickHouse resolves through the statement's aliases (`WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`) or as a tuple element (`d.1`), is refused 392 (K48). Every form of S3-A's peer-leg corpus still passes.
    - Tests: Task 43 `TestUnsafeLatestIsRefusedForReplicaTables`, `TestUnsafeLatestNeverSendsTheCopyTwice`, `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused`, `TestOnQuery_PeerLegFormsPass`, `TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner`; Task 42 `TestDecide_ReplicaRows`, `TestSnapshotSchemaRefusesAReplicaTable`; Task 47 `test_si_gateway_reads_hg_replica_only_with_the_replica_grant`, `test_grant_probe_covers_every_protocol_grant`; check: runbook §3 (`replica-grant-probe-<x>.tsv`).
@@ -304,53 +305,17 @@ Within the tasks:
 
 Line anchors in the tasks refer to the base revisions of the header. Paths marked (S3-Cn) exist only once that plan's tasks have merged; hunks land on top of them.
 
-**housegate** (Tasks 42–44)
-- Task 42:
-  - `pkg/sitable/sitable.go`, `static.go`, `fake.go` (Replica, `CopyTable`, `ReplicaOf`, `Served()`, `ServedDatabases`); `pkg/sitable/replica_reads.go` (new) and `replica_reads_test.go` (new); `sitable_test.go`; `BUILD.bazel`.
-  - `pkg/plugins/sitablestate/plugin.go` (at `:98-138`; QueryComplete and Close hooks), `plugin_test.go`.
-  - `pkg/registry/table_status.go` (at `:7-27`), `si_info.go`.
-  - `pkg/network/rpc.go` (at `:357-378`), `rpc_test.go`.
-  - `pkg/plugins/storageintegrity/plugin_test.go` (`snapshotSchema` at `:1078-1095`).
-  - `proxy.go` (Options, after `:133`), `storage_integrity_table_state.go`, `build.go` (sitablestate at `:876-879`).
-- Task 43:
-  - `pkg/chsession/state.go` (`:56`, `:210`, `:248`).
-  - `pkg/plugins/forward/forward.go` (`:44-80`, `:91-115`, `:204-246`), `forward_test.go`.
-  - `build.go` (`:838-847`).
-  - `pkg/rewriter/storage_integrity.go` (`:160-196`, `:221-233`, `:297-314`), `sentio.go` (`:325-357`), `storage_integrity_test.go`, `native_smoke_test.go` and a new `replica_parity_test.go`.
-  - `pkg/plugins/sireserved/plugin.go` (`:25-53`, `:110-157`), `plugin_test.go`.
-  - `pkg/integration/storage_integrity_replica_reads_test.go` (new), `pkg/integration/BUILD.bazel`.
-- Task 44:
-  - `pkg/chproto/client_error.go` (`:49-121`), `client_error_test.go`.
-  - `pkg/registry/si_info.go` (`:14-51`).
-  - `pkg/network/rpc.go` (`:381-397`).
-  - `pkg/proxy/relay.go` (handshake at `:671-760`, the first-answer path of a query), `server.go` (`:24-52`), `observer.go` (`:60-66`) and a new `relay_replica_failover_test.go`.
-  - `pkg/plugins/agent/replica_failover.go` (new) and `replica_failover_test.go` (new), `upstream_select.go` (unchanged).
-  - `build.go` (`:1779-1824`).
-  - `pkg/integration/storage_integrity_agent_replica_failover_test.go` (new).
-- Docs: `README.md`, `CLAUDE.md`, `pkg/plugins/AGENTS.md`, `pkg/rewriter/AGENTS.md`.
+**housegate** (Tasks42–44; exact owning inventories)
+- Task42: `CLAUDE.md`, `README.md`, `build.go`, `pkg/network/rpc.go`, `pkg/network/rpc_table_status_test.go`, `pkg/plugins/AGENTS.md`, `pkg/plugins/sipeerguard/plugin_test.go`, `pkg/plugins/sistatement/table_status_test.go`, `pkg/plugins/sitablestate/BUILD.bazel`, `pkg/plugins/sitablestate/plugin.go`, `pkg/plugins/sitablestate/plugin_test.go`, `pkg/plugins/storageintegrity/table_state_test.go`, `pkg/registry/table_status.go`, `pkg/registry/table_status_test.go`, `pkg/sitable/BUILD.bazel`, `pkg/sitable/fake.go`, `pkg/sitable/replica_reads.go`, `pkg/sitable/replica_reads_test.go`, `pkg/sitable/sitable.go`, `pkg/sitable/sitable_test.go`, `pkg/sitable/static.go`, `proxy.go`, `storage_integrity_table_state.go`, `storage_integrity_table_state_test.go`.
+- Task43: `CLAUDE.md`, `README.md`, `build.go`, `build_test.go`, `pkg/chsession/state.go`, `pkg/integration/BUILD.bazel`, `pkg/integration/storage_integrity_replica_reads_test.go`, `pkg/plugins/AGENTS.md`, `pkg/plugins/forward/BUILD.bazel`, `pkg/plugins/forward/forward.go`, `pkg/plugins/forward/forward_test.go`, `pkg/plugins/sireserved/plugin.go`, `pkg/plugins/sireserved/plugin_test.go`, `pkg/rewriter/AGENTS.md`, `pkg/rewriter/BUILD.bazel`, `pkg/rewriter/replica_parity_test.go`, `pkg/rewriter/sentio.go`, `pkg/rewriter/storage_integrity.go`, `pkg/rewriter/storage_integrity_test.go`.
+- Task44: `BUILD.bazel`, `CLAUDE.md`, `README.md`, `agent_replica_failover_build_test.go`, `build.go`, `pkg/chproto/client_error.go`, `pkg/chproto/client_error_test.go`, `pkg/chsession/state.go`, `pkg/integration/BUILD.bazel`, `pkg/integration/storage_integrity_agent_replica_failover_test.go`, `pkg/network/BUILD.bazel`, `pkg/network/rpc.go`, `pkg/network/rpc_replica_hosts_test.go`, `pkg/plugin/BUILD.bazel`, `pkg/plugin/upstream_failover.go`, `pkg/plugins/AGENTS.md`, `pkg/plugins/agent/BUILD.bazel`, `pkg/plugins/agent/replica_failover.go`, `pkg/plugins/agent/replica_failover_test.go`, `pkg/plugins/sitablestate/plugin.go`, `pkg/proxy/BUILD.bazel`, `pkg/proxy/observer.go`, `pkg/proxy/relay.go`, `pkg/proxy/relay_replica_failover.go`, `pkg/proxy/relay_replica_failover_test.go`, `pkg/proxy/server.go`, `pkg/registry/si_info.go`, `pkg/registry/si_info_test.go`.
 
-**arbiter-core** (Task 45)
-- `member/serve/` (new): `serve.go`, `conditions.go`, `lease.go`, `probe.go`, `handler.go`, `client.go`, `metrics.go`, `BUILD.bazel`, and their `_test.go` files.
-- `member/install/` (S3-C2): the `Deps.AfterInstall` seam beside `Deps.BeforeInstall`.
-- `member/role.go` and `member/config.go` (S3-C2): `Config.Serve`, `ServeHandler()`, `Serving()`, and the adapters `servedCopies` and `publishedFeed`.
-- `README.md`.
+**arbiter-core** (Task45): new `member/serve/{serve,conditions,lease,probe,handler,client,metrics}.go` and tests/BUILD; `member/serving.go` (the Role adapters/wiring), exact `member/{role,config}.go` and installer hooks/tests, README, module and CI metadata. Published reads use the actual `GetSafeWatermark(ctx)` plus verified `GetSafeSnapshot(ctx,id)` adapters. Runtime source379 is frozen; later upstream surface changes require owning replay before acceptance.
 
-**sentio-node** (Task 46)
-- Pins: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`.
-- Config: `config/config.go` (`:52-58`, `StorageIntegrityReplicaReads`, `StorageIntegrityMemberServe`, refusals), `config/config_test.go`.
-- `storageintegrityadapter/tablestate/model.go` (`Inputs` at `:202-218`), `snapshot.go` (`build` at `:53-147`, `equal` at `:250-267`, `Served` after `:298`), `state.go` (`Config` at `:48-67`, `Refresh` at `:187-259`), `status.go` (`:18-34`), `metrics.go`, `state_test.go`.
-- `storageintegrityadapter/replicalease/` (new): `client.go`, `client_test.go`, `BUILD.bazel`.
-- `rpc/storage_integrity_info.go` (`:14-38`), `storage_integrity_info_test.go`.
-- `standalone/storage_integrity_info.go` (`:50`), `storage_integrity_table_state.go` (`:32-110`), `standalone.go`; `storage_integrity_member_serving.go` (new), `storage_integrity_replica_reads_ch_test.go` (new); `simember/serve.go` and `simember/serve_test.go` (new, S3-C2's package).
-- `commands/storage_integrity.go` (`:13-20`).
-- Elsewhere: `.github/workflows/ci.yml` (the acceptance filter), `README.md`.
+**sentio-node** (Task46): Go/Bazel pins; `config/{config,si_member_serve}.go`, tests/BUILD; `storageintegrityadapter/tablestate/{model,snapshot,state,status,metrics,replica}.go` and tests/BUILD; new `replicalease` and `replicaleasetest`; RPC fields/tests; standalone replica client/metrics/serving/wiring/CH tests; `simember/serve.go`, tests and actual `siMemberRole` seam; commands, README and CI acceptance. The frozen228-file runtime is unchanged; local future CH receipt additionally binds runtime/test/BUILD/module/CI/Keeper bytes.
 
-**production** (Task 47)
-- `charts/sentio-node/values.yaml` (`storageIntegrity` at `:181-207`), `templates/node.yaml` (`storage_integrity` config at `:340-363`, `sentio-node` container env); the member StatefulSet and Service templates of S3-C3 Task 38 (`siMember.serve`).
-- `charts/storage-integrity/values.yaml`, `values.schema.json`, `templates/clickhouse.yaml` (the `si_gateway` grants), `templates/validate.yaml`, `templates/monitoring.yaml` (the `replica-reads` group).
-- `charts/storage-integrity/tests/test_render.py` (constants, `ReplicaReadsTest`, the sidecar check at `:1525-1538` and `DEVNET2_SIDECAR_VERSION` at `:37`), `clickhouse_replica_grant_probe.tsv` (new).
-- `.github/workflows/storage-integrity-chart.yml` (paths).
-- `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md` (new); `docs/storage-integrity-devnet2-multi-source.md` (stage 8 row at `:15` and the sidecar rule at `:996`, now pointing to the P3 runbook); `docs/storage-integrity-devnet2-multi-source-tracks.md` (§8.2 pointer).
+**production** (Task47; exactly14 product files):
+- `docs/storage-integrity-devnet2-multi-source.md`, `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`, `docs/storage-integrity-devnet2-multi-source-tracks.md`, `.github/workflows/storage-integrity-chart.yml`, `charts/sentio-node/values.yaml`, `charts/storage-integrity/values.schema.json`, `charts/storage-integrity/values.yaml`, `charts/storage-integrity/tests/test_render.py`, `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv`, `charts/storage-integrity/templates/validate.yaml`, `charts/storage-integrity/templates/_helpers.tpl`, `charts/storage-integrity/templates/monitoring.yaml`, `charts/sentio-node/templates/si-member.yaml`, `charts/sentio-node/templates/node.yaml`.
 
 **devnet2** (Task 48)
 - The single-service commits of contract §32.5 on `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml`, `storage-integrity-si-v2-indexer-c-source.yaml`, `storage-integrity-si-v2.yaml`, `sentio-node-indexer-{a,b,c}-storage-integrity-si-v2.yaml` and `sentio-node-indexer-{a,b,c}-storage-integrity-si-v2-source-image.yaml`, together with `docs/examples/storage-integrity-fresh-source-image.yaml` and the `test_render.py` constants.
@@ -367,13 +332,13 @@ Line anchors in the tasks refer to the base revisions of the header. Paths marke
 | §11 serving conditions: the peer-trusted guard and the lockdown are live; the host flag is on | 47 (`test_member_serving_needs_the_lockdown_and_the_replica_grant`, `siMember.serve.enabled`); 48 (§2) |
 | §11 installs pause while served; the lease revoked before any install and waited for until released or expired | 42 (`ReplicaReads`), 45 (`BeforeInstall`), 46 (`replicalease`); K44 |
 | §11 Host status: authenticated local status endpoint per database | 45 (§30.3), 46 (§31.3), 47 (the token Secret `<release>-si-member-status-token` of D29, mounted on the host pod by `sentio-node` only, and S3-C3's `status` port); 48 (§2, `token-secrets.txt`) |
-| §11 Host status: `Replica` instead of Ordinary, failing closed; `sitable.Table` copy name; `Snapshot.Served()`; explicit `sitablestate` rows; writes and DDL refused with 392 naming the owner | 42, 46 |
+| §11 Host status: `Replica` instead of Ordinary, failing closed; `sitable.Table` copy name; `Snapshot.Served()`; explicit `sitablestate` rows; writes and DDL refused by the explicit gate392 naming the owner (an earlier engine403 is permitted) | 42, 46 |
 | §11 Host status: additive status fields `replica_of`, `served_from`, `owner_entry`, `frozen_since`, and per-database `replica_hosts` (static until placement) | 42, 44, 46; K45, K50 |
 | §11 Routing: `forward.Plugin` with a table-state port; replica-served sessions local; retryable reconnect refusal; the remote mapping kept | 43 |
-| §11 Routing: `buildStorageIntegrityArgs` with `SafeTable` = `UnsafeTable` = the copy; `unsafe_latest` refused before the engine runs; both engines resolve SI tables before remote mapping | 43 |
+| §11 Routing: `buildStorageIntegrityArgs` with `SafeTable` = `UnsafeTable` = the copy; `unsafe_latest` refused after the classification-only engine pass and before ClickHouse; both engines resolve SI tables before remote mapping | 43 |
 | §11 Read modes: safe reads from the copy, `unsafe_latest` refused with a message naming safe mode | 43; K46 |
 | §11 Agent: failover of reads, never writes, to `replica_hosts` on 392 `indexer_quarantined` or unreachable; every SI host's sidecar in one window, with the deferred-lane behaviour | 44, 47, 48 (§4); K46, K47 |
-| §11 Rejection-caused quarantine: the P2 test that copies never hold rejected rows is P3's entry criterion | 48 (§2, `rejected-rows-test.txt` of `ARBITER_PIN_P2`) |
+| §11 Rejection-caused quarantine: the P2 test that copies never hold rejected rows is P3's entry criterion. `P2_INTEGRATION_SOAK` must be at least500 and the complete release record must pass `si_p2_release_record` on the exact pin | 48 (§2, `rejected-rows-test.txt` of `ARBITER_PIN_P2`) |
 | §14 bullet 1, the peer-trusted guard, revisited for `hg_replica` (S3-A follow-up: carrier-computed names) | 43; K48 |
 | §15 housegate: `sitable` Replica, `Served()`, `sitablestate` rows, `forward.Plugin` with a table-state port, `buildStorageIntegrityArgs` for Replica tables, agent read failover and status fields | 42, 43, 44 |
 | §15 arbiter-core: the local status endpoint | 45 |
@@ -394,7 +359,7 @@ Line anchors in the tasks refer to the base revisions of the header. Paths marke
 - **Agent observability.** The agent sidecars expose no scraped metrics, so failovers are visible only in the sidecar's and the local agent's logs (`agent: replica failover`). Scraping the sidecar is a monitoring change of its own.
 - **Network CHI residual.** `si_gateway`'s `hg_replica` grant is installation-wide on the network CHI, so it exists on the verifier hosts too, whose `hg_replica` is empty (K48 residual, K18 style).
 - **Lanes.** The agent window keeps lanes `off`. Moving the sidecars to `lanes: auto` is its own planned window (stage-1 runbook §11 rule).
-- **The quickstart preset.** The local agent's devnet2 preset reads network state from indexer-a's storage RPC (`http://64.38.144.158:32003`). An unreachable indexer-a still blocks a fresh local agent's startup, though not its replica-host discovery.
+- **The quickstart preset.** The local agent's devnet2 preset reads network state from indexer-a's storage RPC (`http://64.38.144.158:32003`). An unreachable indexer-a still blocks a fresh local agent's startup, and peer discovery also needs the network-state source to answer the context-bounded indexer-list RPC; the peers only replace the storage-info answer.
 - **Release refusals.** A drill quarantine whose release is refused permanently (case (b) of spec §2) would hold indexer-c's track. The drill runs only with no in-flight Rejected work; the remedy belongs to Plan S3-D (settle).
 - **Earlier follow-ups** of Plans S3-A and S3-B remain: rewriter-go `x IN remote(...)`, the peer guards' log redaction, the deployed-image CI job, unresolved-intent repair, the static credential fallback, the injector debug logs and the plaintext credentials in git.
 
@@ -410,7 +375,7 @@ K45 adds the wire side. `pkg/registry` gains `TableStatusReplica` and the four a
 
 Nothing here produces a Replica entry. Only a host-injected table state can (sentio-node, Task 46), so with `Options.StorageIntegrityReplicaReads` unset every path and every chain is today's. Routing, the rewrite to the copy and `unsafe_latest` are Task 43; the agent failover and the release are Task 44.
 
-**Base and anchors.** Line anchors are at `HG_TAG_P1` as Plan S3-C1 Task 22 leaves it: housegate `origin/main` `862a7a8` plus Task 22. `862a7a8` is `HG_TAG` `v0.20.0` (`bc92f91`, Plan S3-A Tasks 1–2 merged as housegate#238) followed only by Plan S3-A's Appendix C records housegate#239–#242, which change nothing outside `docs/superpowers/plans`. Task 22 adds `"strconv"` (`pkg/sitable/sitable.go:10`) and `CopyTable` (`:182-190`), appends two tests to `sitable_test.go` and one sentence to the `CLAUDE.md:163` bullet. housegate#238 already changed `pkg/sitable/sitable.go`, `fake.go`, `sitable_test.go`, `pkg/registry/table_status.go`, `build.go`, `README.md`, `CLAUDE.md` and `pkg/plugins/AGENTS.md`, so for those files the anchors below differ from the header's `66d4df7` anchors; every other file of this task is byte-identical at `66d4df7` and `862a7a8`. No plan between S3-C1 and this one changes housegate code (S3-C2, S3-C3 and S3-D only record ledger values there).
+**Base and anchors.** Runtime anchors were rechecked at housegate `origin/main` `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` (2026-10-17); changes since `5f8a9a9` are documentation only. S3-A is already released (`HG_TAG=v0.20.0`); S3-C1 Task 22 adds the real `CopyTable` producer and its tests. Verification uses the controller's frozen Task 36 `work/hg` source, which contains that reviewed Task 22 implementation; the companion arbiter-core `cfd4f42` plus reviewed C1/C2 source is verified against its 360-file manifest and copied read-only into this review's own scratch. No upstream API stand-in is used. Execution still starts only after the ledger records `HG_TAG_P1`, with S3-C2/C3 exit gates satisfied before P3 execution; current full 500-block integration proof remains pending and this review does not waive it. Quoted textual anchors below bind; line numbers are navigation hints at the post-C1 state. Re-read a changed anchor before applying its hunk; do not overwrite unrelated current-main edits.
 
 **Files:**
 - Modify: `pkg/sitable/sitable.go` — imports (`:8-15`), the end of the `Status` constants (`:48-50`, `Replica` after `Gone`), `String` (`:65`) and `ParseStatus` (`:83`) before their `default:`, `Table` (`:88-96`), the `Snapshot` doc and interface (`:118-132`), `ServedDatabases` after `TableID` (`:192-195`), the `snapshot` struct (`:202-208`), the loop tail of `NewSnapshot` (`:227-231`), `Served` after `Active` (`:246-252`), the last sentence of the `Schema` doc (`:260-262`). `CopyTable` (S3-C1 Task 22), `ReservedDatabases` and the `case Refused, Pending:` rule of `Schema` (S3-A Task 1) stay unchanged.
@@ -477,46 +442,67 @@ Notes:
 - **The ingress needs no change.** `snapshotSchema` switches on `Lookup`'s status and refuses every non-Active one with its existing text, so `TestSnapshotSchemaRefusesAReplicaTable` is a pin, red only because `sitable.Replica` does not exist yet. The agent's `sistatement` claims only `status == "active"`, so an INSERT into a replica table passes through unsigned and the host refuses it 392.
 - **`registry.TableStatus` stays comparable.** The new fields are a pointer, a string, a pointer and an int, so the existing `got != want` comparison of `TestRpcNetworkState_TableStatusWireShape` still compiles; `ReplicaOf` is a pointer because indexer 0 is a valid owner.
 - **No push, PR or release here.** Tasks 43 and 44 continue on the same branch, and Task 44 opens the PR and cuts `HG_TAG_P3` / `HG_DIGEST_P3`. The only remote contact of this task is Step 1's read-only fetch.
-- **Verified while drafting** (2026-10-16) on a `git archive` of housegate `origin/main` (`862a7a8`) with S3-C1 Task 22's `CopyTable`, its two tests and its `CLAUDE.md:163` sentence applied exactly as Task 22 writes them, committed and tagged as a stand-in for `HG_TAG_P1`, with the repository's Go 1.26.3 (`GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local`):
-  - Step 1's checks printed `descends`, `pkg/sitable/sitable.go:3` and an empty diff. Against the local housegate clone, `s3-ledger.py get … HG_TAG` printed `HG_TAG=v0.20.0`, and `get … HG_TAG_P1` stopped with `s3-ledger: not a row of any plan's Appendix C: ['HG_TAG_P1']; stop`, since Plan S3-C1 is not on a ledger copy yet.
-  - This task's text, applied mechanically step by step from its code blocks (new files, the hunks at their anchors, the eight doc replacements), made every new test fail first with exactly the compile errors Steps 3, 8, 13 and 18 state. With the Replica rows taken out of `decide`, `TestDecide_ReplicaRows` fails with `write: err = <nil>, want ClientError code 392`.
-  - Every step's checks then passed (`-race` where the steps say so, `go vet` clean, `gofmt -l` empty). The five commit blocks left the five commits of Step 24 and ` 24 files changed, 1017 insertions(+), 41 deletions(-)`, the same as an earlier replay on `994128b`, whose code is byte-identical. Review round 1's read admission adds 176 net lines inside this task's own lines and review round 2's admission fence 315 more (Step 24 now expects 1508 insertions); both were verified on partial replays (sitable, sitablestate, registry, network and the root option), not by a full 24-file replay (Appendix B).
-  - `bazel run //:gazelle` changed nothing, `bazel build //...` passed, and `bazel test //... --nocache_test_results` ran and passed all 67 targets (`Executed 67 out of 67 tests: 67 tests pass.`), every external repository coming from the local caches. `//pkg/replay/snapshotquery:snapshotquery_test` took 27 s of its 60 s context here; on a loaded machine an earlier run ran out of it (Step 24 says what to do).
-  - `go test` of every package but the three ClickHouse-container packages under `pkg/integration` passed, except `pkg/storageintegrity`, which stops on Go's vet note `intake_test.go:1802:5: suspect or` in a file this task does not touch. It stops the same way at the base, Bazel does not run that vet pass, and the package passes with `-vet=off`.
-  - Nineteen mutations were each caught by the named test meant for them: no de-duplication in `Begin`, no `sync.Once`, no clone or no sort in `Served`, no `Compact` in `ServedDatabases`, `NewSnapshot` not collecting Replica tables (`TestFakeServesReplicaTables`), `Schema` answering Replica, no `omitempty`, `RpcNetworkState` still refusing `replica`, the Replica rows removed, `DROP` of a copy allowed, reads of a copy refused, counting a refused query, not ending a lost end, `OnClose` not ending, counting an operator session, the hooks registered without a counter, the counter not passed to the gate, and the option's refusal removed.
-  - Every bash block and `Run:` line passes `bash -n` with `<worktree path>` and `<HG_TAG_P1>` filled in. `shellcheck` reports only SC2016 on Step 22's check, whose backticks are literal on purpose.
+- **Review verification (2026-10-17):** all four test-first compile failures were reproduced on the actual reviewed source chain, then all eight affected Go packages passed under `-race`. Five targeted behavioral mutations were killed by the named tests (missing Replica rows, missing lease fence, missing current-copy check, missing completion cleanup, missing JSON omission). Full build, Bazel checks and baseline vet comparison are reported with their actual outcomes in the review report; no historical full-suite count is substituted for the final candidate's checks. No ClickHouse, endpoint, remote write, real signing or production action was run by this review.
 
 - [ ] **Step 1: Worktree and base check**
 
-The value `HG_TAG_P1` comes only from the ledger copy (contract §32.7, Plan S3-C1 contract §19, decision D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (an earlier copy holds the same text and is overwritten).
+Read `HG_TAG_P1` only through the complete ledger tool from S3-C1 contract §19, written verbatim to `$HOME/.cache/s3-ledger/s3-ledger.py`. Stop if the ledger value is absent. This task produces no ledger values. The following fetch is remote and read only: obtain explicit user confirmation in chat before running it.
 
-The fetch below is a remote action (read only): ask for explicit user confirmation in chat before running it.
-
-```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch origin --tags && python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get /Users/uranuswch/Dev/projects/sentio-network/housegate HG_TAG_P1 && bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3c4
-```
-
-Expected:
-- the ledger line `HG_TAG_P1=v<x>.<y>.<z>`. `s3-ledger.py` stops instead with `s3-ledger: <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md: HG_TAG_P1 is not recorded; stop` while Plan S3-C1 Task 22 has not recorded it, and with `s3-ledger: not a row of any plan's Appendix C: ['HG_TAG_P1']; stop` while no ledger copy holds Plan S3-C1's file; the `&&` then creates no worktree. Either way stop here: Task 42 starts only once `HG_TAG_P1` exists;
-- one JSON object with `"action": "created"`, whose `path` is `~/src/remotesrc/claude/housegate/multi-source-s3c4` (expanded), on branch `urwt/claude/multi-source-s3c4` from `origin/main`.
-
-`W` below is that path, and `P1` is the tag the ledger printed. The Bash tool keeps no variables between calls, so prefix every command with `W=<that path>; P1=<that tag>;`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` themselves; never pass `--yes` or `--clobber`.
-
-Before the first commit, give the worktree the commit identity (user rule: GitHub never shows the global identity as author or co-author):
+Codex uses runtime `codex`; a Claude-hosted executor substitutes `claude` for the runtime and expected branch only. Use the actual JSON path returned by URWT, including an existing worktree outside the usual template; do not replace its absolute symlink spelling with a guessed or resolved path. If hooks need approval, stop and ask the user to approve them with Worktrunk in their terminal; never bypass hooks, clobber a path or discard existing changes.
 
 ```bash
-W=<worktree path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config user.name && git -C "$W" config user.email
+(
+set -euo pipefail
+umask 077
+state="$HOME/.cache/s3c4-task42"
+repo=/Users/uranuswch/Dev/projects/sentio-network/housegate
+mkdir -p "$state"
+git -C "$repo" fetch origin --tags || exit 1
+python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$repo" HG_TAG_P1 > "$state/ledger.env" || exit 1
+bash "$HOME/.agents/skills/urwt/scripts/urwt-create.sh" "$repo" codex multi-source-s3c4 > "$state/urwt.json" || exit 1
+python3 -I - "$state" "$repo" <<'PY42'
+import json, os, pathlib, re, subprocess, sys
+state, repo = pathlib.Path(sys.argv[1]), sys.argv[2]
+v = json.loads((state / "urwt.json").read_text())
+p = v.get("path") if isinstance(v, dict) else None
+if not isinstance(v, dict) or v.get("action") not in ("created", "existing") or not isinstance(p, str) or not os.path.isabs(p) or "\n" in p or "\r" in p or not os.path.isdir(p):
+    raise SystemExit("invalid URWT result; stop")
+def git(where, *args):
+    return subprocess.check_output(["git", "-C", where, *args], text=True).strip()
+if git(p, "branch", "--show-current") != "urwt/codex/multi-source-s3c4":
+    raise SystemExit("unexpected URWT branch; stop")
+if os.path.realpath(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) != os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")):
+    raise SystemExit("unexpected URWT repository; stop")
+if git(p, "status", "--porcelain"):
+    raise SystemExit("existing worktree has changes; inspect them before continuing")
+rows = (state / "ledger.env").read_text().splitlines()
+if len(rows) != 1 or not re.fullmatch(r"HG_TAG_P1=v[0-9]+\.[0-9]+\.[0-9]+", rows[0]):
+    raise SystemExit("invalid HG_TAG_P1 ledger result; stop")
+(state / "worktree-path").write_text(p + "\n")
+(state / "p1-tag").write_text(rows[0].split("=", 1)[1] + "\n")
+PY42
+W=$(cat "$state/worktree-path")
+P1=$(cat "$state/p1-tag")
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+si_checked_read_1="$(git -C "$W" config user.name)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_1}" = poetry || exit 1
+si_checked_read_2="$(git -C "$W" config user.email)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_2}" = chen@sentio.xyz || exit 1
+si_checked_read_3="$(git -C "$W" config --bool commit.gpgsign)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_3}" = true || exit 1
+git -C "$W" merge-base --is-ancestor "$P1" HEAD || exit 1
+printf '%s\n' descends
+git -C "$W" grep -c -e 'func CopyTable(id string, incarnationSeq uint64) string' -e 'ReplicaDatabase      = "hg_replica"' -e 'case Refused, Pending:' -- pkg/sitable/sitable.go || exit 1
+git -C "$W" diff --stat "$P1" HEAD -- pkg/sitable pkg/plugins/sitablestate pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/sistatement/table_status_test.go pkg/plugins/storageintegrity/table_state_test.go pkg/registry/table_status.go pkg/registry/table_status_test.go pkg/network/rpc.go pkg/network/rpc_table_status_test.go proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go README.md CLAUDE.md pkg/plugins/AGENTS.md || exit 1
+)
 ```
 
-Expected: `poetry`, then `chen@sentio.xyz`. Every commit of this task is then authored `poetry <chen@sentio.xyz>` and carries only the Claude `Co-Authored-By` line.
+Expected: `descends`, `pkg/sitable/sitable.go:3`, and an empty diff for the named paths at the post-P1 base. A changed path requires re-reading that file and applying each following hunk by its quoted anchor; a missing `CopyTable`, wrong branch/repository, dirty reused worktree, malformed JSON or absent ledger value stops. The JSON action may be `created` or `existing`; a requested base does not reset an existing branch. Before editing, read the returned worktree's `AGENTS.md` and `CLAUDE.md`.
 
-Run: `W=<worktree path>; P1=<HG_TAG_P1>; git -C "$W" merge-base --is-ancestor "$P1" HEAD && echo descends && git -C "$W" grep -c -e 'func CopyTable(id string, incarnationSeq uint64) string' -e 'ReplicaDatabase      = "hg_replica"' -e 'case Refused, Pending:' -- pkg/sitable/sitable.go && git -C "$W" diff --stat "$P1" HEAD -- pkg/sitable pkg/plugins/sitablestate pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/sistatement/table_status_test.go pkg/plugins/storageintegrity/table_state_test.go pkg/registry/table_status.go pkg/registry/table_status_test.go pkg/network/rpc.go pkg/network/rpc_table_status_test.go proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go README.md CLAUDE.md pkg/plugins/AGENTS.md`
-
-Expected:
-- `descends`;
-- `pkg/sitable/sitable.go:3`: S3-C1's `CopyTable`, S3-A's `ReplicaDatabase` and S3-A's `Schema` rule are present;
-- an empty diff: every file this task touches is as `HG_TAG_P1` has it. If the diff is not empty, re-read each changed file and apply the hunks below on top of it (the hunk rule of the Global Constraints).
+For every later tool call, set `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")` and, where needed, `P1=$(cat "$HOME/.cache/s3c4-task42/p1-tag")`; never assume shell variables survive calls. A signing cancellation stops the commit flow: ask the user to unlock the repository's actual signing key in their terminal, then retry the same signed commit. Never disable signing or publish an unsigned fallback.
 
 - [ ] **Step 2: Write the failing tests for the Replica status, `Served()` and the counter**
 
@@ -912,7 +898,7 @@ In `pkg/plugins/sipeerguard/plugin_test.go` replace the first line of the loop o
 
 - [ ] **Step 3: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/sitable/ ./pkg/plugins/storageintegrity/ ./pkg/plugins/sipeerguard/ -run 'TestStatusReplicaRoundTrips|TestSnapshotServedListsReplicaTablesSortedAndCloned|TestServedDatabasesAreSortedAndUnique|TestSnapshotSchemaMissesAReplicaTable|TestFakeServesReplicaTables|TestStaticServesNoReplicaTable|TestReplicaReads|TestSnapshotSchemaRefusesAReplicaTable|TestGuardRefusesGovernedTablesOnPeerSessions'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && go test ./pkg/sitable/ ./pkg/plugins/storageintegrity/ ./pkg/plugins/sipeerguard/ -run 'TestStatusReplicaRoundTrips|TestSnapshotServedListsReplicaTablesSortedAndCloned|TestServedDatabasesAreSortedAndUnique|TestSnapshotSchemaMissesAReplicaTable|TestFakeServesReplicaTables|TestStaticServesNoReplicaTable|TestReplicaReads|TestSnapshotSchemaRefusesAReplicaTable|TestGuardRefusesGovernedTablesOnPeerSessions'`
 
 Expected: the three packages FAIL to compile:
 - `pkg/sitable`: `replica_reads_test.go`: `undefined: NewReplicaReads`, `undefined: ReplicaReads` and `undefined: NewReplicaReadsWithClock`; `sitable_test.go`: `undefined: Replica`, `unknown field CopyTable in struct literal of type Table` and `unknown field ReplicaOf in struct literal of type Table`;
@@ -1343,19 +1329,25 @@ func (governedDatabaseState) Served() []sitable.Table     { return nil }
 
 - [ ] **Step 5: Run the tests and see them pass**
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/sitable pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/storageintegrity/table_state_test.go && go test -race ./pkg/sitable/ && go test ./pkg/plugins/sipeerguard/ ./pkg/plugins/storageintegrity/ ./pkg/plugins/sitablestate/ ./pkg/rewriter/ && go build ./... && go vet ./pkg/sitable/ ./pkg/plugins/sipeerguard/`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/sitable pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/storageintegrity/table_state_test.go && go test -race ./pkg/sitable/ && go test ./pkg/plugins/sipeerguard/ ./pkg/plugins/storageintegrity/ ./pkg/plugins/sitablestate/ ./pkg/rewriter/ && go build ./... && go vet ./pkg/sitable/ ./pkg/plugins/sipeerguard/`
 
 Expected:
 - `gofmt` lists nothing;
 - `ok  	github.com/housegate/housegate/pkg/sitable` (race detector on: the 64 concurrent reads), including the unchanged `TestStaticSnapshot`, `TestFakeSwitchesVersionsAndWakes`, S3-A's `TestSnapshotSchemaAnswersAHeldPendingTable` and S3-C1's `TestCopyTable*`;
 - `ok` for the other four packages, including `TestSnapshotSchemaRefusesAReplicaTable`, the extended `TestGuardRefusesGovernedTablesOnPeerSessions` (its `replica/…` subtests) and the unchanged `TestIngressSnapshotRefusesByStatus`;
-- `go build ./...` and `go vet` print nothing. `governedDatabaseState` is the only other `sitable.Snapshot` implementation in the module, so nothing else fails to compile.
+- `go build ./...` and the affected-package `go vet` checks print nothing. The root package has two pre-existing unkeyed `config.Duration` literals in `build_collector_test.go:30-31` at the reviewed base; compare any root vet diagnostic with a clean main export before calling it a regression. `governedDatabaseState` is the only other `sitable.Snapshot` implementation in the module, so nothing else fails to compile.
 
 - [ ] **Step 6: Commit the Replica status**
 
 ```bash
-git -C "$W" add pkg/sitable/sitable.go pkg/sitable/static.go pkg/sitable/fake.go pkg/sitable/replica_reads.go pkg/sitable/replica_reads_test.go pkg/sitable/sitable_test.go pkg/sitable/BUILD.bazel pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/storageintegrity/table_state_test.go
-git -C "$W" commit -m "feat(sitable): the Replica status, Served() and the replica-read counter
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_4="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_4}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/sitable/sitable.go pkg/sitable/static.go pkg/sitable/fake.go pkg/sitable/replica_reads.go pkg/sitable/replica_reads_test.go pkg/sitable/sitable_test.go pkg/sitable/BUILD.bazel pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/storageintegrity/table_state_test.go || exit 1
+git -C "$W" commit -S -m "feat(sitable): the Replica status, Served() and the replica-read counter
 
 A member host serves another SI indexer's tables read-only from its
 member's copies while that owner is quarantined or unreachable (spec
@@ -1372,7 +1364,13 @@ copy, so the host releases a serving lease only once no query still
 reads the database (clarification K44). Nothing in HouseGate produces
 a Replica entry; only an injected table state can.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_5="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_5}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 7: Write the failing tests for the wire status `replica`**
@@ -1503,7 +1501,7 @@ func TestPlugin_SignsActiveTablesOnly(t *testing.T) {
 
 - [ ] **Step 8: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/ -run 'TestTableStatusReplicaFieldsAreOmittedForOtherStatuses|TestRpcNetworkStateAcceptsReplicaStatus|TestRpcNetworkStateStillRefusesAnUnknownStatus|TestPlugin_SignsActiveTablesOnly'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/ -run 'TestTableStatusReplicaFieldsAreOmittedForOtherStatuses|TestRpcNetworkStateAcceptsReplicaStatus|TestRpcNetworkStateStillRefusesAnUnknownStatus|TestPlugin_SignsActiveTablesOnly'`
 
 Expected: the three packages FAIL to compile:
 - `pkg/registry`: `undefined: TableStatusReplica`, `old.ReplicaOf undefined (type TableStatus has no field or method ReplicaOf)` (and the same for `ServedFrom`, `OwnerEntry`, `FrozenSince`), `unknown field ReplicaOf in struct literal of type TableStatus`, `undefined: OwnerEntry`;
@@ -1587,15 +1585,21 @@ The `default` branch and its error text stay.
 
 - [ ] **Step 10: Run the tests and see them pass**
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/registry pkg/network/rpc.go pkg/network/rpc_table_status_test.go pkg/plugins/sistatement/table_status_test.go && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/ ./pkg/plugins/agent/ && go test . -run 'TestAgent|TableStatus'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/registry pkg/network/rpc.go pkg/network/rpc_table_status_test.go pkg/plugins/sistatement/table_status_test.go && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/ ./pkg/plugins/agent/ && go test . -run 'TestAgent|TableStatus'`
 
 Expected: `gofmt` lists nothing. Every package is `ok`, including the unchanged `TestRpcNetworkState_TableStatusWireShape` (its `got != want` still compiles, see the Notes) and `TestTableStatusesFromSchemas`. `TestPlugin_SignsActiveTablesOnly` passes for `replica` without any change to `sistatement`.
 
 - [ ] **Step 11: Commit the wire status**
 
 ```bash
-git -C "$W" add pkg/registry/table_status.go pkg/registry/table_status_test.go pkg/network/rpc.go pkg/network/rpc_table_status_test.go pkg/plugins/sistatement/table_status_test.go
-git -C "$W" commit -m "feat(registry): the replica table status and its four additive fields
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_6="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_6}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/registry/table_status.go pkg/registry/table_status_test.go pkg/network/rpc.go pkg/network/rpc_table_status_test.go pkg/plugins/sistatement/table_status_test.go || exit 1
+git -C "$W" commit -S -m "feat(registry): the replica table status and its four additive fields
 
 sentio_getStorageIntegrityTableStatus gains the status replica (spec
 2026-10-14 §11) with replica_of, served_from, owner_entry and
@@ -1607,7 +1611,13 @@ RpcNetworkState accepts the new name; every other unknown name is
 still an error. The agent signs only active tables, so an INSERT into
 a replica table passes through unsigned and the host refuses it.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_7="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_7}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 12: Write the failing tests for the Replica rows and the in-flight count**
@@ -2084,7 +2094,7 @@ func TestReplicaReadAdmissionNeverOverlapsARelease(t *testing.T) {
 
 - [ ] **Step 13: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted|TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused|TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused|TestReplicaReadAdmissionNeverOverlapsARelease'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted|TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused|TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused|TestReplicaReadAdmissionNeverOverlapsARelease'`
 
 Expected: FAIL to compile, with `unknown field ReplicaReads in struct literal of type Plugin`, `unknown field TableState in struct literal of type Plugin`, `cannot use gate (variable of type *Plugin) as plugin.QueryCompletePlugin value in array or slice literal: *Plugin does not implement plugin.QueryCompletePlugin (missing method OnQueryComplete)`, the same for `plugin.ClosePlugin (missing method OnClose)`, and `(&Plugin{}).OnQueryComplete undefined (type *Plugin has no field or method OnQueryComplete)`. Before the fix `TestDecide_ReplicaRows` would also fail on its own: `decide` falls through to allow for Replica, so its write rows would report `err = <nil>, want ClientError code 392`.
 
@@ -2321,7 +2331,7 @@ In `pkg/plugins/sitablestate/BUILD.bazel` the library now imports `chsession`; i
 
 - [ ] **Step 15: Run the tests and see them pass**
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/plugins/sitablestate && go vet ./pkg/plugins/sitablestate/ && go test -race ./pkg/plugins/sitablestate/ && go test . -run 'TableState|TestBuildServer_'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/plugins/sitablestate && go vet ./pkg/plugins/sitablestate/ && go test -race ./pkg/plugins/sitablestate/ && go test . -run 'TableState|TestBuildServer_'`
 
 Expected:
 - `gofmt` and `go vet` print nothing: the `sync.Map` field sits behind pointer receivers and no `Plugin` is copied, so `copylocks` is satisfied;
@@ -2331,9 +2341,14 @@ Expected:
 - [ ] **Step 16: Commit the Replica rows**
 
 ```bash
-W=<worktree path>
-git -C "$W" add pkg/plugins/sitablestate/plugin.go pkg/plugins/sitablestate/plugin_test.go pkg/plugins/sitablestate/BUILD.bazel
-git -C "$W" commit -m "feat(sitablestate): Replica rows and the in-flight replica-read count
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_8="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_8}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/plugins/sitablestate/plugin.go pkg/plugins/sitablestate/plugin_test.go pkg/plugins/sitablestate/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "feat(sitablestate): Replica rows and the in-flight replica-read count
 
 A Replica table is another SI indexer's published data served from a
 member copy (spec 2026-10-14 §11), so the gate answers its reads and
@@ -2360,11 +2375,16 @@ expiry admits no new read of the copy. The plugin is then also a
 complete and close plugin; without a counter it decides and counts
 exactly as before.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_9="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_9}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
-Expected: `poetry <chen@sentio.xyz>`.
+Expected: a new HEAD, `poetry <chen@sentio.xyz> G` from the identity/signature check and a successful `git verify-commit`; any add, signing, identity or signature failure stops.
 
 - [ ] **Step 17: Write the failing tests for `Options.StorageIntegrityReplicaReads`**
 
@@ -2511,7 +2531,7 @@ The root `housegate_test` target already depends on every package these imports 
 
 - [ ] **Step 18: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test . -run 'TestBuildRefusesReplicaReadsWithoutATableState|TestBuildWiresReplicaReadsIntoSitablestate'`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && go test . -run 'TestBuildRefusesReplicaReadsWithoutATableState|TestBuildWiresReplicaReadsIntoSitablestate'`
 
 Expected: FAIL to compile with `unknown field StorageIntegrityReplicaReads in struct literal of type Options` (twice).
 
@@ -2579,7 +2599,7 @@ func resolveStorageIntegrityTableState(opts Options, reg registry.Registry) (sit
 
 - [ ] **Step 20: Run the tests and see them pass**
 
-Run: `W=<worktree path>; cd "$W" && gofmt -l proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go && go test . -run 'TestBuildRefusesReplicaReadsWithoutATableState|TestBuildWiresReplicaReadsIntoSitablestate' -v 2>&1 | grep -E '^ *(--- |ok|FAIL)' && go test .`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); set -o pipefail; cd "$W" && gofmt -l proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go && go test . -run 'TestBuildRefusesReplicaReadsWithoutATableState|TestBuildWiresReplicaReadsIntoSitablestate' -v 2>&1 | grep -E '^ *(--- |ok|FAIL)' && go test .`
 
 Expected: `gofmt` lists nothing; then
 
@@ -2596,9 +2616,14 @@ ok  	github.com/housegate/housegate	<time>
 - [ ] **Step 21: Commit the option**
 
 ```bash
-W=<worktree path>
-git -C "$W" add proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go
-git -C "$W" commit -m "feat(storage-integrity): Options.StorageIntegrityReplicaReads
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_10="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_10}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): Options.StorageIntegrityReplicaReads
 
 The host injects the in-flight counter of replica-served reads (spec
 2026-10-14 §11, clarification K44), and build.go hands it to
@@ -2610,11 +2635,16 @@ answers Replica, so the option is
 refused with the static table set or with storage integrity off.
 Unset, the chain is exactly today's.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_11="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_11}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
-Expected: `poetry <chen@sentio.xyz>`.
+Expected: a new HEAD, `poetry <chen@sentio.xyz> G` from the identity/signature check and a successful `git verify-commit`; any add, signing, identity or signature failure stops.
 
 - [ ] **Step 22: Document the Replica status and the counter**
 
@@ -2640,7 +2670,7 @@ Each paragraph and bullet stays one line.
 |-- sitablestate/   # server-side SI table-status gate: Pending/Refused/Gone/Replica refusals and in-flight replica reads (spec 2026-09-24 §7, 2026-10-14 §11)
 ```
 
-Run (prefix `W=<worktree path>;` as before):
+Run (prefix `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path");` as before):
 
 ```bash
 cd "$W" && for check in 'served read-only from a copy of indexer:CLAUDE.md' 'served read-only from a copy of indexer:README.md' 'StorageIntegrityReplicaReads:CLAUDE.md' 'the Replica tables sorted (:CLAUDE.md' 'for status `replica` only:CLAUDE.md' 'Gone/Replica:pkg/plugins/AGENTS.md'; do printf '%s %s\n' "${check##*:}" "$(command grep -c -F "${check%:*}" "${check##*:}")"; done && git -C "$W" diff --stat
@@ -2666,27 +2696,62 @@ The repository's root `AGENTS.md` is a symlink to `CLAUDE.md` and needs nothing.
 - [ ] **Step 23: Commit the documentation**
 
 ```bash
-git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md
-git -C "$W" commit -m "docs: the Replica table status, its gate rows and the replica-read counter
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_12="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_12}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md || exit 1
+git -C "$W" commit -S -m "docs: the Replica table status, its gate rows and the replica-read counter
 
 CLAUDE.md, README.md and pkg/plugins/AGENTS.md describe sitable.Replica,
 Served() and ServedDatabases, the replica status fields, sitablestate's
 Replica rows and refusal, and Options.StorageIntegrityReplicaReads
 (spec 2026-10-14 §11, clarifications K44 and K45).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_13="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_13}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 24: Full verification**
 
-Run: `W=<worktree path>; P1=<HG_TAG_P1>; cd "$W" && test -z "$(git diff --name-only "$P1" HEAD -- '*.go' | xargs gofmt -l)" && echo gofmt-clean && bazel run //:gazelle && git status --short && bazel build //... && bazel test //...`
+```bash
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+P1=$(cat "$HOME/.cache/s3c4-task42/p1-tag")
+cd "$W"
+python3 -I - "$P1" <<'PYFMT42'
+import subprocess, sys
+paths = subprocess.check_output(["git", "diff", "--name-only", "-z", sys.argv[1], "HEAD", "--", "*.go"]).split(b"\0")
+paths = [p.decode() for p in paths if p]
+if not paths:
+    raise SystemExit("no changed Go files; verify the task commits before continuing")
+if subprocess.check_output(["gofmt", "-l", *paths]):
+    raise SystemExit("changed Go files need gofmt; stop")
+print("gofmt-clean")
+PYFMT42
+bazel run //:gazelle || exit 1
+git status --short || exit 1
+si_checked_read_14="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_14}" || exit 1
+bazel build //... || exit 1
+bazel test //... || exit 1
+)
+```
 
 Expected:
-- `gofmt-clean` for the 19 Go files this task changed (the check is scoped to them because `pkg/config/agent_quickstart_test.go:312-313` is not gofmt-clean at `862a7a8`, with Go 1.26.3's `gofmt` as with 1.27's, and this task neither touches nor fixes it);
+- `gofmt-clean` for the Go files this task changed (the check is scoped to them because `pkg/config/agent_quickstart_test.go:312-313` is not gofmt-clean at `862a7a8`, with Go 1.26.3's `gofmt` as with 1.27's, and this task neither touches nor fixes it);
 - gazelle makes no change, so `git status --short` prints nothing: the two `BUILD.bazel` edits of Steps 4 and 14 are exactly what gazelle generates;
 - the build passes and every test passes. On darwin run plain `bazel test //...`; `--config=ci` resolves only on linux/x64. The integration targets are `manual`; Task 43's integration tests and Task 44's PR run them in the `Integration (ClickHouse)` job. `//pkg/replay/snapshotquery:snapshotquery_test` runs `TestCanonical65536Duplicates` under the 60 s deadline its limits give `Canonicalize` (`MaxExecutionMS: 60000`): on a loaded machine it fails with `canonical_test.go:148: context deadline exceeded`, at `HG_TAG_P1` as well. This task does not change `pkg/replay`, so in that case rerun `bazel test //pkg/replay/snapshotquery:snapshotquery_test` once the machine is idle and continue only when it passes.
 
-Run: `W=<worktree path>; P1=<HG_TAG_P1>; git -C "$W" log --oneline -5 && git -C "$W" diff --stat "$P1" HEAD | tail -1`
+Run: `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); P1=$(cat "$HOME/.cache/s3c4-task42/p1-tag"); git -C "$W" log --oneline -5 && git -C "$W" diff --stat "$P1" HEAD | tail -1`
 
 Expected: the five commits of Steps 6, 11, 16, 21 and 23, newest first:
 
@@ -2698,7 +2763,8 @@ Expected: the five commits of Steps 6, 11, 16, 21 and 23, newest first:
 <hash> feat(sitable): the Replica status, Served() and the replica-read counter
 ```
 
-and the summary line ` 24 files changed, 1508 insertions(+), 41 deletions(-)` (the nine files of Step 6, five of Step 11, three of Step 16, four of Step 21 and three of Step 23; the drafted 1017 insertions plus the 176 net lines of review round 1's read admission in Steps 12, 14, 17 and 19 and the 315 net lines of review round 2's admission fence in Steps 2, 4, 12, 14, 17 and 19, all inside lines this task adds; the counts hold when `HG_TAG_P1` has exactly the base this task was drafted on, see Base and anchors). Do not push: Task 43 continues on this branch.
+and a diff limited to the 24 listed paths. Line counts depend on the actual post-P1 source and the reviewed task text; inspect the real diff rather than treating the old draft's 1508/41 literals as an acceptance oracle. Do not push: Task 43 continues on this exact branch and actual worktree path.
+
 
 ---
 
@@ -2731,7 +2797,7 @@ Nothing here produces a Replica entry: only a host-injected table state can (sen
 - Modify: `CLAUDE.md` (`:55`, `:153`, `:155`, `:172`), `README.md` (`:203`), `pkg/plugins/AGENTS.md` (`:14`, `:40`, `:42`, `:52`, `:58`), `pkg/rewriter/AGENTS.md` (`:12`, `:21`, `:28`, `:33`, `:40`)
 - Leave unchanged: `pkg/rewriter/native_smoke_test.go` (the engine-gated cases live in `replica_parity_test.go`), `pkg/plugins/sitablestate` (Task 42), `IsObjectCarrierName`, and every file of the never-edit list.
 
-Line anchors are housegate `origin/main` `862a7a8`. It carries Plan S3-A Tasks 1–2 as merged (`bc92f91`, housegate#238, released as `HG_TAG` `v0.20.0`), so S3-A's text is concrete in every file above; the four commits after `bc92f91` (housegate#239–#242) change only S3-A's plan file, so every anchor is also that of `994128b`, the revision Tasks 42 and 44 name. Task 42 changes none of these code anchors: in `build.go` it edits only the `sitablestate` registration (`:875-881`), after every hunk here, and in `CLAUDE.md`, `README.md` and `pkg/plugins/AGENTS.md` it replaces other lines or other substrings of the same line (`CLAUDE.md:172`). Under the hunk rule, apply each replacement below to the file as Tasks 42 and S3-C1 Task 22 left it.
+**Base and anchors.** Runtime anchors were rechecked at housegate `origin/main` `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` (2026-10-17; changes since `5f8a9a9` are documentation only), with reviewed S3-C1 Task22 and the complete reviewed Task42 applied. Verification copies Task42's real source only after checking its925-file HG and360-file core manifests; no upstream API or Role stand-ins are used. S3-A is released (`HG_TAG=v0.20.0`). Task42's shared branch and returned actual URWT path are retained. Line numbers below are navigation hints; quoted text is the hunk anchor. A snippet ending inside a call, as the Step9 `buildStorageIntegrityArgs(` prefix does, replaces that exact prefix without replacing the rest of its line. Stop and re-read any other changed anchor; preserve unrelated current-main code. Task36 full500/C2/C3 prerequisites remain pending and this independent candidate verification does not authorize P3 execution.
 
 **Interfaces:**
 - Consumes:
@@ -2762,22 +2828,61 @@ Notes:
 - **`unsafe_latest`.** Spec §11's "before the engine runs" is read as contract §29.2 fixes it: the refusal needs the accessed tables, which only the engine's first pass reports, and that pass only classifies, so the refusal comes before anything reaches ClickHouse. With `SafeTable` = `UnsafeTable` = the copy, an engine's `unsafe_latest` rendering (`hg_safe ∪ hg_unsafe` minus promoted parts) would read the copy twice. `requireNoReplicaUnderUnsafeLatest` runs on the first pass's accessed ids, before `requireActiveAccessedIDs` (which would otherwise refuse with its generic `not an Active storage-integrity table` text) and before the promotion port; the first pass never reaches ClickHouse. On a host without a promotion port, `buildStorageIntegrityArgs` already refuses `unsafe_latest` with its `unavailable on this housegate` text, before the engine runs.
 - **The K48 rule.** It applies on peer-trusted, non-forwarded sessions, after S3-A's scan, placeholder and reserved-name rules. A bare or backquoted `IsObjectCarrierName` callable followed by `(` must take only arguments that are each exactly one token: a string literal (heredocs included) or an unsigned decimal integer (a word of ASCII digits only). Anything else is refused 392, naming the callable as written: a call, an operator, a cast, a parenthesised literal, a signed number, a decimal, an empty argument, a call that never closes, and every identifier, bare (`1d` included), backquoted, double-quoted or qualified (`` phys.`db1.u` ``, `d.1`). An identifier is refused because ClickHouse's analyzer resolves an identifier argument of a table function through the statement's aliases before it takes it as a name: measured on ClickHouse 26.3.51.7 (`clickhouse/clickhouse-server:26.3`), `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`, the same with `` `d` ``, `"d"` or `1d`, `SELECT *, concat('hg_', 'replica') AS d FROM merge(d, '.*')`, an inline `(concat('hg_', 'replica') AS d)` in `WHERE`, an enclosing query's `WITH`, `WITH concat('hg_', 'replica') AS phys … remote('127.0.0.1:9000', phys, 'secret')` and `WITH tuple(concat('hg_', 'replica'), 'secret') AS d … remote('127.0.0.1:9000', d.1, d.2)` each read the row of `hg_replica.secret`, while `AS 1` is a syntax error, so a digits-only word is always a number. A lexical guard cannot tell which identifiers an alias shadows, so it admits none; no legitimate leg needs one. Arguments are never evaluated: the rule is "no computed argument", not a proof that a computed one is safe (constant folding). S3-A's `peerLegForms`, and the legs ClickHouse pushes into a peer leg (`remote('127.0.0.1:9000', 'phys_pr', 'prdb.l', 'housegate_test', '[HIDDEN]')`, measured by S3-A's `TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass`), carry literal arguments only and still pass. Operator sessions keep refusing every carrier by name, and ordinary and forwarded sessions are unchanged (the engines refuse `merge(concat('hg_', 'replica'), '.*')` there, pinned by the parity tests).
 - **The internal-listen warning** (`build.go:170`) said the guard does not refuse names "built by computed table-function arguments". That is no longer true for object carriers, so the text and its test change. The network rule it states stays.
-- **Verified while drafting (2026-10-16)** on a `git archive` of housegate `origin/main` `862a7a8` with S3-C1 Task 22's `CopyTable` (contract §16) and Task 42's five commits applied as their tasks write them, then committed as a stand-in for the branch: this task's text, applied mechanically step by step from its code blocks, made every new test fail first exactly as Steps 3, 8 and 13 state; every check of Steps 5, 10, 15, 18 and 20 then passed with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (`-race` where the steps say so), `go vet` clean on the five changed packages and `gofmt -l` empty; both engine-gated tests passed with `go test` and through Bazel against the FFI library v0.17.0 and a local container of the devnet2 rewriter pin; the integration tests passed with `go test` and with `bazel test //pkg/integration:integration_test` on `clickhouse/clickhouse-server:25.8` (25.8.28.1); `bazel run //:gazelle` (offline, `--repository_disable_download`) changed nothing, `bazel build //...` passed and `bazel test //...` ended with `67 tests pass`. The five commits left ` 19 files changed, 1461 insertions(+), 39 deletions(-)`, and a second replay of the final text on a fresh copy gave the same tree. Mutations each caught by the test meant for them: no Replica check at hello, peer trust ignored, the mark not cleared on a pivot or on a local `USE`, no rebind of a forwarded session, no 733, excluded parts on a copy, no empty-copy refusal, no `unsafe_latest` refusal, no scrubber pair, no computed-argument rule, any single token accepted, an unclosed call accepted, the new reason not exported at 0, the `build.go` wiring removed (every `TestReplicaReads_*` fails at the handshake) and `localizeReplicaServedUse` removed (both engines and the integration `USE` fail). Every bash block and `Run:` line passes `bash -n` and `shellcheck`, and the fish block passes `fish --no-execute`.
-- **No push, PR or release here.** Tasks 42–44 share the branch `urwt/claude/multi-source-s3c4` and are released once as `HG_TAG_P3` by Task 44, which opens the PR. This task makes no remote or live change. The only actions that leave the machine are optional downloads, each asked for in chat first: the FFI library when it is not cached (Step 10), the user's own pull of the private rewriter image (Step 10), and a testcontainers image that is not local (Step 18). Rollback: no state and no wire change; the previous image restores today's behaviour.
+- **Review verification (2026-10-17).** Replayed the complete Go/test blocks on actual reviewed Task42 source: routing compile RED, exactly seven rewrite-test REDs, peer-guard compile RED and the warning behavior RED; affected Go race packages, native FFI v0.17.0 parity/smoke, Go build and integration binary compilation passed. Exact final Bazel, vet, mutations and procedural checks are reported with their actual outcomes in the review report. The gRPC parity and ClickHouse execution are still required execution gates; this bounded review ran no Docker/ClickHouse/endpoint and does not turn a skipped test into proof. Historical draft measurements below are identified as such, never substituted for current-candidate success.
+- **No push, PR or release here.** Tasks42–44 share Task42's returned branch (`urwt/codex/multi-source-s3c4` for this Codex-hosted executor; Claude-hosted execution uses `claude`) and are released once as `HG_TAG_P3` by Task 44, which opens the PR. This task makes no remote or live change. The only actions that leave the machine are optional downloads, each asked for in chat first: the FFI library when it is not cached (Step 10), the user's own pull of the private rewriter image (Step 10), and a testcontainers image that is not local (Step 18). Rollback: no state and no wire change; the previous image restores today's behaviour.
 
 - [ ] **Step 1: Worktree and base check**
 
-The worktree is Task 42's, created by Task 42 Step 1. The Bash tool keeps no variables between calls, so every command below starts with `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4";`.
+Continue in Task42's actual returned URWT path; create no second worktree or branch. Load `$HOME/.cache/s3c4-task42/worktree-path` on every tool call. Codex expects `urwt/codex/multi-source-s3c4`; a Claude-hosted executor substitutes `claude` consistently with Task42. Preserve the stored absolute symlink spelling. Read that worktree's `AGENTS.md` and `CLAUDE.md` before editing.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; HG=$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get /Users/uranuswch/Dev/projects/sentio-network/housegate HG_TAG) && HG=${HG#HG_TAG=} && git -C "$W" rev-parse --abbrev-ref HEAD && git -C "$W" log --oneline origin/main..HEAD && git -C "$W" merge-base --is-ancestor "$HG" HEAD && echo "descends from $HG" && git -C "$W" grep -c -e 'func ServedDatabases(s Snapshot) \[\]string' -e 'Served() \[\]Table *// every Replica table, sorted by ID' -e 'func CopyTable(id string, incarnationSeq uint64) string' -- pkg/sitable/sitable.go && git -C "$W" grep -c "served read-only from a copy of indexer %d's published data; write through its owner" -- pkg/plugins/sitablestate/plugin.go && git -C "$W" grep -c -e '^func PeerReservedNamespaceViolation' -e '^func IsObjectCarrierName' -- pkg/plugins/sireserved/plugin.go && git -C "$W" grep -c '^var peerLegForms = map\[string\]string{' -- pkg/plugins/sireserved/plugin_test.go && git -C "$W" grep -c 'but not names built by computed table-function arguments' -- build.go && git -C "$W" diff --stat origin/main HEAD -- pkg/chsession pkg/plugins/forward pkg/rewriter pkg/plugins/sireserved pkg/integration build_test.go pkg/rewriter/AGENTS.md`
+```bash
+(
+set -euo pipefail
+state="$HOME/.cache/s3c4-task42"
+repo=/Users/uranuswch/Dev/projects/sentio-network/housegate
+python3 -I - "$state" "$repo" <<'PY43BASE'
+import os, pathlib, re, subprocess, sys
+state, repo = pathlib.Path(sys.argv[1]), sys.argv[2]
+rows = (state / "worktree-path").read_text().splitlines()
+if len(rows) != 1 or not os.path.isabs(rows[0]) or any(ord(c) < 32 or ord(c) == 127 for c in rows[0]) or not os.path.isdir(rows[0]):
+    raise SystemExit("Task42 actual worktree path is missing or invalid; stop")
+p = rows[0]
+def git(where, *args):
+    return subprocess.check_output(["git", "-C", where, *args], text=True).strip()
+if git(p, "branch", "--show-current") != "urwt/codex/multi-source-s3c4":
+    raise SystemExit("unexpected Task42 branch; stop")
+if os.path.realpath(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) != os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")):
+    raise SystemExit("unexpected Task42 repository; stop")
+if git(p, "status", "--porcelain"):
+    raise SystemExit("Task42 worktree has changes; inspect before continuing")
+if git(p, "config", "user.name") != "poetry" or git(p, "config", "user.email") != "chen@sentio.xyz" or git(p, "config", "--bool", "commit.gpgsign") != "true":
+    raise SystemExit("Task42 poetry/signed-commit configuration is missing; stop")
+PY43BASE
+W=$(cat "$state/worktree-path")
+python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$repo" HG_TAG > "$state/task43-ledger.env" || exit 1
+HG=$(python3 -I - "$state/task43-ledger.env" <<'PY43TAG'
+import pathlib, re, sys
+rows = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if len(rows) != 1 or not re.fullmatch(r"HG_TAG=v[0-9]+\.[0-9]+\.[0-9]+", rows[0]):
+    raise SystemExit("invalid HG_TAG ledger result; stop")
+print(rows[0].split("=", 1)[1])
+PY43TAG
+)
+git -C "$W" merge-base --is-ancestor "$HG" HEAD || exit 1
+git -C "$W" log --oneline origin/main..HEAD || exit 1
+printf 'descends from %s\n' "$HG"
+git -C "$W" grep -c -e 'func ServedDatabases(s Snapshot) \[\]string' -e 'Served() \[\]Table *// every Replica table, sorted by ID' -e 'func CopyTable(id string, incarnationSeq uint64) string' -- pkg/sitable/sitable.go || exit 1
+git -C "$W" grep -c "served read-only from a copy of indexer %d's published data; write through its owner" -- pkg/plugins/sitablestate/plugin.go || exit 1
+git -C "$W" grep -c -e '^func PeerReservedNamespaceViolation' -e '^func IsObjectCarrierName' -- pkg/plugins/sireserved/plugin.go || exit 1
+git -C "$W" grep -c '^var peerLegForms = map\[string\]string{' -- pkg/plugins/sireserved/plugin_test.go || exit 1
+git -C "$W" grep -c 'but not names built by computed table-function arguments' -- build.go || exit 1
+git -C "$W" diff --stat origin/main HEAD -- pkg/chsession pkg/plugins/forward pkg/rewriter pkg/plugins/sireserved pkg/integration build_test.go pkg/rewriter/AGENTS.md || exit 1
+)
+```
 
-Expected:
-- `urwt/claude/multi-source-s3c4`, then Task 42's commits only (from `feat(sitable): the Replica status, Served() and the replica-read counter` to its `docs:` commit);
-- `descends from v0.20.0` (Plan S3-A's housegate release `HG_TAG`, read from its Appendix C on `main`; `s3-ledger.py` stops with `… is not recorded` if it is missing);
-- `pkg/sitable/sitable.go:3` (Task 42's `ServedDatabases` and `Served()`, S3-C1's `CopyTable`), `pkg/plugins/sitablestate/plugin.go:1` (Task 42's Replica row), `pkg/plugins/sireserved/plugin.go:2`, `pkg/plugins/sireserved/plugin_test.go:1`, `build.go:1` (S3-A's text);
-- an empty diff stat: Task 42 changes none of these paths.
+Expected: Task42's five commits only, `descends from v0.20.0`, then counts3,1,2,1,1 for the named paths and an empty diff at the expected post-Task42 base. A missing ledger value, wrong branch/repository, dirty worktree or absent prerequisite stops. A nonempty diff requires re-reading the changed file and applying the quoted hunks by intent without overwriting unrelated edits.
 
-If a count is 0, a prerequisite is missing (Task 42, S3-C1 Task 22 or Plan S3-A): stop. If the diff stat is not empty, re-read each listed file and apply the hunks below on top of it (the hunk rule of the Global Constraints).
+Every later call starts with `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")`. Task42 configured `commit.gpgsign true`; all commits below additionally use `-S` and require a new HEAD with `poetry <chen@sentio.xyz> G` and `git verify-commit`. On signing cancellation, stop and ask the user to unlock the repository's actual key in their own terminal; never disable signing or publish an unsigned fallback.
 
 - [ ] **Step 2: Write the failing routing tests**
 
@@ -3116,7 +3221,7 @@ func TestBuildServer_ForwardTableStateFollowsStorageIntegrity(t *testing.T) {
 
 - [ ] **Step 3: Run the routing tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/plugins/forward/ 2>&1 | head -4; go test . -run TestBuildServer_ForwardTableStateFollowsStorageIntegrity 2>&1 | head -3`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W"; if go test ./pkg/plugins/forward/ > $HOME/.cache/s3c4-task42/task43-routing-red.log 2>&1; then echo "routing tests unexpectedly passed; stop" >&2; exit 1; fi; cat $HOME/.cache/s3c4-task42/task43-routing-red.log; if go test . -run TestBuildServer_ForwardTableStateFollowsStorageIntegrity > $HOME/.cache/s3c4-task42/task43-root-red.log 2>&1; then echo "wiring test unexpectedly passed; stop" >&2; exit 1; fi; cat $HOME/.cache/s3c4-task42/task43-root-red.log`
 
 Expected: both fail to compile. `pkg/plugins/forward` prints `# github.com/housegate/housegate/pkg/plugins/forward [github.com/housegate/housegate/pkg/plugins/forward.test]`, then `pkg/plugins/forward/forward_test.go:628:4: p.TableState undefined (type *Plugin has no field or method TableState)` and `pkg/plugins/forward/forward_test.go:674:10: snap.ReplicaServedDatabase undefined (type chsession.SessionStateSnapshot has no field or method ReplicaServedDatabase)`. The root package prints `# github.com/housegate/housegate [github.com/housegate/housegate.test]`, then `./build_test.go:2629:37: fwd.TableState undefined (type *forward.Plugin has no field or method TableState)` and the same at `:2630:79`.
 
@@ -3548,19 +3653,24 @@ with:
 
 - [ ] **Step 5: Run the routing tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/chsession pkg/plugins/forward build.go build_test.go && go test -race ./pkg/chsession/ ./pkg/plugins/forward/ && go test -count=1 . && go test -count=1 . -run TestBuildServer_ForwardTableStateFollowsStorageIntegrity -v 2>&1 | grep -E '^--- ' && go test ./pkg/plugins/forward/ -run 'TestForward_' -v 2>&1 | grep -E '^--- ' | sort`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/chsession pkg/plugins/forward build.go build_test.go && go test -race ./pkg/chsession/ ./pkg/plugins/forward/ && go test -count=1 . && go test -count=1 . -run TestBuildServer_ForwardTableStateFollowsStorageIntegrity -v 2>&1 | grep -E '^--- ' && go test ./pkg/plugins/forward/ -run 'TestForward_' -v 2>&1 | grep -E '^--- ' | sort`
 
 Expected: `gofmt` lists nothing; `ok  	github.com/housegate/housegate/pkg/chsession` and `ok  	github.com/housegate/housegate/pkg/plugins/forward` (race detector on, the existing forward tests unchanged); `ok  	github.com/housegate/housegate`; `--- PASS: TestBuildServer_ForwardTableStateFollowsStorageIntegrity`; then exactly seven lines, `--- PASS:` for `TestForward_PeerTrustedSessionsIgnoreReplicaServing`, `TestForward_ReplicaServedHelloStaysLocal`, `TestForward_ServingEndedIsARetryableRefusal`, `TestForward_USEOfAReplicaServedDatabaseRebindsAForwardedSessionToLocal`, `TestForward_USEOfAReplicaServedDatabaseStaysLocal`, `TestForward_UseElsewhereClearsTheReplicaMark` (with its subtests `pivot_to_the_owner`, `already_routed_to_the_owner` and `local_database`) and `TestForward_WithoutTableStateBehavesAsToday`.
 
 - [ ] **Step 6: Commit the routing**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && git status --short`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && git status --short`
 Expected: exactly the six files below, all ` M`.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/chsession/state.go pkg/plugins/forward/forward.go pkg/plugins/forward/forward_test.go pkg/plugins/forward/BUILD.bazel build.go build_test.go
-git -C "$W" commit -m "feat(forward): keep sessions on a replica-served database local
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_15="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_15}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/chsession/state.go pkg/plugins/forward/forward.go pkg/plugins/forward/forward_test.go pkg/plugins/forward/BUILD.bazel build.go build_test.go || exit 1
+git -C "$W" commit -S -m "feat(forward): keep sessions on a replica-served database local
 
 With a table-state port (spec 2026-10-14 §11), forward.Plugin treats a
 database that this host serves from its member's copy
@@ -3576,7 +3686,13 @@ database, clears the mark. Peer-trusted sessions and a nil table
 state route exactly as before. build.go wires the SI table state when
 storage integrity is enabled.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_16="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_16}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 7: Write the failing rewrite tests**
@@ -4116,7 +4232,7 @@ with:
 
 - [ ] **Step 8: Run the rewrite tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test -count=1 ./pkg/rewriter/ 2>&1 | grep -E '^ *--- FAIL|^ +[a-z_]+\.go:[0-9]+:'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W"; if go test -count=1 ./pkg/rewriter/ > "$HOME/.cache/s3c4-task42/task43-rewrite-red.log" 2>&1; then echo "rewrite tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task43-rewrite-red.log"`
 
 Expected: seven tests FAIL, each with its subtests and messages (map iteration order may name `rrdb.a` or `rrdb.b` in the first line, and the protobuf text of a table may carry one or two spaces between its fields):
 - `TestReplicaTableResolvesBeforeRemoteMapping`: `rrdb.a = <nil>, want hg_replica.rrdb__a__i3 on both surfaces`;
@@ -4456,13 +4572,13 @@ with:
 
 - [ ] **Step 10: Run the rewrite tests and the engine parity tests**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/rewriter && go test -race -count=1 ./pkg/rewriter/ && go test -count=1 ./pkg/rewriter/ -run 'Replica|Unsafe|Scrubber|BuildStorageIntegrityArgs' -v 2>&1 | grep -E '^--- (FAIL|SKIP)'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/rewriter && go test -race -count=1 ./pkg/rewriter/ && go test -count=1 ./pkg/rewriter/ -run 'Replica|Unsafe|Scrubber|BuildStorageIntegrityArgs' -v 2>&1 | grep -E '^--- (FAIL|SKIP)'`
 
 Expected: `gofmt` lists nothing; `ok  	github.com/housegate/housegate/pkg/rewriter`; then only two lines, `--- SKIP: TestNativeEngineReplicaTableResolvesBeforeRemoteMapping` and `--- SKIP: TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping` (no FAIL: the seven tests of Step 8, `TestBuildStorageIntegrityArgsWithoutReplicaTablesIsUnchanged`, every `TestBuildStorageIntegrityArgs*`, `TestSentioRewriter_UnsafeLatest*` and `TestStorageIntegrityScrubber*` test pass).
 
-The native engine needs the FFI library v0.17.0. It is cached at `$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib` once anything fetched it. If `test -s` on that path fails, fetching it downloads the asset from the rewriter-go GitHub release (the repository's own CI step, `ci.yml:107-114`): ask the user in chat before running `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0 | tail -n 1`, which prints that path.
+The native engine needs the FFI library v0.17.0. It is cached at `$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib` once anything fetched it. If `test -s` on that path fails, fetching it downloads the asset from the rewriter-go GitHub release (the repository's own CI step, `ci.yml:107-114`): ask the user in chat before running `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0 | tail -n 1`, which prints that path.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"; cd "$W" && test -s "$FFI" && POLYGLOT_SQL_FFI_PATH="$FFI" go test -count=1 ./pkg/rewriter/ -run 'TestNativeEngineReplicaTableResolvesBeforeRemoteMapping|TestNativeEngineSmoke|TestNativeEngineProbeSmoke' -v 2>&1 | grep -E '^--- |->'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"; cd "$W" && test -s "$FFI" && POLYGLOT_SQL_FFI_PATH="$FFI" go test -count=1 ./pkg/rewriter/ -run 'TestNativeEngineReplicaTableResolvesBeforeRemoteMapping|TestNativeEngineSmoke|TestNativeEngineProbeSmoke' -v 2>&1 | grep -E '^--- |->'`
 
 Expected: `--- PASS` for the three tests and the logged rewrites, as measured:
 - `SELECT count() FROM rrdb.a -> SELECT count() FROM (SELECT * EXCEPT (_hg_row_id) FROM hg_replica.rrdb__a__i3) AS "rrdb.a"`;
@@ -4474,12 +4590,34 @@ Expected: `--- PASS` for the three tests and the logged rewrites, as measured:
 The gRPC engine runs against a local container of the devnet2 rewriter pin. It needs Docker, and the image is private: if `docker image inspect` fails, the agent asks the user in chat to pull it in their own terminal (their registry login), with the fish commands below, and waits.
 
 ```bash
-IMG="us-west1-docker.pkg.dev/sentio-352722/sentio/housegate-rewriter:$(git -C /Users/uranuswch/Dev/projects/sentio-network/production show origin/main:k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml | sed -n 's/^    tag: "\(0\.17\.0@sha256:[0-9a-f]*\)"$/\1/p')"
-docker image inspect "$IMG" --format '{{index .RepoDigests 0}}'
-docker run -d --rm --name hg-s3c4-rewriter -p 127.0.0.1:50551:50051 "$IMG" /clickhousegate_rewriter 50051 80
-for _ in $(seq 1 120); do docker logs hg-s3c4-rewriter 2>&1 | grep -q 'Server listening on 0.0.0.0:50051 (gRPC)' && break; sleep 1; done
-docker logs hg-s3c4-rewriter 2>&1 | head -3
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551 go test -count=1 ./pkg/rewriter/ -run TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping -v 2>&1 | grep -E '^--- |->'
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"
+test -s "$FFI" || exit 1
+pin=$(git -C /Users/uranuswch/Dev/projects/sentio-network/production show origin/main:k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml | sed -n 's/^    tag: "\(0\.17\.0@sha256:[0-9a-f]*\)"$/\1/p')
+python3 -I - "$pin" <<'PY43IMAGE'
+import re, sys
+if not re.fullmatch(r"0\.17\.0@sha256:[0-9a-f]{64}", sys.argv[1]):
+    raise SystemExit("missing or changed deployed rewriter pin; review the engines before continuing")
+PY43IMAGE
+IMG="us-west1-docker.pkg.dev/sentio-352722/sentio/housegate-rewriter:$pin"
+docker image inspect "$IMG" --format '{{index .RepoDigests 0}}' || exit 1
+name="hg-s3c4-rewriter-$(python3 -I -c 'import uuid; print(uuid.uuid4().hex)')"
+cid=$(docker run -d --rm --name "$name" --label housegate.s3c4.task43="$name" -p 127.0.0.1:50551:50051 "$IMG" /clickhousegate_rewriter 50051 80) || exit 1
+# Only the exact container this successful run returned may be stopped.
+trap 'docker stop --time 10 "$cid" >/dev/null || exit 1' EXIT
+ready=false
+for _ in $(seq 1 120); do
+    if docker logs "$cid" 2>&1 | grep 'Server listening on 0.0.0.0:50051 (gRPC)' > /dev/null; then ready=true; break; fi
+    sleep 1
+done
+test "$ready" = true || { echo "local rewriter did not become ready within120s; stop" >&2; exit 1; }
+docker logs "$cid" 2>&1
+cd "$W"
+HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551 go test -count=1 ./pkg/rewriter/ -run TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping -v
+bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH="$FFI" --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551 --test_output=all
+)
 ```
 
 For the user, in fish:
@@ -4491,18 +4629,22 @@ docker pull $IMG
 
 Expected: `docker image inspect` prints `us-west1-docker.pkg.dev/sentio-352722/sentio/housegate-rewriter@sha256:b3b227fa4a28bd9dcd5d3d6aa172890ff66d7bf60e1c7039428efe4dabebb50a`; `docker run` warns that the image is `linux/amd64` on an `arm64` host (it runs emulated on Apple silicon) and prints the container id; within two minutes the log shows `Rewriter Server Version: v0.17.0-dirty (b56ae374ce25c4303a51feb4d8bb2c91bc252c36)` and `Server listening on 0.0.0.0:50051 (gRPC)`; then `--- PASS: TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping` with the same rewrites, the aliases quoted with backticks (`` AS `rrdb.a` ``) and the JOIN written `INNER JOIN`.
 
-Run the two engine cases the way runbook §2 does (Bazel, both environment variables, the container still up): `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"; cd "$W" && bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH="$FFI" --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551 --test_output=all 2>&1 | grep -E 'native rewriter engine loaded|connected to rewriter service|PASSED|FAILED'`, then `docker stop hg-s3c4-rewriter`.
-Expected: `native rewriter engine loaded`, `connected to rewriter service service_addr=127.0.0.1:50551` and `//pkg/rewriter:rewriter_test PASSED`; `docker stop` prints `hg-s3c4-rewriter`.
+The same block runs the two engine cases the way runbook §2 does (Bazel, both environment variables), while its owned container is up. Expected: `native rewriter engine loaded`, `connected to rewriter service service_addr=127.0.0.1:50551` and `//pkg/rewriter:rewriter_test PASSED`; the EXIT trap then stops only that block's returned container id. An already-used local port, failed create, missing image or readiness timeout stops the block; it never inspects or stops a pre-existing container with a shared name.
 
 - [ ] **Step 11: Commit the rewrite**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && git status --short`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && git status --short`
 Expected: ` M` for `pkg/rewriter/BUILD.bazel`, `pkg/rewriter/sentio.go`, `pkg/rewriter/storage_integrity.go`, `pkg/rewriter/storage_integrity_test.go` and `??` for `pkg/rewriter/replica_parity_test.go`, nothing else.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/rewriter/storage_integrity.go pkg/rewriter/sentio.go pkg/rewriter/storage_integrity_test.go pkg/rewriter/replica_parity_test.go pkg/rewriter/BUILD.bazel
-git -C "$W" commit -m "feat(rewriter): read Replica tables from the member's copy
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_17="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_17}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/rewriter/storage_integrity.go pkg/rewriter/sentio.go pkg/rewriter/storage_integrity_test.go pkg/rewriter/replica_parity_test.go pkg/rewriter/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "feat(rewriter): read Replica tables from the member's copy
 
 buildStorageIntegrityArgs lists every Replica table of the query's
 snapshot with SafeTable = UnsafeTable = hg_replica.<CopyTable> and no
@@ -4518,7 +4660,13 @@ of a copy after the first pass, before anything reaches ClickHouse,
 with a message naming safe mode and the owner, so a copy is never read
 twice. The scrubber maps the copy name back to its logical table.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_18="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_18}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 12: Write the failing peer-guard tests**
@@ -4679,7 +4827,9 @@ with:
 
 - [ ] **Step 13: Run the peer-guard tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/plugins/sireserved/ 2>&1 | head -2; go test -count=1 . -run TestStorageIntegrityInternalListenWarning 2>&1 | grep -m1 'want'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W"; if go test ./pkg/plugins/sireserved/ > "$HOME/.cache/s3c4-task42/task43-peer-red.log" 2>&1; then echo "peer tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task43-peer-red.log"`
+
+Then run the warning regression separately: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W"; if go test -count=1 . -run TestStorageIntegrityInternalListenWarning > "$HOME/.cache/s3c4-task42/task43-warning-red.log" 2>&1; then echo "warning regression unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task43-warning-red.log"`.
 
 Expected: `pkg/plugins/sireserved` fails to compile with `pkg/plugins/sireserved/plugin_test.go:1356:19: undefined: PeerCarrierArgumentViolation`; `TestStorageIntegrityInternalListenWarning` fails with `build_test.go:212: warning = "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id there, string literals included, but not names built by computed table-function arguments, so internal_listen MUST still be reachable only from trusted peer subnets", want "every object-carrier table function called with a computed argument"`.
 
@@ -4955,19 +5105,24 @@ with:
 
 - [ ] **Step 15: Run the peer-guard tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/plugins/sireserved build.go build_test.go && go test -count=1 ./pkg/plugins/sireserved/ ./pkg/plugins/sipeerguard/ ./pkg/plugins/tablerefguard/ && go test -count=1 ./pkg/plugins/sireserved/ -run 'TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused|TestOnQuery_PeerLegFormsPass|TestOnQuery_PeerRefusalCountsAndLogs' -v 2>&1 | grep -E '^--- ' && go test -count=1 ./pkg/plugins/sireserved/ -run TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused -v 2>&1 | grep -c '^    --- PASS' && go test -count=1 . -run TestStorageIntegrityInternalListenWarning`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/plugins/sireserved build.go build_test.go && go test -count=1 ./pkg/plugins/sireserved/ ./pkg/plugins/sipeerguard/ ./pkg/plugins/tablerefguard/ && go test -count=1 ./pkg/plugins/sireserved/ -run 'TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused|TestOnQuery_PeerLegFormsPass|TestOnQuery_PeerRefusalCountsAndLogs' -v 2>&1 | grep -E '^--- ' && go test -count=1 ./pkg/plugins/sireserved/ -run TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused -v 2>&1 | grep -c '^    --- PASS' && go test -count=1 . -run TestStorageIntegrityInternalListenWarning`
 
 Expected: `gofmt` lists nothing; `ok` for `sireserved`, `sipeerguard` and `tablerefguard`; `--- PASS` for `TestOnQuery_PeerLegFormsPass` (S3-A's, unchanged), `TestOnQuery_PeerRefusalCountsAndLogs` (S3-A's, unchanged) and `TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused`; `41` (its 31 refused forms and 10 passing literal forms); `ok  	github.com/housegate/housegate`.
 
 - [ ] **Step 16: Commit the peer guard**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && git status --short`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && git status --short`
 Expected: ` M` for exactly `build.go`, `build_test.go`, `pkg/plugins/sireserved/plugin.go` and `pkg/plugins/sireserved/plugin_test.go`.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/plugins/sireserved/plugin.go pkg/plugins/sireserved/plugin_test.go build.go build_test.go
-git -C "$W" commit -m "feat(sireserved): refuse computed carrier arguments on peer loopbacks
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_19="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_19}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/plugins/sireserved/plugin.go pkg/plugins/sireserved/plugin_test.go build.go build_test.go || exit 1
+git -C "$W" commit -S -m "feat(sireserved): refuse computed carrier arguments on peer loopbacks
 
 Plan S3-C4 K48: once si_gateway may read hg_replica, a peer-trusted,
 non-forwarded leg such as merge(concat('hg_', 'replica'), '.*') could
@@ -4984,7 +5139,13 @@ keep passing; operator, ordinary and forwarded sessions are unchanged.
 The internal-listen warning no longer says computed names are not
 refused.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_20="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_20}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 17: Write the integration tests**
@@ -5297,7 +5458,7 @@ Every dep the new file imports is already in the target.
 
 - [ ] **Step 18: Run the integration tests**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/integration/storage_integrity_replica_reads_test.go && go vet ./pkg/integration/ && bazel run //:gazelle && git -C "$W" status --short -- '*.bazel' && bazel build //pkg/integration:integration_test`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && gofmt -l pkg/integration/storage_integrity_replica_reads_test.go && go vet ./pkg/integration/ && bazel run //:gazelle && git -C "$W" status --short -- '*.bazel' && bazel build //pkg/integration:integration_test`
 Expected: nothing from `gofmt` and `go vet`; gazelle makes no change beyond this task's BUILD edits (the status lists only `pkg/integration/BUILD.bazel`); the target builds.
 
 The run needs Docker, the FFI library of Step 10 and two images: the testcontainers ClickHouse `clickhouse/clickhouse-server:25.8` and testcontainers' `testcontainers/ryuk:0.14.0` helper (testcontainers-go v0.43.0, `go.mod:84`).
@@ -5305,7 +5466,7 @@ The run needs Docker, the FFI library of Step 10 and two images: the testcontain
 Run: `docker image inspect clickhouse/clickhouse-server:25.8 testcontainers/ryuk:0.14.0 > /dev/null && echo both-local`
 Expected: `both-local`. If either is missing (docker prints `Error response from daemon: No such image: …`), the test run would download it from Docker Hub (the ClickHouse image is about 750 MB): ask the user in chat first, naming the image, and only with an explicit yes run `docker pull clickhouse/clickhouse-server:25.8` (the repository's CI pre-pulls the same image, `ci.yml:91`) or let the run pull `ryuk`. Without a yes, skip the run: the PR's `Integration (ClickHouse)` job runs the whole target (`ci.yml:68-128`).
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"; cd "$W" && test -s "$FFI" && bazel test //pkg/integration:integration_test --test_env=POLYGLOT_SQL_FFI_PATH="$FFI" --test_filter='TestReplicaReads_|TestPeerReservedGuard|TestOpenWrites_PeerGuardRefusesGovernedPhysicalReads' --test_arg=-test.v --test_output=all 2>&1 | grep -E '^--- |refused: |ordinary rrdb.o|Code: 210|PASSED|FAILED'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); FFI="$HOME/Library/Caches/housegate/rewriter-ffi/v0.17.0/libpolyglot_sql_ffi.dylib"; cd "$W" && test -s "$FFI" && bazel test //pkg/integration:integration_test --test_env=POLYGLOT_SQL_FFI_PATH="$FFI" --test_filter='TestReplicaReads_|TestPeerReservedGuard|TestOpenWrites_PeerGuardRefusesGovernedPhysicalReads' --test_arg=-test.v --test_output=all 2>&1 | grep -E '^--- |refused: |ordinary rrdb.o|Code: 210|PASSED|FAILED'`
 
 Expected, as measured with this task's code on ClickHouse 25.8.28.1 and FFI v0.17.0:
 - `--- PASS` for the four `TestReplicaReads_*` tests, S3-A's `TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass` (its captured legs, with a nested `remote('127.0.0.1:9000', 'phys_pr', 'prdb.l', 'housegate_test', '[HIDDEN]')`, pass the computed-argument rule) and `TestPeerReservedGuard_RemoteLeftJoinOfALocalSITableIsRefused`, and `TestOpenWrites_PeerGuardRefusesGovernedPhysicalReads`;
@@ -5318,9 +5479,14 @@ Keep the thirteen refusal lines for the PR description of Task 44. Without Docke
 - [ ] **Step 19: Commit the integration tests**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/integration/storage_integrity_replica_reads_test.go pkg/integration/BUILD.bazel
-git -C "$W" commit -m "test(integration): read a replica-served database end to end
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_21="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_21}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/integration/storage_integrity_replica_reads_test.go pkg/integration/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "test(integration): read a replica-served database end to end
 
 A member host (indexer 1) whose table state serves rrdb.a and rrdb.b
 from hg_replica copies, with rrdb's owner (indexer 2) unreachable: a
@@ -5331,7 +5497,13 @@ an ordinary table of rrdb still goes to the owner and fails, and when
 serving ends the marked session gets the retryable 733 while a new
 hello pivots to the owner (spec 2026-10-14 §11).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_22="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_22}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 20: Document the routing, the copy reads and the peer rule**
@@ -5550,21 +5722,43 @@ bazel test //pkg/rewriter:rewriter_test --test_filter=TestNativeEngineSmoke --te
 bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH=/path/to/libpolyglot_sql_ffi.dylib --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551
 ```
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && grep -c 'computed_carrier_argument' CLAUDE.md && grep -c 'ReplicaServedDatabase' CLAUDE.md && grep -c 'localizeReplicaServedUse' CLAUDE.md pkg/rewriter/AGENTS.md && grep -c 'no longer served from a copy on this host' README.md CLAUDE.md && grep -c 'peerCarrierArgumentForms' CLAUDE.md pkg/plugins/AGENTS.md && grep -c 'inspect carrier arguments' pkg/plugins/AGENTS.md; git -C "$W" diff --stat`
-Expected: `2`; `1`; `CLAUDE.md:1` and `pkg/rewriter/AGENTS.md:3`; `README.md:1` and `CLAUDE.md:1`; `CLAUDE.md:1` and `pkg/plugins/AGENTS.md:1`; `0`; and a stat of exactly `CLAUDE.md`, `README.md`, `pkg/plugins/AGENTS.md` and `pkg/rewriter/AGENTS.md`. The root `AGENTS.md` is a symlink to `CLAUDE.md` and needs nothing.
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); cd "$W" && grep -c 'computed_carrier_argument' CLAUDE.md && grep -c 'ReplicaServedDatabase' CLAUDE.md && grep -c 'localizeReplicaServedUse' CLAUDE.md pkg/rewriter/AGENTS.md && grep -c 'no longer served from a copy on this host' README.md CLAUDE.md && grep -c 'peerCarrierArgumentForms' CLAUDE.md pkg/plugins/AGENTS.md ; if grep -q 'inspect carrier arguments' pkg/plugins/AGENTS.md; then echo 'stale carrier-argument documentation; stop' >&2; exit 1; fi; git -C "$W" diff --stat`
+Expected: `2`; `1`; `CLAUDE.md:1` and `pkg/rewriter/AGENTS.md:3`; `README.md:1` and `CLAUDE.md:1`; `CLAUDE.md:1` and `pkg/plugins/AGENTS.md:1`; no stale carrier-argument documentation; and a stat of exactly `CLAUDE.md`, `README.md`, `pkg/plugins/AGENTS.md` and `pkg/rewriter/AGENTS.md`. The root `AGENTS.md` is a symlink to `CLAUDE.md` and needs nothing.
 
 - [ ] **Step 21: Full verification**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/chsession pkg/plugins/forward pkg/plugins/sireserved pkg/rewriter pkg/integration build.go build_test.go && bazel run //:gazelle && git -C "$W" status --short && bazel build //... && bazel test //...`
+```bash
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+cd "$W"
+python3 -I - <<'PY43FMT'
+import subprocess
+paths = ["pkg/chsession/state.go", "pkg/plugins/forward/forward.go", "pkg/plugins/forward/forward_test.go", "build.go", "build_test.go", "pkg/rewriter/storage_integrity.go", "pkg/rewriter/sentio.go", "pkg/rewriter/storage_integrity_test.go", "pkg/rewriter/replica_parity_test.go", "pkg/plugins/sireserved/plugin.go", "pkg/plugins/sireserved/plugin_test.go", "pkg/integration/storage_integrity_replica_reads_test.go"]
+result = subprocess.run(["gofmt", "-l", *paths], check=True, capture_output=True, text=True)
+if result.stdout.strip():
+    raise SystemExit("unformatted task-owned Go files:\n" + result.stdout)
+PY43FMT
+bazel run //:gazelle || exit 1
+git status --short || exit 1
+bazel build //... || exit 1
+bazel test //... || exit 1
+)
+```
 
-Expected: `gofmt` lists nothing; gazelle makes no change; the status lists exactly ` M CLAUDE.md`, ` M README.md`, ` M pkg/plugins/AGENTS.md` and ` M pkg/rewriter/AGENTS.md`; the build passes; `bazel test //...` reports `67 tests pass` (on darwin plain `bazel test //...`; the integration target is `manual`; measured in the scratch export). `//pkg/replay/snapshotquery:snapshotquery_test` contains the CPU-bound `TestCanonical65536Duplicates` (a 60 s deadline), which this task does not touch: on a heavily loaded machine it fails with `canonical_test.go:148: context deadline exceeded` on `origin/main` too (measured at load average 25–32), so if it fails, rerun that target alone on an idle machine before treating the run as red.
+Expected: `gofmt` lists nothing; gazelle makes no change; the status lists exactly ` M CLAUDE.md`, ` M README.md`, ` M pkg/plugins/AGENTS.md` and ` M pkg/rewriter/AGENTS.md`; the build passes; `bazel test //...` passes every discovered nonmanual target (the integration target is `manual` and needs Step18 separately; report the actual current count, not the historical draft count of67). `//pkg/replay/snapshotquery:snapshotquery_test` contains the CPU-bound `TestCanonical65536Duplicates` (a 60 s deadline), which this task does not touch: on a heavily loaded machine it fails with `canonical_test.go:148: context deadline exceeded` on `origin/main` too (measured at load average 25–32), so if it fails, rerun that target alone on an idle machine before treating the run as red.
 
 - [ ] **Step 22: Commit the documentation**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md pkg/rewriter/AGENTS.md
-git -C "$W" commit -m "docs: document replica-served routing and the computed-argument peer rule
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path")
+si_checked_read_23="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_23}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md pkg/rewriter/AGENTS.md || exit 1
+git -C "$W" commit -S -m "docs: document replica-served routing and the computed-argument peer rule
 
 CLAUDE.md, README.md, pkg/plugins/AGENTS.md and pkg/rewriter/AGENTS.md
 describe how a member host keeps a session on a replica-served
@@ -5574,13 +5768,20 @@ the engines' own refusal of writes and DDL, and sireserved's refusal
 of computed carrier arguments on peer loopbacks (spec 2026-10-14 §11,
 Plan S3-C4 K48).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_24="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_24}" = "poetry <chen@sentio.xyz> G" || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 23: Hand-off**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; git -C "$W" log --oneline origin/main..HEAD | head -12 && git -C "$W" status --short`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path"); git -C "$W" log --oneline origin/main..HEAD | head -12 && git -C "$W" status --short`
 Expected: this task's five commits on top (`docs: document replica-served routing …`, `test(integration): read a replica-served database end to end`, `feat(sireserved): refuse computed carrier arguments on peer loopbacks`, `feat(rewriter): read Replica tables from the member's copy`, `feat(forward): keep sessions on a replica-served database local`), then Task 42's commits; a clean status. Nothing is pushed: Task 44 continues on this branch, opens the PR for Tasks 42–44 and releases `HG_TAG_P3`. Its PR description carries the measured lines of Steps 10 and 18 (the engine rewrites of both engines with the rewriter image digest, the thirteen refusals and the ClickHouse version).
+
 
 ---
 
@@ -5596,7 +5797,7 @@ Spec §11 (Agent; Host status, `replica_hosts`), contract §29.3, clarifications
 - opens the PR for Tasks 42–44, releases `HG_TAG_P3`, records the image digest `HG_DIGEST_P3`, and writes both into Appendix C.
 
 Notes:
-- **Base revisions.** housegate `origin/main` is `862a7a8`, not the header's `66d4df7`: S3-A Tasks 1–2 merged as housegate#238 (`v0.20.0`), and housegate#239–#242 changed only S3-A's plan file (so the code is `994128b`'s). Every file this task touches is byte-identical between `66d4df7` and `862a7a8` except `build.go` (S3-A's warning text, `+2` lines after `:156`) and the three docs (S3-A's peer-rule text), so the anchors below are those of `862a7a8`; where Tasks 42 and 43 move a hunk, **Files** also gives its line after them. Tasks 42 and 43 land first on this branch; where they edit the same file (`pkg/chsession/state.go`, `pkg/plugins/sitablestate/plugin.go`, `pkg/network/rpc.go`, `build.go`, the docs), the hunks below anchor on text they leave unchanged, or on Task 43's own `ReplicaServedDatabase` field (the hunk rule).
+- **Base revisions.** Runtime source was rechecked at housegate main `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` (changes since `5f8a9a9` are documentation only), plus the reviewed real Task22 and Tasks42–43. The review verifies all927 HG/360 core predecessor files before copying; core is actual `cfd4f42` plus reviewed C1/C2 source, with only its own local HG replacement path adjusted. No API stand-in is used. Quoted text is the hunk anchor; line numbers are navigation hints. Task36 full500/C2/C3 exit gates remain pending and independent code checks do not authorize P3 execution.
 - **When a session fails over (K46).** Only in two places, both in the relay:
   - *At hello:* the dial to the session's first upstream fails, or phase 2 of its handshake does (a write or read error, EOF, an Exception or an unexpected packet instead of a ServerHello). `failoverAtHello` sends the post-plugin ClientHello, `Database` set to the session database, to each candidate in turn, binds the first that answers a ServerHello in place of the failed upstream, and the handshake continues on it unchanged (revision, raw ServerHello echo, both addenda). The client has seen nothing yet.
   - *At an eligible read's first answer:* `writeQuery` arms a `SELECT` or `WITH` of an eligible session and keeps its Query packet; `spliceClientPacket` keeps its terminating empty Data block. If the first upstream packet is an Exception the failover accepts, or the connection breaks before any packet of the query was relayed, `failoverRead` prepares a candidate completely (dial, the stored upstream hello with the session database at the client leg's revision, the same revision and timezone the client already received, the addendum, the Query and, if it was already sent, the terminator) and only then rebinds the session to it (`RebindUpstream`, which closes the owner's connection). Until then the owner stays bound, so a failover that no candidate takes lets the original Exception through and keeps the session on the owner. The candidate's first answer then decides (review round 1): `replica_hosts` is static until placement, so a reachable candidate may take the read and still not serve it (its member does not serve the database, so its host pivots to the quarantined owner and relays the same 392, or its connection breaks before it answers). Such an answer is a failure `Reason` accepts, before any packet reached the client, so `failoverRead` keeps the failover (`failoverQuery.moving`, a `readFailover` with the candidates not tried yet and the owner's original packet or error) and moves the read to the next candidate the same way. When none is left the loop handles the owner's original Exception (relayed to the client) or read error (the session ends) instead of the last candidate's answer; the session stays on that last candidate, which routes later statements as the owner's host would. The failover is reported (`FailedOver`, `agent: replica failover`, `replica_failovers_total`) only at the first answer that is not such a failure: a packet of the answer, its EndOfStream, an opaque result or an Exception `Reason` declines. A query never fails over once any packet of its answer reached the client.
@@ -5609,11 +5810,13 @@ Notes:
 - **Discovery.** `StorageIntegrityReplicaHosts` asks the network-state source first and, only when it gives no decoded answer, the storage endpoint of every other indexer from `AllIndexers()` in ascending id, each endpoint once. `AllIndexers` itself is answered by the source, so with the source unreachable the lookup fails: the C4 follow-up "an unreachable indexer-a still blocks a fresh local agent's startup, though not its replica-host discovery" holds only while the source still answers `sentio_getIndexerInfos` (contract issue).
 - **Metrics and log.** `clickhouse_proxy_agent_replica_failovers_total{reason}` counts a failover that reached a serving upstream (a candidate whose first answer was not a failover failure), `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}` one that did not (no candidate at all included); both reasons are exported at 0 from `init`. Each served failover is logged at info as `agent: replica failover` with `database`, `owner`, `reason`, `from` and `to`; an exhausted one at warn as `relay: no replica host served the failover; the client gets the original error`. Task 48's `si_failovers` greps the first in the local agent's log.
 - **Byte for byte without a failover.** With `Server.UpstreamFailover` nil the relay's wire behaviour is unchanged: the dial and handshake errors keep their texts (`exchangeUpstreamHello` carries them), no state is armed, `ReplicaFailoverEligible` stays false and no `USE` is recorded (`TestRelayWithoutUpstreamFailoverIsUnchanged`). Only the handshake's two debug lines become one.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of housegate `origin/main` `862a7a8` as `origin/main`, Plan S3-C1 Task 22's `CopyTable` and Tasks 42 and 43 applied exactly as their texts write them (Task 42's real code, no stand-ins) with their own commit commands, and this task applied step by step with its own commit commands (16 commits ahead of `origin/main`, nothing left uncommitted), with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): every failing step failed with the messages given; every test of this task passes, the relay tests also under `-race -count=20` (2.1 s); each fails as stated below with its fix reverted (failover reason forced off, eligibility never cleared, `answered` never set, the closing guard removed, the build wiring removed). `bazel run //:gazelle` changes nothing after the `BUILD.bazel` edits below; `bazel build //...` passes and `bazel test //...` ends with `Executed 32 out of 67 tests: 67 tests pass.`; this task's integration test and Task 43's four pass with `go test` and with `bazel test //pkg/integration:integration_test` on `clickhouse/clickhouse-server:25.8` (25.8.28.1) and FFI `v0.17.0`; every bash block passes `bash -n` and `shellcheck`. At the base already, `go vet .` reports two `composites` findings in `build_collector_test.go`, and Go 1.27's vet stops plain `go test ./pkg/storageintegrity/` on `intake_test.go:1802` (`suspect or`; Bazel's test of that package passes); this task vets its own packages only.
+- **Review measurements (2026-10-17).** Four missing-implementation compile RED states reproduce, then all six directly affected Go packages pass under race on the actual reviewed chain. The new discovery deadline regression fails the old topology fallback and passes the corrected caller-context RPC. Final checks, mutations and procedural fixtures are reported with actual outcomes in the review report. ClickHouse/gRPC integration execution and full release-path evidence remain pending; historical draft measurements are not substituted for a current PASS.
 - **clickhouse-go drops a connection after any error** (`release` closes it, `clickhouse.go:368-388` of the `sentioxyz` fork), so the integration test follows a session after a successful `SET`, not after a refused write; the unit tests follow one after a refused write.
 - **Release.** `release.yml` builds the linux/amd64 binary with Bazel, the image with a plain `docker build` (`.github/workflows/release.yml:224-254`), and publishes `housegate-<tag>-darwin-arm64` with `SHA256SUMS` and the Homebrew formula: `HG_DIGEST_P3` is the digest of the manifest it pushes for the tag, which Task 47 pins as `DEVNET2_P3_AGENT_SIDECAR_IMAGE`, and the darwin asset is what the user installs for the drill (D40).
 - **Remote actions.** Every fetch, push, PR, check watch, merge, release run, run-log read, registry read, image pull and ledger push below needs explicit user confirmation in chat, each for its own step. Nothing touches devnet2.
-- **Values across commands.** The worktree is `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"` (Task 42 Step 1), and the Bash tool keeps no variables between calls, so every command sets `W` itself. What the release steps learn is kept in files beside the worktree, never inside it: `$W.pr-body.md`, `$W.pr-url` (Step 28), `$W.merge` (Step 29), `$W.hg-tag-p3` (Step 30) and `$W.hg-digest-p3` (Step 31); later commands read them back, so no value is typed in by hand.
+- **Values across commands.** Tasks42–44 share Task42's actual URWT path from `$HOME/.cache/s3c4-task42/worktree-path`, preserving its absolute symlink spelling. Codex expects `urwt/codex/multi-source-s3c4`; Claude-hosted execution substitutes `claude` consistently with Task42. Never create a replacement worktree or reconstruct a template path. PR, merge, workflow run, tag and digest evidence lives beside that actual path as `$W.pr-body.md`, `$W.pr-url`, `$W.merge`, `$W.release-dispatch`, `$W.release-run`, `$W.hg-tag-p3` and `$W.hg-digest-p3`. Every later command loads W afresh. Task42 enabled signed commits; each commit below explicitly uses `-S`, requires a changed HEAD and `poetry <chen@sentio.xyz> G`, and verifies the commit. Signing cancellation stops; ask the user to unlock the repository's actual key in their terminal, never disable signing or publish an unsigned fallback.
+
+- **Cancellation and RPC lookup bounds.** `RpcNetworkState.GetContext(ctx context.Context, database string) (registry.Database, bool)` and `ProxyByIndexerIdContext(ctx context.Context, indexerId uint64) (registry.ProxyAddress, bool)` are additive caller-context forms. Legacy `Get` and `ProxyByIndexerId` retain their Background wrappers. `ReplicaFailover` prefers the optional context-aware forms and checks cancellation between candidate reads; discovery peer-list RPCs also use the caller context. A canceled owner RPC returns `(Database{}, false)`, which Candidates reports as an unknown-database error; a canceled indexer RPC returns `(ProxyAddress{}, false)`, so that candidate is skipped. Cancellation detected before a remaining candidate returns `ctx.Err()` with no partial result. If cancellation occurs on the last topology read, Candidates may return earlier addresses; the relay still dials using its canceled bounded context and does not rebind without a successful handshake. Existing synchronous in-memory ports remain supported; a custom blocking I/O implementation must provide these optional context-aware methods to honor the lookup deadline. The two regression tests exercise the real RPC implementation, including blocked owner and indexer lookup transports.
 
 **Files:**
 - Modify: `pkg/chproto/client_error.go` (after `IsIndexerQuarantinedMessage`, `:105-107`), `pkg/chproto/client_error_test.go` (append after `:194`)
@@ -5630,13 +5833,14 @@ Notes:
 - Create: `pkg/integration/storage_integrity_agent_replica_failover_test.go`; Modify: `pkg/integration/BUILD.bazel` (`srcs`, `:38-39`)
 - Modify: `CLAUDE.md` (`:62`, `:161`, `:164`, `:172`, `:176`; `:63`, `:164`, `:167`, `:175`, `:179` after Tasks 42–43), `README.md` (`:723`, `:725` after them), `pkg/plugins/AGENTS.md` (`:9`, `:38`)
 - Ledger: Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` on the ledger copy (rows `HG_TAG_P3`, `HG_DIGEST_P3`, item `housegate release (Task 44)`), from URWT `multi-source-s3c4-ledger-44`
-- Local only, never committed: beside the worktree, `$HOME/src/remotesrc/claude/housegate/multi-source-s3c4.pr-body.md`, `.pr-url`, `.merge`, `.hg-tag-p3` and `.hg-digest-p3`; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19's tool), `record-s3c4-44.md` (the run record) and `record-s3c4-44` (the ledger worktree's path and ref), and `record-s3c4-44-pr.md` / `record-s3c4-44-pr-url` only when the ledger copy is `origin/main`
+- Local only, never committed: beside the worktree, `$W.pr-body.md`, `.pr-url`, `.merge`, `.hg-tag-p3` and `.hg-digest-p3`; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19's tool), `record-s3c4-44.md` (the run record) and `record-s3c4-44` (the ledger worktree's path and ref), and `record-s3c4-44-pr.md` / `record-s3c4-44-pr-url` only when the ledger copy is `origin/main`
 
 **Interfaces:**
 - Consumes:
   - Task 42 (this branch): sitablestate's Refused row text; `sitable.Replica` and the Replica rows the member host answers (through Task 43's routing).
   - Task 43 (this branch): `chsession.SessionState.ReplicaServedDatabase` (the anchor of this task's field); the member host of `pkg/integration/storage_integrity_replica_reads_test.go` (`seedReplicaReads`, `startReplicaReadsHost`, `replicaReadsServed`, `replicaReadsDB`, `replicaReadsOwner`, `replicaReadsCopyA`, `queryUint64`), whose `forward.Plugin.TableState` keeps a failed-over session local.
   - Existing: `chproto.TrimSeqUnspentSuffix`, `IsIndexerQuarantinedMessage`, `ClientHelloForUpstream`, `SupportsAddendum`, `Codec.ResolveUpstreamAddendum` / `SendAddendum`; `chsession.Session.BindUpstream` / `RebindUpstream`, `SessionState.UpstreamHello` / `SetUpstreamHello` / `SetLogicalDatabase` / `LogicalDatabaseName` / `PhysicalDatabaseName`; `sicore.LeadingKeywords`, `sicore.ParseUseDatabaseStrict`; `registry.Databases.Get`, `registry.Topology.ProxyByIndexerId`, `ProxyAddress.Addr`; `RpcNetworkState.callAt`, `AllIndexers`; `agentNetworkState`, `isNilInterface`, `requireProxyServer` (`build_test.go`); proxy test helpers `deferredTestRev` (54453), `plugin.PluginChain`, `sistatement.ReadModeInjector`; integration helpers `openConnDB`, `authTestKey1`, `testenv.StartAgentProxyWithSelector`, `chEnv`.
+- Additional caller-context RPC forms: `(*network.RpcNetworkState).GetContext(context.Context, string) (registry.Database, bool)` and `(*network.RpcNetworkState).ProxyByIndexerIdContext(context.Context, uint64) (registry.ProxyAddress, bool)`. Agent-private adapters: `replicaDatabase` and `replicaProxy`. Tests: `TestRpcNetworkStateReplicaHostsHonorsTheLookupDeadline` and `TestReplicaFailoverCandidatesHonorsRPCDeadline`.
 - Produces (contract §29.3, verbatim):
   - `pkg/chproto`: `func TableRefusedMessage(tableID, code, reason string) string`; `func IsIndexerQuarantinedReadMessage(msg string) bool`.
   - `pkg/registry`: `StorageIntegrityInfo.ReplicaDatabases []string` (`json:"replica_databases"`) and `ReplicaHosts map[string][]uint64` (`json:"replica_hosts"`); `type StorageIntegrityReplicaDiscovery interface{ StorageIntegrityReplicaHosts(ctx context.Context, database string, owner uint64) ([]uint64, error) }`.
@@ -5655,11 +5859,41 @@ Notes:
 
 - [ ] **Step 1: Base check**
 
-The worktree is Tasks 42 and 43's, `$HOME/src/remotesrc/claude/housegate/multi-source-s3c4` on branch `urwt/claude/multi-source-s3c4` (Task 42 Step 1). In fish, set it with `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"`.
+Continue in Tasks42–43's actual path and branch. Load the stored path, validate its repository, branch, clean state and signing configuration, and verify the actual prerequisite declarations. Do not use historical commit counts as the source oracle: unrelated current-main merges can change them.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; git -C "$W" log --oneline origin/main..HEAD | wc -l && git -C "$W" diff --stat origin/main HEAD -- pkg/chproto pkg/registry/si_info.go pkg/registry/si_info_test.go pkg/proxy pkg/plugin pkg/plugins/agent pkg/integration/storage_integrity_agent_replica_failover_test.go agent_replica_failover_build_test.go && grep -c 'func ServedDatabases(s Snapshot) \[\]string' "$W/pkg/sitable/sitable.go" && grep -c 'func (s \*SessionState) SetReplicaServedDatabase(database string)' "$W/pkg/chsession/state.go" && grep -c 'func startReplicaReadsHost(t \*testing.T, state sitable.TableState) \*testenv.TestProxy' "$W/pkg/integration/storage_integrity_replica_reads_test.go" && grep -c 'was refused: %s: %s' "$W/pkg/plugins/sitablestate/plugin.go"`
+```bash
+(
+set -euo pipefail
+state="$HOME/.cache/s3c4-task42"
+repo=/Users/uranuswch/Dev/projects/sentio-network/housegate
+python3 -I - "$state" "$repo" <<'PY44BASE'
+import os, pathlib, re, subprocess, sys
+state, repo = pathlib.Path(sys.argv[1]), sys.argv[2]
+rows = (state / "worktree-path").read_text().splitlines()
+if len(rows) != 1 or not os.path.isabs(rows[0]) or any(ord(c) < 32 or ord(c) == 127 for c in rows[0]) or not os.path.isdir(rows[0]):
+    raise SystemExit("Task42 actual worktree path is missing or invalid; stop")
+p = rows[0]
+def git(where, *args):
+    return subprocess.check_output(["git", "-C", where, *args], text=True).strip()
+if git(p, "branch", "--show-current") != "urwt/codex/multi-source-s3c4":
+    raise SystemExit("unexpected Task42 branch; stop")
+if os.path.realpath(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) != os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")):
+    raise SystemExit("unexpected Task42 repository; stop")
+if git(p, "status", "--porcelain"):
+    raise SystemExit("Task42 worktree has changes; inspect before continuing")
+if git(p, "config", "user.name") != "poetry" or git(p, "config", "user.email") != "chen@sentio.xyz" or git(p, "config", "--bool", "commit.gpgsign") != "true":
+    raise SystemExit("Task42 poetry/signed-commit configuration is missing; stop")
+PY44BASE
+W=$(cat "$state/worktree-path") || exit 1
+git -C "$W" grep -q 'func ServedDatabases(s Snapshot) \[\]string' -- pkg/sitable/sitable.go || exit 1
+git -C "$W" grep -q 'func (s \*SessionState) SetReplicaServedDatabase(database string)' -- pkg/chsession/state.go || exit 1
+git -C "$W" grep -q 'func startReplicaReadsHost(t \*testing.T, state sitable.TableState)' -- pkg/integration/storage_integrity_replica_reads_test.go || exit 1
+git -C "$W" grep -q 'was refused: %s: %s' -- pkg/plugins/sitablestate/plugin.go || exit 1
+test ! -e "$W/pkg/proxy/relay_replica_failover.go" || { echo 'Task44 is already partially applied; inspect and stop'; exit 1; }
+)
+```
 
-Expected: `10` (Task 42's five commits and Task 43's five); an empty diff stat (Tasks 42 and 43 touch none of these paths); then `1`, `1`, `1` and `1`. If a count is 0, the prerequisite (Task 42, Task 43, or this task's own earlier run) is missing or already applied: stop and read the branch before going on.
+Expected: exit0 and no output. Missing prerequisites, a dirty/wrong worktree, missing signed poetry configuration or a partially applied Task44 stops before editing. All inline Run commands below are Bash tool commands; the only user-terminal commands are explicitly shown as fish.
 
 - [ ] **Step 2: Write the failing tests for the read-side quarantine text**
 
@@ -5722,7 +5956,7 @@ func TestIsIndexerQuarantinedReadMessage(t *testing.T) {
 
 - [ ] **Step 3: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/chproto/ -run 'TestTableRefusedMessageIsTheSitablestateText|TestIsIndexerQuarantinedReadMessage'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W"; if go test ./pkg/chproto/ -run 'TestTableRefusedMessageIsTheSitablestateText|TestIsIndexerQuarantinedReadMessage' > "$HOME/.cache/s3c4-task42/task44-matcher-red.log" 2>&1; then echo "matcher tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task44-matcher-red.log"`
 
 Expected: FAIL to compile with `undefined: TableRefusedMessage` and `undefined: IsIndexerQuarantinedReadMessage` (from `client_error_test.go:205` on).
 
@@ -5796,16 +6030,21 @@ The message is byte-identical: sitablestate's `TestDecisionMatrix` and `TestRefu
 
 - [ ] **Step 5: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/chproto pkg/plugins/sitablestate && go test ./pkg/chproto/ ./pkg/plugins/sitablestate/ ./pkg/proxy/`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && gofmt -l pkg/chproto pkg/plugins/sitablestate && go test ./pkg/chproto/ ./pkg/plugins/sitablestate/ ./pkg/proxy/`
 
 Expected: `gofmt` lists nothing; `ok` for the three packages (`pkg/proxy`'s `TestSessionPreservingIngressException` keeps the read-side text out of the session-preserving set, `relay_reject_test.go:542`).
 
 - [ ] **Step 6: Commit the matcher**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/chproto/client_error.go pkg/chproto/client_error_test.go pkg/plugins/sitablestate/plugin.go
-git -C "$W" commit -m "feat(chproto): the read-side indexer-quarantine refusal
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_25="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_25}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/chproto/client_error.go pkg/chproto/client_error_test.go pkg/plugins/sitablestate/plugin.go || exit 1
+git -C "$W" commit -S -m "feat(chproto): the read-side indexer-quarantine refusal
 
 TableRefusedMessage is sitablestate's Refused-table text, which the gate
 now builds through it byte for byte, and IsIndexerQuarantinedReadMessage
@@ -5814,7 +6053,13 @@ owner's host answers for a read of its table, on which the agent fails
 the read over to a replica host (spec 2026-10-14 §11, Plan S3-C4 K46).
 It never keeps a deferred-lane session.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_26="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_26}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 7: Write the failing tests for replica-host discovery**
@@ -6057,6 +6302,10 @@ func TestRpcNetworkStateReplicaHostsCachesPerDatabase(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(again, []uint64{0, 2}) || infoCalls() != 1 {
 		t.Fatalf("cached lookup = %v, %v after %d info calls; want [0 2] from the cache", again, err, infoCalls())
 	}
+	again[0] = 99
+	if third, err := rpc.StorageIntegrityReplicaHosts(ctx, "db2", 1); err != nil || !reflect.DeepEqual(third, []uint64{0, 2}) || infoCalls() != 1 {
+		t.Fatalf("mutating a cached answer changed the cache: %v, %v", third, err)
+	}
 	if other, err := rpc.StorageIntegrityReplicaHosts(ctx, "db3", 1); err != nil || !reflect.DeepEqual(other, []uint64{0}) || infoCalls() != 2 {
 		t.Fatalf("db3 lookup = %v, %v after %d info calls; want its own answer", other, err, infoCalls())
 	}
@@ -6081,6 +6330,43 @@ func TestRpcNetworkStateReplicaHostsCachesPerDatabase(t *testing.T) {
 		t.Fatalf("DefaultReplicaHostsTTL = %s, want 30s", DefaultReplicaHostsTTL)
 	}
 }
+
+// TestRpcNetworkStateReplicaHostsHonorsTheLookupDeadline ensures the topology
+// fallback cannot outlive a caller's deadline while a peer list is blocked.
+func TestRpcNetworkStateReplicaHostsHonorsTheLookupDeadline(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			ID     uint64 `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if req.Method == "sentio_getIndexerInfos" {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"error":{"code":-32000,"message":"unavailable"}}`, req.ID)
+	}))
+	defer source.Close()
+	rpc, err := NewRpcNetworkState(source.URL, RpcOptions{Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := rpc.StorageIntegrityReplicaHosts(ctx, "db2", 1); err == nil {
+		t.Fatal("lookup unexpectedly succeeded")
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("lookup ignored its deadline: %s", elapsed)
+	}
+}
 ```
 
 In `pkg/network/BUILD.bazel` (test `srcs`, `:33-34`), replace:
@@ -6099,7 +6385,7 @@ with:
 
 - [ ] **Step 8: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/registry/ ./pkg/network/ -run 'TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases|TestRpcNetworkStateReplicaHosts'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W"; if go test ./pkg/registry/ ./pkg/network/ -run 'Test.*ReplicaHosts|TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases' > "$HOME/.cache/s3c4-task42/task44-discovery-red.log" 2>&1; then echo "discovery tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task44-discovery-red.log"`
 
 Expected: both packages FAIL to compile:
 - `pkg/registry`: `info.ReplicaDatabases undefined (type StorageIntegrityInfo has no field or method ReplicaDatabases)` and `info.ReplicaHosts undefined (type StorageIntegrityInfo has no field or method ReplicaHosts)`;
@@ -6153,6 +6439,90 @@ type StorageIntegrityReplicaDiscovery interface {
 ```
 
 The file already imports `context`.
+
+In `pkg/network/rpc.go`, add the caller-context form without changing the legacy port; replace:
+
+```go
+func (r *RpcNetworkState) Get(database string) (registry.Database, bool) {
+	var info DatabaseInfo
+	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoById", []interface{}{database}, &info)
+	if err != nil {
+		log.Warnfe(err, "rpc: getDatabaseInfoById id=%v failed", database)
+		return registry.Database{}, false
+	}
+	if !ok {
+		return registry.Database{}, false
+	}
+	return convertDatabase(info), true
+}
+```
+with:
+
+```go
+func (r *RpcNetworkState) Get(database string) (registry.Database, bool) {
+	return r.GetContext(context.Background(), database)
+}
+
+// GetContext is the caller-context form used by replica failover.
+func (r *RpcNetworkState) GetContext(ctx context.Context, database string) (registry.Database, bool) {
+	var info DatabaseInfo
+	ok, err := r.call(ctx, "sentio_getDatabaseInfoById", []interface{}{database}, &info)
+	if err != nil {
+		log.Warnfe(err, "rpc: getDatabaseInfoById id=%v failed", database)
+		return registry.Database{}, false
+	}
+	if !ok {
+		return registry.Database{}, false
+	}
+	return convertDatabase(info), true
+}
+```
+
+In `pkg/network/rpc.go`, add the caller-context form without changing the legacy port; replace:
+
+```go
+func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
+	var info IndexerInfo
+	ok, err := r.call(context.Background(), "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
+	if err != nil {
+		log.Warnfe(err, "rpc: getIndexerInfoById id=%v failed", indexerId)
+		return registry.ProxyAddress{}, false
+	}
+	if !ok {
+		return registry.ProxyAddress{}, false
+	}
+	return registry.ProxyAddress{
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
+	}, true
+}
+```
+with:
+
+```go
+func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
+	return r.ProxyByIndexerIdContext(context.Background(), indexerId)
+}
+
+// ProxyByIndexerIdContext is the caller-context form used by replica failover.
+func (r *RpcNetworkState) ProxyByIndexerIdContext(ctx context.Context, indexerId uint64) (registry.ProxyAddress, bool) {
+	var info IndexerInfo
+	ok, err := r.call(ctx, "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
+	if err != nil {
+		log.Warnfe(err, "rpc: getIndexerInfoById id=%v failed", indexerId)
+		return registry.ProxyAddress{}, false
+	}
+	if !ok {
+		return registry.ProxyAddress{}, false
+	}
+	return registry.ProxyAddress{
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
+	}, true
+}
+```
 
 In `pkg/network/rpc.go` (the header, `:17`), replace:
 
@@ -6326,7 +6696,21 @@ func (r *RpcNetworkState) replicaHostsAt(ctx context.Context, endpoint, database
 // replicaHostsFromPeers asks, in ascending id, every indexer but owner that
 // advertises a storage endpoint not asked yet.
 func (r *RpcNetworkState) replicaHostsFromPeers(ctx context.Context, database string, owner uint64) ([]uint64, bool) {
-	all := r.AllIndexers()
+	// AllIndexers uses a background context for the legacy topology port.
+	// Use the same RPC with the failover caller's context here, so its
+	// candidate lookup deadline also bounds this fallback's topology read.
+	var infos []IndexerInfo
+	ok, err := r.call(ctx, "sentio_getIndexerInfos", nil, &infos)
+	if err != nil || !ok {
+		return nil, false
+	}
+	all := make(map[uint64]registry.ProxyAddress, len(infos))
+	for _, info := range infos {
+		all[info.IndexerId] = registry.ProxyAddress{
+			Url: info.IndexerUrl, HousegatePort: info.ClickhouseProxyPort,
+			StorageRPCPort: info.StorageNodeRpcPort,
+		}
+	}
 	ids := make([]uint64, 0, len(all))
 	for id := range all {
 		ids = append(ids, id)
@@ -6357,16 +6741,21 @@ var _ registry.StorageIntegrityReplicaDiscovery = (*RpcNetworkState)(nil)
 
 - [ ] **Step 10: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/registry pkg/network && go vet ./pkg/registry/ ./pkg/network/ && go test ./pkg/registry/ ./pkg/network/ -run 'TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases|TestRpcNetworkStateReplicaHosts' -v 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && gofmt -l pkg/registry pkg/network && go vet ./pkg/registry/ ./pkg/network/ && go test ./pkg/registry/ ./pkg/network/ -run 'TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases|TestRpcNetworkStateReplicaHosts' -v 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/registry/ ./pkg/network/ ./pkg/plugins/sistatement/`
 
 Expected: nothing from `gofmt` and `go vet`; `--- PASS: TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases`, `--- PASS: TestRpcNetworkStateReplicaHostsAsksTheSourceThenThePeers` with its four subtests (`the_source_answers`, `the_source_fails,_the_peers_answer_in_ascending_id_without_the_owner`, `an_older_server_answers_no_replica_hosts`, `nobody_answers`), `--- PASS: TestRpcNetworkStateReplicaHostsCachesPerDatabase`; then `ok` for the three packages.
 
 - [ ] **Step 11: Commit the discovery**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/registry/si_info.go pkg/registry/si_info_test.go pkg/network/rpc.go pkg/network/rpc_replica_hosts_test.go pkg/network/BUILD.bazel
-git -C "$W" commit -m "feat(network): replica_hosts discovery for the agent
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_27="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_27}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/registry/si_info.go pkg/registry/si_info_test.go pkg/network/rpc.go pkg/network/rpc_replica_hosts_test.go pkg/network/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "feat(network): replica_hosts discovery for the agent
 
 StorageIntegrityInfo decodes replica_databases and replica_hosts (an
 older server's answer has neither), registry gains the port
@@ -6376,7 +6765,13 @@ every indexer but the owner in ascending id, so an unreachable owner
 never blocks the lookup; a successful answer is cached 30 s per
 database (spec 2026-10-14 §11, Plan S3-C4 K50).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_28="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_28}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 12: Write the failing relay tests**
@@ -7244,7 +7639,7 @@ func TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead(t *testing.T) {
 
 - [ ] **Step 13: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged'`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W"; if go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged' > "$HOME/.cache/s3c4-task42/task44-relay-red.log" 2>&1; then echo "relay tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task44-relay-red.log"`
 
 Expected: FAIL to compile, among others with `undefined: FailoverPhase`, `undefined: FailoverAtHello`, `undefined: FailoverAtRead`, `undefined: UpstreamFailover`, `r.failover undefined (type *Relay has no field or method failover)`, `c.relay.sess.State().ReplicaFailoverEligible undefined (type *chsession.SessionState has no field or method ReplicaFailoverEligible)`, `undefined: agentReplicaFailoversTotal` and `undefined: agentReplicaFailoverExhaustedTotal`.
 
@@ -8290,7 +8685,7 @@ with:
 
 - [ ] **Step 15: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/plugin pkg/proxy pkg/chsession && go vet ./pkg/plugin/ ./pkg/proxy/ ./pkg/chsession/ && go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged' -v -count=1 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged' -race -count=20 && go test ./pkg/plugin/ ./pkg/proxy/ ./pkg/chsession/ .`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && gofmt -l pkg/plugin pkg/proxy pkg/chsession && go vet ./pkg/plugin/ ./pkg/proxy/ ./pkg/chsession/ && go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged' -v -count=1 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/proxy/ -run 'TestAgent|TestRelayWithoutUpstreamFailoverIsUnchanged' -race -count=20 && go test ./pkg/plugin/ ./pkg/proxy/ ./pkg/chsession/ .`
 
 Expected:
 - nothing from `gofmt` and `go vet`;
@@ -8303,9 +8698,14 @@ As measured: with `failoverRead`'s Reason forced to not-ok, `TestAgentFailsOverA
 - [ ] **Step 16: Commit the relay failover**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/plugin/upstream_failover.go pkg/plugin/BUILD.bazel pkg/proxy/relay_replica_failover.go pkg/proxy/relay_replica_failover_test.go pkg/proxy/relay.go pkg/proxy/server.go pkg/proxy/observer.go pkg/proxy/BUILD.bazel pkg/chsession/state.go
-git -C "$W" commit -m "feat(proxy): replica read failover in the relay
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_29="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_29}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/plugin/upstream_failover.go pkg/plugin/BUILD.bazel pkg/proxy/relay_replica_failover.go pkg/proxy/relay_replica_failover_test.go pkg/proxy/relay.go pkg/proxy/server.go pkg/proxy/observer.go pkg/proxy/BUILD.bazel pkg/chsession/state.go || exit 1
+git -C "$W" commit -S -m "feat(proxy): replica read failover in the relay
 
 With Server.UpstreamFailover set, an agent session fails over only at
 hello (a dial or handshake failure) or at an eligible read's first
@@ -8326,7 +8726,13 @@ clickhouse_proxy_agent_replica_failovers_total{reason} and
 clickhouse_proxy_agent_replica_failover_exhausted_total{reason}.
 Unset, the relay is byte for byte today's.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_30="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_30}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 17: Write the failing tests for the agent's replica tier and its wiring**
@@ -8339,13 +8745,16 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 	"github.com/prometheus/client_golang/prometheus"
@@ -8506,6 +8915,56 @@ var (
 	_ proxy.UpstreamFailover = (*ReplicaFailover)(nil)
 	_ proxy.FailoverReporter = (*ReplicaFailover)(nil)
 )
+
+type replicaDeadlineTransport func(*http.Request) (*http.Response, error)
+
+func (f replicaDeadlineTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestReplicaFailoverCandidatesHonorsRPCDeadline covers owner and topology
+// RPCs with an in-memory transport; no network connection is opened.
+func TestReplicaFailoverCandidatesHonorsRPCDeadline(t *testing.T) {
+	for _, blocked := range []string{"sentio_getDatabaseInfoById", "sentio_getIndexerInfoById"} {
+		t.Run(blocked, func(t *testing.T) {
+			client := &http.Client{Transport: replicaDeadlineTransport(func(r *http.Request) (*http.Response, error) {
+				var req struct {
+					Method string `json:"method"`
+					ID     uint64 `json:"id"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					return nil, err
+				}
+				if req.Method == blocked {
+					select {
+					case <-r.Context().Done():
+						return nil, r.Context().Err()
+					case <-time.After(500 * time.Millisecond):
+						return nil, io.EOF
+					}
+				}
+				body := `{"databaseId":"db2","indexerId":1}`
+				if req.Method == "sentio_getIndexerInfoById" {
+					body = `{"indexerId":0,"indexerUrl":"node-a","clickhouseProxyPort":9001}`
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, body)))}, nil
+			})}
+			rpc, err := network.NewRpcNetworkState("http://fixture.invalid", network.RpcOptions{HTTPClient: client})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := &ReplicaFailover{Discovery: &fakeReplicaDiscovery{hosts: []uint64{0}}, Databases: rpc, Topology: rpc}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			got, _ := f.Candidates(ctx, "db2")
+			if len(got) != 0 {
+				t.Fatalf("blocked lookup returned %v", got)
+			}
+			if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+				t.Fatalf("candidate lookup ignored deadline: %s", elapsed)
+			}
+		})
+	}
+}
 ```
 
 Create `agent_replica_failover_build_test.go`:
@@ -8581,7 +9040,7 @@ func TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState(t *testi
 
 - [ ] **Step 18: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && go test ./pkg/plugins/agent/ -run TestReplicaFailover; go test . -run TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W"; if go test ./pkg/plugins/agent/ -run TestReplicaFailover > "$HOME/.cache/s3c4-task42/task44-agent-red.log" 2>&1; then echo "agent tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task44-agent-red.log"; if go test . -run TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState > "$HOME/.cache/s3c4-task42/task44-wiring-red.log" 2>&1; then echo "wiring tests unexpectedly passed; stop" >&2; exit 1; fi; cat "$HOME/.cache/s3c4-task42/task44-wiring-red.log"`
 
 Expected: both FAIL to compile, `pkg/plugins/agent` with `undefined: ReplicaFailover`, `undefined: FailoverReasonOwnerQuarantined` and `undefined: FailoverReasonOwnerUnreachable`, the root package with `undefined: agent.ReplicaFailover`.
 
@@ -8641,7 +9100,7 @@ func (f *ReplicaFailover) Candidates(ctx context.Context, database string) ([]st
 	if database == "" {
 		return nil, errors.New("agent: replica failover: the session has no database")
 	}
-	db, ok := f.Databases.Get(database)
+	db, ok := f.replicaDatabase(ctx, database)
 	if !ok {
 		return nil, fmt.Errorf("agent: replica failover: database %s is not in the network state", database)
 	}
@@ -8657,13 +9116,35 @@ func (f *ReplicaFailover) Candidates(ctx context.Context, database string) ([]st
 		if id == db.IndexerId || (i > 0 && ids[i-1] == id) {
 			continue
 		}
-		addr, ok := f.Topology.ProxyByIndexerId(id)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		addr, ok := f.replicaProxy(ctx, id)
 		if !ok || addr.Url == "" || addr.HousegatePort == 0 {
 			continue
 		}
 		out = append(out, addr.Addr())
 	}
 	return out, nil
+}
+
+// Use caller-context RPC accessors when available. Legacy in-memory ports
+// keep their existing interface; custom I/O ports must expose these forms.
+func (f *ReplicaFailover) replicaDatabase(ctx context.Context, database string) (registry.Database, bool) {
+	if d, ok := f.Databases.(interface {
+		GetContext(context.Context, string) (registry.Database, bool)
+	}); ok {
+		return d.GetContext(ctx, database)
+	}
+	return f.Databases.Get(database)
+}
+func (f *ReplicaFailover) replicaProxy(ctx context.Context, id uint64) (registry.ProxyAddress, bool) {
+	if t, ok := f.Topology.(interface {
+		ProxyByIndexerIdContext(context.Context, uint64) (registry.ProxyAddress, bool)
+	}); ok {
+		return t.ProxyByIndexerIdContext(ctx, id)
+	}
+	return f.Topology.ProxyByIndexerId(id)
 }
 
 // Reason classifies a failure. At FailoverAtRead only an Exception that
@@ -8825,7 +9306,7 @@ with:
 
 - [ ] **Step 20: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/plugins/agent build.go agent_replica_failover_build_test.go && go vet ./pkg/plugins/agent/ && go list -deps ./pkg/plugins/agent | grep -c 'housegate/pkg/proxy$'; go test ./pkg/plugins/agent/ -run TestReplicaFailover -v -count=1 2>&1 | grep -E '^(--- |ok|FAIL)' && go test . -run TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState -v -count=1 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/plugins/agent/ ./pkg/network/ .`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && gofmt -l pkg/plugins/agent build.go agent_replica_failover_build_test.go && go vet ./pkg/plugins/agent/ && go list -deps ./pkg/plugins/agent | grep -c 'housegate/pkg/proxy$'; go test ./pkg/plugins/agent/ -run TestReplicaFailover -v -count=1 2>&1 | grep -E '^(--- |ok|FAIL)' && go test . -run TestBuildAgentWiresReplicaFailoverOnlyForAnUnpinnedRPCNetworkState -v -count=1 2>&1 | grep -E '^(--- |    --- |ok|FAIL)' && go test ./pkg/plugins/agent/ ./pkg/network/ .`
 
 Expected:
 - nothing from `gofmt` and `go vet`, then `0`: the agent library does not import `pkg/proxy`;
@@ -8836,9 +9317,14 @@ Expected:
 - [ ] **Step 21: Commit the agent tier**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/plugins/agent/replica_failover.go pkg/plugins/agent/replica_failover_test.go pkg/plugins/agent/BUILD.bazel build.go agent_replica_failover_build_test.go BUILD.bazel
-git -C "$W" commit -m "feat(agent): ReplicaFailover, the agent's replica read tier
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_31="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_31}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/plugins/agent/replica_failover.go pkg/plugins/agent/replica_failover_test.go pkg/plugins/agent/BUILD.bazel build.go agent_replica_failover_build_test.go BUILD.bazel || exit 1
+git -C "$W" commit -S -m "feat(agent): ReplicaFailover, the agent's replica read tier
 
 agent.ReplicaFailover names the failover candidates, the database's
 replica_hosts in ascending id without the owner and indexers without a
@@ -8850,7 +9336,13 @@ discovers its upstreams through an RPC network state; a pinned
 upstream, a YAML file and a host-injected state keep every relay as
 before (spec 2026-10-14 §11, Plan S3-C4 K46).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_32="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_32}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 22: Write the integration test**
@@ -9136,21 +9628,26 @@ with:
 
 - [ ] **Step 23: Run the integration test**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && gofmt -l pkg/integration && go vet ./pkg/integration/ && bazel build //pkg/integration:integration_test`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && gofmt -l pkg/integration && go vet ./pkg/integration/ && bazel build //pkg/integration:integration_test`
 Expected: nothing from `gofmt` and `go vet`; the manual target builds.
 
 Downloads: `fetch-rewriter-lib` fetches `libpolyglot_sql_ffi.dylib` `v0.17.0` from `https://github.com/housegate/rewriter-go/releases/download` (about 49 MB on darwin/arm64) unless it is cached under `~/Library/Caches/housegate/rewriter-ffi/v0.17.0/`, and testcontainers pulls `clickhouse/clickhouse-server:25.8` (about 740 MB unpacked) unless Docker has it; each download needs explicit user confirmation in chat before running.
 
-Run (needs Docker and the FFI library; the bash form is for the agent's Bash tool): `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && FFI=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0 | tail -n 1) && POLYGLOT_SQL_FFI_PATH="$FFI" bazel test //pkg/integration:integration_test --test_env=POLYGLOT_SQL_FFI_PATH --test_filter='TestAgentReplicaFailover_|TestReplicaReads_' --test_arg=-test.v --test_output=all 2>&1 | grep -E '^--- |PASSED|FAILED'`
+Run (needs Docker and the FFI library; the bash form is for the agent's Bash tool): `W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && FFI=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0 | tail -n 1) && POLYGLOT_SQL_FFI_PATH="$FFI" bazel test //pkg/integration:integration_test --test_env=POLYGLOT_SQL_FFI_PATH --test_filter='TestAgentReplicaFailover_|TestReplicaReads_' --test_arg=-test.v --test_output=all 2>&1 | grep -E '^--- |PASSED|FAILED'`
 
 Expected, as measured on `clickhouse/clickhouse-server:25.8` (25.8.28.1) with FFI `v0.17.0`: `--- PASS: TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember` and Task 43's four `--- PASS: TestReplicaReads_…`, then `//pkg/integration:integration_test PASSED`. With Step 19's wiring reverted (`buildAgentReplicaFailover` returning nil), the new test fails with `read through the agent = 0, code: 392, message: storage_integrity: table rrdb.a was refused: indexer_quarantined: storage-integrity indexer 2 is quarantined; want the copies' JOIN count 2`. Without Docker, skip this run; the PR's `Integration (ClickHouse)` job runs the whole target. For the user in fish (from the worktree): `set -gx POLYGLOT_SQL_FFI_PATH (bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.17.0 | tail -n 1); bazel test //pkg/integration:integration_test --test_env=POLYGLOT_SQL_FFI_PATH --test_filter='TestAgentReplicaFailover_' --test_arg=-test.v --test_output=all`.
 
 - [ ] **Step 24: Commit the integration test**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add pkg/integration/storage_integrity_agent_replica_failover_test.go pkg/integration/BUILD.bazel
-git -C "$W" commit -m "test(integration): an agent reads a quarantined owner's table from a member
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_33="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_33}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add pkg/integration/storage_integrity_agent_replica_failover_test.go pkg/integration/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "test(integration): an agent reads a quarantined owner's table from a member
 
 The agent of a client of rrdb lands on rrdb's owner, which refuses the
 read as quarantined; the agent replays the hello and the read on the
@@ -9159,7 +9656,13 @@ write is refused by the owner and never replayed, a session that ran
 SET no longer fails over, and once the owner cannot be reached a new
 session's hello fails over too (spec 2026-10-14 §11, Plan S3-C4 K46).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_34="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_34}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 25: Documentation**
@@ -9257,15 +9760,20 @@ with:
 | Agent USE state |
 ```
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && grep -c 'IsIndexerQuarantinedReadMessage' CLAUDE.md && grep -c 'clickhouse_proxy_agent_replica_failovers_total' CLAUDE.md README.md && grep -c 'agent: replica failover' CLAUDE.md README.md && grep -c 'ReplicaFailoverEligible' CLAUDE.md && grep -c 'replica read failover' pkg/plugins/AGENTS.md`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; cd "$W" && grep -c 'IsIndexerQuarantinedReadMessage' CLAUDE.md && grep -c 'clickhouse_proxy_agent_replica_failovers_total' CLAUDE.md README.md && grep -c 'agent: replica failover' CLAUDE.md README.md && grep -c 'ReplicaFailoverEligible' CLAUDE.md && grep -c 'replica read failover' pkg/plugins/AGENTS.md`
 Expected: `1`; `CLAUDE.md:1` and `README.md:1`; `CLAUDE.md:1` and `README.md:1`; `1`; `2`. The repository's root `AGENTS.md` is a symlink to `CLAUDE.md` and needs nothing.
 
 - [ ] **Step 26: Commit the documentation**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md
-git -C "$W" commit -m "docs: document the agent replica read failover
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_35="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_35}" = urwt/codex/multi-source-s3c4 || exit 1
+before=$(git -C "$W" rev-parse HEAD)
+git -C "$W" add CLAUDE.md README.md pkg/plugins/AGENTS.md || exit 1
+git -C "$W" commit -S -m "docs: document the agent replica read failover
 
 CLAUDE.md, README.md and pkg/plugins/AGENTS.md describe when an agent
 session fails over to a replica host and when it never does, the
@@ -9273,23 +9781,47 @@ replica_hosts discovery, the port in pkg/plugin, the read-side
 quarantine matcher, the counters and the log line (spec 2026-10-14
 §11, Plan S3-C4 K46, K50).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_36="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_36}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 27: Full verification**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; cd "$W" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //...`
+```bash
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+cd "$W"
+python3 -I - <<'PY44FORMAT'
+import subprocess
+paths = ['pkg/chproto/client_error.go', 'pkg/chproto/client_error_test.go', 'pkg/plugins/sitablestate/plugin.go', 'pkg/registry/si_info.go', 'pkg/registry/si_info_test.go', 'pkg/network/rpc.go', 'pkg/network/rpc_replica_hosts_test.go', 'pkg/plugin/upstream_failover.go', 'pkg/proxy/relay_replica_failover.go', 'pkg/proxy/relay_replica_failover_test.go', 'pkg/proxy/relay.go', 'pkg/proxy/server.go', 'pkg/proxy/observer.go', 'pkg/chsession/state.go', 'pkg/plugins/agent/replica_failover.go', 'pkg/plugins/agent/replica_failover_test.go', 'build.go', 'agent_replica_failover_build_test.go', 'pkg/integration/storage_integrity_agent_replica_failover_test.go']
+listed = subprocess.check_output(["gofmt", "-l", *paths], text=True)
+if listed:
+    raise SystemExit("unformatted task files:\n" + listed)
+PY44FORMAT
+bazel run //:gazelle || exit 1
+si_checked_read_37="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_37}" || { echo 'gazelle or another check changed the worktree; inspect before continuing'; exit 1; }
+bazel build //... || exit 1
+bazel test //... || exit 1
+)
+```
 
 Expected:
 - gazelle makes no change and `git status --short` prints nothing: the `BUILD.bazel` edits of Steps 7, 14, 19 and 22 are exactly what it generates;
-- the build passes and every test passes: the summary ends with `67 tests pass.` (measured in the scratch export: `Executed 32 out of 67 tests: 67 tests pass.`; how many it executes depends on the cache). On darwin run plain `bazel test //...`; `--config=ci` resolves only on linux/x64. The integration target is `manual`. `//pkg/replay/snapshotquery:snapshotquery_test` runs `TestCanonical65536Duplicates` under a 60 s context and can fail on a loaded machine with `canonical_test.go:148: context deadline exceeded` (at `HG_TAG_P1` as well); this branch does not change `pkg/replay`, so rerun that target alone once the machine is idle and continue only when it passes.
+- the build passes and every test passes: report the actual discovered target count, with no failed or skipped required target; the historical draft count of67 is not a current oracle. On darwin run plain `bazel test //...`; `--config=ci` resolves only on linux/x64. The integration target is `manual`. `//pkg/replay/snapshotquery:snapshotquery_test` runs `TestCanonical65536Duplicates` under a 60 s context and can fail on a loaded machine with `canonical_test.go:148: context deadline exceeded` (at `HG_TAG_P1` as well); this branch does not change `pkg/replay`, so rerun that target alone once the machine is idle and continue only when it passes.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; git -C "$W" log --oneline origin/main..HEAD | wc -l && git -C "$W" log --oneline -6 | cat`
+Run: `set -euo pipefail; W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1; git -C "$W" log --oneline origin/main..HEAD | wc -l && git -C "$W" log --oneline -6 | cat`
 Expected: `16` (Task 42's five commits, Task 43's five and this task's six) and, newest first, `docs: document the agent replica read failover`, `test(integration): an agent reads a quarantined owner's table from a member`, `feat(agent): ReplicaFailover, the agent's replica read tier`, `feat(proxy): replica read failover in the relay`, `feat(network): replica_hosts discovery for the agent`, `feat(chproto): the read-side indexer-quarantine refusal`.
 
-- [ ] **Step 28: PR for Tasks 42–44 (requires explicit user confirmation)**
+- [ ] **Step 28: PR for Tasks42–44 (requires explicit user confirmation)**
 
-Write the PR body with the Write tool to `/Users/uranuswch/src/remotesrc/claude/housegate/multi-source-s3c4.pr-body.md` (`$W.pr-body.md` below: beside the worktree, never inside it). The measured lines are those of Task 43 Steps 10 and 18 and Step 23 here; if a run on the PR's `Integration (ClickHouse)` job prints another ClickHouse version or another refusal text, put the printed one in their place before creating the PR:
+Write the following body to `$W.pr-body.md`, beside Task42's actual W. Replace all historical measurement prose with the final current-run evidence before publishing; this review's unexecuted ClickHouse/gRPC gates must not be described as passed. Every remote read/write below needs its own explicit user confirmation in chat. Do not run any of these steps during plan review.
 
 ```markdown
 Stage 3, P3, of the multi-source storage-integrity network: reads from members (spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §11 and §14 bullet 1; plan S3-C4 Tasks 42–44, contract §29, clarifications K44–K48 and K50). A member host answers a quarantined or unreachable owner's SI tables read-only, in safe mode, from its member's verified copies in `hg_replica`; the agent fails reads, never writes, over to such a host. Everything is inert until a host injects Replica entries (sentio-node, plan S3-C4 Task 46) or an agent runs with an RPC network state and no pinned upstream.
@@ -9302,170 +9834,463 @@ Table status (Task 42):
 
 Routing and rewrite (Task 43):
 - `forward.Plugin.TableState`: a hello or standalone `USE` of a replica-served database stays local; once serving ends, the session's next statement gets the retryable 733 asking to reconnect.
-- The rewrite reads Replica tables from the copy (`SafeTable` = `UnsafeTable` = `hg_replica.<copy>`), keeps the database's remote mapping for its ordinary tables, refuses `unsafe_latest` of a copy with a message naming safe mode, and the scrubber maps the copy back. Both engines resolve SI tables before remote mapping, measured with rewriter-go v0.17.0 (FFI) and the devnet2 `rewriter-grpc` v0.17.0 image.
-- Writes and DDL of a served table are refused by the engines first, as measured on ClickHouse 25.8.28.1 (`rewriter rejected SQL (code=UnsupportedStatement): insert target maps to a remote upstream; remote() can only appear as a SELECT-side table function`, and `storage-integrity table rrdb.a accepts writes only through the signed statement lane` for ALTER, DELETE, TRUNCATE, OPTIMIZE, RENAME and every CREATE), with sitablestate's 392 as the second layer.
+- The rewrite reads Replica tables from the copy (`SafeTable` = `UnsafeTable` = `hg_replica.<copy>`), keeps the database's remote mapping for its ordinary tables, refuses `unsafe_latest` of a copy with a message naming safe mode, and the scrubber maps the copy back. Both engines resolve SI tables before remote mapping, covered by the native/gRPC parity tests; attach their actual current-run versions and results before publishing this PR.
+- Writes and DDL of a served table are refused by the engine or the downstream gate; attach the actual current integration refusal messages. The sitablestate392 row remains the second layer.
 - `sireserved` refuses a computed object-carrier argument on a peer loopback (`merge(concat('hg_', 'replica'), '.*')`, and any identifier argument, which ClickHouse resolves through the statement's aliases: `WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')`; reason `computed_carrier_argument`, K48); S3-A's `peerLegForms` and the measured peer legs still pass.
 
 Agent read failover (Task 44):
 - `chproto.TableRefusedMessage` / `IsIndexerQuarantinedReadMessage`; `replica_databases` / `replica_hosts` in `StorageIntegrityInfo`; `RpcNetworkState.StorageIntegrityReplicaHosts` (the network-state source, then every indexer but the owner; 30 s cache).
 - `proxy.Server.UpstreamFailover`: the relay fails a session over only at hello or at an eligible read's first answer (the read-side quarantine refusal, or a broken connection before any packet reached the client), replays the hello and that one query on the first replica host that takes them at the client's revision and timezone, and only then rebinds; a replica host whose first answer is itself such a failure (the owner's refusal relayed by a host whose member does not serve) is followed by the next one, and only a usable answer counts as a failover. Writes, INSERT ... SELECT, `SET`, anything after an answer packet and a closing session never fail over; the injected read mode is kept; an exhausted failover lets the original error through. The port lives in `pkg/plugin` and `pkg/proxy` re-exports it.
 - `agent.ReplicaFailover`, wired for an agent with an RPC network state and no pinned `agent.upstream`; counters `clickhouse_proxy_agent_replica_failovers_total{reason}` and `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}`; log `agent: replica failover`.
-- `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`: an agent of a quarantined owner's database reads the copies through the member host (ClickHouse 25.8.28.1, FFI v0.17.0).
+- `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`: an agent of a quarantined owner's database reads the copies through the member host (publish its actual current integration version and result only after the required run passes).
 
 Compatibility: `Snapshot` gains `Served()`, which breaks every outside implementation; the only one, sentio-node's table state, pins this release together with its own change (plan S3-C4 Task 46, K47). No wire change for older clients beyond the status name `replica`, which no host answers before every agent is upgraded (K47). Rollback: the previous release.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-Remote write (push and PR): needs explicit user confirmation in chat before running.
+After explicit confirmation for the push and PR:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-git -C "$W" push -u origin urwt/claude/multi-source-s3c4
-gh pr create --repo housegate/housegate --base main --head urwt/claude/multi-source-s3c4 --title 'feat(storage-integrity): multi-source SI stage 3 P3 reads from members (Replica status, routing, agent read failover)' --body-file "$W.pr-body.md" | tee "$W.pr-url"
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_38="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_38}" = urwt/codex/multi-source-s3c4 || exit 1
+si_checked_read_39="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_39}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+si_checked_read_40="$(git -C "$W" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_40}" || exit 1
+git -C "$W" push -u origin urwt/codex/multi-source-s3c4 || exit 1
+gh pr create --repo housegate/housegate --base main --head urwt/codex/multi-source-s3c4 --title 'feat(storage-integrity): multi-source SI stage 3 P3 reads from members (Replica status, routing, agent read failover)' --body-file "$W.pr-body.md" > "$W.pr-url" || exit 1
+python3 -I - "$W.pr-url" <<'PY44PR'
+import pathlib, re, sys
+rows = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if len(rows) != 1 or not re.fullmatch(r"https://github.com/housegate/housegate/pull/[1-9][0-9]*", rows[0]):
+    raise SystemExit("invalid PR URL; stop")
+print(rows[0])
+PY44PR
+)
 ```
 
-For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"`; the other two run unchanged. Expected: the push creates the remote branch, and `gh` prints the PR URL `https://github.com/housegate/housegate/pull/<number>`, which `$W.pr-url` keeps for Step 29.
+Expected: the confirmed branch is pushed and exactly one validated PR URL is retained. Failed push/PR stops. No force push is permitted.
 
-- [ ] **Step 29: Checks and merge (requires explicit user confirmation)**
+- [ ] **Step 29: Checks, author validation and merge (requires explicit user confirmation)**
 
-Remote read (the PR's checks): needs explicit user confirmation in chat before running.
+Confirm the remote CI read, run the following check, then obtain a separate explicit confirmation for squash merge after review. An integration failure is compared with clean main before being called a regression; a new failover/Replica regression stops and is fixed on the branch before another confirmed push.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; n="$(basename "$(cat "$W.pr-url")")"
-gh pr checks "$n" --repo housegate/housegate --watch
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+n=$(basename "$(cat "$W.pr-url")")
+case "$n" in ''|*[!0-9]*) echo 'invalid PR number; stop' >&2; exit 1;; esac
+gh pr checks "$n" --repo housegate/housegate --watch || exit 1
+)
 ```
 
-For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; set n (basename (cat "$W.pr-url"))`; the second runs unchanged. Expected: `Release tooling`, `Build` and `Integration (ClickHouse)` pass. Judge an integration failure against a clean `main` run (main-baseline rule, `.claude/skills/upgrade-dependency/SKILL.md`) before calling it a regression; a failure of a `TestReplicaReads_*`, `TestAgentReplicaFailover_*`, `TestPeerReservedGuard_*`, forward, agent or relay test is this PR's: fix it on the branch with a new commit and ask again before pushing.
-
-Remote write (merge), then a remote read of the merge commit: needs explicit user confirmation in chat, after review, before running.
+After the separate merge confirmation, validate the current remote head and complete paginated REST primary-author/messages immediately before merging:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; n="$(basename "$(cat "$W.pr-url")")"
-gh pr merge "$n" --repo housegate/housegate --squash
-gh pr view "$n" --repo housegate/housegate --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv' | tee "$W.merge"
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+si_checked_read_41="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_41}" = urwt/codex/multi-source-s3c4 || exit 1
+si_checked_read_42="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_42}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+n=$(basename "$(cat "$W.pr-url")")
+case "$n" in ''|*[!0-9]*) exit 1;; esac
+head=$(git -C "$W" rev-parse HEAD)
+si_checked_read_43="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_43" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+test "${si_checked_read_43}" = "$head" || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$head" || exit 1
+si_checked_read_44="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_44" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+test "${si_checked_read_44}" = "$head" || exit 1
+gh pr merge "$n" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+gh pr view "$n" --repo housegate/housegate --json state,mergeCommit,mergedAt > "$W.merge.json" || exit 1
+python3 -I - "$W.merge.json" "$W.merge" <<'PY44MERGE'
+import json, pathlib, re, sys
+v = json.loads(pathlib.Path(sys.argv[1]).read_text())
+m = v.get("mergeCommit")
+if v.get("state") != "MERGED" or not isinstance(m, dict) or not re.fullmatch(r"[0-9a-f]{40}", m.get("oid", "")) or not isinstance(v.get("mergedAt"), str) or not v["mergedAt"].endswith("Z"):
+    raise SystemExit("PR is not a recorded completed merge; stop")
+row = "MERGED\t" + m["oid"] + "\t" + v["mergedAt"] + "\n"
+pathlib.Path(sys.argv[2]).write_text(row)
+print(row, end="")
+PY44MERGE
+)
 ```
 
-For the user in fish, the first line is as above; the other two run unchanged. Expected: `MERGED`, the 40-hex squash-merge commit (`M` below) and the merge time, tab-separated; `$W.merge` keeps them for Steps 30 and 32.
+Expected: `PR commit identities and pinned head verified`, then one validated MERGED/hash/UTC-time row. Empty/malformed/truncated REST data, unexpected primary author/trailer, changed head, failed merge or invalid merge evidence stops before release.
 
-- [ ] **Step 30: Release `HG_TAG_P3` (requires explicit user confirmation)**
+- [ ] **Step 30: Release HG_TAG_P3 (requires explicit user confirmation)**
 
-Remote write (release workflow): needs explicit user confirmation in chat before running.
+Confirm release dispatch, bounded run discovery, watch and logs as one explicit remote release action. Dispatch only while main equals the recorded merge. Persist the exact run id; never watch or read an arbitrary latest run. If another matching dispatch makes the selection ambiguous, stop and reconcile the run IDs with the user. A timeout or failed job is not success; retry only the failed job when appropriate, because a full redispatch may cut a second tag.
 
 ```bash
-gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto
-bash -c 'gh run watch --repo housegate/housegate "$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+M=$(cut -f2 "$W.merge")
+python3 -I - "$W" "$M" <<'PY44RELEASE'
+import datetime, json, pathlib, re, subprocess, sys, time
+w, merge = sys.argv[1:]
+if pathlib.Path(w + ".release-dispatch").exists():
+    raise SystemExit("release dispatch already attempted; reconcile the retained run before retrying; stop")
+if not re.fullmatch(r"[0-9a-f]{40}", merge):
+    raise SystemExit("invalid merge commit; stop")
+def gh(*args):
+    return subprocess.check_output(["gh", *args], text=True, timeout=60)
+main = json.loads(gh("api", "repos/housegate/housegate/commits/main"))
+if main.get("sha") != merge:
+    raise SystemExit("main moved after the recorded merge; review the additional commits before releasing; stop")
+prior = json.loads(gh("run", "list", "--repo", "housegate/housegate", "--workflow", "release.yml", "--limit", "100", "--json", "databaseId"))
+if not isinstance(prior, list) or any(not isinstance(v, dict) or not isinstance(v.get("databaseId"), int) for v in prior):
+    raise SystemExit("malformed prior workflow listing; stop")
+old = {v["databaseId"] for v in prior}
+started = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+pathlib.Path(w + ".release-dispatch").write_text(started.isoformat() + "\n")
+subprocess.run(["gh", "workflow", "run", "release.yml", "--repo", "housegate/housegate", "--ref", "main", "-f", "bump=auto"], check=True, timeout=60)
+run = None
+for _ in range(30):
+    runs = json.loads(gh("run", "list", "--repo", "housegate/housegate", "--workflow", "release.yml", "--limit", "100", "--json", "databaseId,event,headBranch,headSha,createdAt"))
+    if not isinstance(runs, list) or any(not isinstance(v, dict) for v in runs):
+        raise SystemExit("malformed workflow listing; stop")
+    matches = []
+    for v in runs:
+        if v.get("databaseId") in old:
+            continue
+        if v.get("event") != "workflow_dispatch" or v.get("headBranch") != "main" or v.get("headSha") != merge:
+            continue
+        if datetime.datetime.fromisoformat(v["createdAt"].replace("Z", "+00:00")) >= started:
+            matches.append(v)
+    if len(matches) > 1:
+        raise SystemExit("ambiguous release dispatch; inspect the run IDs with the user; stop")
+    if matches:
+        run = matches[0]["databaseId"]
+        if type(run) is not int or run <= 0:
+            raise SystemExit("invalid release run ID; stop")
+        break
+    time.sleep(2)
+if run is None:
+    raise SystemExit("release run not found within60s; inspect without redispatching; stop")
+pathlib.Path(w + ".release-run").write_text(str(run) + "\n")
+subprocess.run(["gh", "run", "watch", str(run), "--repo", "housegate/housegate", "--exit-status"], check=True)
+meta = json.loads(gh("run", "view", str(run), "--repo", "housegate/housegate", "--json", "conclusion,event,headBranch,headSha"))
+if (meta.get("conclusion"), meta.get("event"), meta.get("headBranch"), meta.get("headSha")) != ("success", "workflow_dispatch", "main", merge):
+    raise SystemExit("release run does not match the successful recorded dispatch; stop")
+log = gh("run", "view", str(run), "--repo", "housegate/housegate", "--log")
+tags = set(re.findall(r"Next tag: (v[0-9]+\.[0-9]+\.[0-9]+)(?![0-9])", log))
+if len(tags) != 1:
+    raise SystemExit("release log must contain exactly one tag; stop")
+tag = tags.pop()
+pathlib.Path(w + ".hg-tag-p3").write_text(tag + "\n")
+print("release", run, tag, merge)
+PY44RELEASE
+)
 ```
 
-Both lines run unchanged in fish and in the agent's shell. The new run can take a few seconds to appear: if the watched run is not the one just dispatched (its `createdAt` in `gh run list --repo housegate/housegate --workflow release.yml --limit 2` predates the dispatch), wait and run the second line again. Expected: the run succeeds. `bump=auto` cuts a minor version on the first cut of a UTC day and a patch version otherwise (`.github/workflows/release.yml:11-15`); the latest tag at `origin/main` is `v0.20.0`, and Plan S3-C1's `HG_TAG_P1` comes after it: record what the run prints, never a predicted tag. The workflow also publishes the GitHub Release (`housegate-<tag>-linux-amd64`, `housegate-<tag>-darwin-arm64` and `SHA256SUMS`), `ghcr.io/housegate/housegate:<tag>` and `:latest`, and the Homebrew formula; if only the `homebrew` job fails, re-run that job alone, because re-running the whole workflow cuts another tag.
-
-Read the tag the run printed (remote read; needs explicit user confirmation in chat before running):
+Expected: one successful bound run and exactly one observed tag; no predicted release value. Verify the tag content only after explicit confirmation of the remote fetch:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-run="$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-gh run view "$run" --repo housegate/housegate --json conclusion,event,headBranch,createdAt --jq '[.conclusion, .event, .headBranch, .createdAt] | @tsv'
-gh run view "$run" --repo housegate/housegate --log | grep -oE 'Next tag: v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | sed 's/^Next tag: //' | tee "$W.hg-tag-p3"
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+HG_TAG_P3=$(cat "$W.hg-tag-p3")
+M=$(cut -f2 "$W.merge")
+git -C "$W" fetch -q origin --tags || exit 1
+python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$W" HG_TAG_P1 > "$W.p1-ledger.env" || exit 1
+python3 -I - "$W" "$HG_TAG_P3" "$M" <<'PY44CONTENT'
+import pathlib, re, subprocess, sys
+w, tag, merge = sys.argv[1:]
+if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or not re.fullmatch(r"[0-9a-f]{40}", merge):
+    raise SystemExit("invalid tag/merge; stop")
+rows = pathlib.Path(w + ".p1-ledger.env").read_text().splitlines()
+if len(rows) != 1 or not re.fullmatch(r"HG_TAG_P1=v[0-9]+\.[0-9]+\.[0-9]+", rows[0]):
+    raise SystemExit("invalid producing HG_TAG_P1 ledger row; stop")
+p1 = rows[0].split("=", 1)[1]
+def git(*args):
+    return subprocess.check_output(["git", "-C", w, *args], text=True)
+if git("rev-parse", tag + "^{commit}").strip() != merge:
+    raise SystemExit("release tag does not identify the reviewed merge; stop")
+subprocess.run(["git", "-C", w, "merge-base", "--is-ancestor", p1, tag], check=True)
+checks = {
+ "pkg/sitable/sitable.go": ["func ServedDatabases(s Snapshot)", "func CopyTable(id string"],
+ "pkg/sitable/replica_reads.go": ["func NewReplicaReads()", "func (r *ReplicaReads) Admit("],
+ "pkg/plugins/forward/forward.go": ["TableState sitable.TableState"],
+ "pkg/rewriter/storage_integrity.go": ["func requireNoReplicaUnderUnsafeLatest("],
+ "pkg/plugins/sireserved/plugin.go": ["func PeerCarrierArgumentViolation("],
+ "pkg/chproto/client_error.go": ["func IsIndexerQuarantinedReadMessage("],
+ "pkg/plugins/agent/replica_failover.go": ["type ReplicaFailover struct", '"agent: replica failover"'],
+ "pkg/proxy/observer.go": ["clickhouse_proxy_agent_replica_failovers_total", "clickhouse_proxy_agent_replica_failover_exhausted_total"],
+}
+for path, needles in checks.items():
+    text = git("show", tag + ":" + path)
+    for needle in needles:
+        if text.count(needle) != 1:
+            raise SystemExit("release content mismatch in " + path + ": " + needle)
+print("release content verified", tag, merge, "contains", p1)
+PY44CONTENT
+)
 ```
 
-For the user in fish, the first two lines are `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; set run (gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')`; the other two run unchanged. Expected: `success`, `workflow_dispatch`, `main` and the dispatch time, tab-separated; then exactly one line, the tag that the run's `Compute next tag` step printed (`Next tag: v<x>.<y>.<z> (<reason>)`), which `$W.hg-tag-p3` keeps. Any other conclusion, no tag line or two different tags: stop; nothing is recorded.
+- [ ] **Step 31: Record HG_DIGEST_P3 (requires explicit user confirmation)**
 
-Verify by content (remote read, the fetch; needs explicit user confirmation in chat before running):
+Confirm the registry manifest read first; before image download name the actual layer-size total from the manifest. Then obtain separate confirmation for that download/version execution. A malformed digest or version mismatch stops and records no ledger row.
 
 ```bash
-R=/Users/uranuswch/Dev/projects/sentio-network/housegate; W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-HG_TAG_P3="$(cat "$W.hg-tag-p3")"; M="$(cut -f2 "$W.merge")"
-git -C "$R" fetch -q origin --tags
-P1="$(python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$R" HG_TAG_P1 | sed 's/^HG_TAG_P1=//')"
-git -C "$R" show "$HG_TAG_P3":pkg/sitable/sitable.go | grep -c -e '^func ServedDatabases(s Snapshot) \[\]string {' -e '^func CopyTable(id string, incarnationSeq uint64) string {'
-git -C "$R" show "$HG_TAG_P3":pkg/sitable/replica_reads.go | grep -c '^func NewReplicaReads() \*ReplicaReads {'
-git -C "$R" show "$HG_TAG_P3":pkg/plugins/forward/forward.go | grep -c '^[[:space:]]*TableState sitable.TableState$'
-git -C "$R" show "$HG_TAG_P3":pkg/rewriter/storage_integrity.go | grep -c '^func requireNoReplicaUnderUnsafeLatest(snap sitable.Snapshot, ids \[\]string) error {'
-git -C "$R" show "$HG_TAG_P3":pkg/plugins/sireserved/plugin.go | grep -c '^func PeerCarrierArgumentViolation(sql string) (string, error) {'
-git -C "$R" show "$HG_TAG_P3":pkg/chproto/client_error.go | grep -c '^func IsIndexerQuarantinedReadMessage(msg string) bool {'
-git -C "$R" show "$HG_TAG_P3":pkg/plugins/agent/replica_failover.go | grep -c -e '"agent: replica failover"' -e '^type ReplicaFailover struct {'
-git -C "$R" show "$HG_TAG_P3":pkg/proxy/observer.go | grep -c -e 'clickhouse_proxy_agent_replica_failovers_total' -e 'clickhouse_proxy_agent_replica_failover_exhausted_total'
-git -C "$R" show "$HG_TAG_P3":go.mod | grep -c 'github.com/sentioxyz/arbiter-proto v0.11.0$'
-git -C "$R" merge-base --is-ancestor "$P1" "$HG_TAG_P3" && echo "$HG_TAG_P3 contains $P1"
-git -C "$R" merge-base --is-ancestor "$M" "$HG_TAG_P3" && echo "$HG_TAG_P3 contains $M"
-git -C "$R" rev-parse "$HG_TAG_P3^{commit}"
-git -C "$R" log --oneline "$M..$HG_TAG_P3"
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+HG_TAG_P3=$(cat "$W.hg-tag-p3")
+docker buildx imagetools inspect "ghcr.io/housegate/housegate:$HG_TAG_P3" --format '{{json .Manifest}}' > "$W.image-manifest.json" || exit 1
+python3 -I - "$W.image-manifest.json" "$W.hg-digest-p3" <<'PY44DIGEST'
+import json, pathlib, re, sys
+v = json.loads(pathlib.Path(sys.argv[1]).read_text())
+d = v.get("digest") if isinstance(v, dict) else None
+if not isinstance(d, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", d):
+    raise SystemExit("invalid registry manifest digest; stop")
+pathlib.Path(sys.argv[2]).write_text(d + "\n")
+print(d)
+PY44DIGEST
+)
 ```
 
-For the user in fish, the first two lines are `set R /Users/uranuswch/Dev/projects/sentio-network/housegate; set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; set HG_TAG_P3 (cat "$W.hg-tag-p3"); set M (cut -f2 "$W.merge")` and the fourth `set P1 (python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$R" HG_TAG_P1 | sed 's/^HG_TAG_P1=//')`; the rest run unchanged. Expected: `2`, `1`, `1`, `1`, `1`, `1`, `2`, `2`, `1` (housegate keeps arbiter-proto `v0.11.0`: nothing here needs a newer one), `<HG_TAG_P3> contains <HG_TAG_P1>`, `<HG_TAG_P3> contains <M>`, the tag's commit hash, which is `M` itself when nothing merged after Step 29, and an empty log; if the log lists commits merged after `M`, they are in the release too: name them in the run record. Any other count: stop; nothing is recorded.
-
-- [ ] **Step 31: Record the image digest `HG_DIGEST_P3` (requires explicit user confirmation)**
-
-Remote read (the registry manifest), then a download (the image `ghcr.io/housegate/housegate:<HG_TAG_P3>`, the distroless base and the housegate binary; before asking, name its size, the sum of the layers' `size` in `docker buildx imagetools inspect --raw ghcr.io/housegate/housegate:<HG_TAG_P3>`): each needs explicit user confirmation in chat before running.
+Before asking for the download, read the raw manifest by the validated digest under the registry-read confirmation and print its total compressed layer bytes:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; HG_TAG_P3="$(cat "$W.hg-tag-p3")"
-docker buildx imagetools inspect "ghcr.io/housegate/housegate:$HG_TAG_P3" --format '{{json .Manifest}}' | jq -r .digest | tee "$W.hg-digest-p3"
-HG_DIGEST_P3="$(cat "$W.hg-digest-p3")"
-docker run --rm --platform linux/amd64 "ghcr.io/housegate/housegate:$HG_TAG_P3@$HG_DIGEST_P3" -version
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+HG_DIGEST_P3=$(cat "$W.hg-digest-p3")
+docker buildx imagetools inspect --raw "ghcr.io/housegate/housegate@$HG_DIGEST_P3" > "$W.image-layers.json" || exit 1
+python3 -I - "$W.image-layers.json" <<'PY44LAYERS'
+import json, pathlib, sys
+v = json.loads(pathlib.Path(sys.argv[1]).read_text())
+layers = v.get("layers") if isinstance(v, dict) else None
+if not isinstance(layers, list) or not layers or any(not isinstance(x, dict) or type(x.get("size")) is not int or x["size"] < 0 for x in layers):
+    raise SystemExit("expected one linux/amd64 image manifest with layer sizes; inspect the manifest before downloading; stop")
+print("compressed image layer bytes", sum(x["size"] for x in layers))
+PY44LAYERS
+)
 ```
 
-For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"; set HG_TAG_P3 (cat "$W.hg-tag-p3")` and the third `set HG_DIGEST_P3 (cat "$W.hg-digest-p3")`; the second and the fourth run unchanged. Expected: one `sha256:` followed by 64 lowercase hex digits (the digest of the manifest `release.yml` pushed for the tag from its linux/amd64 `docker build`), which `$W.hg-digest-p3` keeps; then a version line starting with `housegate <HG_TAG_P3> ` (`pkg/version.Info`). Anything else, or a digest that does not match `sha256:[0-9a-f]{64}`: stop; nothing is recorded. Task 47 pins `ghcr.io/housegate/housegate:<HG_TAG_P3>@<HG_DIGEST_P3>` as `DEVNET2_P3_AGENT_SIDECAR_IMAGE`.
-
-- [ ] **Step 32: Record `HG_TAG_P3` and `HG_DIGEST_P3`**
-
-Record them, never predicting either, with the record procedure of contract §32.7 (S3-B D23 through `s3-ledger.py`, S3-C1 contract §19). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (every recording task writes it; an earlier copy holds the same text and is overwritten). Then write the run record `$HOME/.cache/s3-ledger/record-s3c4-44.md` with the Write tool: one paragraph of what Steps 28–31 printed — `housegate/housegate#<number>` (`feat(storage-integrity): multi-source SI stage 3 P3 reads from members (Replica status, routing, agent read failover)`, Tasks 42–44) squash-merged as `<M>` on <merge date> UTC with `Release tooling`, `Build` and `Integration (ClickHouse)` passed; `Release` run `<run id>` cut `<HG_TAG_P3>` at `<its commit>` (GitHub Release with the darwin-arm64 and linux-amd64 assets, `ghcr.io/housegate/housegate:<HG_TAG_P3>`, Homebrew formula), naming any commit merged after `<M>`; the content checks printed `2 1 1 1 1 1 2 2 1`, and `<HG_TAG_P3>` contains `<HG_TAG_P1>` and `<M>`; the image digest `<HG_DIGEST_P3>`, whose `-version` printed `<the line>` — then lines starting `- ` (each becomes a sub-item): the measured lines the PR description carries (the ClickHouse version and FFI tag of the integration runs, Task 43's engine refusals) and the local runs of Steps 15, 23 and 27. Every value in it is one Steps 28–31 printed or `$W.pr-url`, `$W.merge`, `$W.hg-tag-p3` and `$W.hg-digest-p3` hold.
-
-R1 (local; the housegate fetch only reads; contract §32.7). Like every remote read of this task, it needs explicit user confirmation in chat before running:
+After the separate download confirmation:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3c4"
-HG_TAG_P3="$(cat "$W.hg-tag-p3")"; HG_DIGEST_P3="$(cat "$W.hg-digest-p3")"
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=44
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+HG_TAG_P3=$(cat "$W.hg-tag-p3")
+HG_DIGEST_P3=$(cat "$W.hg-digest-p3")
+docker run --rm --platform linux/amd64 "ghcr.io/housegate/housegate:$HG_TAG_P3@$HG_DIGEST_P3" -version > "$W.image-version" || exit 1
+python3 -I - "$W.image-version" "$HG_TAG_P3" <<'PY44VERSION'
+import pathlib, sys
+rows = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if len(rows) != 1 or not rows[0].startswith("housegate " + sys.argv[2] + " "):
+    raise SystemExit("image version does not match release tag; stop")
+print(rows[0])
+PY44VERSION
+)
+```
+
+Expected: validated manifest digest, then one matching version line. Task47 pins exactly this observed tag/digest as DEVNET2_P3_AGENT_SIDECAR_IMAGE.
+
+- [ ] **Step 32: Record HG_TAG_P3 and HG_DIGEST_P3**
+
+Write the complete current S3-C1 contract19 ledger tool verbatim to `$HOME/.cache/s3-ledger/s3-ledger.py` before recording. Write `$HOME/.cache/s3-ledger/record-s3c4-44.md` with the observed PR/merge date and hash, exact successful bound workflow run/tag/commit, actual image digest/version and current verification results. No placeholder or historical unexecuted measurement may enter it. R1–R4 below are the complete record flow; any failure stops. Remote reads/writes require their own explicit confirmation. D34's historical Claude plans-copy ref is unchanged.
+
+R1, after confirmation of the remote fetch, creates a new record worktree using Codex and validates the actual JSON path. An existing result stops for reconciliation; it is never overwritten or silently reused. No hooks are bypassed.
+
+```bash
+(
+set -euo pipefail
+umask 077
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+HG_TAG_P3=$(cat "$W.hg-tag-p3")
+HG_DIGEST_P3=$(cat "$W.hg-digest-p3")
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+L="$HOME/.cache/s3-ledger"
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
-git -C "$h" fetch -q origin
+mkdir -p "$L" || exit 1
+chmod 700 "$L" || exit 1
+git -C "$h" fetch -q origin || exit 1
 python3 -I "$L/s3-ledger.py" empty "$h" HG_TAG_P3 HG_DIGEST_P3 || exit 1
-ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c4-ledger-$n" "urwt/claude/multi-source-s3c4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-$n"
-python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c4-$n.md" HG_TAG_P3="$HG_TAG_P3" HG_DIGEST_P3="$HG_DIGEST_P3" || exit 1
-git -C "$d" commit -q -m "docs(plan): record HG_TAG_P3 and HG_DIGEST_P3 of Plan S3-C4 (Task 44)
+ref=$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4) || exit 1
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) echo 'unexpected ledger ref; stop' >&2; exit 1;; esac
+bash "$HOME/.agents/skills/urwt/scripts/urwt-create.sh" "$h" codex multi-source-s3c4-ledger-44 urwt/codex/multi-source-s3c4-ledger-44 "$ref" > "$L/record-s3c4-44-urwt.json" || exit 1
+d=$(python3 -I - "$L/record-s3c4-44-urwt.json" "$h" "$ref" <<'PY44LEDGERPATH'
+import json, os, pathlib, subprocess, sys
+file, repo, ref = sys.argv[1:]
+v = json.loads(pathlib.Path(file).read_text())
+p = v.get("path") if isinstance(v, dict) else None
+if not isinstance(v, dict) or v.get("action") != "created" or not isinstance(p, str) or p == "/" or not os.path.isabs(p) or any(ord(c) < 32 or ord(c) == 127 for c in p) or not os.path.isdir(p):
+    raise SystemExit("ledger worktree is not a new valid actual JSON path; stop and reconcile")
+def git(where, *args):
+    return subprocess.check_output(["git", "-C", where, *args], text=True).strip()
+if git(p, "branch", "--show-current") != "urwt/codex/multi-source-s3c4-ledger-44":
+    raise SystemExit("unexpected ledger branch; stop")
+if os.path.realpath(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) != os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")):
+    raise SystemExit("unexpected ledger repository; stop")
+if git(p, "rev-parse", "HEAD") != git(repo, "rev-parse", ref) or git(p, "status", "--porcelain"):
+    raise SystemExit("ledger worktree is not a clean checkout of its producing ref; stop")
+print(p)
+PY44LEDGERPATH
+) || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-44"
+before=$(git -C "$d" rev-parse HEAD)
+python3 -I "$L/s3-ledger.py" set "$d/$rel" 44 "$L/record-s3c4-44.md" HG_TAG_P3="$HG_TAG_P3" HG_DIGEST_P3="$HG_DIGEST_P3" || exit 1
+si_checked_read_45="$(git -C "$d" diff --name-only)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_45}" = "$rel" || exit 1
+git -C "$d" add -- "$rel" || exit 1
+git -C "$d" commit -S -m "docs(plan): record HG_TAG_P3 and HG_DIGEST_P3 of Plan S3-C4 (Task 44)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" show --stat --oneline HEAD | cat
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$d" rev-parse HEAD)
+test "$after" != "$before" || exit 1
+si_checked_read_46="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_46}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit "$after" || exit 1
+git -C "$d" show --stat --oneline HEAD
+)
 ```
 
-Expected: `s3-ledger: HG_TAG_P3 HG_DIGEST_P3 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md`; `ref` prints the ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the PR carrying Plans S3-C1 to S3-F merges, then `origin/main`, D34); `s3-ledger: Task 44 recorded HG_TAG_P3=v…, HG_DIGEST_P3=sha256:… and its run record 'housegate release' in …/docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md`; then one commit of the plan file only (` 1 file changed, 3 insertions(+), 3 deletions(-)` plus one insertion per sub-item: the two rows and the run-record item). A `stop` writes nothing: report it and ask. When `ref` stops with `no plan 's3c4'` (the plans branch is not on origin yet), stop and ask the user to push it; never record into a local checkout.
+Expected: both rows and the `housegate release` run record are recorded in exactly one signed docs-only commit. A missing ledger copy/value, existing or wrong URWT result, path/identity/signing failure stops; ask the user to unlock the repository's actual key on signing cancellation. No unsigned fallback and no predicted ledger value.
 
-R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 44's ledger record (Appendix C of Plan S3-C4: HG_TAG_P3, HG_DIGEST_P3 and the run record 'housegate release'; docs only) to housegate, straight to the plans branch when it is the ledger copy, else as a docs PR into main". After a yes:
+R2 requires separate confirmation to push Task44's two ledger rows and `housegate release` record. Its only permitted direct ledger-copy target is D34's plans branch; origin/main uses a docs PR instead.
 
 ```bash
-L="$HOME/.cache/s3-ledger"; n=44
-d="$(sed -n 1p "$L/record-s3c4-$n")"; ref="$(sed -n 2p "$L/record-s3c4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+(
+set -euo pipefail
+L="$HOME/.cache/s3-ledger"
+d=$(sed -n 1p "$L/record-s3c4-44")
+ref=$(sed -n 2p "$L/record-s3c4-44")
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) exit 1;; esac
+si_checked_read_47="$(git -C "$d" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_47}" = urwt/codex/multi-source-s3c4-ledger-44 || exit 1
+si_checked_read_48="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_48}" = 1 || exit 1
+si_checked_read_49="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_49}" || exit 1
+si_checked_read_50="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_50}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit HEAD || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  si_record_subject="$(git -C "$d" log -1 --format=%s)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  printf '%s\n\n%s\n' "${si_record_subject}: Appendix C of Plan S3-C4 only, docs only (contract32.7/D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-44-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${si_record_subject}" --body-file "$L/record-s3c4-44-pr.md") > "$L/record-s3c4-44-pr-url" || exit 1
+  cat "$L/record-s3c4-44-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
+)
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 44's ledger record"); after a yes:
+Expected: the non-forced docs push, or one docs PR. A rejected push stops for reconciliation, never force.
+
+R3 applies only when the ledger copy was origin/main. Obtain a separate explicit confirmation for this docs PR squash merge, then validate the exact current head and every REST primary author/message before merging:
 
 ```bash
-L="$HOME/.cache/s3-ledger"; n=44
-gh pr merge "$(basename "$(cat "$L/record-s3c4-$n-pr-url")")" --repo housegate/housegate --squash
+(
+set -euo pipefail
+L="$HOME/.cache/s3-ledger"
+d=$(sed -n 1p "$L/record-s3c4-44")
+test "$(sed -n 2p "$L/record-s3c4-44")" = origin/main || exit 1
+n=$(basename "$(cat "$L/record-s3c4-44-pr-url")")
+case "$n" in ''|*[!0-9]*) exit 1;; esac
+head=$(git -C "$d" rev-parse HEAD)
+si_checked_read_52="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test "${si_checked_read_52}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+si_checked_read_53="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_53" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+test "${si_checked_read_53}" = "$head" || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$head" || exit 1
+gh pr merge "$n" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+)
 ```
 
-Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+R4, after its own remote-read confirmation, fetches and re-reads both produced rows through the ledger tool. Exact equality with the retained release/tag evidence is required; a ledger-copy transition after R1 is not success until the rows are on the current copy.
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P3 HG_DIGEST_P3
+(
+set -euo pipefail
+W=$(cat "$HOME/.cache/s3c4-task42/worktree-path") || exit 1
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+L="$HOME/.cache/s3-ledger"
+git -C "$h" fetch -q origin || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P3 HG_DIGEST_P3 > "$L/record-s3c4-44-readback.env" || exit 1
+python3 -I - "$W" "$L/record-s3c4-44-readback.env" <<'PY44READBACK'
+import pathlib, re, sys
+w, file = sys.argv[1:]
+tag = pathlib.Path(w + ".hg-tag-p3").read_text().strip()
+digest = pathlib.Path(w + ".hg-digest-p3").read_text().strip()
+if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    raise SystemExit("invalid retained release evidence; stop")
+rows = pathlib.Path(file).read_text().splitlines()
+if rows != ["HG_TAG_P3=" + tag, "HG_DIGEST_P3=" + digest]:
+    raise SystemExit("ledger readback differs from produced release evidence; stop")
+print("\n".join(rows))
+PY44READBACK
+)
 ```
 
-Expected: `HG_TAG_P3=<the tag written>` and `HG_DIGEST_P3=<the digest written>`, equal to `$W.hg-tag-p3` and `$W.hg-digest-p3`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. Task 46 reads `HG_TAG_P3` from there only and pins it in sentio-node; Task 47 reads both for `DEVNET2_P3_AGENT_SIDECAR_IMAGE`; Task 48 asks the user to upgrade their local agent to `HG_TAG_P3` (D40). For the user in fish, the R4 lines run as `set h /Users/uranuswch/Dev/projects/sentio-network/housegate; set L "$HOME/.cache/s3-ledger"`, then the last two unchanged, and R3 as `set L "$HOME/.cache/s3-ledger"; gh pr merge (basename (cat "$L/record-s3c4-44-pr-url")) --repo housegate/housegate --squash`.
+Task44 completes only after R4. Task46 reads HG_TAG_P3 only through the producing ledger; Task47 reads both image pins there; Task48 asks the user to upgrade their own agent (D40).
+
+Commands above are Bash tool blocks. For the user's own fish terminal, load the same actual path with:
+
+```fish
+set W (cat "$HOME/.cache/s3c4-task42/worktree-path"); or exit 1
+```
+
+Then execute a reviewed block file with `bash /absolute/path/to/block.sh`; never paste a Bash assignment or heredoc directly into fish.
+
 
 ---
 
@@ -9473,7 +10298,7 @@ Expected: `HG_TAG_P3=<the tag written>` and `HG_DIGEST_P3=<the digest written>`,
 
 Spec §11 ("Reads from members"), clarifications K44 and K45, contract §30. A member host serves a peer owner's database read-only from the member's copy only while the member says it may: the owner is quarantined, or its HouseGate has been unreachable from the member for `t_unreach`; the owner's `track_frontiers` entry in the latest published manifest, read from the arbiter in the same poll, has not moved over two polls; the copy equals that entry, the audits are clean, and the copy holds exactly the registry's Active incarnations of the database, none Foreign, Diverged or excluded; serving is enabled. The member grants its host one lease per served database, and before any install of that database it revokes the lease and waits until the host released it or it expired, so the host never reads a copy that is changing (K44). This task adds the package `member/serve` (the serving view, the owner probe, the leases, the bearer-token endpoint `GET /v1/serving` / `POST /v1/serving/{acquire,renew,release}` and its client `serve.Client`, the `sentio_node_si_member_serve_*` series), gives Plan S3-C2's installer the pair `install.Deps.AfterInstall` of its `BeforeInstall` seam, wires both into `member.Role` through `member.Config.Serve` (nil: byte for byte the P2 member), and releases arbiter-core as `CORE_TAG_P3`.
 
-Nothing here touches consensus: no Raft command, tag, Raft-reachable field, snapshot version, header byte or feature string; `arbiter.LocalNodeFeatures()` stays as `CORE_TAG_P2` has it; arbiter-proto stays at `PROTO_TAG` and housegate at the `HG_TAG_P1` pin of `CORE_TAG_P2` (contract §30.1). The member reads the arbiter only through the SafeState reads S3-C2 already makes (`GetSafeWatermark`, `GetManifest`). `CORE_TAG_P3` is what Task 46 pins in sentio-node (`serve.Client`, `serve.HostDeadlineMargin` on the host; `member.Config.Serve`, `Role.ServeHandler()`, `Role.ServeMetrics()` on the `si-member` process) and what Plan S3-D's `CORE_TAG_P4` builds on. This task may run in parallel with Tasks 42–44 (it needs only `CORE_TAG_P2`).
+Nothing here touches consensus: no Raft command, tag, Raft-reachable field, snapshot version, header byte or feature string; `arbiter.LocalNodeFeatures()` stays as `CORE_TAG_P2` has it; arbiter-proto stays at `PROTO_TAG` and housegate at the `HG_TAG_P1` pin of `CORE_TAG_P2` (contract §30.1). The member reads the arbiter watermark through `GetSafeWatermark(ctx)` and its published manifest through the verified `manifestfeed.Store.GetSafeSnapshot(ctx, snapshotID)`, as implemented by this task’s `publishedFeed`. `CORE_TAG_P3` is what Task 46 pins in sentio-node (`serve.Client`, `serve.HostDeadlineMargin` on the host; `member.Config.Serve`, `Role.ServeHandler()`, `Role.ServeMetrics()` on the `si-member` process) and what Plan S3-D's `CORE_TAG_P4` builds on. This task may run in parallel with Tasks 42–44 (it needs only `CORE_TAG_P2`).
 
 **Base and anchors.** The branch starts from arbiter-core `origin/main` at or after `CORE_TAG_P2` (Plans S3-A Tasks 4–6, S3-C1 Tasks 23–24 and S3-C2 Tasks 29–34 merged). When this task was drafted, `origin/main` was `cfd4f42` (Plan S3-A Tasks 4–6 merged as arbiter-core#50, tagged `v0.15.0`, Plan S3-A's `CORE_TAG`), so line anchors of files that exist there are given at `cfd4f42`; `member/install/installer.go`, `member/install/audit.go`, `member/config.go`, `member/role.go`, `member/BUILD.bazel` and the CI target list exist only from `CORE_TAG_P2`, so their hunks are given by the declarations and statements they touch (the hunk rule of the Global Constraints): `member/install` as Plan S3-C2 Task 32 writes it (its Steps 10–11), the role as Task 34 writes it (`type Role struct`, `New`, `build` at startup step (7) and `runParts` at step (9)).
 
@@ -9522,7 +10347,7 @@ Notes (Facts F45.1–F45.14 for Appendix B):
 - **F45.3 — Two polls, and what resets them.** A database counts the consecutive polls that read the same owner entry; a poll whose manifest read fails, every poll while the database is installing, and `AfterInstall` reset the count to 0. So serving resumes only after two full polls since the install (contract §30.2), and after a feed failure only after two good polls (fail closed). A poll reads the registry, the manifest and the journal without the lock and applies them under it; a `BeforeInstall` or `AfterInstall` that ran in between (an epoch counter) makes that poll count as installing, so a stale journal read never confirms an entry. `FrozenSinceUnixMs` is the time of the first poll that read the owner's current entry (per owner, not reset by installs). With `Enabled` off a poll reads nothing from the arbiter, so a member whose serving is off costs no SafeState barrier (the agent window's `W-x-m` phase of Task 48).
 - **F45.4 — One lease per database.** `Acquire` succeeds only for a database the last poll found serving and only at its view's `SnapshotID`; it replaces any earlier lease of the database (a host that restarted lost its id), recording the new lease before it ends the old one. It is refused while installing, because `BeforeInstall` marks installing before it revokes, under the same lock. A revoked lease is never renewed (409) and still expires `LeaseTTL` after its last renew, so `BeforeInstall` waits at most one TTL. An unknown database answers 409 `member serving: database %s is not served: table_missing`. A pass that only moves an owner's journal to a later snapshot with the same entry (a carried track) changes no copy, calls no `BeforeInstall` and does not revoke: the view's `snapshot_id` moves while the lease stays held and renewable; a host that acquires again uses the new `snapshot_id` (Task 46).
 - **F45.5 — `BeforeInstall` and `AfterInstall` in the installer.** Task 32's `installGates.check` calls `BeforeInstall` at most once per database and pass, right before the first statement that changes a copy of it, in an owner's install pass (`applyOwner`) and in an audit of a copy (`auditCopy`, the equal-hash twin `DROP PART`). This task adds `installGates.done`, deferred where the gates are created, which calls `AfterInstall` once for every database whose `BeforeInstall` returned nil: after the owner's journal write (`return i.journalOwner(...)` runs before the deferred call), or once the pass failed. A failed pass after an `ATTACH` leaves unjournaled parts (`TableState.Diverged`), so the database answers `table_diverged` and is not served; a database whose `BeforeInstall` failed was never held and is not paired. Nothing waits when both seams are nil (P2). The audit's twin drops are held too, so a host never reads twins disappear under a lease.
-- **F45.6 — `BeforeInstall` itself.** It returns at once without a lease; with one it waits for the release or the expiry and counts the wait in `lease_waits_total{outcome}`; on `ctx`'s error it clears installing again (no lease is outstanding then, since it was revoked), and serving may resume after two polls. A lease restored after a restart (F45.14) is a lease here: an install waits for it the same way.
+- **F45.6 — `BeforeInstall` itself.** It returns at once without a lease; with one it waits for the release or the expiry and counts the wait in `lease_waits_total{outcome}`; on `ctx`'s error it clears installing again; the revoked lease remains outstanding until release or expiry and cannot renew, and serving may resume after two polls. A lease restored after a restart (F45.14) is a lease here: an install waits for it the same way.
 - **F45.14 — Leases survive a restart (review round 1).** `serve.New` builds the lease tables empty, so a crashed and restarted si-member used to find no lease and install at once while its host, a separate process, still answered the database Replica from its old snapshot until its next successful poll or its lease deadline (the member's endpoint is down while it restarts). Every lease is therefore recorded in `serve.LeaseFile` (`serve-leases.json`) in `Deps.StateDir` (the member's state directory, a persistent volume; `member.newServing` passes `Config.StateDir`) before a grant or a renew is answered: id, database, owner, last renew in unix nanoseconds and the TTL it was granted with, written atomically as the install journal is (temp file, `Sync`, rename, directory `Sync`), under `mu`. A grant or renew that cannot be recorded is refused with 500 `serve: record leases in <path>: <error>` and changes nothing (the host's renew then fails, so it serves only until its deadline, which the recorded expiry covers); a release that cannot be recorded leaves the lease in the file until it expires, which only makes a restart wait longer. `New` restores every recorded lease that has not expired, revoked: its renew answers 409, the host drops it at its next poll (the view does not serve the database for two polls) and releases it once its reads drained, and an install waits for that release or the expiry exactly as before the restart. An unreadable record fails `New` (`serve: lease file <path>: <error>`, a version other than 1, or a record without an id, a database or a TTL), since the member cannot tell which leases its host still holds. `Deps.StateDir` is required (`serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`). Tests: `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted` (a host that releases, a host that stays silent, and a lease past its expiry not restored), `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed` (the record, a blocked file refusing grant and renew with 500, unreadable files refused by `New`).
 - **F45.7 — `ConditionExcluded` in P3.** S3-C2's journal has no exclusion; `servedCopies` marks a table excluded when its journal (`TableState.SnapshotID`, `Entry`) is not at its owner's journal entry, that is a ready copy not installed yet, which is the P5 meaning of a checkpoint's `excluded` (spec §9.1; Plan S3-E1's `ExclusionNotInstalled`). Foreign takes precedence over Diverged. `AuditClean` is the installer's (the startup and restart audits and the self-audit). Since S3-C2's review fix 245-1, a ready copy that no audit covered since the start or the last ClickHouse restart (one the copyset made ready after that audit) is `TableState.Diverged` and keeps `Stats.AuditClean` false until `Apply` audits it, so the view reports `audit_unclean` (the table `diverged`) until then; nothing here changes for it. An owner without a journal entry has no copy (`table_missing`).
 - **F45.8 — `publishedFeed` has its own two-entry `manifestfeed.Store`.** Each poll reads `GetSafeWatermark` from the arbiter and the manifest through the store, which fetches by snapshot id and keeps only manifests `manifestfeed.Verify` accepted (requested id, its own root, the partition ledger); it then requires the watermark's `ManifestRoot` and `track_frontiers` (K37). A separate store keeps the role's feed untouched.
@@ -9533,7 +10358,15 @@ Notes (Facts F45.1–F45.14 for Appendix B):
 - **F45.13 — The ClickHouse test.** `TestServeHoldsInstallsOfAServedDatabase` runs the lease protocol against a real ClickHouse and a real HTTP listener: a host holds the lease of a served copy (made by `ddl.EnsureCopy`) and reads it; the next entry's install, the installer's statement `ALTER TABLE <copy> ATTACH PARTITION … FROM <scratch>` (scratch from `ddl.ScratchIntent`), waits through ten reads that keep the published row count, runs after the release, and serving resumes at the new snapshot. It uses unique databases (`serve_replica_<hex>`, `serve_rstage_<hex>`), not `hg_replica` / `hg_rstage`, because CI runs every ClickHouse target against one server in parallel, and it drives `BeforeInstall` / `AfterInstall` directly; the installer's side of the pairing is `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite`.
 - **Residual (Follow-ups, unchanged):** K44's residual (queries already running past the host's local deadline) is the host's (Task 46).
 
+**Current measured predecessor qualification (2026-10-18).** Root accepts current Task36 baseline f8924677 (63PASS/five exact SKIP/0FAIL) and affected race 74f918f1 (764PASS/16 exact SKIP/0FAIL), on source2b6c920f and corrected memo74875928; local source review75d77690 accepts that bounded chain. Old full500 f34c9ee7 retains its original source/observer scope and is not retagged to source2b6c920f.
+
+Root Task45 source-stage receipt56c90cee binds freshly composed corrected34 core381/HG923 (HG_TAG_P1 boundary), source manifest b8e8d7646e660089cf43dddec056d3c6d6a0f3433b2c7ff5318845e70e8237a7: 1304 files, 30 literal payload intents and1274 unchanged checkpoint rows. BUILD receipt30e0ba6f binds newly built binaries and selected SDK actions. TEST receipt0eff9e5b accepts exactly three targets, plain and one race: each62PASS/25 exact opt-in SKIP/0FAIL. Root actual receipt `6547fa229c43b6744441dd58f0fcca2ab804c2f7c8e39cf2f9c72a1cc52d8c56` accepts the original three CH tests, two invocations, noSKIP, measured26.3.37.3/image46a501c3, posthashes and actual cleanup (21 known host groups; three container absences spanning30.1588s, one180s cleanup budget). Initial ready exit210 is retained as a transient within the original60s readiness budget. No causal conclusion follows. That root receipt's independent_actual_observer_final_pending=true remains historical and immutable. Separate final root receipt4fc391b77e9a0fdb83ddc65bd2e50f6dbe797e7de88db152bd61ae96d1da4e0d closes the wait and accepts all three independent observer packages: BUILD3424ae98, TEST5044bd0b, ACTUAL76a0b66f/report535f1d08. Actual Docker/test/inspect raw diagnostics were intentionally memory-only: retained SHA/count/EOF and safe classifications plus source-bound control flow support the bounded verdict; unavailable nonempty raw bytes were not independently replayed. BUILD/TEST named SDK leaves and selected actions do not prove a universal SDK/cache closure.
+
+Task45 source approval is bounded local corrected34 core381/HG923 source review, not the later fullP3 HG42–44 composition, Task46, full-core500, release, real registry/CI, production or live execution. Old379-file source/binaries and pre-test/loader/port failures remain historical, with causes UNKNOWN. New success creates no retrospective cause, TDD/mutation/reliability proof or released pin. Current E1 Task62 already preserves the memo/post-C4 constructor/wrappers. Future separately approved fresh full-chain composition remains necessary.
+
 Verification while drafting (2026-10-16): this text was applied mechanically to a scratch export and run there. The base was a `git archive` of arbiter-core `origin/main` `cfd4f42` (Plan S3-A's merge, `v0.15.0`) with every file the current drafts of Plan S3-C1 Tasks 23–24 and Plan S3-C2 Tasks 29–34 create, verbatim, and the hunks of theirs this task's anchors need: Task 29's `ManifestOwner` (in a file of its own), Task 30's exported `IncarnationSchema` and its `pkg/sitable` resolve directive, the `data` and `tags` attributes Tasks 30, 32, 33 and 34 give their test targets, the `data-plane integration` targets of Tasks 23 and 30–33, and the README edits of Tasks 23 and 34; housegate `origin/main` (`v0.20.0`) with Plan S3-C1 Task 22's `pkg/replay` helpers and `sitable.CopyTable`, and arbiter-proto `v0.12.0`, both through a `replace` and a Bazel `local_path_override` of the scratch only. One scratch-only fix: Task 34's role tests stub `readOwnGrants` with no rows, which the current Task 31 `CheckRemoteGrants` refuses (`sources: system.grants shows no READ ON REMOTE for this user`), so the stub returned one `READ ON REMOTE` row; with it every Task 34 test passed. That tree was committed and tagged as the `CORE_TAG_P2` stand-in, and Bazel 9.1.0 ran offline (`--repository_disable_download`): gazelle kept every BUILD file and `bazel test //...` passed its 27 targets. Then each step of this task ran as written, its Create blocks and scripts taken from this text: Step 2 printed the listed lines; Steps 4, 13, 18 and 22 failed to build with the listed messages; Steps 10, 15, 20 and 24 passed, and Step 26 passed 28 targets with and without the race detector, with the six commits on top of the stand-in and `consensus.go unchanged`; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test -race -count=10 ./member/serve/` and `go test -race ./member/...` passed; Step 4's build list moved no module; Steps 23 and 25 gave the diff stats stated there; `actionlint` accepted `ci.yml`. The ClickHouse-gated tests (`TestServeHoldsInstallsOfAServedDatabase` and Task 32's suite with this task's two) passed on `clickhouse/clickhouse-server:25.8` (25.8.28.1, CI's `integration-clickhouse` image) through Bazel and on `26.3` (26.3.51.7) through `go test`. Each of these mutations failed a named test: dropping `r.attachServing(inst)` or `start("serving", r.runServing)`, a nil `AfterInstall` in the role, `polls < 1`, mapping only renew's 409 to `ErrLeaseRevoked`, never marking a lagging table excluded, and dropping `defer gates.done()` in `applyOwner`. Step 29's content checks ran on a scratch tag (with a stand-in `gh`), and Step 30's R1, R2 (to a local bare origin) and R4 ran through `s3-ledger.py` (Plan S3-C1 contract §19, verbatim) on a stand-in housegate holding this plan's Appendix C; every bash block passes `bash -n` (also under macOS `/bin/bash` 3.2) and `shellcheck` (one SC2046 for the repository's `gofmt -l $(git ls-files '*.go')` idiom), and the blocks of Steps 27–29 pass `fish -n`.
+
+**Historical adversarial review candidate (2026-10-17).** Current core main remains `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455`; Housegate main is `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, with no `pkg` delta from the reviewed `ed24705` prerequisite. This candidate uses independently hash-verified real reviewed P2 source, not the historical drafting stubs. Lease-file restoration rejects trailing JSON and duration overflow; the client refuses redirects to keep the bearer token at its configured member endpoint and redacts echoed tokens from errors while preserving cancellation identity. These defenses add no public API or consensus field. Actual ClickHouse execution remains a required gate and has not been rerun by this review while the controller's Docker window is occupied. The earlier drafting measurements above are historical, not current completion or ledger evidence.
 
 - [ ] **Step 1: Worktree and ledger**
 
@@ -9542,26 +10375,89 @@ The ledger lives in Appendix C of the plan files on their ledger copies, never a
 Remote reads (both fetches): need explicit user confirmation in chat before running.
 
 ```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core fetch origin --tags
-git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin
-python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get /Users/uranuswch/Dev/projects/sentio-network/housegate CORE_TAG_P2 HG_TAG_P1 PROTO_TAG
-python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" empty /Users/uranuswch/Dev/projects/sentio-network/housegate CORE_TAG_P3
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter-core claude multi-source-s3c4
+set -eo pipefail
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T45="$HOME/.cache/s3c4-task45"
+mkdir -p "$T45" || exit 1
+chmod 700 "$T45" || exit 1
+git -C "$h" fetch -q origin
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+# The marker is literal plan text: $HOME stays unexpanded on purpose.
+# shellcheck disable=SC2016
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" || exit 1
+echo "s3-ledger.py is contract §19 of $ref"
+python3 -I "$L/s3-ledger.py" ref "$h" s3d || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" CORE_TAG_P2 HG_TAG_P1 PROTO_TAG > "$T45/ledger.env" || exit 1
+cat "$T45/ledger.env"
+python3 -I "$L/s3-ledger.py" empty "$h" CORE_TAG_P3
+```
+
+Then create a new worktree (the same remote-read confirmation covers the fetch):
+
+```bash
+set -eo pipefail
+P=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core; T45="$HOME/.cache/s3c4-task45"
+git -C "$P" fetch -q origin --tags || exit 1
+[ ! -e "$T45/worktree.json" ] || { echo "saved URWT state exists; reconcile the prior attempt before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3c4 urwt/codex/multi-source-s3c4 origin/main)" || { echo "URWT failed; stop"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$T45/worktree.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_54="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_54}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$P" rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c4 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+printf '%s\n' "$out"
+git -C "$W" log -1 --format='%H'
 ```
 
 Expected:
 - `CORE_TAG_P2=v<x>.<y>.<z>`, `HG_TAG_P1=v<x>.<y>.<z>`, `PROTO_TAG=v<x>.<y>.<z>` (a `stop` naming `CORE_TAG_P2` means Plan S3-C2 Task 34 has not recorded it: stop, since this task starts from `CORE_TAG_P2`);
 - `s3-ledger: CORE_TAG_P3 not recorded yet in origin/urwt/claude/ms-si-stage3-plans-cf:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` (`origin/main:` once the plans PR of Plans S3-C1–S3-F merged, decision D34); a `stop` saying it is recorded already means this task ran before: stop and ask;
-- one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/arbiter-core/multi-source-s3c4` (expanded), on branch `urwt/claude/multi-source-s3c4` from `origin/main`.
+- one retained JSON object with `action: created` and the actual absolute `path`, on branch `urwt/codex/multi-source-s3c4` from `origin/main`; the worktree identity/signing settings are configured before any commit.
 
-`W` below is that path. The Bash tool keeps no variables between calls, so prefix every command with `W=<that path>; CORE_TAG_P2=<value>; HG_TAG_P1=<value>; PROTO_TAG=<value>;`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core config approvals add` in their own terminal (the same in fish); never pass `--yes` or `--clobber`.
+Every later block reloads the actual absolute JSON `path` from `$HOME/.cache/s3c4-task45/worktree.json` and the measured ledger pins from `ledger.env`; no path or pin is reconstructed or typed into a placeholder. The executing runtime here is Codex; use the actual host runtime consistently if another host executes this plan. Preserve the returned path's symlink spelling. Existing or failed saved state must be reconciled before any retry, never overwritten or silently reused. Real commits require `poetry <chen@sentio.xyz> G`; on GPG signing cancellation stop and ask the user to unlock this repository's actual key in their own terminal, never disable signing. If URWT says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core config approvals add` in fish; never pass `--yes` or `--clobber`.
 
 - [ ] **Step 2: Prove the base holds S3-C2's names and none of this task's**
 
 Run (read-only):
 
 ```bash
-cd "$W" && git merge-base --is-ancestor "$CORE_TAG_P2" HEAD && echo "base contains $CORE_TAG_P2"
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_55="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_55}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" && git merge-base --is-ancestor "$CORE_TAG_P2" HEAD && echo "base contains $CORE_TAG_P2" || exit 1
 grep -E '^\s+github.com/(housegate/housegate|sentioxyz/arbiter-proto) ' go.mod
 git grep -c -F 'BeforeInstall func(ctx context.Context, owner uint64, database string) error' -- member/install/installer.go
 git grep -c -F 'gates := &installGates{before: i.d.BeforeInstall, owner: owner, seen: map[string]bool{}}' -- member/install/installer.go
@@ -10763,6 +11659,26 @@ func TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed(t *testing.T) {
 		}
 	})
 }
+
+// TestLeaseRestoreRejectsTrailingAndOverflowingRecords fails startup instead
+// of discarding a lease after an integer conversion or a partial JSON read.
+func TestLeaseRestoreRejectsTrailingAndOverflowingRecords(t *testing.T) {
+	for name, content := range map[string]string{
+		"trailing document": `{"version":1,"leases":[]} {"version":1,"leases":[{}]}`,
+		"overflowing ttl":   `{"version":1,"leases":[{"lease_id":"0011","database":"dex","renewed_unix_nano":0,"ttl_ms":9223372036854775807}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, LeaseFile), []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := New(testConfig(), Deps{Registry: &fakeRegistry{}, Published: &fakePublished{}, Copies: &fakeCopies{}, StateDir: dir})
+			if err == nil {
+				t.Fatal("New accepted an invalid lease record")
+			}
+		})
+	}
+}
 ```
 
 Create `member/serve/handler_test.go`:
@@ -10969,12 +11885,32 @@ The tests run inside `testing/synctest` bubbles (Go 1.25+, the module is on 1.26
 `go get`, `go mod tidy`, `bazel mod tidy` and the first Bazel build after them fetch `github.com/prometheus/client_golang` and its requirements from the Go module proxy when the local caches lack them (remote reads): needs explicit user confirmation in chat before running.
 
 ```bash
-cd "$W" && v="$(GOWORK=off go list -m -f '{{.Version}}' github.com/prometheus/client_golang)" && echo "client_golang $v" \
-  && d="$(mktemp -d)" && GOWORK=off go list -m all > "$d/before" \
-  && GOWORK=off go get "github.com/prometheus/client_golang@$v" && GOWORK=off go mod tidy && GOWORK=off go list -m all > "$d/after" \
-  && awk 'NR==FNR {v[$1]=$2; next} ($1 in v) && v[$1] != $2 {print "moved: " $1 " " v[$1] " -> " $2}' "$d/before" "$d/after"; echo "build list compared"; rm -rf "$d"
-cd "$W" && bazel mod tidy && bazel run //:gazelle && git diff -- go.mod MODULE.bazel && cat member/serve/BUILD.bazel
-cd "$W" && bazel test //member/serve:serve_test --test_output=errors
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_56="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_56}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" || exit 1
+v="$(GOWORK=off go list -m -f '{{.Version}}' github.com/prometheus/client_golang)" || exit 1
+printf 'client_golang %s\n' "$v"
+d="$(mktemp -d)" || exit 1
+GOWORK=off go list -m all > "$d/before" || exit 1
+GOWORK=off go get "github.com/prometheus/client_golang@$v" || exit 1
+GOWORK=off go mod tidy || exit 1
+GOWORK=off go list -m all > "$d/after" || exit 1
+awk 'NR==FNR {v[$1]=$2; next} ($1 in v) && v[$1] != $2 {print "moved: " $1 " " v[$1] " -> " $2; bad=1} END {exit bad}' "$d/before" "$d/after" || { echo "dependency versions moved; stop"; exit 1; }
+echo "build list compared"
+bazel mod tidy || exit 1
+bazel run //:gazelle || exit 1
+git diff -- go.mod MODULE.bazel || exit 1
+cat member/serve/BUILD.bazel || exit 1
+bazel test //member/serve:serve_test --test_output=errors
 ```
 
 Expected: `client_golang v1.23.2` (the version housegate's pin requires; whatever this prints is the version used); no `moved:` line, then `build list compared` (no module changes version; the build list only gains Prometheus's own requirements); the `go.mod` diff is the direct requirement `github.com/prometheus/client_golang v1.23.2` in the first `require` block plus indirect lines for `github.com/beorn7/perks`, `github.com/munnerz/goautoneg`, `github.com/prometheus/client_model`, `github.com/prometheus/common`, `github.com/prometheus/procfs` and `go.yaml.in/yaml/v2` (`go mod tidy` may also drop an indirect line the graph no longer needs, as it dropped `gopkg.in/check.v1` from the drafting base's); the `MODULE.bazel` diff is `"com_github_prometheus_client_golang",` added to `use_repo(go_deps, ...)` in sorted position; gazelle writes `member/serve/BUILD.bazel` with only a `go_test` named `serve_test`; the test FAILS to build (`//member/serve:serve_test FAILED TO BUILD`) with `member/serve/fakes_test.go:<line>:<col>: undefined: DatabaseCopy`, `undefined: OwnerDatabase`, `undefined: Server`, `undefined: Metrics`, `undefined: Config` and `too many errors`. A `moved:` line means the housegate pin and the new requirement disagree: stop and ask.
@@ -11769,6 +12705,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11801,6 +12738,10 @@ const LeaseFile = "serve-leases.json"
 // leaseFileVersion is the only LeaseFile version this package reads and
 // writes.
 const leaseFileVersion = 1
+
+// maxLeaseTTLMs is the largest millisecond duration representable without
+// wrapping; an invalid durable record must fail startup, not lose its hold.
+const maxLeaseTTLMs = int64((1<<63 - 1) / time.Millisecond)
 
 // leaseFileContent is LeaseFile's JSON.
 type leaseFileContent struct {
@@ -11859,6 +12800,9 @@ func (s *Server) restoreLeases() error {
 	if err := dec.Decode(&f); err != nil {
 		return fmt.Errorf("serve: lease file %s: %w", s.leaseFile, err)
 	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("serve: lease file %s: expected exactly one JSON value", s.leaseFile)
+	}
 	if f.Version != leaseFileVersion {
 		return fmt.Errorf("serve: lease file %s has version %d, want %d", s.leaseFile, f.Version, leaseFileVersion)
 	}
@@ -11866,6 +12810,9 @@ func (s *Server) restoreLeases() error {
 	for _, r := range f.Leases {
 		if r.LeaseID == "" || r.Database == "" || r.TTLMs <= 0 {
 			return fmt.Errorf("serve: lease file %s has a lease record without an id, a database or a ttl", s.leaseFile)
+		}
+		if r.TTLMs > maxLeaseTTLMs {
+			return fmt.Errorf("serve: lease file %s has a ttl that overflows time.Duration", s.leaseFile)
 		}
 		if s.leases[r.Database] != nil || s.byID[r.LeaseID] != nil {
 			return fmt.Errorf("serve: lease file %s lists database %s or lease %s twice", s.leaseFile, r.Database, r.LeaseID)
@@ -12522,9 +13469,20 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 - [ ] **Step 10: Run the serving tests and see them pass**
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_57="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_57}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 cd "$W" && test -z "$(gofmt -l member/serve)" && bazel run //:gazelle && cat member/serve/BUILD.bazel \
   && bazel test //member/serve:serve_test --test_output=errors \
-  && bazel test --@rules_go//go/config:race //member/serve:serve_test --runs_per_test=10 --test_output=errors
+  && bazel test --@rules_go//go/config:race //member/serve:serve_test --runs_per_test=10 --test_output=errors || exit 1
 ```
 
 Expected: gofmt lists nothing; `member/serve/BUILD.bazel` now has `go_library(name = "serve", srcs = ["conditions.go", "handler.go", "lease.go", "metrics.go", "probe.go", "serve.go"], importpath = "github.com/sentioxyz/arbiter-core/member/serve", visibility = ["//visibility:public"], deps = ["//dataplane", "//wire", "@com_github_prometheus_client_golang//prometheus", "@housegate//pkg/replay", "@housegate//pkg/sitable"])` and the `go_test` embeds `:serve`; `//member/serve:serve_test PASSED`, and PASSED ten times under the race detector (the bubbles make the timing deterministic).
@@ -12532,7 +13490,19 @@ Expected: gofmt lists nothing; `member/serve/BUILD.bazel` now has `go_library(na
 - [ ] **Step 11: Commit**
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_58="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_58}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 git -C "$W" add go.mod go.sum MODULE.bazel MODULE.bazel.lock member/serve
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/serve): serving conditions, owner probe, leases and the install hold
 
 The stage-3 P3 serving view of a member (housegate spec 2026-10-14 §11,
@@ -12549,10 +13519,14 @@ reason and outcome is exported from startup. No consensus change;
 github.com/prometheus/client_golang becomes a direct dependency at the
 version the housegate pin already selects.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_59="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_59}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
-Run: `git -C "$W" log --oneline -1 && git -C "$W" status --short`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1; git -C "$W" log --oneline -1 && git -C "$W" status --short`
 Expected: `<sha> feat(member/serve): serving conditions, owner probe, leases and the install hold` and an empty status.
 
 - [ ] **Step 12: Write the failing client tests**
@@ -12563,8 +13537,11 @@ Create `member/serve/client_test.go`:
 package serve
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -12695,12 +13672,104 @@ func TestNewClientRefusesABadURLOrNoToken(t *testing.T) {
 		}
 	}
 }
+
+// TestClientNeverFollowsAnEndpointRedirect keeps the bearer token at the
+// configured endpoint even when another server shares its hostname.
+func TestClientNeverFollowsAnEndpointRedirect(t *testing.T) {
+	leaked := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization") != ""
+		_, _ = w.Write([]byte(`{"node_id":"other","databases":[]}`))
+	}))
+	defer other.Close()
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
+	}))
+	defer endpoint.Close()
+	c, err := NewClient(endpoint.URL, testToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Serving(t.Context())
+	if err == nil || leaked {
+		t.Fatalf("redirect: err %v, credential forwarded %t", err, leaked)
+	}
+}
+
+type tokenErrorTransport struct{}
+
+func (tokenErrorTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("transport refused %s", r.Header.Get("Authorization"))
+}
+
+// TestClientErrorsRedactTheToken covers remote errors and errors returned by
+// an injected HTTP transport, not only the endpoint's fixed 401 message.
+func TestClientErrorsRedactTheToken(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":%q}`, "invalid token "+testToken)
+	}))
+	defer endpoint.Close()
+	for name, hc := range map[string]*http.Client{"remote": nil, "transport": {Transport: tokenErrorTransport{}}} {
+		t.Run(name, func(t *testing.T) {
+			c, err := NewClient(endpoint.URL, testToken, hc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Serving(context.Background())
+			if err == nil || strings.Contains(err.Error(), testToken) {
+				t.Fatal("client error exposed its bearer token")
+			}
+		})
+	}
+}
+
+// TestClientRejectsMalformedLeaseAnswers refuses duration overflow and a
+// credential reflected as a malformed lease id, without printing it.
+func TestClientRejectsMalformedLeaseAnswers(t *testing.T) {
+	for name, body := range map[string]string{
+		"overflow": `{"lease_id":"00112233445566778899aabbccddeeff","ttl_ms":9223372036854775807}`,
+		"token id": `{"lease_id":"` + testToken + `","ttl_ms":30000}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer ts.Close()
+			c, err := NewClient(ts.URL, testToken, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Acquire(t.Context(), "dex", "s40")
+			if err == nil || strings.Contains(err.Error(), testToken) {
+				t.Fatal("malformed lease accepted or credential printed")
+			}
+		})
+	}
+}
+
+func TestClientBoundsResponsesAndPreservesCancellation(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"databases":[]}` + strings.Repeat(" ", maxResponseBytes)))
+	}))
+	defer ts.Close()
+	c, err := NewClient(ts.URL, testToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Serving(t.Context()); err == nil {
+		t.Fatal("oversized response accepted")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := c.Serving(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation identity lost: %v", err)
+	}
+}
 ```
 
 - [ ] **Step 13: Run them and see them fail**
 
-Run: `cd "$W" && bazel run //:gazelle && bazel test //member/serve:serve_test --test_output=errors`
-Expected: FAIL to build `//member/serve:serve_test` (`//member/serve:serve_test FAILED TO BUILD`) with nine errors in `member/serve/client_test.go`, each `<line>:<col>: undefined: <name>`: `NewClient` five times, `ErrLeaseRevoked` twice, `ErrNotServed` and `ErrUnauthorized` once each.
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/serve:serve_test --test_output=errors`
+Expected: FAIL to build `//member/serve:serve_test` (`//member/serve:serve_test FAILED TO BUILD`) with undefined `NewClient`, `ErrLeaseRevoked`, `ErrNotServed` and `ErrUnauthorized` in `member/serve/client_test.go`, ending in `too many errors` after the new redirect, malformed-response and redaction regressions. No runtime test can run before the client exists.
 
 - [ ] **Step 14: Implement `member/serve/client.go`**
 
@@ -12719,6 +13788,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12766,7 +13836,12 @@ func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error) 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &Client{base: "http://" + u.Host, token: token, http: httpClient}, nil
+	// A redirect to another port of the same hostname otherwise forwards
+	// Authorization. Keep the token at the configured member endpoint and
+	// leave the caller's HTTP client unchanged.
+	hc := *httpClient
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{base: "http://" + u.Host, token: token, http: &hc}, nil
 }
 
 func validPort(port string) bool {
@@ -12799,8 +13874,8 @@ func (c *Client) Acquire(ctx context.Context, database, snapshotID string) (Leas
 		return Lease{}, fmt.Errorf("%w: %s", ErrNotServed, msg)
 	case status != http.StatusOK:
 		return Lease{}, c.statusError(http.MethodPost, "/v1/serving/acquire", status, msg)
-	case out.LeaseID == "" || out.TTLMs <= 0:
-		return Lease{}, fmt.Errorf("serve: acquire answered lease %q with ttl %dms", out.LeaseID, out.TTLMs)
+	case len(out.LeaseID) != 32 || strings.Trim(out.LeaseID, "0123456789abcdef") != "" || out.TTLMs <= 0 || out.TTLMs > maxLeaseTTLMs:
+		return Lease{}, fmt.Errorf("serve: acquire answered lease %q with ttl %dms", strings.ReplaceAll(out.LeaseID, c.token, "<redacted>"), out.TTLMs)
 	}
 	return Lease{ID: out.LeaseID, TTL: time.Duration(out.TTLMs) * time.Millisecond}, nil
 }
@@ -12816,7 +13891,7 @@ func (c *Client) Renew(ctx context.Context, leaseID string) (Lease, error) {
 		return Lease{}, fmt.Errorf("%w: %s", ErrLeaseRevoked, msg)
 	case status != http.StatusOK:
 		return Lease{}, c.statusError(http.MethodPost, "/v1/serving/renew", status, msg)
-	case out.TTLMs <= 0:
+	case out.TTLMs <= 0 || out.TTLMs > maxLeaseTTLMs:
 		return Lease{}, fmt.Errorf("serve: renew answered ttl %dms", out.TTLMs)
 	}
 	return Lease{ID: leaseID, TTL: time.Duration(out.TTLMs) * time.Millisecond}, nil
@@ -12843,7 +13918,25 @@ func (c *Client) statusError(method, path string, status int, msg string) error 
 
 // do sends one request and decodes a 200 answer into out; any other answer
 // returns its status and error text.
-func (c *Client) do(ctx context.Context, method, path string, in, out any) (int, string, error) {
+// redactedClientError preserves errors.Is (including cancellation) while
+// refusing to print a credential echoed by an HTTP transport or a peer.
+type redactedClientError struct {
+	cause error
+	token string
+}
+
+func (e *redactedClientError) Error() string {
+	return strings.ReplaceAll(e.cause.Error(), e.token, "<redacted>")
+}
+func (e *redactedClientError) Unwrap() error { return e.cause }
+
+func (c *Client) do(ctx context.Context, method, path string, in, out any) (status int, message string, err error) {
+	defer func() {
+		message = strings.ReplaceAll(message, c.token, "<redacted>")
+		if err != nil {
+			err = &redactedClientError{cause: err, token: c.token}
+		}
+	}()
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -12865,9 +13958,12 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) (int,
 		return 0, "", fmt.Errorf("serve: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return 0, "", fmt.Errorf("serve: %s %s: %w", method, path, err)
+	}
+	if len(data) > maxResponseBytes {
+		return 0, "", fmt.Errorf("serve: %s %s answered a body larger than %d bytes", method, path, maxResponseBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
 		var e errorResponse
@@ -12886,9 +13982,21 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) (int,
 - [ ] **Step 15: Run the tests, see them pass, and commit**
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_60="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_60}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 cd "$W" && test -z "$(gofmt -l member/serve)" && bazel run //:gazelle && bazel test //member/serve:serve_test --test_output=errors \
-  && bazel test --@rules_go//go/config:race //member/serve:serve_test --runs_per_test=10 --test_output=errors
+  && bazel test --@rules_go//go/config:race //member/serve:serve_test --runs_per_test=10 --test_output=errors || exit 1
 git -C "$W" add member/serve
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/serve): the bearer-token serving client
 
 serve.Client is the host's side of the member serving endpoint (Plan
@@ -12898,7 +14006,11 @@ acquire, ErrLeaseRevoked for a revoked or an unknown lease (the member's
 text says which) and ErrUnauthorized for a refused token; no error
 carries the token.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_61="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_61}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: both test runs PASS; `member/serve/BUILD.bazel`'s library gains `client.go` and its test `srcs` `client_test.go`; one commit `feat(member/serve): the bearer-token serving client`.
@@ -13137,7 +14249,18 @@ func TestServeHoldsInstallsOfAServedDatabase(t *testing.T) {
 Insert `//member/serve:serve_test` into the `data-plane integration` step's target list in sorted position, without reordering the targets S3-A and S3-C2 added:
 
 ```bash
-cd "$W" && python3 -I - .github/workflows/ci.yml <<'EOF'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_62="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_62}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" && python3 -I - .github/workflows/ci.yml <<'EOF' || exit 1
 import sys
 
 path = sys.argv[1]
@@ -13154,27 +14277,68 @@ lines.insert(at, "            " + new)
 open(path, "w").write("\n".join(lines))
 print("inserted at line", at + 1)
 EOF
-git -C "$W" diff -- .github/workflows/ci.yml && actionlint .github/workflows/ci.yml && echo 'actionlint: clean'
+git -C "$W" diff -- .github/workflows/ci.yml || exit 1
+if command -v actionlint >/dev/null 2>&1; then
+  actionlint .github/workflows/ci.yml || exit 1
+else
+  ruby -ryaml -e 'YAML.load_file(ARGV[0]); puts "ci.yml parses (Ruby YAML; actionlint unavailable)"' .github/workflows/ci.yml || exit 1
+fi
 ```
 
-Expected: `inserted at line <n>` (the line after `//member/install:install_test`; its number depends on what S3-A Task 4 added above it); the diff is the one line `+            //member/serve:serve_test \` right after `//member/install:install_test \`; `actionlint: clean` (where `actionlint` is not installed, `python3 -I -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1])); print("ci.yml parses")' .github/workflows/ci.yml`).
+Expected: `inserted at line <n>` (the line after `//member/install:install_test`; its number depends on what S3-A Task 4 added above it); the diff is the one line `+            //member/serve:serve_test \` right after `//member/install:install_test \`; `actionlint: clean` (or the explicit Ruby YAML parse when actionlint is unavailable; parsing is not claimed as actionlint).
 
 Then run the test without ClickHouse (it skips) and against a local ClickHouse. The `docker run` may pull `clickhouse/clickhouse-server:25.8` (CI's `integration-clickhouse` image) from Docker Hub, a remote read: needs explicit user confirmation in chat before running.
 
 ```bash
-cd "$W" && bazel run //:gazelle && bazel test //member/serve:serve_test --test_filter='^TestServeHoldsInstallsOfAServedDatabase$' --test_arg=-test.v --nocache_test_results --test_output=all 2>&1 | grep -E -- '--- (SKIP|PASS|FAIL)'
-c=arbiter-core-s3c4-serve-ch; docker rm -f "$c" >/dev/null 2>&1 || true
-docker run -d --rm --name "$c" -p 127.0.0.1::9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.8 >/dev/null
-port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$c")"
-for _ in $(seq 1 60); do docker exec "$c" clickhouse-client --query 'SELECT version()' 2>/dev/null && break; sleep 1; done
-cd "$W" && env ARBITER_CH_INTEGRATION=1 CH_ADDR="127.0.0.1:$port" bazel test //member/serve:serve_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR \
-  --test_filter='^TestServeHoldsInstallsOfAServedDatabase$' --test_arg=-test.v --nocache_test_results --test_output=all 2>&1 | grep -E -- '--- (SKIP|PASS|FAIL)'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_63="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_63}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" || exit 1
+bazel run //:gazelle || exit 1
+bazel test //member/serve:serve_test --test_filter='^TestServeHoldsInstallsOfAServedDatabase$' --test_arg=-test.v --nocache_test_results --test_output=all > "$T45/serve-skipped.log" 2>&1 || exit 1
+grep -F -- '--- SKIP: TestServeHoldsInstallsOfAServedDatabase' "$T45/serve-skipped.log" || exit 1
+[ ! -e "$T45/ch-container" ] || { echo "saved local CH ownership exists; reconcile before creating a replacement; stop"; exit 1; }
+c="arbiter-core-s3c4-serve-ch-$(date +%s)-$$"
+printf '%s\n' "$c" > "$T45/ch-container"
+docker run -d --rm --name "$c" -p 127.0.0.1::9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.8 > "$T45/ch-id" || exit 1
+port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$c")" || exit 1
+ready=false
+for _ in $(seq 1 60); do
+  if docker exec "$c" clickhouse-client --query 'SELECT version()' > "$T45/ch-version" 2>/dev/null; then ready=true; break; fi
+  sleep 1
+done
+[ "$ready" = true ] || { echo "owned CH failed readiness; inspect and remove only its saved id; stop"; exit 1; }
+grep -E '^25[.]8[.]' "$T45/ch-version" || exit 1
+env ARBITER_CH_INTEGRATION=1 CH_ADDR="127.0.0.1:$port" CH_USER=default CH_PASSWORD="" bazel test //member/serve:serve_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_env=CH_USER --test_env=CH_PASSWORD \
+  --test_filter='^TestServeHoldsInstallsOfAServedDatabase$' --test_arg=-test.v --nocache_test_results --test_output=all > "$T45/serve-ch.log" 2>&1 || exit 1
+grep -F -- '--- PASS: TestServeHoldsInstallsOfAServedDatabase' "$T45/serve-ch.log" || exit 1
+if grep -E -- '--- (SKIP|FAIL): TestServeHoldsInstallsOfAServedDatabase' "$T45/serve-ch.log"; then echo "hold test skipped or failed; stop"; exit 1; fi
 ```
 
 Expected: `--- SKIP: TestServeHoldsInstallsOfAServedDatabase` (no `ARBITER_CH_INTEGRATION`); a `25.8.<x>.<y>` version line; `--- PASS: TestServeHoldsInstallsOfAServedDatabase (1.<n>s)`. A `--- SKIP` in the second run means the env did not reach the test: check `--test_env`. Keep the container for Step 20 and the PASS line for the run record. Then commit:
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_64="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_64}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 git -C "$W" add member/serve .github/workflows/ci.yml
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "test(member/serve): installs of a served database wait for the lease, against ClickHouse
 
 TestServeHoldsInstallsOfAServedDatabase runs the lease protocol with a
@@ -13184,7 +14348,11 @@ scratch waits and the host keeps reading the published rows; it runs
 after the release, and serving resumes at the new snapshot. CI's
 integration-clickhouse job runs //member/serve:serve_test.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_65="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_65}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 17: Write the failing installer-hold tests**
@@ -13453,7 +14621,7 @@ func TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite(t *testing.T) {
 
 - [ ] **Step 18: Run them and see them fail**
 
-Run: `cd "$W" && bazel run //:gazelle && bazel test //member/install:install_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/install:install_test --test_output=errors`
 Expected: gazelle adds `hooks_ch_test.go` to `install_test`'s `srcs` (the `data = glob(["*.go"])` line stays); FAIL to build with `member/install/hooks_ch_test.go:<line>:<col>: d.AfterInstall undefined (type *Deps has no field or method AfterInstall)` (twice).
 
 - [ ] **Step 19: Add `Deps.AfterInstall` and pair it in both gate sites**
@@ -13461,7 +14629,18 @@ Expected: gazelle adds `hooks_ch_test.go` to `install_test`'s `srcs` (the `data 
 Apply the five hunks below to Task 32's `member/install/installer.go` and `member/install/audit.go`. The script checks each old text occurs exactly once and writes nothing otherwise; its old and new texts are the hunks:
 
 ```bash
-cd "$W" && python3 -I - . <<'EOF'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_66="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_66}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" && python3 -I - . <<'EOF' || exit 1
 import pathlib
 import sys
 
@@ -13568,18 +14747,51 @@ Expected: `member/install: AfterInstall added; both installGates sites release t
 - [ ] **Step 20: Run the installer tests, see them pass, and commit**
 
 ```bash
-cd "$W" && test -z "$(gofmt -l member/install)" && bazel run //:gazelle && git status --short -- member/install \
-  && bazel test //member/install:install_test --test_output=errors
-c=arbiter-core-s3c4-serve-ch; port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$c")"
-cd "$W" && env ARBITER_CH_INTEGRATION=1 CH_ADDR="127.0.0.1:$port" bazel test //member/install:install_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR \
-  --test_arg=-test.v --nocache_test_results --test_output=all 2>&1 | grep -E -- '--- (PASS|FAIL|SKIP)'
-docker rm -f "$c" >/dev/null
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_67="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_67}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" || exit 1
+test -z "$(gofmt -l member/install)" || exit 1
+bazel run //:gazelle || exit 1
+bazel test //member/install:install_test --test_output=errors || exit 1
+c="$(cat "$T45/ch-container")" || exit 1
+[ "$(docker inspect --format '{{.Id}}' "$c")" = "$(cat "$T45/ch-id")" ] || { echo "local CH ownership mismatch; stop"; exit 1; }
+port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$c")" || exit 1
+env ARBITER_CH_INTEGRATION=1 CH_ADDR="127.0.0.1:$port" CH_USER=default CH_PASSWORD="" bazel test //member/install:install_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_env=CH_USER --test_env=CH_PASSWORD \
+  --test_arg=-test.v --nocache_test_results --test_output=all > "$T45/install-ch.log" 2>&1 || exit 1
+for name in TestInstallerWithoutAGateIsUnchanged TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite; do
+  grep -F -- "--- PASS: $name" "$T45/install-ch.log" || exit 1
+  if grep -E -- "--- (SKIP|FAIL): $name" "$T45/install-ch.log"; then exit 1; fi
+done
+docker rm -f "$(cat "$T45/ch-id")" > /dev/null || exit 1
+mv "$T45/ch-container" "$T45/ch-container.completed-$(date +%s)" || exit 1
+mv "$T45/ch-id" "$T45/ch-id.completed-$(date +%s)" || exit 1
 ```
 
 Expected: gofmt lists nothing; the status lists ` M member/install/BUILD.bazel`, ` M member/install/audit.go`, ` M member/install/installer.go` and `?? member/install/hooks_ch_test.go`; `//member/install:install_test PASSED` (the ClickHouse tests skip); then, against ClickHouse 25.8, `--- PASS:` for every Task 32 test, `TestInstallerWithoutAGateIsUnchanged` and `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite`, and only `--- SKIP: TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow` (it needs `ARBITER_CH_RESTART`, Task 32 Step 14). Then commit:
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_68="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_68}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 git -C "$W" add member/install
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member/install): AfterInstall beside BeforeInstall
 
 install.Deps gains AfterInstall, the pair of S3-C2's BeforeInstall seam
@@ -13590,7 +14802,11 @@ write or once the pass failed; a refused BeforeInstall changes nothing
 and is not paired. With both seams nil nothing waits: P2's installer,
 statement for statement.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_69="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_69}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 21: Write the failing role-wiring tests**
@@ -13960,7 +15176,7 @@ If Step 2 found no `data = glob(["*.go"])` on `go_test(name = "member_test", ...
 
 - [ ] **Step 22: Run them and see them fail**
 
-Run: `cd "$W" && bazel run //:gazelle && bazel test //member:member_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member:member_test --test_output=errors`
 Expected: FAIL to build `//member:member_test` with `member/serving_test.go:<line>:<col>: unknown field Serve in struct literal of type Config`, `r.installHooks undefined (type *Role has no field or method installHooks)`, `r.attachServing undefined`, `r.runServing undefined`, `r.ServeHandler undefined`, `r.ServeMetrics undefined`, `r.Serving undefined` and `too many errors`.
 
 - [ ] **Step 23: Implement the role's serving side**
@@ -14220,7 +15436,18 @@ Then apply the hunks below to Plan S3-C2 Task 34's `member/config.go` and `membe
 The script checks that each old text occurs exactly once and writes nothing otherwise; its old and new texts are the hunks:
 
 ```bash
-cd "$W" && python3 -I - . <<'EOF'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_70="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_70}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" && python3 -I - . <<'EOF' || exit 1
 import pathlib
 import sys
 
@@ -14341,10 +15568,22 @@ Expected: `member: Config.Serve added; the role builds, wires and runs its servi
 - [ ] **Step 24: Run the member tests, see them pass, and commit**
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_71="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_71}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
 cd "$W" && test -z "$(gofmt -l member)" && bazel run //:gazelle && git diff -- member/BUILD.bazel \
   && bazel test //member/... --test_output=errors \
-  && bazel test --@rules_go//go/config:race //member/... --test_output=errors
+  && bazel test --@rules_go//go/config:race //member/... --test_output=errors || exit 1
 git -C "$W" add member
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(member): Config.Serve wires the serving server into the role and the installer
 
 member.Config.Serve (Plan S3-C4 contract §30.6) builds a serve.Server
@@ -14355,7 +15594,11 @@ BeforeInstall and AfterInstall to the role's installer, starts it at
 startup step (9) and exposes ServeHandler, Serving and ServeMetrics.
 Without Config.Serve the role is P2's, byte for byte.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_72="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_72}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: gofmt lists nothing; the `member/BUILD.bazel` diff adds `serving.go` to the library's `srcs` and `serving_test.go` to `member_test`'s, `//:arbiter-core` and `//member/serve` to the library's `deps` and `//member/serve` to the test's (the deps Task 34's BUILD already lists stay; plus the `data` line if Step 21 added it); every `//member/...` target PASSES with and without the race detector (Task 34's tests included: with `Config.Serve` nil they run P2's role; the ClickHouse-gated and confinement tests skip); one commit.
@@ -14363,7 +15606,18 @@ Expected: gofmt lists nothing; the `member/BUILD.bazel` diff adds `serving.go` t
 - [ ] **Step 25: Document member serving**
 
 ```bash
-cd "$W" && python3 -I - README.md <<'EOF'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_73="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_73}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" && python3 -I - README.md <<'EOF' || exit 1
 import pathlib
 import sys
 
@@ -14406,9 +15660,14 @@ print("README.md: the member/serve row, § Member serving (stage 3 P3), one Comp
 EOF
 git -C "$W" diff --stat -- README.md
 git -C "$W" add README.md
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "docs: member serving (stage 3 P3)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and ask the user to unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_74="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_74}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `README.md: the member/serve row, § Member serving (stage 3 P3), one Compatibility paragraph`; ` README.md | 17 +++++++++++++++++` (one row, the 14-line section, and a blank line and the paragraph); one commit. A `stop` means Task 34's README text moved (its `member` row or `## Releases`): put the three pieces at the places the script names by hand.
@@ -14416,20 +15675,53 @@ Expected: `README.md: the member/serve row, § Member serving (stage 3 P3), one 
 - [ ] **Step 26: Full verification**
 
 ```bash
-cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bash scripts/check-public-boundary.sh && bazel run //:gazelle && git diff --exit-code -- '*.bazel' \
-  && bazel build //... && bazel test //... --test_output=errors \
-  && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
-git -C "$W" diff --quiet "$CORE_TAG_P2" HEAD -- consensus.go && echo "consensus.go unchanged"
-git -C "$W" diff --stat "$CORE_TAG_P2" HEAD -- wire authority conformance consensus.go domains.go types.go table_registry.go snode verifier dataplane .github/workflows/cut-release.yml
-git -C "$W" grep -n -E 'stage3_v1|Stage3Feature' -- '*.go' || echo "no stage-3 feature string"
-git -C "$W" status --short && git -C "$W" log --oneline "$CORE_TAG_P2..HEAD"
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_75="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_75}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+cd "$W" || exit 1
+(
+  task45_go_list=
+  trap 'if [ -n "$task45_go_list" ]; then rm -f -- "$task45_go_list" || exit 1; fi' EXIT
+  task45_go_created="$(mktemp "$T45/gofmt-files.XXXXXX")" || exit 1
+  task45_go_list=$task45_go_created
+  git ls-files -z -- '*.go' > "$task45_go_list" || exit 1
+  task45_go_files=()
+  while IFS= read -r -d '' task45_go_file; do
+    task45_go_files+=("./$task45_go_file")
+  done < "$task45_go_list" || exit 1
+  task45_go_changes=
+  if [ "${#task45_go_files[@]}" -gt 0 ]; then
+    task45_go_changes="$(gofmt -l "${task45_go_files[@]}")" || exit 1
+  fi
+  test -z "$task45_go_changes" || exit 1
+) || exit 1
+bash scripts/check-public-boundary.sh || exit 1
+bazel run //:gazelle || exit 1
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build //... || exit 1
+bazel test //... --test_output=errors || exit 1
+bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors || exit 1
+git diff --exit-code "$CORE_TAG_P2" HEAD -- wire authority conformance consensus.go domains.go types.go table_registry.go snode verifier dataplane .github/workflows/cut-release.yml || exit 1
+echo "LocalNodeFeatures and protected sources unchanged"
+if git grep -n -E 'stage3_v1|Stage3Feature' -- '*.go'; then echo "unexpected stage3 feature; stop"; exit 1; else rc=$?; [ "$rc" = 1 ] || exit 1; fi
+si_checked_read_76="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_76}" || exit 1
+git log --oneline "$CORE_TAG_P2..HEAD" || exit 1
 ```
 
-Expected: no gofmt output, no boundary violation, no BUILD change, every target PASSES with and without the race detector (ClickHouse-gated tests SKIP); `consensus.go unchanged` (`LocalNodeFeatures` is `CORE_TAG_P2`'s); the `diff --stat` prints nothing (this task touches no consensus, wire, SNode, verifier, data-plane or release-workflow file); `no stage-3 feature string`; a clean tree; and the six commits of Steps 11, 15, 16, 20, 24 and 25 on top of `CORE_TAG_P2` (plus any commit `main` gained after it, unchanged). Then run Step 16's ClickHouse block and Step 20's once more on the final tree (starting the container again); expected the same PASS lines.
+Expected: no gofmt output, no boundary violation, no BUILD change, every target PASSES with and without the race detector (ClickHouse-gated tests SKIP); `LocalNodeFeatures and protected sources unchanged` (the protected-tree diff is empty, and no feature-string hit is accepted); a clean tree; and the six commits of Steps 11, 15, 16, 20, 24 and 25 on top of `CORE_TAG_P2` (plus any commit `main` gained after it, unchanged). Then run Step 16's ClickHouse block and Step 20's once more on the final tree, creating a fresh unique owned container after the prior checked cleanup archived its ownership markers; expected the same PASS lines.
 
 - [ ] **Step 27: Push and open the PR**
 
-Remote write (push, PR): needs explicit user confirmation in chat before running. First write the body below with the Write tool to `~/src/remotesrc/claude/arbiter-core/multi-source-s3c4.pr-body.md` (beside the worktree, never inside it), with the three ledger values of Step 1 in place of `<CORE_TAG_P2>`, `<HG_TAG_P1>` and `<PROTO_TAG>`:
+Remote write (push, PR): needs explicit user confirmation in chat before running. First write the body below with the Write tool to `$HOME/.cache/s3c4-task45/pr-body.md` (outside the worktree), with the three ledger values of Step 1 in place of `<CORE_TAG_P2>`, `<HG_TAG_P1>` and `<PROTO_TAG>`:
 
 ```markdown
 Stage 3 P3 of the multi-source storage-integrity network, the member side of reads from members (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §11; Plan S3-C4 contract §30, clarifications K44 and K45), on `<CORE_TAG_P2>` with housegate `<HG_TAG_P1>` and arbiter-proto `<PROTO_TAG>` unchanged. No consensus change: no Raft command, field, snapshot version or feature string, `LocalNodeFeatures` unchanged; every component can return to `<CORE_TAG_P2>`.
@@ -14444,112 +15736,323 @@ Stage 3 P3 of the multi-source storage-integrity network, the member side of rea
 ```
 
 ```bash
-git -C ~/src/remotesrc/claude/arbiter-core/multi-source-s3c4 push -u origin urwt/claude/multi-source-s3c4
-gh pr create --repo sentioxyz/arbiter-core --base main --head urwt/claude/multi-source-s3c4 --title 'feat(member): stage 3 P3 serving view, owner probe and serving leases' --body-file ~/src/remotesrc/claude/arbiter-core/multi-source-s3c4.pr-body.md
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_77="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_77}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+ids="$(git -C "$W" rev-list origin/main..HEAD)" || exit 1
+[ -n "$ids" ] || { echo "empty task history; stop"; exit 1; }
+for id in $ids; do
+  si_checked_read_78="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$id")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  [ "${si_checked_read_78}" = 'poetry <chen@sentio.xyz> G' ] || { echo "branch has an unexpected author or signature; stop"; exit 1; }
+  git -C "$W" verify-commit "$id" || exit 1
+done
+si_checked_read_79="$(git -C "$W" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+test -z "${si_checked_read_79}" || exit 1
+git -C "$W" push -u origin HEAD || exit 1
+gh pr create --repo sentioxyz/arbiter-core --base main --head urwt/codex/multi-source-s3c4 --title 'feat(member): stage 3 P3 serving view, owner probe and serving leases' --body-file "$T45/pr-body.md" | tee "$T45/pr-url" || exit 1
 ```
 
-Expected: the push creates `urwt/claude/multi-source-s3c4` on `origin`; `gh pr create` prints `https://github.com/sentioxyz/arbiter-core/pull/<n>`. Both commands run unchanged in fish and in the agent's shell.
+Expected: the non-force push publishes `urwt/codex/multi-source-s3c4`; the exact new PR URL is retained in `$HOME/.cache/s3c4-task45/pr-url`. A failure stops before any merge or release.
 
 - [ ] **Step 28: CI and merge**
 
-Remote read (checks): needs explicit user confirmation in chat before running.
+Remote reads (CI/review): need explicit user confirmation in chat before running.
 
 ```bash
-gh pr checks urwt/claude/multi-source-s3c4 --repo sentioxyz/arbiter-core --watch
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_80="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_80}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+gh pr checks "$(cat "$T45/pr-url")" --repo sentioxyz/arbiter-core --watch || exit 1
 ```
 
-Expected: every check green (`test`, `integration-clickhouse` with `//member/install:install_test` and `//member/serve:serve_test`, and the jobs S3-A and S3-C2 added, `clickhouse-mechanics` and `member-confinement`). If review asks for a change, make it on the branch, rerun Step 26's checks, push (confirmed again) and watch the checks again.
+Expected: every check is green, including both actual ClickHouse hold tests, mechanics and member confinement. For each actionable review finding, verify/fix it, repeat the affected checks and the signed commit/range gates, then push only after its separate confirmation.
 
-Remote write (squash merge), after review: needs explicit user confirmation in chat before running.
+Remote write (squash merge), after review: needs explicit user confirmation in chat before running. Gate: "squash-merge the reviewed Task 45 arbiter-core PR retained in pr-url". Validate the complete paginated REST primary authors and coauthor trailers, and bind both head reads to the local reviewed HEAD:
 
 ```bash
-gh pr merge urwt/claude/multi-source-s3c4 --repo sentioxyz/arbiter-core --squash
-git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core fetch -q origin
-git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core log --oneline -1 origin/main
-gh pr view urwt/claude/multi-source-s3c4 --repo sentioxyz/arbiter-core --json number,mergeCommit,mergedAt --jq '"#" + (.number | tostring) + " " + .mergeCommit.oid + " " + .mergedAt'
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+T45="$HOME/.cache/s3c4-task45"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
+n="$(sed -n 's|^https://github.com/sentioxyz/arbiter-core/pull/\([0-9][0-9]*\)$|\1|p' "$T45/pr-url")"
+[ -n "$n" ] || { echo "no PR URL in $T45/pr-url: stop"; exit 1; }
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_81="$(gh pr view "$n" --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_81" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_81}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/arbiter-core/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_checked_read_82="$(gh pr view "$n" --repo sentioxyz/arbiter-core --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_82" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_82}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+gh pr merge "$n" --repo sentioxyz/arbiter-core --squash --match-head-commit "$expected_head" || exit 1
+gh pr view "$n" --repo sentioxyz/arbiter-core --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
+gh pr view "$n" --repo sentioxyz/arbiter-core --json mergeCommit --jq .mergeCommit.oid > "$T45/merge"
+gh pr view "$n" --repo sentioxyz/arbiter-core --json mergedAt --jq .mergedAt > "$T45/merged-at"
+git -C "$R" fetch -q origin
+git -C "$R" log --oneline -1 origin/main
+si_checked_read_83="$(git -C "$R" rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_83" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_83}" = "$(cat "$T45/merge")" ] && echo "origin/main is the merge commit" || exit 1
 ```
 
-Expected: the merge succeeds; `origin/main` is `<merge sha> feat(member): stage 3 P3 serving view, owner probe and serving leases (#<n>)`; the last line prints `#<n>`, that 40-hex merge commit and its UTC merge time (kept for the run record). All four commands run unchanged in fish.
+Expected: `PR commit identities and pinned head verified`, a successful squash merge and `MERGED <40-hex merge> <UTC time>`. The exact merge/time are persisted in `merge` and `merged-at`, and origin/main must still equal that merge before a release. An unexpected author, malformed/truncated listing or changed head stops; no automatic author rewrite or force push.
 
 - [ ] **Step 29: Cut the release and verify `CORE_TAG_P3` by content**
 
-Remote write (tag and GitHub release): needs explicit user confirmation in chat before running. Cut Release runs the boundary check, the race suite and its ClickHouse steps (S3-A's mechanics, S3-C2's member confinement), then tags `vX.Y.Z` (`scripts/next-version.sh`: Y+1 on the first cut of a later UTC day, else Z+1). Never predict the tag.
+Remote write (an annotated permanent tag and published release): needs explicit user confirmation in chat before running. Tags are permanent; stop if main differs from the reviewed merge. The workflow computes the next release number; never predict it. Gate: "dispatch arbiter-core Cut Release on the exact reviewed main, publishing CORE_TAG_P3".
 
 ```bash
-gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main
-bash -c 'gh run watch --repo sentioxyz/arbiter-core "$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
-gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq '.[0].tagName'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_84="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_84}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
+merge="$(cat "$T45/merge")" || exit 1
+[ "$(git -C "$R" ls-remote origin refs/heads/main | cut -f1)" = "$merge" ] || { echo "main moved since review; stop and ask"; exit 1; }
+[ ! -e "$T45/cut-since" ] || { echo "a prior dispatch intent exists; reconcile its run instead of redispatching; stop"; exit 1; }
+python3 -I -c 'import datetime;print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))' > "$T45/cut-since" || exit 1
+gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main || exit 1
 ```
 
-The new run can take a few seconds to appear: if the watched run predates the dispatch (`gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --limit 2 --json databaseId,createdAt`), wait and run the second line again. Expected: the run ends green with the summary `### Cutting vX.Y.Z` and the last line prints that tag. Then verify it by content (remote reads, part of this confirmed step). The block takes the tag from the release list and the base values from the ledger copy, keeps the tag in `$HOME/.cache/s3-ledger/record-s3c4-45.tag` for Step 30, and is wrapped in `bash -c` so it runs unchanged from fish:
+Then run these remote reads under the same confirmation. If no unique run is registered yet, inspect and repeat this read only; never redispatch merely to obtain an id. The run is selected by workflow, event, captured head and dispatch time, then watched with `--exit-status`. Task 34 already added the exact stdout line `member release tag: <tag>` to Cut Release; no new workflow mutation is needed here.
 
 ```bash
-bash -c 'R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core; h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-T="$(gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq ".[0].tagName")"
-P2="$(python3 -I "$L/s3-ledger.py" get "$h" CORE_TAG_P2 | sed "s/^CORE_TAG_P2=//")"
-HG="$(python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P1 | sed "s/^HG_TAG_P1=//")"
-PR="$(python3 -I "$L/s3-ledger.py" get "$h" PROTO_TAG | sed "s/^PROTO_TAG=//")"
-echo "tag $T on $P2 (housegate $HG, arbiter-proto $PR)"
-git -C "$R" fetch -q origin --tags
-git -C "$R" show "$T:member/serve/serve.go" | grep -cE "DefaultLeaseTTL += 30 [*] time.Second"
-git -C "$R" show "$T:consensus.go" | grep -c stage3_v1
-git -C "$R" diff --quiet "$P2" "$T" -- consensus.go && echo "LocalNodeFeatures unchanged"
-git -C "$R" show "$T:member/install/installer.go" | grep -c "AfterInstall func(owner uint64, database string)"
-git -C "$R" show "$T:member/serving.go" | grep -c "^func (r [*]Role) ServeHandler() http.Handler"
-git -C "$R" show "$T:.github/workflows/ci.yml" | grep -c "//member/serve:serve_test"
-git -C "$R" show "$T:go.mod" | grep -cE "^[[:space:]]+github.com/housegate/housegate $HG$"
-git -C "$R" show "$T:go.mod" | grep -cE "^[[:space:]]+github.com/sentioxyz/arbiter-proto $PR$"
-git -C "$R" rev-parse "$T^{commit}"
-printf "%s\n" "$T" > "$L/record-s3c4-45.tag"'
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_85="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_85}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+since="$(cat "$T45/cut-since")" || exit 1
+merge="$(cat "$T45/merge")" || exit 1
+rid="$(gh run list --repo sentioxyz/arbiter-core --workflow cut-release.yml --event workflow_dispatch --limit 30 --json databaseId,createdAt,headSha --jq "map(select(.createdAt >= \"$since\" and .headSha == \"$merge\")) | if length == 1 then .[0].databaseId else error(\"expected exactly one matching cut run; stop\") end")" || exit 1
+printf '%s\n' "$rid" > "$T45/cut-id" || exit 1
+gh run watch "$rid" --repo sentioxyz/arbiter-core --exit-status || exit 1
+gh run view "$rid" --repo sentioxyz/arbiter-core --log > "$T45/cut.log" || exit 1
+tag="$(sed -nE 's/.*member release tag: (v[0-9]+[.][0-9]+[.][0-9]+)[[:space:]]*$/\1/p' "$T45/cut.log" | LC_ALL=C sort -u)" || exit 1
+[ "$(printf '%s\n' "$tag" | grep -Ec '^v[0-9]+[.][0-9]+[.][0-9]+$')" = 1 ] || { echo "run did not print exactly one member release tag; stop"; exit 1; }
+printf '%s\n' "$tag" > "$T45/tag" || exit 1
+gh release view "$tag" --repo sentioxyz/arbiter-core --json tagName,isDraft,isPrerelease,createdAt > "$T45/release.json" || exit 1
+python3 -I - "$T45/release.json" "$tag" <<'PYRELEASE' || exit 1
+import json,sys
+x=json.load(open(sys.argv[1]))
+assert x.get("tagName")==sys.argv[2] and x.get("isDraft") is False and x.get("isPrerelease") is False and isinstance(x.get("createdAt"),str) and x["createdAt"], "not the expected stable published release"
+print(x["tagName"] + " draft=false prerelease=false " + x["createdAt"])
+PYRELEASE
 ```
 
-Expected: `tag v<x>.<y>.<z> on <CORE_TAG_P2> (housegate <HG_TAG_P1>, arbiter-proto <PROTO_TAG>)`; `1`, `0` (contract §30.7's two content checks), `LocalNodeFeatures unchanged`, `1`, `1`, `1`, `1`, `1` (the housegate and arbiter-proto pins are `CORE_TAG_P2`'s); then the tag's commit, equal to Step 28's merge commit. That tag is `CORE_TAG_P3`. A `stop` from `s3-ledger.py`, or any other count: stop; nothing is recorded. If the commit differs (another PR merged before the cut), confirm with the user that its change belongs in `CORE_TAG_P3` before recording, and name it in the run record.
+Expected: the matching successful run id and one stable published `vX.Y.Z` derived from that same run, retained in `tag`. Latest-release ordering is never used. Finally verify content and annotated tag identity, as part of this confirmed remote-read step:
+
+```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/worktree.json")" || exit 1
+si_checked_read_86="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_86}" = urwt/codex/multi-source-s3c4 ] || { echo "saved worktree branch mismatch; stop"; exit 1; }
+CORE_TAG_P2="$(sed -n 's/^CORE_TAG_P2=//p' "$T45/ledger.env")" || exit 1
+HG_TAG_P1="$(sed -n 's/^HG_TAG_P1=//p' "$T45/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T45/ledger.env")" || exit 1
+for value in "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG"; do
+  printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || { echo "missing or invalid saved ledger pin; stop"; exit 1; }
+done
+R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
+T="$(cat "$T45/tag")" || exit 1
+merge="$(cat "$T45/merge")" || exit 1
+git -C "$R" fetch -q origin --tags || exit 1
+python3 -I - "$R" "$T" "$merge" "$CORE_TAG_P2" "$HG_TAG_P1" "$PROTO_TAG" <<'PYVERIFY' || exit 1
+import subprocess,sys,re
+repo,tag,merge,base,hg,proto=sys.argv[1:]
+def git(*args):return subprocess.check_output(["git","-C",repo,*args],text=True)
+assert re.fullmatch(r"v[0-9]+[.][0-9]+[.][0-9]+",tag) and re.fullmatch(r"[0-9a-f]{40}",merge)
+assert git("rev-parse",tag+"^{commit}").strip()==merge,"tag is not the reviewed merge"
+assert git("cat-file","-t",tag).strip()=="tag","tag is not annotated"
+remote=git("ls-remote","--tags","origin","refs/tags/"+tag).split()
+assert remote==[git("rev-parse",tag).strip(),"refs/tags/"+tag],"origin tag differs"
+protected=["wire","authority","conformance","consensus.go","domains.go","types.go","table_registry.go","snode","verifier","dataplane",".github/workflows/cut-release.yml"]
+assert not git("diff","--name-only",base,tag,"--",*protected).strip(),"protected sources changed"
+for path,needle in {
+ "member/serve/serve.go":"DefaultLeaseTTL = 30 * time.Second",
+ "member/install/installer.go":"AfterInstall func(owner uint64, database string)",
+ "member/serving.go":"func (r *Role) ServeHandler() http.Handler {",
+ ".github/workflows/ci.yml":"//member/serve:serve_test",
+}.items():
+ data=git("show",tag+":"+path)
+ assert data.count(needle)==1,"release content mismatch: "+path
+mod=git("show",tag+":go.mod")
+for module,pin in [("github.com/housegate/housegate",hg),("github.com/sentioxyz/arbiter-proto",proto)]:
+ assert len(re.findall(r"(?m)^\s*"+re.escape(module)+" "+re.escape(pin)+r"$",mod))==1,"release pin changed"
+assert "stage3_v1" not in git("show",tag+":consensus.go"),"stage3 feature added"
+print("release content, pins, protected sources and exact annotated tag verified")
+PYVERIFY
+printf '%s\n%s\n' "$T" "$merge" > "$T45/release-verified" || exit 1
+printf '%s\n' "$T" > "$HOME/.cache/s3-ledger/record-s3c4-45.tag" || exit 1
+```
+
+Expected: `release content, pins, protected sources and exact annotated tag verified`. Only then is `record-s3c4-45.tag` written; a failed content check cannot authorize a ledger record. Any unrelated change, moved main, missing/ambiguous run, unsuccessful watch, unexpected pin or tag mismatch stops and asks the user.
 
 - [ ] **Step 30: Record `CORE_TAG_P3` (contract §32.7)**
 
-Record it, never predicting it, with S3-B's record procedure R1–R4 through `s3-ledger.py` (Plan S3-C1 contract §19). The tag comes from `$HOME/.cache/s3-ledger/record-s3c4-45.tag`, which Step 29 wrote once its content checks ran. First write the run record `$HOME/.cache/s3-ledger/record-s3c4-45.md` with the Write tool: one paragraph of what Steps 16, 20, 28 and 29 printed, in this form: `` `sentioxyz/arbiter-core#<n>` (`feat(member): stage 3 P3 serving view, owner probe and serving leases`) squash-merged as `<merge sha>` at <mergedAt> UTC on `<CORE_TAG_P2>` (housegate `<HG_TAG_P1>`, arbiter-proto `<PROTO_TAG>` unchanged), its checks green, `integration-clickhouse` with `//member/serve:serve_test`; locally `TestServeHoldsInstallsOfAServedDatabase`, `TestInstallerWithoutAGateIsUnchanged` and `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` passed on ClickHouse `<version>`; Cut Release run `<run id>` tagged `<tag>` at `<merge sha>`; the content checks printed `1`, `0`, `LocalNodeFeatures unchanged` and `1` five times. `` — optionally followed by lines starting `- ` (each becomes a sub-item), for example a commit merged after the PR that the tag also holds.
+Record it, never predicting it, with S3-B's record procedure R1–R4 through `s3-ledger.py` (Plan S3-C1 contract §19). The tag comes from `$HOME/.cache/s3-ledger/record-s3c4-45.tag`, which Step 29 wrote once its content checks ran. First write the run record `$HOME/.cache/s3-ledger/record-s3c4-45.md` with the Write tool: one paragraph of what Steps 16, 20, 28 and 29 printed, in this form: `` `sentioxyz/arbiter-core#<n>` (`feat(member): stage 3 P3 serving view, owner probe and serving leases`) squash-merged as `<merge sha>` at <mergedAt> UTC on `<CORE_TAG_P2>` (housegate `<HG_TAG_P1>`, arbiter-proto `<PROTO_TAG>` unchanged), its checks green, `integration-clickhouse` with `//member/serve:serve_test`; locally `TestServeHoldsInstallsOfAServedDatabase`, `TestInstallerWithoutAGateIsUnchanged` and `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` passed on ClickHouse `<version>`; Cut Release run `<run id>` tagged `<tag>` at `<merge sha>`; the content check printed `release content, pins, protected sources and exact annotated tag verified`. `` — optionally followed by lines starting `- ` (each becomes a sub-item), for example a commit merged after the PR that the tag also holds.
 
-R1 (local; its housegate fetch reads a remote, so it needs explicit user confirmation in chat before running):
+R1 (local with a remote fetch): needs explicit user confirmation in chat before running. The completed release verification must match the saved tag and merge before a fresh ledger worktree is created.
 
 ```bash
+set -eo pipefail
+T45="$HOME/.cache/s3c4-task45"
+CORE_TAG_P3="$(cat "$T45/tag")" || exit 1
+[ "$(sed -n 1p "$T45/release-verified")" = "$CORE_TAG_P3" ] && [ "$(sed -n 2p "$T45/release-verified")" = "$(cat "$T45/merge")" ] || { echo "missing exact release verification; stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=45
-CORE_TAG_P3="$(cat "$L/record-s3c4-$n.tag")"
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
 git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" empty "$h" CORE_TAG_P3 || exit 1
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c4-ledger-$n" "urwt/claude/multi-source-s3c4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+python3 -I "$L/s3-ledger.py" empty "$h" CORE_TAG_P3 || exit 1
+[ ! -e "$T45/ledger-worktree.json" ] || { echo "saved ledger URWT exists; reconcile before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c4-ledger-$n" "urwt/codex/multi-source-s3c4-ledger-$n" "$ref")" || exit 1
+(set -C; printf '%s\n' "$out" > "$T45/ledger-worktree.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task45/ledger-worktree.json")" || exit 1
+si_checked_read_89="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_89" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_88="$(git -C "$h" rev-parse "$ref")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_88" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_87="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${si_checked_read_89}" = "${si_checked_read_88}" ] && [ -z "${si_checked_read_87}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+si_checked_read_90="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_90}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || { echo "ledger branch mismatch; stop"; exit 1; }
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c4-$n.md" CORE_TAG_P3="$CORE_TAG_P3" || exit 1
+previous_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record CORE_TAG_P3 of Plan S3-C4 (Task 45)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" show --stat --oneline HEAD | cat
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signature failed; stop and unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+si_checked_read_91="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_91}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+git -C "$d" show --stat --oneline HEAD | cat || exit 1
 ```
 
-Expected: `s3-ledger: CORE_TAG_P3 not recorded yet in origin/urwt/claude/ms-si-stage3-plans-cf:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` (`origin/main:` once the plans PR merged), `s3-ledger: Task 45 recorded CORE_TAG_P3=<tag> and its run record 'arbiter-core release' in <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md`, then one commit `docs(plan): record CORE_TAG_P3 of Plan S3-C4 (Task 45)` of the plan file only (` 1 file changed, 2 insertions(+), 2 deletions(-)`: its row and its run-record item, plus one insertion per sub-item). A `stop` writes nothing: report it and ask.
+Expected: a newly created actual JSON ledger path on `urwt/codex/multi-source-s3c4-ledger-45`, configured before the first commit as `poetry <chen@sentio.xyz>` with signing enabled, then one new GPG-good docs-only record commit. Preserve failed/existing JSON; never silently reuse it or disable signing.
 
-R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 45's ledger record (Appendix C of Plan S3-C4: CORE_TAG_P3 and the run record 'arbiter-core release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf when that branch is the ledger copy, else as a docs PR into main". After a yes:
+R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 45 CORE_TAG_P3 and its arbiter-core release run record to the ledger copy, or open its main docs PR".
 
 ```bash
+set -eo pipefail
 L="$HOME/.cache/s3-ledger"; n=45
 d="$(sed -n 1p "$L/record-s3c4-$n")"; ref="$(sed -n 2p "$L/record-s3c4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+si_checked_read_93="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_92="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_93}" = 1 ] && [ -z "${si_checked_read_92}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+si_checked_read_95="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_94="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_95}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] && [ "${si_checked_read_94}" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger branch/identity/signature mismatch; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+git -C "$d" merge-base --is-ancestor "$ref" HEAD || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  si_record_subject="$(git -C "$d" log -1 --format=%s)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  printf '%s\n\n%s\n' "${si_record_subject}: Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${si_record_subject}" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 45's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
+Expected: a non-force push to the ledger branch, or one docs PR when the ledger copy is origin/main. Rejected pushes stop; never force or redirect the record.
+
+R3 (only for the main docs PR): squash merge needs its own explicit user confirmation in chat. Validate the complete REST primary author/coauthor list and exact head again:
 
 ```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=45
+d="$(sed -n 1p "$L/record-s3c4-$n")" || exit 1
+pr="$(sed -n 's|^https://github.com/housegate/housegate/pull/\([0-9][0-9]*\)$|\1|p' "$L/record-s3c4-$n-pr-url")"
+[ -n "$pr" ] || { echo "missing ledger PR; stop"; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+si_checked_read_97="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_97" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_97}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_checked_read_98="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_98" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_98}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
+```
+
+R4 (remote read) needs explicit user confirmation in chat before running:
+
+```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" get "$h" CORE_TAG_P3
@@ -14565,6 +16068,8 @@ Contract §31 (binding), §29.1 and §29.3 (the housegate names this task consum
 
 Nothing changes until it is configured (contract §29 "Inert by default"): without `member_status_url` there is no member client, no lease client, no in-flight counter for HouseGate, no replica series and no Replica entry; without the token the si-member builds `member.Config` with `Serve` nil and opens no serving listener. The only visible differences on an unconfigured host are additive: the label value `replica` of `sentio_node_storage_integrity_tables` (exported at 0) and the two always-present fields of `sentio_getStorageIntegrityInfo` (`replica_databases: []`, `replica_hosts` from the registry). Merging runs CI's `docker-push` only (`latest` and `sha-<SN_COMMIT_P3>`); this task never dispatches `Release Devnet` or `Release Testnet`, and neither may run on a commit containing `SN_COMMIT_P3` during this plan (the floating `:devnet` tag that the devnet2 observer and the testnet-v2 releases follow with `pullPolicy: Always` would move pods no runbook covers). Nothing on devnet2 changes in this task.
 
+**Current review base.** sentio-node `0828f212c9ff6fee311701f9b14d8df8c7817a64` plus the complete real reviewed C1 Task25/C2 Task35 source; housegate is the actual reviewed Task42–44 source (935 files), arbiter-core the actual reviewed Task45 source (379 files), on actual main `bc8780f` / `cfd4f42`. The Task35 config BUILD correction and bounded alias walker are retained, with no Role/API stand-ins. Numeric anchors below are historical navigation; current named hunks replay against that actual chain. Formal C2/C3/full-release and actual CH gates remain pending controller acceptance; this independent review never records future tags, digests or live results.
+
 **Files:**
 - Modify: `go.mod` (the housegate and arbiter-core requires, base `:9`, `:14`, at `HG_TAG_P1` and `CORE_TAG_P2` since Plan S3-C2 Task 35), `go.sum`, `MODULE.bazel` (`bazel_dep` `arbiter_core` and `housegate`, base `:12-19`; `git_override` `housegate` and `arbiter_core` with their `# Resolved …` comments, base `:29-41`), `MODULE.bazel.lock`
 - Modify: `storageintegrityadapter/tablestate/snapshot.go` (`Snapshot` base `:270-274`, `newSnapshot` `:278-287`, `Served` after `Active` `:298-304`; then `content` `:24-33`, the `build` doc `:46-52`, its end `:142-147`, `equal` `:248-267`), `model.go` (imports `:8-12`; `Inputs` `:202-218`; the new types after it), `state.go` (`Config` `:47-67`, `registryInput` `:69-74`, `Refresh` `:184-217` and a helper after it, `buildAndPublish` `:218-228`, `applyRegistryWithoutChain` `:230-259`), `status.go` (`:10-34`), `metrics.go` (`:11-80`, new methods after `Register`), `BUILD.bazel` (`go_library` srcs `:10-11`; `go_test` srcs and deps `:30-45`), each as Plan S3-B Task 12 left it (K11: a held Active table keeps its schema)
@@ -14574,7 +16079,7 @@ Nothing changes until it is configured (contract §29 "Inert by default"): witho
 - Test: `storageintegrityadapter/replicalease/client_test.go` (new)
 - Modify: `config/config.go` (imports `:7-10`; a constant after Plan S3-B Task 12's `StorageIntegrityClickhousePasswordEnv`; `StorageIntegrityConfig` after Plan S3-C1 Task 25's `Backup` field, base `:52-58`; `Validate` `:87-90` and after Task 12's login check; `decodeConfigYAML` `:376-390` as Plans S3-B Task 12 and S3-C1 Task 25 left it), `config/si_member.go` (Plan S3-C2 Task 35's file: `StorageIntegrityMemberConfig`, `loadSIMemberConfig`, `Validate`, `MemberConfig`), `config/BUILD.bazel` (as Task 35 left it)
 - Create: `config/si_member_serve.go`
-- Test: `config/config_test.go` (two tests appended at its end, after Plan S3-B Task 12's `TestStorageIntegrityOwnerAuditValidation`), `config/si_member_test.go` (Task 35's file: one import, two tests appended)
+- Test: `config/config_test.go` (two tests appended at its end, after Plan S3-B Task 12's `TestStorageIntegrityOwnerAuditValidation`), `config/si_member_test.go` (Task35's file: serving import, two protocol tests and `TestMemberServeTokenRefusalVisitsSharedYAMLOnce` appended)
 - Modify: `rpc/storage_integrity_info.go` (`StorageIntegrityInfo` `:14-38`, `GetStorageIntegrityInfo` `:60-73`), `rpc/storage_integrity_status.go` (the method doc `:28-33`), `rpc/BUILD.bazel` (`go_test` srcs `:41-42`)
 - Test: `rpc/storage_integrity_info_test.go` (`:64-67`, `:75-78`, `:154-157`), `rpc/storage_integrity_replica_info_test.go` (new)
 - Modify: `standalone/storage_integrity_table_state.go` (imports `:10-19`; `storageIntegrityTableStateDeps` `:32-53`; `storageIntegrityTableStateRuntime` `:58-68`; the constructor `:70-110`; a method before `clientLanesEnabled` `:141`; `begin` `:189-191`; `registerMetrics` `:200-217`, each as Plan S3-B Task 12 left it), `standalone/storage_integrity_info.go` (imports `:10-12`; `StorageIntegrityInfo` `:50-77`), `standalone/standalone.go` (imports `:42-45`; before the `storageIntegrityTableStateDeps` literal `:421`; the literal's end `:432-433`; the `housegate.Options` literal `:444-457`), `standalone/BUILD.bazel`
@@ -14607,39 +16112,136 @@ Notes:
 - **The member's endpoint (D29, K47).** `MemberConfig` sets `member.Config.Serve` from `serve.ServeConfig(token)` only when `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN` is set; `run` then registers the role's serving series on the process's own registry, builds the endpoint and binds `serve.listen` (default `:9096`, S3-C3's `siMember.statusPort`) before the role runs, so a busy port fails the start, serves it as a fourth part beside the metrics server, the follower and the role, and shuts it down with the others. The bearer check is `member/serve`'s own handler; sentio-node never reads the token beyond passing it. `serve.enabled` without the token is refused at load. `poll_interval` has no YAML key (the strict decoder refuses it); `member/serve` uses its default 5 s. `owner_housegate` keys are YAML integers (`map[uint64]string`): a quoted key such as `"0":` is refused by the decoder, so Task 47 renders each key bare and each duration as a quoted string (`owner_unreachable_after: "60s"`); `TestStorageIntegrityMemberServeValidation` loads exactly that form.
 - **Host wiring.** `Run` reads `si.ReplicaReads.MemberStatusURL`, a field of the canonical snapshot, which the source-shape audits allow (only method calls on `si` count as writes, Plan S3-B Task 12); with a URL it builds `serve.NewClient(url, os.Getenv(STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN), &http.Client{Timeout: 5 * time.Second})` (contract §31.7) and hands it to the runtime, which builds `sitable.NewReplicaReads()` for `housegate.Options.StorageIntegrityReplicaReads` and the lease client with `Refresh: state.Refresh`, `InFlight: replicaReads.InFlight` and `ServeUntil: replicaReads.ServeUntil`. The first snapshot (inside the startup transaction, before `housegate.New`) holds no Replica entry; the lease client is a task that starts at commit. `member_status_up` and both lease outcomes are registered only on a host with a URL, so `StorageIntegrityMemberStatusUnreachable` (Task 47) sees no series elsewhere; `replica_serving` and `replica_reads_in_flight` are scrape-time series for every database that is served or has a read in flight.
 - **`replica_hosts` (K50).** `ReplicaHosts` takes every database with a live physical SI incarnation (Pending, Active, Retiring or Purging) and lists the enrolled SI indexers other than any owner of its live incarnations, ascending; before the signed-claims activation only the founding indexer is enrolled, so every list is empty. The RPC always renders both fields, `[]` and `{}` when none, and an empty host list as `[]`, never `null`.
-- **The two YAML refusals (D29).** Both read the YAML nodes (through aliases and merge keys, Plan S3-B Task 12's `yamlMappingValues`), so an empty or null value is refused too: the host's in `decodeConfigYAML` after Plans S3-B's and S3-C1's refusals, whether or not storage integrity is enabled; the member's in `loadSIMemberConfig` right after Task 35's `refuseSIMemberSecretKeys`, before the strict decode, so its own text and not `field token not found` names the key. The member test keeps the contract's name `TestDecodeConfigYAMLRefusesAMemberServeTokenKey` although the member's decoder is `LoadSIMemberConfig`.
+- **The two YAML refusals (D29).** Both read YAML nodes through aliases and merge keys with Task35's bounded `siMemberYAMLMappingValues` walker, so an empty or null value is refused too: the host's in `decodeConfigYAML` after Plans S3-B's and S3-C1's refusals, whether or not storage integrity is enabled; the member's in `loadSIMemberConfig` right after Task 35's `refuseSIMemberSecretKeys`, before the strict decode, so its own text and not `field token not found` names the key. The member test keeps the contract's name `TestDecodeConfigYAMLRefusesAMemberServeTokenKey` although the member's decoder is `LoadSIMemberConfig`.
 - **The CI count.** The acceptance step counts `--- PASS: TestStorageIntegrity` lines, which the two new tests (`TestSIMember…`) do not match, so the SKIP check and the count become `Test(StorageIntegrity|SIMember)` patterns (`grep -E`), and the expected count goes from 6 to 8. Neither new test has subtests, so no indented PASS line is counted twice.
 - **Order and rollback.** `SN_COMMIT_P3` needs `HG_TAG_P3` and `CORE_TAG_P3` recorded and sentio-node `main` at or after `SN_COMMIT_P2`. A host or member that runs `SN_DIGEST_P3` without the new values behaves as on `SN_DIGEST_P2` apart from the additive series and info fields; both can return to their previous image (Task 48's §8). An image older than `SN_COMMIT_P3` ignores `replica_reads` on the host (lenient YAML) but refuses `serve` on the member (strict decoder), which is why Task 47 renders the member's `serve` block only with `siMember.serve.endpoint`, for the P3 member image.
-- **Verification while drafting** (Appendix B). Plan S3-A has meanwhile been released (housegate `v0.20.0`, arbiter-core `v0.15.0`, arbiter-proto `v0.12.0` are on origin/main), so the upstream stand-ins were built on those releases: `HG_TAG_P1` is housegate `v0.20.0` with Plan S3-C1 Task 22's `CopyTable` and `OwnerEntry`; `HG_TAG_P3` is that with Task 42's drafting tree and Task 44's `si_info.go` hunks; `CORE_TAG_P2` is arbiter-core `v0.15.0` with stand-ins of Plan S3-C2's `member` packages and Task 29's `wire.TableRegistrySnapshot.ManifestOwner`; `CORE_TAG_P3` is that with Task 45's `member/serve` sources verbatim (its own tests pass there) and a `member.Role` stand-in carrying contract §30.6's `Config.Serve` and three methods. The sentio-node prior state is `git archive` of `origin/main` (`5d2f169`) with the markdown of Plan S3-B Task 12, Plan S3-C1 Task 25 and Plan S3-C2 Task 35 applied mechanically (every Create, replace and append; the pins emulated by `go.mod` replaces and their own `MODULE.bazel` scripts), except Task 25's backup and restore-drill code (stubbed, since S3-C1's objstore library is not stood in) and Task 35's `simember/install_ch_test.go` (it needs the real member packages). This task's markdown was then replayed onto it step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go`: Step 2's pin script changed exactly its six lines and was idempotent, every "Expected: FAIL" appeared with the stated messages, every package passed after each implementation step, `-race` passed on every touched package, `gofmt` and `go vet ./...` were clean and `go test ./...` passed. Offline Bazel (`--repository_disable_download`, `--override_module` to the two P3 stand-ins) built `//...` and passed `bazel test //...`, `//storageintegrityadapter/tablestate:tablestate_test` with its external test files included, and `bazel run //:gazelle` changed no line this task writes (it only dropped deps that the stubbed Task 25 and Task 35 files no longer import). Against a local `clickhouse/clickhouse-server:25.8.32.4` with Keeper, Step 18's block printed its nine PASS lines, and the acceptance step of the new `ci.yml`, run through Bazel, passed with 8 PASS markers. Steps 19 and 21's local blocks printed exactly their expected lines. Of 28 mutations (the deadline margin dropped in `Serving` or in the poll; a release while reads are in flight or before the dropping poll's `Refresh`; a lease missing from the view kept; renews at TTL/2; a revoked renew kept; the serving-change rule removed from the chain-failure path; the replica source not asked; a wrong copy name, a stale seq or an unlisted Active table accepted; the governed check removed; `served_from` or `frozen_since` dropped; each YAML token refusal disabled; a URL with a path accepted; `enabled` without the token accepted; the token printed by `member-serving`; the si-member's serving config dropped; the lease client not started; HouseGate given no counter; `[]` or an empty host list rendered `null`; the owner listed as its own replica host), each failed a named test except one equivalent (dropping `CopyTable` and `ReplicaOf` from `content.equal`, which the serving views already imply). Every bash block and `Run:` line passes `bash -n` and `shellcheck` with its placeholders filled; `buildifier -mode=check -lint=warn` passes on every `BUILD.bazel` written below, and `actionlint` reports nothing new on `ci.yml`. Two defects of earlier plans surfaced and were worked around in the scratch prior state only: Plan S3-B Task 12's `evaluate` doc hunk ends on a partial line (`func evaluate(`), and Plan S3-C2 Task 35's `config/BUILD.bazel` deps hunk expects an `@arbiter_core//dataplane/objstore` line that Plan S3-C1 Task 25 never adds (neither task's config imports objstore).
+- **Historical verification while drafting (stand-in sources, not current review proof)** (Appendix B). Plan S3-A has meanwhile been released (housegate `v0.20.0`, arbiter-core `v0.15.0`, arbiter-proto `v0.12.0` are on origin/main), so the upstream stand-ins were built on those releases: `HG_TAG_P1` is housegate `v0.20.0` with Plan S3-C1 Task 22's `CopyTable` and `OwnerEntry`; `HG_TAG_P3` is that with Task 42's drafting tree and Task 44's `si_info.go` hunks; `CORE_TAG_P2` is arbiter-core `v0.15.0` with stand-ins of Plan S3-C2's `member` packages and Task 29's `wire.TableRegistrySnapshot.ManifestOwner`; `CORE_TAG_P3` is that with Task 45's `member/serve` sources verbatim (its own tests pass there) and a `member.Role` stand-in carrying contract §30.6's `Config.Serve` and three methods. The sentio-node prior state is `git archive` of `origin/main` (`5d2f169`) with the markdown of Plan S3-B Task 12, Plan S3-C1 Task 25 and Plan S3-C2 Task 35 applied mechanically (every Create, replace and append; the pins emulated by `go.mod` replaces and their own `MODULE.bazel` scripts), except Task 25's backup and restore-drill code (stubbed, since S3-C1's objstore library is not stood in) and Task 35's `simember/install_ch_test.go` (it needs the real member packages). This task's markdown was then replayed onto it step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go`: Step 2's pin script changed exactly its six lines and was idempotent, every "Expected: FAIL" appeared with the stated messages, every package passed after each implementation step, `-race` passed on every touched package, `gofmt` and `go vet ./...` were clean and `go test ./...` passed. Offline Bazel (`--repository_disable_download`, `--override_module` to the two P3 stand-ins) built `//...` and passed `bazel test //...`, `//storageintegrityadapter/tablestate:tablestate_test` with its external test files included, and `bazel run //:gazelle` changed no line this task writes (it only dropped deps that the stubbed Task 25 and Task 35 files no longer import). Against a local `clickhouse/clickhouse-server:25.8.32.4` with Keeper, Step 18's block printed its nine PASS lines, and the acceptance step of the new `ci.yml`, run through Bazel, passed with 8 PASS markers. Steps 19 and 21's local blocks printed exactly their expected lines. Of 28 mutations (the deadline margin dropped in `Serving` or in the poll; a release while reads are in flight or before the dropping poll's `Refresh`; a lease missing from the view kept; renews at TTL/2; a revoked renew kept; the serving-change rule removed from the chain-failure path; the replica source not asked; a wrong copy name, a stale seq or an unlisted Active table accepted; the governed check removed; `served_from` or `frozen_since` dropped; each YAML token refusal disabled; a URL with a path accepted; `enabled` without the token accepted; the token printed by `member-serving`; the si-member's serving config dropped; the lease client not started; HouseGate given no counter; `[]` or an empty host list rendered `null`; the owner listed as its own replica host), each failed a named test except one equivalent (dropping `CopyTable` and `ReplicaOf` from `content.equal`, which the serving views already imply). Every bash block and `Run:` line passes `bash -n` and `shellcheck` with its placeholders filled; `buildifier -mode=check -lint=warn` passes on every `BUILD.bazel` written below, and `actionlint` reports nothing new on `ci.yml`. Two defects of earlier plans surfaced and were worked around in the scratch prior state only: Plan S3-B Task 12's `evaluate` doc hunk ends on a partial line (`func evaluate(`), and Plan S3-C2 Task 35's `config/BUILD.bazel` deps hunk expects an `@arbiter_core//dataplane/objstore` line that Plan S3-C1 Task 25 never adds (neither task's config imports objstore).
 
 - [ ] **Step 1: Worktree, ledger and contract check**
 
 Remote read (fetch): needs explicit user confirmation in chat before running.
 
 ```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch origin
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/sentio-node claude multi-source-s3c4
+set -eo pipefail
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T46="$HOME/.cache/s3c4-task46"
+mkdir -p "$T46" || exit 1
+chmod 700 "$T46" || exit 1
+[ ! -e "$T46/worktree.json" ] && [ ! -e "$T46/ledger.env" ] || { echo "saved Task46 state exists; reconcile before resuming; stop"; exit 1; }
+git -C "$h" fetch -q origin || exit 1
+ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c1)" || exit 1
+# The marker is literal plan text: $HOME stays unexpanded on purpose.
+# shellcheck disable=SC2016
+python3 -I "$L/s3-ledger.py" show "$h" s3c1 | python3 -I -c '
+import sys
+lines = sys.stdin.read().split("\n")
+marker = "The ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, decision D23 generalized), verbatim:"
+hits = [i for i, line in enumerate(lines) if line == marker]
+if len(hits) != 1:
+    sys.exit(f"expected one contract §19 ledger-tool line, found {len(hits)}")
+i = hits[0] + 1
+while i < len(lines) and lines[i] == "":
+    i += 1
+if i >= len(lines) or lines[i] != "```python":
+    sys.exit("contract §19: no python block after the ledger-tool line")
+end = lines.index("```", i + 1)
+sys.stdout.write("\n".join(lines[i + 1:end]) + "\n")
+' > "$L/s3-ledger.py.plan" || exit 1
+cmp "$L/s3-ledger.py" "$L/s3-ledger.py.plan" || exit 1
+echo "s3-ledger.py is contract §19 of $ref"
+python3 -I "$L/s3-ledger.py" ref "$h" s3c4 || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P3 CORE_TAG_P3 SN_COMMIT_P2 PROTO_TAG > "$T46/ledger.env" || exit 1
+cat "$T46/ledger.env"
+python3 -I "$L/s3-ledger.py" empty "$h" SN_COMMIT_P3 SN_DIGEST_P3
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3c4` (expanded) on branch `urwt/claude/multi-source-s3c4` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
+Create the new worktree and retain its returned JSON (same confirmed fetch scope):
+
+```bash
+set -eo pipefail
+P=/Users/uranuswch/Dev/projects/sentio-network/sentio-node; T46="$HOME/.cache/s3c4-task46"
+git -C "$P" fetch -q origin --tags || exit 1
+[ ! -e "$T46/worktree.json" ] || { echo "saved URWT state exists; reconcile the prior attempt before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3c4 urwt/codex/multi-source-s3c4 origin/main)" || { echo "URWT failed; stop"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$T46/worktree.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task46/worktree.json")" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$P" rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3c4 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+printf '%s\n' "$out"
+git -C "$W" log -1 --format='%H'
+cat > "$T46/env.sh" <<'TASK46_ENV'
+set -eo pipefail
+T46="$HOME/.cache/s3c4-task46"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task46/worktree.json")" || exit 1
+si_checked_read_99="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_99}" = urwt/codex/multi-source-s3c4 ] || { echo "Task46 worktree branch mismatch; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_r="$(git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_w" "$common_r" || exit 1
+si_checked_read_102="$(git -C "$W" config --worktree user.name)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_101="$(git -C "$W" config --worktree user.email)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_100="$(git -C "$W" config --worktree commit.gpgsign)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_102}" = poetry ] && [ "${si_checked_read_101}" = chen@sentio.xyz ] && [ "${si_checked_read_100}" = true ] || { echo "Task46 worktree identity/signing mismatch; stop"; exit 1; }
+HG_TAG_P3="$(sed -n 's/^HG_TAG_P3=//p' "$T46/ledger.env")" || exit 1
+CORE_TAG_P3="$(sed -n 's/^CORE_TAG_P3=//p' "$T46/ledger.env")" || exit 1
+SN_COMMIT_P2="$(sed -n 's/^SN_COMMIT_P2=//p' "$T46/ledger.env")" || exit 1
+PROTO_TAG="$(sed -n 's/^PROTO_TAG=//p' "$T46/ledger.env")" || exit 1
+for value in "$HG_TAG_P3" "$CORE_TAG_P3" "$PROTO_TAG"; do
+ printf '%s\n' "$value" | grep -Eq '^v[0-9]+[.][0-9]+[.][0-9]+$' || exit 1
+done
+printf '%s\n' "$SN_COMMIT_P2" | grep -Eq '^[0-9a-f]{40}$' || exit 1
+
+task46_gofmt() {
+ local formatted
+ formatted="$(gofmt -l "$@")" || { echo "gofmt failed; stop" >&2; exit 1; }
+ [ -z "$formatted" ] || { printf '%s\n' "$formatted" >&2; echo "unformatted source; stop" >&2; exit 1; }
+}
+task46_runtime_hash() {
+ python3 -I - "$W" <<'TASK46_RUNTIME'
+import hashlib,pathlib,sys
+root=pathlib.Path(sys.argv[1]);h=hashlib.sha256();paths=[]
+for f in root.rglob("*"):
+ r=f.relative_to(root)
+ if any(x==".git" or x.startswith("bazel-") for x in r.parts) or f.is_symlink() or not f.is_file(): continue
+ if f.suffix==".go" or f.name in {"BUILD.bazel","go.mod","go.sum","MODULE.bazel","MODULE.bazel.lock"} or str(r)==".github/workflows/ci.yml" or (str(r).startswith("scripts/ci/") and f.suffix==".xml"): paths.append((str(r),f))
+assert paths
+for name,f in sorted(paths): h.update(name.encode()+b"\0"+hashlib.sha256(f.read_bytes()).digest())
+print(h.hexdigest())
+TASK46_RUNTIME
+}
+TASK46_ENV
+. "$T46/env.sh" || exit 1
+```
+
+Expected: canonical ledger-tool equality, four recorded upstream rows in `$HOME/.cache/s3c4-task46/ledger.env`, empty P3 release cells, then one retained `action: created` JSON with its actual absolute path on `urwt/codex/multi-source-s3c4`. The creator validates its repository/common directory, clean origin/main base and branch, enables worktree-local poetry identity and GPG signing, then installs `env.sh`. Later calls source that complete helper and preserve the JSON path's absolute symlink spelling. Do not reconstruct a template, overwrite prior state or silently reuse an `existing` result. A failed/interrupted attempt stops for reconciliation. On signing cancellation preserve staged work and ask the user to unlock this repository's actual signing key in their own fish terminal; never disable signing. If URWT says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` in fish; never use `--yes` or `--clobber`.
 
 Before the first commit, give the worktree the commit identity (user rule: GitHub never shows the global identity as author or co-author):
 
 ```bash
-W=<worktree path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config user.name && git -C "$W" config user.email
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" config --worktree user.name || exit 1
+git -C "$W" config --worktree user.email || exit 1
+git -C "$W" config --worktree commit.gpgsign || exit 1
 ```
 
-Expected: `poetry`, then `chen@sentio.xyz`. Every commit of this task is then authored `poetry <chen@sentio.xyz>` and carries only the Claude `Co-Authored-By` line.
+Expected: `poetry`, `chen@sentio.xyz`, then `true`. Every commit of this task is then authored `poetry <chen@sentio.xyz>` and carries only the Claude `Co-Authored-By` line.
 
 The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §32.7, Plan S3-C1 contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" ref "$h" s3c4
-python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P3 CORE_TAG_P3 SN_COMMIT_P2 PROTO_TAG
-python3 -I "$L/s3-ledger.py" empty "$h" SN_COMMIT_P3 SN_DIGEST_P3
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+cat "$T46/ledger.env" || exit 1
 ```
 
 Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the stage-3 plans PR merged), then `HG_TAG_P3=v…` (Task 44's record), `CORE_TAG_P3=v…` (Task 45's), `SN_COMMIT_P2=<40 hex>` (Plan S3-C2's) and `PROTO_TAG=v…` (Plan S3-A's), each after its R4, then `s3-ledger: SN_COMMIT_P3 SN_DIGEST_P3 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md`. A `stop` (`no plan 's3c4'`: the plans branch is not on origin yet; a value not recorded yet; or `SN_COMMIT_P3` recorded already, which means this task ran before): stop and ask. Every `HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; SN_COMMIT_P2=<ledger>; PROTO_TAG=<ledger>` prefix below takes these values.
@@ -14647,7 +16249,8 @@ Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the 
 Remote read (tag fetches): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; SN_COMMIT_P2=<ledger>; PROTO_TAG=<ledger>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
 H=/Users/uranuswch/Dev/projects/sentio-network/housegate; C=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
 git -C "$W" log --oneline -1
 git -C "$W" merge-base --is-ancestor "$SN_COMMIT_P2" HEAD && echo "SN_COMMIT_P2 is in HEAD"
@@ -14680,11 +16283,40 @@ Expected: HEAD is `SN_COMMIT_P2` or a descendant (`SN_COMMIT_P2 is in HEAD`) and
 `go get` downloads the two modules through the Go proxy: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; PROTO_TAG=<ledger>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
 HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P3^{commit}")"
 CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P3^{commit}")"
 echo "$HG_SHA $CORE_SHA"
-cd "$W" && GOWORK=off go get "github.com/housegate/housegate@$HG_TAG_P3" "github.com/sentioxyz/arbiter-core@$CORE_TAG_P3" && GOWORK=off go mod tidy
+cd "$W" || exit 1
+GOWORK=off go list -m -json all > "$T46/modules-before.json" || exit 1
+GOWORK=off go mod edit -json > "$T46/replace-before.json" || exit 1
+GOWORK=off go get "github.com/housegate/housegate@$HG_TAG_P3" "github.com/sentioxyz/arbiter-core@$CORE_TAG_P3" || exit 1
+GOWORK=off go mod tidy || exit 1
+GOWORK=off go list -m -json all > "$T46/modules-after.json" || exit 1
+GOWORK=off go mod edit -json > "$T46/replace-after.json" || exit 1
+python3 -I - "$T46/modules-before.json" "$T46/modules-after.json" "$T46/replace-before.json" "$T46/replace-after.json" "$HG_TAG_P3" "$CORE_TAG_P3" "$PROTO_TAG" <<'TASK46_GRAPH' || exit 1
+import json,sys
+
+def stream(path):
+ text=open(path).read();decoder=json.JSONDecoder();items=[]
+ while text.strip():
+  value,end=decoder.raw_decode(text.lstrip());assert isinstance(value,dict) and isinstance(value.get("Path"),str)
+  items.append(value);text=text.lstrip()[end:]
+ assert items and len({i["Path"] for i in items})==len(items)
+ return {i["Path"]:i.get("Version","") for i in items}
+
+before,after=stream(sys.argv[1]),stream(sys.argv[2])
+hg,core,proto=sys.argv[5:]
+expected={"github.com/housegate/housegate":hg,"github.com/sentioxyz/arbiter-core":core,"github.com/sentioxyz/arbiter-proto":proto}
+assert before.keys()==after.keys(), "module roster changed; inspect MVS before proceeding"
+for path,tag in expected.items():assert after.get(path)==tag, "unexpected selected pin: "+path
+for path,version in before.items():
+ if path not in {"github.com/housegate/housegate","github.com/sentioxyz/arbiter-core"}:assert after[path]==version, "unrelated module moved: "+path
+assert json.load(open(sys.argv[3])).get("Replace")==json.load(open(sys.argv[4])).get("Replace"), "replace directives changed"
+print("exact selected module pins and unchanged replacements verified")
+TASK46_GRAPH
+
 grep -nE "housegate/housegate $HG_TAG_P3\$|sentioxyz/arbiter-core $CORE_TAG_P3\$|sentioxyz/arbiter-proto $PROTO_TAG\$" "$W/go.mod"
 git -C "$W" diff --stat -- go.mod go.sum
 ```
@@ -14694,12 +16326,18 @@ Expected: two 40-hex commits; `go.mod` requires `github.com/housegate/housegate 
 Set both `bazel_dep` versions (the tags without the leading `v`) and both `git_override` commits with their `# Resolved …` comments in `MODULE.bazel` (local edit; it refuses, writing nothing, unless each of the four places matches exactly once):
 
 ```bash
-W=<worktree path>; HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
-python3 -I - "$W/MODULE.bazel" "$HG_TAG_P3" "$HG_SHA" "$CORE_TAG_P3" "$CORE_SHA" <<'PY'
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P3^{commit}")" || exit 1
+CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P3^{commit}")" || exit 1
+python3 -I - "$W/MODULE.bazel" "$HG_TAG_P3" "$HG_SHA" "$CORE_TAG_P3" "$CORE_SHA" <<'PY' || exit 1
 import re
 import sys
 
 path, hg_tag, hg_sha, core_tag, core_sha = sys.argv[1:]
+assert all(re.fullmatch(r"v[0-9]+[.][0-9]+[.][0-9]+",tag) for tag in [hg_tag,core_tag]), "invalid release tag"
+assert all(re.fullmatch(r"[0-9a-f]{40}",sha) for sha in [hg_sha,core_sha]), "invalid resolved tag commit"
+
 text = open(path).read()
 
 
@@ -14722,7 +16360,7 @@ git -C "$W" diff -- MODULE.bazel
 
 Expected: `MODULE.bazel: housegate <HG_TAG_P3> at <HG_SHA>, arbiter-core <CORE_TAG_P3> at <CORE_SHA>` and a diff of exactly six changed lines (six `-`, six `+`): the two `version = "…"` lines, the two `# Resolved …` comments and the two `commit = "…"` lines, each `-` line at `HG_TAG_P1`'s and `CORE_TAG_P2`'s values. A second run changes nothing. arbiter-proto has no `bazel_dep` here, so `go.mod` is its only pin.
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go build ./... 2>&1 | head -4`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go build ./... 2>&1 | head -4`
 
 Expected: FAIL — `# compute-network-node/storageintegrityadapter/tablestate`, then `storageintegrityadapter/tablestate/snapshot.go:<line>:26: cannot use (*Snapshot)(nil) (value of type *Snapshot) as sitable.Snapshot value in variable declaration: *Snapshot does not implement sitable.Snapshot (missing method Served)` and the same for `state.go`'s `Current` (K47: the pin alone does not build; nothing is committed until Step 3).
 
@@ -14809,14 +16447,15 @@ func (s *Snapshot) Served() []sitable.Table {
 	}
 ```
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)" && GOWORK=off go build ./... && GOWORK=off go vet ./storageintegrityadapter/... ./standalone/ ./simember/ && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt storageintegrityadapter && GOWORK=off go build ./... && GOWORK=off go vet ./storageintegrityadapter/... ./standalone/ ./simember/ && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: no unformatted file, the build and `go vet` succeed, and the full run prints nothing (every package `ok`; the ClickHouse-gated tests skip without their environment).
 
 Fetching the new `git_override` sources is a download: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_SHA=<printed in Step 2>; CORE_SHA=<printed in Step 2>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
 cd "$W" && bazel run @rules_go//go -- mod tidy && bazel mod tidy && bazel run //:gazelle && bazel build //... && grep -nE "$HG_SHA|$CORE_SHA" MODULE.bazel && bazel test //... --test_output=errors
 git -C "$W" status --short
 ```
@@ -14824,8 +16463,11 @@ git -C "$W" status --short
 Expected: the build succeeds; `grep` prints the two `commit = …` lines (a stale `git_override` compiles the old sources silently); all tests PASS. `git status --short` lists exactly `M MODULE.bazel`, `M MODULE.bazel.lock`, `M go.mod`, `M go.sum` and `M storageintegrityadapter/tablestate/snapshot.go`; anything else (a `BUILD.bazel` gazelle rewrote because an upstream package moved) is reviewed and committed with the pins only if it follows from them.
 
 ```bash
-W=<worktree path>; HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; HG_SHA=<printed in Step 2>; CORE_SHA=<printed in Step 2>
-git -C "$W" add -A && git -C "$W" commit -m "chore(deps): pin housegate $HG_TAG_P3 and arbiter-core $CORE_TAG_P3; Snapshot.Served
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "chore(deps): pin housegate $HG_TAG_P3 and arbiter-core $CORE_TAG_P3; Snapshot.Served
 
 Stage-3 P3 multi-source SI (housegate spec 2026-10-14 §11, §16 P3):
 housegate adds the Replica table status, Snapshot.Served,
@@ -14835,7 +16477,12 @@ pinned in go.mod, bazel_dep and git_override ($HG_SHA, $CORE_SHA) in
 one commit with the table state's Snapshot.Served, which the new
 sitable.Snapshot requires (Plan S3-C4 K47). arbiter-proto is unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_103="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_103}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 - [ ] **Step 4: Write the failing config tests**
@@ -15080,9 +16727,20 @@ func TestStorageIntegrityMemberServeValidation(t *testing.T) {
 	_, _, err = loadSIMemberText(t, siMemberMinimalYAML+"    serve:\n      owner_housegate:\n        \"0\": sentio-node-devnet2-indexer-a:32001\n")
 	require.ErrorContains(t, err, "cannot unmarshal !!str `0` into uint64", "owner_housegate keys are plain indexer ids, never quoted strings")
 }
+
+func TestMemberServeTokenRefusalVisitsSharedYAMLOnce(t *testing.T) {
+	var doc strings.Builder
+	doc.WriteString("n0: &n0 {}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&doc, "n%d: &n%d {<<: [*n%d, *n%d]}\n", i, i, i-1, i-1)
+	}
+	base := doc.String()
+	require.NoError(t, refuseSIMemberServeTokenKey([]byte(base+"storage_integrity:\n  member:\n    <<: *n40\n    serve: {}\n")))
+	require.NoError(t, refuseStorageIntegrityMemberStatusTokenKey([]byte(base+"storage_integrity:\n  replica_reads:\n    <<: *n40\n    member_status_url: http://m:9096\n")))
+}
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./config/ -count=1 -run 'ReplicaReads|MemberStatusToken|MemberServe' 2>&1 | head -12`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./config/ -count=1 -run 'ReplicaReads|MemberStatusToken|MemberServe' 2>&1 | head -12`
 
 Expected: FAIL, the package does not compile: `unknown field ReplicaReads in struct literal of type StorageIntegrityConfig`, `undefined: StorageIntegrityReplicaReads`, `undefined: StorageIntegrityMemberStatusTokenEnv`, …, `undefined: refuseSIMemberServeTokenKey`, `too many errors`.
 
@@ -15286,9 +16944,9 @@ func refuseStorageIntegrityMemberStatusTokenKey(data []byte) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
-	for _, block := range yamlMappingValues(doc.Content[0], "storage_integrity") {
-		for _, reads := range yamlMappingValues(block, "replica_reads") {
-			if len(yamlMappingValues(reads, "member_status_token")) > 0 {
+	for _, block := range siMemberYAMLMappingValues(doc.Content[0], "storage_integrity") {
+		for _, reads := range siMemberYAMLMappingValues(block, "replica_reads") {
+			if len(siMemberYAMLMappingValues(reads, "member_status_token")) > 0 {
 				return fmt.Errorf("storage_integrity.replica_reads.member_status_token is not read from the config file; set %s instead", StorageIntegrityMemberStatusTokenEnv)
 			}
 		}
@@ -15442,10 +17100,10 @@ func refuseSIMemberServeTokenKey(data []byte) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
-	for _, si := range yamlMappingValues(doc.Content[0], "storage_integrity") {
-		for _, block := range yamlMappingValues(si, "member") {
-			for _, serveBlock := range yamlMappingValues(block, "serve") {
-				if len(yamlMappingValues(serveBlock, "token")) > 0 {
+	for _, si := range siMemberYAMLMappingValues(doc.Content[0], "storage_integrity") {
+		for _, block := range siMemberYAMLMappingValues(si, "member") {
+			for _, serveBlock := range siMemberYAMLMappingValues(block, "serve") {
+				if len(siMemberYAMLMappingValues(serveBlock, "token")) > 0 {
 					return fmt.Errorf("storage_integrity.member.serve.token is not read from the config file; set %s instead", StorageIntegrityMemberStatusTokenEnv)
 				}
 			}
@@ -15583,13 +17241,17 @@ with:
         "@arbiter_core//member/sources",
 ```
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config)" && GOWORK=off go vet ./config/ && GOWORK=off go test ./config/ -count=1 -run 'ReplicaReads|MemberStatusToken|MemberServe' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./config/ ./simember/ ./commands/ -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt config && GOWORK=off go vet ./config/ && GOWORK=off go test ./config/ -count=1 -run 'ReplicaReads|MemberStatusToken|MemberServe' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./config/ ./simember/ ./commands/ -count=1`
 
 Expected: no unformatted file, `go vet` silent, `--- PASS:` for `TestStorageIntegrityReplicaReadsValidation`, `TestDecodeConfigYAMLRefusesAMemberStatusTokenKey`, `TestDecodeConfigYAMLRefusesAMemberServeTokenKey` and `TestStorageIntegrityMemberServeValidation`, `ok  	compute-network-node/config`, then `ok` for `config`, `simember` and `commands` (Plan S3-C2's member tests are untouched: without the token `MemberConfig` leaves `Serve` nil).
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(config): stage-3 P3 replica_reads and member serve config
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(config): stage-3 P3 replica_reads and member serve config
 
 storage_integrity.replica_reads.member_status_url names the host's
 si-member serving endpoint, whose bearer token comes only from
@@ -15600,7 +17262,12 @@ refused in the file, enabled needs the token, and MemberConfig builds
 member.Config.Serve only when the token is set (Plan S3-C4 contract §31.2,
 §31.3, decision D29).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_104="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_104}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M config/BUILD.bazel`, `M config/config.go`, `M config/config_test.go`, `M config/si_member.go`, `A config/si_member_serve.go` and `M config/si_member_test.go` before the commit.
@@ -15974,7 +17641,7 @@ func TestReplicaHostsListEveryEnrolledIndexerButTheOwner(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./storageintegrityadapter/tablestate/ -count=1 2>&1 | head -10`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./storageintegrityadapter/tablestate/ -count=1 2>&1 | head -10`
 
 Expected: FAIL, the test does not compile: `undefined: ReplicaDatabase`, `undefined: ReplicaTable`, `unknown field Replicas in struct literal of type Config`, …, `too many errors`.
 
@@ -16776,13 +18443,17 @@ with:
 
 The library's deps already hold `@housegate//pkg/registry` and `@housegate//pkg/sitable`; the `go_test` changes come with Step 9.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)" && GOWORK=off go vet ./storageintegrityadapter/tablestate/ && GOWORK=off go test ./storageintegrityadapter/tablestate/ -count=1 -run 'Replica|Served|ServingStarts|NeverAnswersReplica|DisagreeWith|PeerOwnersTable' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./storageintegrityadapter/... ./standalone/ ./rpc/ -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt storageintegrityadapter && GOWORK=off go vet ./storageintegrityadapter/tablestate/ && GOWORK=off go test ./storageintegrityadapter/tablestate/ -count=1 -run 'Replica|Served|ServingStarts|NeverAnswersReplica|DisagreeWith|PeerOwnersTable' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./storageintegrityadapter/... ./standalone/ ./rpc/ -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: `--- PASS:` for `TestBuildAnswersAPeerOwnersTableReplicaWhileTheMemberServesIt`, `TestBuildServesNothingOfADatabaseWhoseTablesDisagreeWithTheRegistry`, `TestBuildNeverAnswersReplicaInAGovernedDatabase`, `TestVersionMovesWhenServingStartsAndEnds`, `TestSnapshotServedMatchesTheReplicaEntries`, `TestStorageIntegrityTableStatusCarriesReplicaFields` and `TestReplicaHostsListEveryEnrolledIndexerButTheOwner`, `ok  	compute-network-node/storageintegrityadapter/tablestate`; the second run prints nothing (every earlier table-state, standalone and RPC test is unchanged: without a replica source nothing is Replica, and only the `replica` label value is new on `sentio_node_storage_integrity_tables`).
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): Replica entries in the host table state
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): Replica entries in the host table state
 
 While this host's member serves another SI indexer's database under a
 lease (tablestate.ReplicaSource), every Active table of it answers
@@ -16797,7 +18468,12 @@ The status method answers replica with replica_of, served_from,
 owner_entry and frozen_since; tablestate.ReplicaHosts gives every SI
 database's replica hosts (Plan S3-C4 contract §31.4, K45, K50).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_105="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_105}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M storageintegrityadapter/tablestate/BUILD.bazel`, `M …/metrics.go`, `M …/model.go`, `A …/replica.go`, `A …/replica_test.go`, `M …/snapshot.go`, `M …/state.go` and `M …/status.go` before the commit.
@@ -17795,7 +19471,7 @@ func TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks(
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=1 2>&1 | head -8`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=1 2>&1 | head -8`
 
 Expected: FAIL: `no non-test Go files in …/storageintegrityadapter/replicalease`, then `undefined: Client`, `undefined: New`, `undefined: Config`, and `FAIL	compute-network-node/storageintegrityadapter/tablestate [build failed]`.
 
@@ -18320,13 +19996,17 @@ with:
 
 rules_go compiles the external `tablestate_test` files against the test archive and rebuilds `replicalease` against it, so the `go_test` may depend on a package that depends on the library under test.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)" && GOWORK=off go vet ./storageintegrityadapter/... && GOWORK=off go test ./storageintegrityadapter/... -count=1 -v 2>&1 | grep -E -- '^(--- |    --- |ok|FAIL)' | grep -E 'Lease|ReplicaEntries|ok|FAIL' && GOWORK=off go test -race ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=3`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt storageintegrityadapter && GOWORK=off go vet ./storageintegrityadapter/... && GOWORK=off go test ./storageintegrityadapter/... -count=1 -v 2>&1 | grep -E -- '^(--- |    --- |ok|FAIL)' | grep -E 'Lease|ReplicaEntries|ok|FAIL' && GOWORK=off go test -race ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=3`
 
 Expected: `--- PASS:` for `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused` (with `revoked`, `unknown_lease` and `unreachable`), `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline` (with `deadline`, `renewal` and `drop`), `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails` and `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks`, `ok` for `replicalease` and `tablestate` (`replicaleasetest` has no tests); the race run is `ok` three times.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): the host's serving-lease client
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): the host's serving-lease client
 
 storageintegrityadapter/replicalease polls the si-member's serving view
 every second, acquires a lease for each serving database, renews it at a
@@ -18346,7 +20026,12 @@ table-state refresh blocked in its chain-state read, which keeps a
 Replica snapshot published past the lease's expiry, admits no new read
 of the copy. replicaleasetest fakes the member endpoint for the tests.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_106="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_106}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 git -C "$W" log -1 --format='%an <%ae>'
 ```
 
@@ -18467,7 +20152,7 @@ func TestStorageIntegrityInfoCarriesReplicaHostsAndDatabases(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./rpc/ -count=1 2>&1 | head -6`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./rpc/ -count=1 2>&1 | head -6`
 
 Expected: FAIL, the test does not compile: `unknown field ReplicaDatabases in struct literal of type fixedStorageIntegrityInfo`, `unknown field ReplicaHosts in struct literal of type fixedStorageIntegrityInfo`.
 
@@ -18571,20 +20256,29 @@ with:
 
 The new test's imports are already the `go_test`'s deps.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l rpc)" && GOWORK=off go test ./rpc/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' | grep -E 'Info|Discovery|ok|FAIL'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt rpc && GOWORK=off go test ./rpc/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' | grep -E 'Info|Discovery|ok|FAIL'`
 
 Expected: `--- PASS:` for `TestStorageIntegrityInfoWireShape`, `TestStorageIntegrityInfoWithoutStorageIntegrity`, `TestStorageIntegrityInfoSelfIndexerIDIsNullUnlessResolved`, `TestStorageIntegrityInfoCarriesReplicaHostsAndDatabases` and `TestHostedDiscoveryMatchesHousegateClient`, then `ok  	compute-network-node/rpc`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(rpc): replica_databases and replica_hosts in sentio_getStorageIntegrityInfo
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(rpc): replica_databases and replica_hosts in sentio_getStorageIntegrityInfo
 
 Both fields are always present ([] and {} when none, an empty host list
 [] rather than null), so HouseGate's agent decodes them from every SI
 host; the status method documents the replica status and its four
 additive fields (Plan S3-C4 contract §31.6, K50).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_107="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_107}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M rpc/BUILD.bazel`, `M rpc/storage_integrity_info.go`, `M rpc/storage_integrity_info_test.go`, `A rpc/storage_integrity_replica_info_test.go` and `M rpc/storage_integrity_status.go` before the commit.
@@ -19008,7 +20702,7 @@ with:
 	} {
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./standalone/ -count=1 -run 'Replica|MemberServing|InfoMethod' 2>&1 | head -10`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./standalone/ -count=1 -run 'Replica|MemberServing|InfoMethod' 2>&1 | head -10`
 
 Expected: FAIL, the test does not compile: `deps.replicaMember undefined (type storageIntegrityTableStateDeps has no field or method replicaMember)`, `runtime.replicaReadsCounter undefined`, `runtime.leases undefined`, `undefined: PrintStorageIntegrityMemberServing`, `too many errors`.
 
@@ -19652,13 +21346,17 @@ with:
 
 The `go_test` srcs entry for `storage_integrity_replica_reads_ch_test.go` names the file Step 18 creates; until then `go test` (which ignores BUILD files) is what runs. Plan S3-B Task 12's `storage_integrity_owner_audit_metrics.go` sits between `storage_integrity_info.go` and `storage_integrity_reconciler_metrics.go`, and its two test files are already in the `go_test` srcs.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l standalone)" && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./standalone/ -count=1 -run 'Replica|MemberServing|InfoMethod' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./standalone/ -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt standalone && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./standalone/ -count=1 -run 'Replica|MemberServing|InfoMethod' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test ./standalone/ -count=1`
 
 Expected: `--- PASS:` for `TestRunWiresReplicaReadsIntoHouseGateAndTheTableState`, `TestRunWithoutReplicaReadsIsUnchanged`, `TestStorageIntegrityReplicaCollectorReportsEverySeriesIncludingZeros`, `TestMemberServingCommandPrintsTheViewWithoutTheToken` and `TestStorageIntegrityTableStateServesTheInfoMethod` (and the unrelated `TestSchemaRegistryOptionsPinSuccessfulCreateReplica`, which the filter also matches), then `ok` for the whole package: the source-shape audits of the canonical `si` snapshot still pass, since `si.ReplicaReads.MemberStatusURL` is a field read, not a method call.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): wire stage-3 P3 replica reads into the host
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): wire stage-3 P3 replica reads into the host
 
 With storage_integrity.replica_reads.member_status_url set, Run builds
 the member/serve client with the token from
@@ -19671,7 +21369,12 @@ standalone.PrintStorageIntegrityMemberServing reads the member's serving
 view for the operator command. Without the URL nothing changes (Plan
 S3-C4 contract §31.4, §31.6, §31.7).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_108="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_108}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M standalone/BUILD.bazel`, `M standalone/standalone.go`, `M standalone/storage_integrity_info.go`, `A standalone/storage_integrity_member_serving.go`, `A standalone/storage_integrity_replica_metrics.go`, `A standalone/storage_integrity_replica_reads_test.go`, `M standalone/storage_integrity_table_state.go` and `M standalone/storage_integrity_table_state_test.go` before the commit.
@@ -19698,7 +21401,7 @@ func TestStorageIntegrityCommandOffersMemberServing(t *testing.T) {
 ```
 
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./commands/ -count=1 -run MemberServing 2>&1 | grep -E 'Error:|unknown command|^(--- |FAIL|ok)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./commands/ -count=1 -run MemberServing 2>&1 | grep -E 'Error:|unknown command|^(--- |FAIL|ok)'`
 
 Expected: `--- FAIL: TestStorageIntegrityCommandOffersMemberServing` with `Received unexpected error:` `unknown command "member-serving" for "storage-integrity"`.
 
@@ -19757,20 +21460,29 @@ func newMemberServingCommand(configPath *string) *cobra.Command {
 
 `commands/BUILD.bazel` needs no change: the library already depends on `//config`, `//standalone` and cobra.
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l commands)" && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt commands && GOWORK=off go test ./commands/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)'`
 
 Expected: `--- PASS: TestStorageIntegrityCommandOffersTheEnrollmentStatement`, `--- PASS: TestStorageIntegrityCommandOffersMemberServing`, Plans S3-C1's and S3-C2's command tests passing, and `ok  	compute-network-node/commands`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): sentio-node storage-integrity member-serving
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): sentio-node storage-integrity member-serving
 
 Prints the si-member's serving view (GET /v1/serving) as one JSON line,
 read with the token from STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN, never
 printed; it acquires nothing. The P3 runbook reads the view only through
 it (Plan S3-C4 contract §31.7, decision D29).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_109="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_109}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M commands/storage_integrity.go` and `M commands/storage_integrity_test.go` before the commit.
@@ -20014,7 +21726,7 @@ func TestSIMemberServesTheServingEndpoint(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./simember/ -count=1 2>&1 | head -6`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./simember/ -count=1 2>&1 | head -6`
 
 Expected: FAIL, the test does not compile: `unknown field serving in struct literal of type runDeps`, `undefined: siMemberServe` (three times).
 
@@ -20310,13 +22022,17 @@ with:
         "@arbiter_core//wire",
 ```
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l simember)" && GOWORK=off go vet ./simember/ && GOWORK=off go test ./simember/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test -race ./simember/ -count=3`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt simember && GOWORK=off go vet ./simember/ && GOWORK=off go test ./simember/ -count=1 -v 2>&1 | grep -E -- '^(--- |ok|FAIL)' && GOWORK=off go test -race ./simember/ -count=3`
 
 Expected: `--- PASS:` for `TestSIMemberCollectorExportsEveryCounterIncludingZeros`, `TestSIMemberCollectorNamesAreTheReviewedSet`, `TestRunWiresTheMemberRoleWithItsOwnLogin`, `TestRunReturnsTheRolesError`, `TestReadyzFollowsTheRole` and `TestSIMemberServesTheServingEndpoint` (`TestSIMemberInstallsACopyFromTheOwnerPull` skips), `ok  	compute-network-node/simember`, and the race run `ok`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(si-member): the stage-3 P3 serving endpoint
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(si-member): the stage-3 P3 serving endpoint
 
 With STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN set, sentio-node si-member
 builds its role with member.Config.Serve, mounts the role's member/serve
@@ -20326,7 +22042,12 @@ sentio_node_si_member_serve_* series on its own registry; serve.enabled
 only turns serving on. Without the token the process is P2's (Plan
 S3-C4 contract §31.3).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_110="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_110}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M simember/BUILD.bazel`, `M simember/run.go`, `M simember/run_test.go`, `A simember/serve.go` and `A simember/serve_test.go` before the commit.
@@ -20842,34 +22563,78 @@ func TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost(t *testing.T) {
 }
 ```
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l standalone)" && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./standalone/ -count=1 -run '^TestSIMemberServes' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; task46_gofmt standalone && GOWORK=off go vet ./standalone/ && GOWORK=off go test ./standalone/ -count=1 -run '^TestSIMemberServes' -v 2>&1 | grep -E -- '^(--- |ok|FAIL)'`
 
 Expected: `--- SKIP: TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost`, `--- SKIP: TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost` (no `SENTIO_SI_CH_E2E`), `ok`.
 
-Then run them, and the whole acceptance set of the CI step with the drift test, against a local ClickHouse with Keeper as CI runs it (`scripts/ci/clickhouse-keeper.xml`). Starting the container is local; pulling the image, if it is not present, is a download: needs explicit user confirmation in chat before running.
+Then run the whole acceptance set plus the drift test against pinned local26.3.37.3 with the CI Keeper configuration (`scripts/ci/clickhouse-keeper.xml`). The inherited sentio-node CI image remains its actual25.8 digest; this local run does not substitute for that separately required CI run or for the controller's independently allocated actual-image proof. Starting the container is local; pulling the image, if it is not present, is a download: needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
-ch=sn-s3c4-t46-ch
-docker rm -f "$ch" >/dev/null 2>&1 || true
-docker run -d --rm --name "$ch" --hostname "$ch" -p 127.0.0.1::9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 \
-  -v "$W/scripts/ci/clickhouse-keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro" clickhouse/clickhouse-server:25.8.32.4 >/dev/null
-port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$ch")"
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+cd "$W" || exit 1
+image=clickhouse/clickhouse-server:26.3.37.3
+docker image inspect "$image" > /dev/null || { echo "pinned CH image missing; stop for separately approved download"; exit 1; }
+[ ! -e "$T46/ch-id" ] || { echo "prior local CH ownership exists; reconcile before retrying; stop"; exit 1; }
+ch="sn-s3c4-t46-ch-$(date +%s)-$$"
+printf '%s\n' "$ch" > "$T46/ch-name" || exit 1
+cid=""
+cleanup46() {
+ if [ -n "$cid" ]; then
+  actual="$(docker inspect --format '{{.Id}}' "$ch")" || return 1
+  [ "$actual" = "$cid" ] || { echo "CH ownership changed; stop" >&2; return 1; }
+  docker rm -f "$cid" > /dev/null || return 1
+ fi
+}
+finish46() {
+ local rc=$?
+ trap - EXIT
+ if ! cleanup46; then exit 1; fi
+ exit "$rc"
+}
+trap finish46 EXIT
+runtime_before="$(task46_runtime_hash)" || exit 1
+cid="$(docker run -d --rm --name "$ch" --hostname "$ch" -p 127.0.0.1::9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 \
+ -v "$W/scripts/ci/clickhouse-keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro" "$image")" || exit 1
+printf '%s\n' "$cid" | grep -Eq '^[0-9a-f]{64}$' || exit 1
+printf '%s\n' "$cid" > "$T46/ch-id" || exit 1
+port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "9000/tcp") 0).HostPort}}' "$cid")" || exit 1
+ready=false
 for _ in $(seq 1 60); do
-  docker exec "$ch" clickhouse-client --query "SELECT count() FROM system.zookeeper WHERE path = '/'" >/dev/null 2>&1 && break
-  sleep 1
+ if docker exec "$cid" clickhouse-client --query "SELECT count() FROM system.zookeeper WHERE path = '/'" > /dev/null 2>&1; then ready=true; break; fi
+ sleep 1
 done
-cd "$W" && SENTIO_SI_CH_E2E=1 CH_ADDR="127.0.0.1:$port" GOWORK=off go test ./standalone/ -count=1 -v -timeout 1200s \
-  -run '^(TestStorageIntegrityMalformedColumnTypeCreatesNoTable|TestStorageIntegrityBackpressureKeepsTheEmbeddedProxySession|TestStorageIntegrityDynamicTableLifecycle|TestStorageIntegrityDynamicProcessorTableIsOrdinary|TestStorageIntegrityGenesisRestartAfterPurge|TestStorageIntegrityClickHouseLoginAuthenticatesAsTheConfiguredUser|TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost|TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost|TestStorageIntegrityProtocolTableDriftFailsBootstrap)$' \
-  2>&1 | grep -E -- '^(--- |ok|FAIL)'
-docker rm -f "$ch" >/dev/null
+[ "$ready" = true ] || { echo "owned CH Keeper readiness timed out; stop"; exit 1; }
+docker exec "$cid" clickhouse-client --query 'SELECT version()' > "$T46/ch-version" || exit 1
+grep -Eq '^26[.]3[.]37[.]3$' "$T46/ch-version" || exit 1
+env SENTIO_SI_CH_E2E=1 CH_ADDR="127.0.0.1:$port" CH_USER=default CH_PASSWORD= GOWORK=off go test ./standalone/ -count=1 -v -timeout 1200s \
+ -run '^(TestStorageIntegrityMalformedColumnTypeCreatesNoTable|TestStorageIntegrityBackpressureKeepsTheEmbeddedProxySession|TestStorageIntegrityDynamicTableLifecycle|TestStorageIntegrityDynamicProcessorTableIsOrdinary|TestStorageIntegrityGenesisRestartAfterPurge|TestStorageIntegrityClickHouseLoginAuthenticatesAsTheConfiguredUser|TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost|TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost|TestStorageIntegrityProtocolTableDriftFailsBootstrap)$' \
+ > "$T46/ch-acceptance.log" 2>&1 || exit 1
+python3 -I - "$T46/ch-acceptance.log" <<'TASK46_CH' || exit 1
+import pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+expected={"TestStorageIntegrityMalformedColumnTypeCreatesNoTable","TestStorageIntegrityBackpressureKeepsTheEmbeddedProxySession","TestStorageIntegrityDynamicTableLifecycle","TestStorageIntegrityDynamicProcessorTableIsOrdinary","TestStorageIntegrityGenesisRestartAfterPurge","TestStorageIntegrityClickHouseLoginAuthenticatesAsTheConfiguredUser","TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost","TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost","TestStorageIntegrityProtocolTableDriftFailsBootstrap"}
+passed=re.findall(r"^--- PASS: (\w+) \(",text,re.M)
+assert set(passed)==expected and len(passed)==len(expected) and not re.search(r"^--- (?:FAIL|SKIP):",text,re.M), "incomplete or failed CH acceptance roster"
+print("nine exact CH acceptance tests passed")
+TASK46_CH
+cleanup46 || exit 1
+cid=""
+trap - EXIT
+runtime_after="$(task46_runtime_hash)" || exit 1
+[ "$runtime_before" = "$runtime_after" ] || { echo "runtime source changed during CH acceptance; stop"; exit 1; }
+printf '%s\n%s\n' "$image" "$runtime_after" > "$T46/ch-accepted" || exit 1
 ```
 
 Expected: nine `--- PASS:` lines, the eight of the acceptance step (Step 19) and `TestStorageIntegrityProtocolTableDriftFailsBootstrap`, among them `--- PASS: TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost` (about 3 s) and `--- PASS: TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost` (about 4 s), then `ok  	compute-network-node/standalone`; the container is removed.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "test(storage-integrity): stage-3 P3 replica reads against ClickHouse
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "test(storage-integrity): stage-3 P3 replica reads against ClickHouse
 
 TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost and
 TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost run a real
@@ -20880,7 +22645,12 @@ clock, a safe read returns the copy's rows, a write is refused 392 naming
 the owner, and the release ends serving with owner_available and the
 lease released (Plan S3-C4 contract §31.8, K49).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_111="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_111}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M standalone/storage_integrity_acceptance_ch_test.go` and `A standalone/storage_integrity_replica_reads_ch_test.go` before the commit.
@@ -20976,35 +22746,45 @@ with:
 Check the step's script locally (the step's `run` text, with `bazel test` replaced by `cat` of a recorded log):
 
 ```bash
-W=<worktree path>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
 tmp="$(mktemp -d)"
-python3 -I - "$W/.github/workflows/ci.yml" "$tmp/step.sh" <<'PY'
-import sys
-import yaml
-
-ci, out = sys.argv[1:]
-steps = yaml.safe_load(open(ci))["jobs"]["integration-clickhouse"]["steps"]
-run = next(s["run"] for s in steps if s["name"].startswith("storage-integrity acceptance"))
-start, end = run.index("bazel test"), run.index("| tee")
-open(out, "w").write(run[:start] + 'cat "$ACC_LOG" ' + run[end:])
-PY
-bash -n "$tmp/step.sh" && shellcheck -s bash "$tmp/step.sh" && echo 'step script ok'
+ruby -ryaml - "$W/.github/workflows/ci.yml" "$tmp/step.sh" <<'TASK46_CI' || exit 1
+ci,out=ARGV
+steps=YAML.load_file(ci)["jobs"]["integration-clickhouse"]["steps"]
+hits=steps.select { |s| s["name"].to_s.start_with?("storage-integrity acceptance") }
+abort "expected one acceptance step" unless hits.length == 1
+run=hits[0].fetch("run")
+start=run.index("bazel test");finish=run.index("| tee")
+abort "missing test/log command" unless start && finish && start < finish
+File.write(out,run[0...start] + 'cat "$ACC_LOG" ' + run[finish..-1])
+TASK46_CI
+bash -n "$tmp/step.sh" || exit 1
+shellcheck -s bash "$tmp/step.sh" || exit 1
+echo 'step script ok'
 printf '%s\n' '--- PASS: TestStorageIntegrityA (1s)' '--- PASS: TestStorageIntegrityB (1s)' '--- PASS: TestStorageIntegrityC (1s)' \
   '--- PASS: TestStorageIntegrityD (1s)' '--- PASS: TestStorageIntegrityE (1s)' '--- PASS: TestStorageIntegrityF (1s)' \
   '--- PASS: TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost (3s)' '--- PASS: TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost (4s)' > "$tmp/pass.log"
-ACC_LOG="$tmp/pass.log" bash "$tmp/step.sh" >/dev/null && echo 'eight passes accepted'
+ACC_LOG="$tmp/pass.log" bash "$tmp/step.sh" >/dev/null || exit 1
+echo 'eight passes accepted'
 sed 's/--- PASS: TestSIMemberServesAnUnreachable/--- SKIP: TestSIMemberServesAnUnreachable/' "$tmp/pass.log" > "$tmp/skip.log"
-ACC_LOG="$tmp/skip.log" bash "$tmp/step.sh" | tail -1
+if ACC_LOG="$tmp/skip.log" bash "$tmp/step.sh" > "$tmp/skip.out" 2>&1; then echo "invalid CI acceptance log was accepted; stop"; exit 1; fi
+tail -1 "$tmp/skip.out"
 head -7 "$tmp/pass.log" > "$tmp/seven.log"
-ACC_LOG="$tmp/seven.log" bash "$tmp/step.sh" | tail -1
+if ACC_LOG="$tmp/seven.log" bash "$tmp/step.sh" > "$tmp/seven.out" 2>&1; then echo "invalid CI acceptance log was accepted; stop"; exit 1; fi
+tail -1 "$tmp/seven.out"
 rm -rf "$tmp"
 ```
 
 Expected: `step script ok`, `eight passes accepted`, `storage-integrity acceptance skipped`, `expected 8 storage-integrity acceptance PASS markers, saw 7`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "ci: run the stage-3 P3 replica-read acceptance tests
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "ci: run the stage-3 P3 replica-read acceptance tests
 
 The storage-integrity acceptance step also runs
 TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost and
@@ -21012,7 +22792,12 @@ TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost; its SKIP
 check and PASS count match the TestSIMember prefix too, and it expects 8
 PASS markers (Plan S3-C4 contract §31.8).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_112="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_112}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M .github/workflows/ci.yml` before the commit.
@@ -21066,36 +22851,60 @@ SENTIO_SI_CH_E2E=1 CH_ADDR=127.0.0.1:9000 go test ./standalone/ -count=1 -v \
 ````
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "docs(readme): stage-3 P3 replica reads
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -A || exit 1
+git -C "$W" status --short || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "docs(readme): stage-3 P3 replica reads
 
 The host's replica_reads block, the si-member's serve block, the token
 variable, the member-serving command, the replica series and the two
 ClickHouse acceptance tests.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit produced no new HEAD; stop" >&2; exit 1; }
+si_checked_read_113="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_113}" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
 ```
 
 Expected: `git status --short` lists `M README.md` before the commit.
 
 - [ ] **Step 21: Full verification**
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && GOWORK=off go vet ./... && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'; GOWORK=off go test -race ./config/ ./storageintegrityadapter/... ./rpc/ ./standalone/ ./commands/ ./simember/ -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; formatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)" || exit 1; [ -z "$formatted" ] || exit 1; GOWORK=off go vet ./... || exit 1; GOWORK=off go test ./... -count=1 || exit 1; GOWORK=off go test -race ./config/ ./storageintegrityadapter/... ./rpc/ ./standalone/ ./commands/ ./simember/ -count=1 || exit 1`
 
-Expected: no unformatted file, `go vet` silent, and both runs print nothing (every package `ok`; the ClickHouse-gated tests skip without their environment).
+Expected: no unformatted file, `go vet` silent, and both complete test commands exit0 (every package passes; opt-in ClickHouse skips remain separate, unexecuted gates).
 
 Bazel builds from the sources Step 3 fetched; if it starts any further download, that is a remote read and needs explicit user confirmation in chat before it continues.
 
-Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
+Run: `set -eo pipefail; . "$HOME/.cache/s3c4-task46/env.sh" || exit 1; cd "$W" || exit 1; bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
-Expected: gazelle leaves the tree clean (`git status --short` prints nothing: Steps 5, 7, 9, 11, 13 and 17 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`, and rerun this command); the build succeeds; every test PASSES (`//storageintegrityadapter/tablestate:tablestate_test` with its external `tablestate_test` files, `//storageintegrityadapter/replicalease:replicalease_test`, `//standalone:standalone_test` and `//simember:simember_test` with their ClickHouse tests skipped). If Bazel instead reports an import cycle or a duplicate `tablestate` package for `//storageintegrityadapter/tablestate:tablestate_test` (the external test files import `replicalease`, which imports `tablestate`), stop and ask: moving the two tests to another package changes contract §31.8's placement.
+Expected: Gazelle produces no unexpected runtime change and the full build/test succeed. If it changes BUILD metadata, review that exact diff and use this complete guarded follow-up commit before repeating the clean-tree checks. An import cycle or external-test package mismatch is a real failure to fix in its owning task, not a passed test.
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+git -C "$W" add -- '*BUILD.bazel' || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "chore(build): gazelle metadata for P3 replica reads" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signing failed; preserve staged work and ask the user to unlock the actual signing key; no unsigned fallback" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_114="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_114}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+git -C "$W" diff --exit-code -- '*BUILD.bazel' || exit 1
+```
 
 Then the built binary (local only; nothing is dialed: each run stops at a refusal, or reads a fake member on loopback):
 
 ```bash
-W=<worktree path>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
 tmp="$(mktemp -d)"
-cd "$W" && GOWORK=off go build -o "$tmp/sentio-node" .
+cd "$W" || exit 1
+GOWORK=off go build -o "$tmp/sentio-node" . || exit 1
 bin="$tmp/sentio-node"
 "$bin" storage-integrity --help 2>/dev/null | grep -E '^  member-serving '
 cat > "$tmp/host.yaml" <<'YAML'
@@ -21105,10 +22914,12 @@ storage_integrity:
     member_status_url: "http://127.0.0.1:1"
     member_status_token: in-the-file
 YAML
-"$bin" storage-integrity member-serving --config-path "$tmp/host.yaml" > "$tmp/out" 2> "$tmp/err"
-echo "token key exit $? stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
-grep -qF 'storage_integrity.replica_reads.member_status_token is not read from the config file; set STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN instead' "$tmp/err" && echo 'refused: a member status token in the config file'
-grep -qF 'in-the-file' "$tmp/err" "$tmp/out" && echo 'LEAK: the token value was printed'
+if "$bin" storage-integrity member-serving --config-path "$tmp/host.yaml" > "$tmp/out" 2> "$tmp/err"; then echo "expected refusal unexpectedly succeeded; stop"; exit 1; else smoke_rc=$?; fi
+[ "$smoke_rc" = 1 ] && [ ! -s "$tmp/out" ] || exit 1
+echo "token key exit $smoke_rc stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
+grep -qF 'storage_integrity.replica_reads.member_status_token is not read from the config file; set STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN instead' "$tmp/err" || exit 1
+echo 'refused: a member status token in the config file'
+if grep -qF 'in-the-file' "$tmp/err" "$tmp/out"; then echo "LEAK: token value was printed"; exit 1; fi
 cat > "$tmp/member.yaml" <<'YAML'
 storage_integrity:
   arbiter_peers:
@@ -21129,14 +22940,18 @@ storage_integrity:
       enabled: true
       token: in-the-file
 YAML
-"$bin" si-member --config-path "$tmp/member.yaml" > "$tmp/out" 2> "$tmp/err"
-echo "serve token key exit $? stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
-grep -qF 'storage_integrity.member.serve.token is not read from the config file; set STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN instead' "$tmp/err" && echo 'refused: a serve token in the config file'
-grep -qF 'in-the-file' "$tmp/err" "$tmp/out" && echo 'LEAK: the token value was printed'
+if "$bin" si-member --config-path "$tmp/member.yaml" > "$tmp/out" 2> "$tmp/err"; then echo "expected refusal unexpectedly succeeded; stop"; exit 1; else smoke_rc=$?; fi
+[ "$smoke_rc" = 1 ] && [ ! -s "$tmp/out" ] || exit 1
+echo "serve token key exit $smoke_rc stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
+grep -qF 'storage_integrity.member.serve.token is not read from the config file; set STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN instead' "$tmp/err" || exit 1
+echo 'refused: a serve token in the config file'
+if grep -qF 'in-the-file' "$tmp/err" "$tmp/out"; then echo "LEAK: token value was printed"; exit 1; fi
 sed -i.bak -e '/token: in-the-file/d' "$tmp/member.yaml"
-env STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN= "$bin" si-member --config-path "$tmp/member.yaml" > "$tmp/out" 2> "$tmp/err"
-echo "serving without a token exit $? stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
-grep -qF 'storage_integrity.member.serve.enabled requires STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN: the serving endpoint answers only bearer-token requests' "$tmp/err" && echo 'refused: serving enabled without the token'
+if env STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN= "$bin" si-member --config-path "$tmp/member.yaml" > "$tmp/out" 2> "$tmp/err"; then echo "expected refusal unexpectedly succeeded; stop"; exit 1; else smoke_rc=$?; fi
+[ "$smoke_rc" = 1 ] && [ ! -s "$tmp/out" ] || exit 1
+echo "serving without a token exit $smoke_rc stdout $(wc -c < "$tmp/out" | tr -d ' ') bytes"
+grep -qF 'storage_integrity.member.serve.enabled requires STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN: the serving endpoint answers only bearer-token requests' "$tmp/err" || exit 1
+echo 'refused: serving enabled without the token'
 rm -rf "$tmp"
 ```
 
@@ -21156,11 +22971,12 @@ No `LEAK:` line may appear.
 
 - [ ] **Step 22: PR, CI and merge**
 
-sentio-node always goes through a PR (`CLAUDE.md` "Pull Request Workflow"). Write the body (local file, outside the worktree):
+sentio-node always goes through a PR. The actual retained worktree and upstream pins come from Step1. Write the technical body outside the worktree only after the required local checks, including real CH acceptance; a source-only review never checks that live acceptance box.
 
 ```bash
-HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; PROTO_TAG=<ledger>
-BODY="$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md"
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+BODY="$T46/pr-body.md"
 sed -e "s|@HG_TAG_P3@|$HG_TAG_P3|g" -e "s|@CORE_TAG_P3@|$CORE_TAG_P3|g" -e "s|@PROTO_TAG@|$PROTO_TAG|g" > "$BODY" <<'PRBODY'
 Stage 3 P3 of the multi-source storage-integrity network, reads from members (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §11, §15, §16 P3; Plan S3-C4 Task 46, contract §31).
 
@@ -21183,117 +22999,359 @@ Nothing changes until configured: without `member_status_url` there is no lease 
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 PRBODY
-grep -c '@' "$BODY"; grep -c 'Generated with' "$BODY"
+if grep -q '@' "$BODY"; then echo "unresolved PR body marker; stop"; exit 1; fi
+[ "$(grep -c 'Generated with' "$BODY")" = 1 ] || exit 1
+[ -s "$T46/ch-accepted" ] || { echo "no completed current local CH acceptance receipt; stop"; exit 1; }
+[ "$(sed -n 1p "$T46/ch-accepted")" = clickhouse/clickhouse-server:26.3.37.3 ] && [ "$(sed -n 2p "$T46/ch-accepted")" = "$(task46_runtime_hash)" ] && [ "$(wc -l < "$T46/ch-accepted" | tr -d ' ')" = 2 ] || { echo "local CH receipt does not cover this runtime source; stop"; exit 1; }
+echo "PR body complete and local CH gate recorded"
 ```
 
-Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
+Expected: `PR body complete and local CH gate recorded`. Missing acceptance, unresolved body markers or invalid retained state stop before any push. The two-line local receipt binds the exact image and deterministic runtime/test/BUILD/module/CI/Keeper hash measured before and after the successful nine-test run and owned cleanup; PR preparation recomputes it. An old image-only receipt or changed measured input is refused. This future workflow does not claim actual CH acceptance in this source-only review.
 
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
-cd "$W" && git push -u origin urwt/claude/multi-source-s3c4
-gh pr create --repo sentioxyz/sentio-node --base main --head urwt/claude/multi-source-s3c4 \
-  --title 'feat(storage-integrity): multi-source SI stage 3 P3 replica reads (Replica table state, member serving)' \
-  --body-file "$HOME/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md"
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+cd "$W" || exit 1
+si_checked_read_115="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -z "${si_checked_read_115}" ] || { echo "worktree is dirty; stop"; exit 1; }
+si_checked_read_116="$(git rev-list "$SN_COMMIT_P2..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -n "$si_checked_read_116" ] || { echo "expected commit list is empty; stop" >&2; exit 1; }
+# shellcheck disable=SC2086 # checked Git commit list: one commit id per word
+for id in ${si_checked_read_116}; do
+ si_checked_read_117="$(git log -1 --format='%an <%ae> %G?' "$id")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+ [ "${si_checked_read_117}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+ git verify-commit "$id" || exit 1
+done
+git push -u origin urwt/codex/multi-source-s3c4 || exit 1
+gh pr create --repo sentioxyz/sentio-node --base main --head urwt/codex/multi-source-s3c4 \
+ --title 'feat(storage-integrity): multi-source SI stage 3 P3 replica reads (Replica table state, member serving)' \
+ --body-file "$T46/pr-body.md" | tee "$T46/pr-url" || exit 1
+python3 -I - "$T46/pr-url" <<'TASK46_PR' || exit 1
+import pathlib,re,sys
+value=pathlib.Path(sys.argv[1]).read_text().strip()
+assert re.fullmatch(r"https://github[.]com/sentioxyz/sentio-node/pull/[1-9][0-9]*",value), "unexpected PR URL"
+TASK46_PR
 ```
 
 Remote read (CI status): needs explicit user confirmation in chat before running.
 
 ```bash
-gh pr checks <n> --repo sentioxyz/sentio-node --watch
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+n="$(sed -n 's|^https://github.com/sentioxyz/sentio-node/pull/\([0-9][0-9]*\)$|\1|p' "$T46/pr-url")" || exit 1
+[ -n "$n" ] || exit 1
+gh pr checks "$n" --repo sentioxyz/sentio-node --watch || exit 1
 ```
 
-Expected: `build` and `integration-clickhouse` pass; the acceptance step's log carries `--- PASS: TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost` and `--- PASS: TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost` and no `expected 8 storage-integrity acceptance PASS markers` line; the drift step, the `@arbiter_core//snode:snode_test` step and Plan S3-C2's `si-member install acceptance` step pass unchanged. On a failure, read the log (`gh run view <id> --repo sentioxyz/sentio-node --log-failed`), fix it on the branch with a new commit, and ask again before pushing.
+Expected: required build, integration-clickhouse, existing drift/SNode/member-install acceptance and the two new replica serving tests pass. Inspect full failed logs and repair before another explicitly confirmed push; a skipped actual acceptance is not a PASS.
 
-Remote write (merge): needs explicit user confirmation in chat, after review, before running.
+Remote write (squash merge), after review: needs explicit user confirmation in chat before running. Both remote head reads and --match-head-commit bind to the same checked local HEAD; paginated primary-author and message-trailer validation is complete and fail closed.
 
 ```bash
-gh pr merge <n> --repo sentioxyz/sentio-node --squash
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task46/worktree.json")" || exit 1
+T46="$HOME/.cache/s3c4-task46"
+n="$(sed -n 's|^https://github.com/sentioxyz/sentio-node/pull/\([0-9][0-9]*\)$|\1|p' "$T46/pr-url")"
+[ -n "$n" ] || { echo "no PR URL in $T46/pr-url: stop"; exit 1; }
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_118="$(gh pr view "$n" --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_118" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_118}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_checked_read_119="$(gh pr view "$n" --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_119" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_119}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+gh pr merge "$n" --repo sentioxyz/sentio-node --squash --match-head-commit "$expected_head" || exit 1
+gh pr view "$n" --repo sentioxyz/sentio-node --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
+gh pr view "$n" --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid > "$T46/merge"
+gh pr view "$n" --repo sentioxyz/sentio-node --json mergedAt --jq .mergedAt > "$T46/merged-at"
+printf '%s\n' "$expected_head" > "$T46/reviewed-head"
 ```
 
-- [ ] **Step 23: Record `SN_COMMIT_P3` and `SN_DIGEST_P3`**
+Expected: identities verified, successful merge and MERGED/merge/time output, with exact merge/time/reviewed head retained. No automatic author rewrite or force push.
 
-Remote read (PR, workflow runs): needs explicit user confirmation in chat before running.
+- [ ] **Step 23: Verify the exact merged CI/image and record `SN_COMMIT_P3` / `SN_DIGEST_P3`**
+
+Remote read (merged PR and exact CI run): needs explicit user confirmation in chat before running. No Release Devnet/Testnet workflow is dispatched.
 
 ```bash
-SN_COMMIT_P3="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid)"; echo "$SN_COMMIT_P3"
-gh run list --repo sentioxyz/sentio-node --branch main --workflow 'CI Build' --limit 3 --json databaseId,headSha,status,conclusion
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+SN_COMMIT_P3="$(cat "$T46/merge")" || exit 1
+printf '%s\n' "$SN_COMMIT_P3" | grep -Eq '^[0-9a-f]{40}$' || exit 1
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/actions/workflows/ci.yml/runs?head_sha=$SN_COMMIT_P3&event=push&per_page=100" > "$T46/ci-runs.json" || exit 1
+python3 -I - "$T46/ci-runs.json" "$SN_COMMIT_P3" > "$T46/ci-id" <<'TASK46_RUN' || exit 1
+import json,sys
+pages=json.load(open(sys.argv[1]));assert isinstance(pages,list) and pages
+runs=[]
+for page in pages:
+ assert isinstance(page,dict) and isinstance(page.get("workflow_runs"),list)
+ runs.extend(page["workflow_runs"])
+hits=[r for r in runs if r.get("head_sha")==sys.argv[2] and r.get("head_branch")=="main" and r.get("event")=="push"]
+assert len(hits)==1 and isinstance(hits[0].get("id"),int) and hits[0]["id"]>0, "missing or ambiguous merge-bound CI run"
+print(hits[0]["id"])
+TASK46_RUN
+run="$(cat "$T46/ci-id")" || exit 1
+gh run watch "$run" --repo sentioxyz/sentio-node --exit-status || exit 1
+gh api "repos/sentioxyz/sentio-node/actions/runs/$run" > "$T46/ci-complete.json" || exit 1
+python3 -I - "$T46/ci-complete.json" "$SN_COMMIT_P3" "$run" <<'TASK46_COMPLETE' || exit 1
+import json,sys
+r=json.load(open(sys.argv[1]));assert r.get("id")==int(sys.argv[3]) and r.get("head_sha")==sys.argv[2] and r.get("head_branch")=="main" and r.get("event")=="push" and r.get("status")=="completed" and r.get("conclusion")=="success", "wrong or unsuccessful CI completion"
+TASK46_COMPLETE
+gh run view "$run" --repo sentioxyz/sentio-node --json jobs > "$T46/jobs.json" || exit 1
+jq -e '[.jobs[] | select(.name == "docker-push")] | length == 1 and .[0].conclusion == "success"' "$T46/jobs.json" > /dev/null || exit 1
+gh run view "$run" --repo sentioxyz/sentio-node --log > "$T46/ci.log" || exit 1
+for test in TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost; do
+ grep -F -- "--- PASS: $test" "$T46/ci.log" || exit 1
+ if grep -E -- "--- (FAIL|SKIP): $test" "$T46/ci.log"; then exit 1; fi
+done
+if grep -F 'expected 8 storage-integrity acceptance PASS markers' "$T46/ci.log"; then exit 1; fi
+echo "exact merge CI and replica acceptance verified"
 ```
 
-Expected: a 40-hex `SN_COMMIT_P3` (the squash-merge commit) and a run whose `headSha` is `SN_COMMIT_P3`. Watch it (`gh run watch <id> --repo sentioxyz/sentio-node`, remote read, confirmed with the block above) until its `docker-push` job succeeds (`gh run view <id> --repo sentioxyz/sentio-node --json jobs --jq '.jobs[] | select(.name == "docker-push") | .conclusion'` prints `success`), then `gh run view <id> --repo sentioxyz/sentio-node --log | grep -cE -- '--- PASS: TestSIMemberServes(AQuarantined|AnUnreachable)OwnersDatabaseThroughTheHost'` prints at least `2` (the acceptance ran on the merge commit). The push tags `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>` (`type=sha,format=long`).
-
-Remote read (registry and fetch): needs explicit user confirmation in chat before running.
+Remote read (registry and source fetch): needs explicit user confirmation in chat before running. Resolve an index digest once, then inspect only that immutable digest; every executable platform's revision must match the merge.
 
 ```bash
-SN_COMMIT_P3=<sha>; HG_TAG_P3=<ledger>; CORE_TAG_P3=<ledger>; PROTO_TAG=<ledger>
-docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3" | sed -n '1,4p'
-docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3" --format '{{json .Image}}' \
-  | jq -r 'if has("config") then .config.Labels["org.opencontainers.image.revision"] else (to_entries[0].value.config.Labels["org.opencontainers.image.revision"]) end'
-git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch -q origin
-git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node show "$SN_COMMIT_P3":go.mod | grep -E "housegate/housegate $HG_TAG_P3|arbiter-core $CORE_TAG_P3|arbiter-proto $PROTO_TAG"
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+SN_COMMIT_P3="$(cat "$T46/merge")" || exit 1
+image="ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3"
+docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' > "$T46/manifest.json" || exit 1
+python3 -I - "$T46/manifest.json" > "$T46/digest" <<'TASK46_DIGEST' || exit 1
+import json,re,sys
+x=json.load(open(sys.argv[1]));assert isinstance(x,dict) and x.get("mediaType") in {"application/vnd.oci.image.index.v1+json","application/vnd.docker.distribution.manifest.list.v2+json"}, "expected a multi-platform image index";d=x.get("digest");assert isinstance(d,str) and re.fullmatch(r"sha256:[0-9a-f]{64}",d), "invalid image index digest"
+print(d)
+TASK46_DIGEST
+SN_DIGEST_P3="$(cat "$T46/digest")" || exit 1
+docker buildx imagetools inspect "$image@$SN_DIGEST_P3" --format '{{json .Image}}' > "$T46/image.json" || exit 1
+python3 -I - "$T46/image.json" "$SN_COMMIT_P3" <<'TASK46_IMAGE' || exit 1
+import json,sys
+x=json.load(open(sys.argv[1]));assert isinstance(x,dict) and x
+images=[x] if "config" in x else list(x.values())
+assert images and all(isinstance(i,dict) and isinstance(i.get("config"),dict) and i["config"].get("Labels",{}).get("org.opencontainers.image.revision")==sys.argv[2] for i in images), "image revision mismatch or malformed platform metadata"
+TASK46_IMAGE
+git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch -q origin || exit 1
+git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node show "$SN_COMMIT_P3:go.mod" > "$T46/released-go.mod" || exit 1
+git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node show "$SN_COMMIT_P3:MODULE.bazel" > "$T46/released-MODULE.bazel" || exit 1
+HG_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/housegate rev-parse "$HG_TAG_P3^{commit}")" || exit 1
+CORE_SHA="$(git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core rev-parse "$CORE_TAG_P3^{commit}")" || exit 1
+python3 -I - "$T46/released-go.mod" "$T46/released-MODULE.bazel" "$HG_TAG_P3" "$HG_SHA" "$CORE_TAG_P3" "$CORE_SHA" "$PROTO_TAG" <<'TASK46_PINS' || exit 1
+import pathlib,re,sys
+mod=pathlib.Path(sys.argv[1]).read_text();bazel=pathlib.Path(sys.argv[2]).read_text();hg,hs,core,cs,proto=sys.argv[3:]
+for path,tag in [("github.com/housegate/housegate",hg),("github.com/sentioxyz/arbiter-core",core),("github.com/sentioxyz/arbiter-proto",proto)]:
+ assert re.findall(r"^\s*"+re.escape(path)+r"\s+(v[0-9]+[.][0-9]+[.][0-9]+)(?:\s*//.*)?$",mod,re.M)==[tag], "wrong require pin: "+path
+for name,tag,sha in [("housegate",hg,hs),("arbiter_core",core,cs)]:
+ assert re.findall(r'bazel_dep\(\s*name = "'+name+r'",\s*version = "([^"]+)"',bazel)==[tag[1:]], "wrong bazel version"
+ assert re.findall(r'module_name = "'+name+r'",\s*# Resolved [^\n]+\n\s*commit = "([0-9a-f]{40})"',bazel)==[sha], "wrong override commit"
+TASK46_PINS
 ```
 
-Expected: `Name:`, `MediaType:` and `Digest: sha256:…` — that index digest is `SN_DIGEST_P3`; the revision label is exactly `SN_COMMIT_P3` (contract §31.9); the three requires at `HG_TAG_P3`, `CORE_TAG_P3`, `PROTO_TAG`. Any mismatch: stop; nothing is recorded.
-
-Pulling the image to check its binary is a download (the image, linux/amd64): needs explicit user confirmation in chat before running.
+Downloading/running the immutable image for binary-help checks needs its own explicit user confirmation in chat before running. No service is started by these help commands.
 
 ```bash
-SN_COMMIT_P3=<sha>; SN_DIGEST_P3=<sha256:… printed above>
-docker run --rm --platform linux/amd64 "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3@$SN_DIGEST_P3" storage-integrity --help 2>/dev/null | grep -E '^  member-serving '
-docker run --rm --platform linux/amd64 "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3@$SN_DIGEST_P3" si-member --help 2>/dev/null | grep -E '^  clear-foreign '
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+SN_COMMIT_P3="$(cat "$T46/merge")" || exit 1
+SN_DIGEST_P3="$(cat "$T46/digest")" || exit 1
+image="ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3@$SN_DIGEST_P3"
+docker run --rm --platform linux/amd64 "$image" storage-integrity --help > "$T46/image-storage-help" 2>&1 || exit 1
+grep -E '^  member-serving ' "$T46/image-storage-help" || exit 1
+docker run --rm --platform linux/amd64 "$image" si-member --help > "$T46/image-member-help" 2>&1 || exit 1
+grep -E '^  clear-foreign ' "$T46/image-member-help" || exit 1
+printf '%s\n%s\n' "$SN_COMMIT_P3" "$SN_DIGEST_P3" > "$T46/release-verified" || exit 1
 ```
 
-Expected: the `member-serving` line of Step 21 and the `clear-foreign` line of Plan S3-C2: the image's entrypoint `/sentio-node`, which Task 47's charts run both as the host (`sentio-node`) and as the member (`si-member`), has both commands.
+Write `$HOME/.cache/s3-ledger/record-s3c4-46.md` with the Write tool: one paragraph describing only the observed exact merge/time, merge-bound CI run/docker-push/acceptance proof, immutable digest/platform revision and pin checks, binary-help checks and the actual local Step18 image/test receipt. Never copy the historical25.8 drafting result as this run's proof. No value is predicted.
 
-Record both, never predicting either, with the record procedure (contract §32.7, Plan S3-C1 contract §19, decision D23). First write the run record `$HOME/.cache/s3-ledger/record-s3c4-46.md` with the Write tool, one paragraph of what the commands above printed, then sub-items: `sentioxyz/sentio-node#<n>` squash-merged as `<SN_COMMIT_P3>` on <merge date> UTC; `CI Build` run `<id>` with `docker-push` `success` and the acceptance step passing with 8 PASS markers, among them the two `TestSIMemberServes…` tests; `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>`, index digest `<SN_DIGEST_P3>`, revision label `<SN_COMMIT_P3>`; `go.mod` at `<SN_COMMIT_P3>` requires housegate `<HG_TAG_P3>`, arbiter-core `<CORE_TAG_P3>` and arbiter-proto `<PROTO_TAG>`; the image's `/sentio-node storage-integrity --help` lists `member-serving`; then a line `- local acceptance: nine PASS lines of Step 18 on clickhouse/clickhouse-server:25.8.32.4`.
-
-R1 (local; the housegate fetch only reads; contract §32.7, decision D23). Like every remote read of this task, it needs explicit user confirmation in chat before running:
+R1 (local record after a freshly confirmed housegate fetch): needs explicit user confirmation in chat before running. The helper from Step1 and the already verified release receipt supply all values; the complete canonical ledger tool remains byte-equal to contract §19.
 
 ```bash
-SN_COMMIT_P3=<sha>; SN_DIGEST_P3=<sha256:… printed above>
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+SN_COMMIT_P3="$(sed -n 1p "$T46/release-verified")" || exit 1
+SN_DIGEST_P3="$(sed -n 2p "$T46/release-verified")" || exit 1
+[ "$SN_COMMIT_P3" = "$(cat "$T46/merge")" ] && [ "$SN_DIGEST_P3" = "$(cat "$T46/digest")" ] || { echo "release receipt mismatch; stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=46
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c4-ledger-$n" "urwt/claude/multi-source-s3c4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+python3 -I "$L/s3-ledger.py" empty "$h" SN_COMMIT_P3 SN_DIGEST_P3 || exit 1
+[ ! -e "$T46/ledger-worktree.json" ] || { echo "saved ledger URWT exists; reconcile before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c4-ledger-$n" "urwt/codex/multi-source-s3c4-ledger-$n" "$ref")" || exit 1
+(set -C; printf '%s\n' "$out" > "$T46/ledger-worktree.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3c4-task46/ledger-worktree.json")" || exit 1
+si_checked_read_122="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_122" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_121="$(git -C "$h" rev-parse "$ref")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_121" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_120="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${si_checked_read_122}" = "${si_checked_read_121}" ] && [ -z "${si_checked_read_120}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+si_checked_read_123="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_123}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || { echo "ledger branch mismatch; stop"; exit 1; }
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c4-$n.md" SN_COMMIT_P3="$SN_COMMIT_P3" SN_DIGEST_P3="$SN_DIGEST_P3" || exit 1
+si_checked_read_124="$(git -C "$d" diff --name-only)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_124}" = "$rel" ] || { echo "record changed something outside the owning plan; stop"; exit 1; }
+previous_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record SN_COMMIT_P3 and SN_DIGEST_P3 of Plan S3-C4 (Task 46)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" show --stat --oneline HEAD | cat
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signature failed; stop and unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+si_checked_read_125="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$new_head" != "$previous_head" ] && [ "${si_checked_read_125}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+git -C "$d" show --stat --oneline HEAD | cat || exit 1
 ```
 
-Expected: `s3-ledger: Task 46 recorded SN_COMMIT_P3=…, SN_DIGEST_P3=… and its run record 'sentio-node release' in …`, then one commit of the plan file only (its two rows and the run-record item). A `stop` writes nothing: report it and ask.
+Expected: one new retained Codex ledger path, poetry/signing configured before the record, then exactly one new verified signed commit for both owned rows and their run-record item. Signing/JSON/base/branch failures stop with state preserved.
 
-R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 46's ledger record (Appendix C of Plan S3-C4: SN_COMMIT_P3, SN_DIGEST_P3 and the run record 'sentio-node release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
+R2 (remote write): needs explicit user confirmation in chat before running. Gate: push Task46's two P3 release rows and run record to the fixed ledger-copy branch, or create the main docs PR; never force.
 
 ```bash
+set -eo pipefail
 L="$HOME/.cache/s3-ledger"; n=46
 d="$(sed -n 1p "$L/record-s3c4-$n")"; ref="$(sed -n 2p "$L/record-s3c4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+T46="$HOME/.cache/s3c4-task46"
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
+raw_d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$T46/ledger-worktree.json")" || exit 1
+[ "$d" = "$raw_d" ] || { echo "saved ledger path differs from its actual URWT JSON; stop"; exit 1; }
+ref="$(sed -n 2p "$L/record-s3c4-$n")" || exit 1
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) echo "unexpected ledger-copy ref; stop"; exit 1;; esac
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+si_checked_read_126="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_126}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || exit 1
+si_checked_read_128="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_127="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_128}" = 1 ] && [ -z "${si_checked_read_127}" ] || exit 1
+si_checked_read_129="$(git -C "$d" diff --name-only "$ref" HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_129}" = "$rel" ] || { echo "ledger commit scope changed; stop"; exit 1; }
+si_checked_read_130="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_130}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+si_checked_read_132="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_131="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_132}" = 1 ] && [ -z "${si_checked_read_131}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+si_checked_read_134="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_133="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_134}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] && [ "${si_checked_read_133}" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger branch/identity/signature mismatch; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+git -C "$d" merge-base --is-ancestor "$ref" HEAD || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C4 only, docs only (contract §32.7, decisions D23 and D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  si_record_subject="$(git -C "$d" log -1 --format=%s)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  printf '%s\n\n%s\n' "${si_record_subject}: Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${si_record_subject}" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+elif [ "$ref" = origin/urwt/claude/ms-si-stage3-plans-cf ]; then
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  echo "unexpected ledger-copy ref; stop"; exit 1
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 46's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+R3 (main docs PR only): squash merge needs its own explicit user confirmation in chat before running. Exact validated head, complete primary-author/trailer validator and the merge compare use the same SHA.
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P3 SN_DIGEST_P3
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=46
+d="$(sed -n 1p "$L/record-s3c4-$n")" || exit 1
+T46="$HOME/.cache/s3c4-task46"
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
+raw_d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$T46/ledger-worktree.json")" || exit 1
+[ "$d" = "$raw_d" ] || { echo "saved ledger path differs from its actual URWT JSON; stop"; exit 1; }
+ref="$(sed -n 2p "$L/record-s3c4-$n")" || exit 1
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) echo "unexpected ledger-copy ref; stop"; exit 1;; esac
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+si_checked_read_136="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_136}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || exit 1
+si_checked_read_138="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_137="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_138}" = 1 ] && [ -z "${si_checked_read_137}" ] || exit 1
+si_checked_read_139="$(git -C "$d" diff --name-only "$ref" HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_139}" = "$rel" ] || { echo "ledger commit scope changed; stop"; exit 1; }
+si_checked_read_140="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_140}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+[ "$ref" = origin/main ] || { echo "R3 is only for the main docs PR; stop"; exit 1; }
+pr="$(sed -n 's|^https://github.com/housegate/housegate/pull/\([0-9][0-9]*\)$|\1|p' "$L/record-s3c4-$n-pr-url")"
+[ -n "$pr" ] || { echo "missing ledger PR; stop"; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+si_checked_read_141="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_141" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_141}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_checked_read_142="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_142" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_142}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
-Expected: `SN_COMMIT_P3=<the value written>`, `SN_DIGEST_P3=<the value written>`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. Task 47 reads them from there only: it allowlists `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>` as `DEVNET2_P3_HOST_IMAGE` (in `REPLICA_READ_HOST_IMAGES`), and Task 48 rolls it as the member image (`siMember.image`) and the host image of the agent window.
+R4 (remote read): needs explicit user confirmation in chat before running.
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3c4-task46/env.sh" || exit 1
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
+git -C "$h" fetch -q origin || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P3 SN_DIGEST_P3 > "$T46/r4.env" || exit 1
+printf 'SN_COMMIT_P3=%s\nSN_DIGEST_P3=%s\n' "$(cat "$T46/merge")" "$(cat "$T46/digest")" > "$T46/r4-expected.env" || exit 1
+cmp "$T46/r4.env" "$T46/r4-expected.env" || exit 1
+cat "$T46/r4.env" || exit 1
+```
+
+Expected: both rows exactly equal the verified release receipt. Task46 is complete only after this R4 equality; Task47 consumes those actual rows, not local placeholders.
+
 
 ---
 
@@ -21301,7 +23359,7 @@ Expected: `SN_COMMIT_P3=<the value written>`, `SN_DIGEST_P3=<the value written>`
 
 Contract §32.1–§32.4 (binding), §32.5 (the live commits the runbook makes), §32.6 (the exit it records), §32.7–§32.9; spec §11 (serving conditions, the lease, host status, routing, read modes, the agent), §14 bullet 1, §15 (production: alert rules and grants), §16 row P3; clarifications K44–K50; decisions D29 (the member status token in its own Secret), D34 (the ledger copy) and D40 (the user's local agent). This task adds every production piece of P3, each off by default, so that merging `P3_PR` applies nothing. (1) **charts/sentio-node, host:** `storageIntegrity.replicaReads.memberStatusURL` renders `storage_integrity.replica_reads.member_status_url` right after the host's `snode:` block, and `memberStatusTokenSecret` (the release's own `<release>-si-member-status-token`, key `status-token`) renders `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN` on the `sentio-node` container only; the agent sidecar, the rewriter, the init containers, every volume and every ConfigMap never name it, and no container of the host pod names the `si_member` password Secret. (2) **charts/sentio-node, member:** `siMember.serve.{endpoint, enabled, ownerUnreachableAfter, leaseTTL, ownerHouseGate}` render `storage_integrity.member.serve` into the si-member's own config file (its own checksum, so a serving change restarts the member only), with `listen` on S3-C3's `status` port 9096, plain indexer-id keys and quoted durations. (3) **charts/storage-integrity:** `clickhouse.access.replicaReads` adds `GRANT SELECT ON hg_replica.*` as `si_gateway`'s last grant (a users reload), and `monitoring.replicaReads` renders the rule group `<fullname>.replica-reads` with the four alerts of §32.2. (4) **Guards and tests:** the seven guards of §32.1, the grant guard of §32.2 and the four refusals this task adds; the replica grant probe `clickhouse_replica_grant_probe.tsv`; `test_render.py`'s constants, `ReplicaReadsTest`, the three `ActualFreshNetworkTest` tests and the extended tests of §32.3, and the hunks that keep the earlier plans' tests green through every live commit of Task 48 (the stage-3 P2 helpers keep the replica grant last, the indexer-c and indexer-a sidecar checks read the rollout map, a member decodes `serve` only on the P3 image). (5) **The runbook** `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md` (§0–§9 of contract §32.4), whose §0 helpers include `si_p3_edit`, the editor of every single-service commit of §32.5, and the pointers from the stage-1 and tracks runbooks. (6) **The P3 PR** (`P3_PR`), recorded in Appendix C.
 
-**Files** (anchors: production `origin/main` once the last Plan S3-C3 record PR has merged, i.e. `75514e3de` (SI paths byte-identical to Plan S3-B's base `9d3d0326b`) with the hunks of Plans S3-B, S3-C1 and S3-C3 applied and every devnet2 installation and member at its P2 end state (`DEVNET2_P2_STAGE` all `member`, `DEVNET2_MEMBERS_ENABLED` all `True`, `monitoring.members` listing the three hosts). Line numbers in parentheses are those of that state as rebuilt while drafting and are guidance only; the quoted text is the anchor, and a hunk that meets an earlier plan's edit of the same lines applies its intent on top of it, the hunk rule of the Global Constraints):
+**Files** (anchors: production `origin/main` at execution after the last Plan S3-C3 record PR has merged; reviewed against actual main `efe5c77859e98d0465838cb5763c7f1fcbd89ee3` with the current Plans S3-B, S3-C1 and S3-C3 source chain through Task40 (`cf3a86887d4c29dbc4cdf8cdc1732aaab3c3b615`) applied and every devnet2 installation and member at its P2 end state (`DEVNET2_P2_STAGE` all `member`, `DEVNET2_MEMBERS_ENABLED` all `True`, `monitoring.members` listing the three hosts). The recorded S3-B exit remains 2026-10-17, indexer-c ID 2, source host sea-dg-6/CHI sea-dg-3, member PVC 10GiB and keep-free 100GiB. The reviewed source-only P2-end fixture explicitly enables monitoring as a future entry precondition; actual-main monitoring is false. Missing P2/P3 END values and unreleased image metadata remain execution gates. Task39/40 grant-probe API proposals and Task41 final source/record hashes must be reconciled before execution. Line numbers in parentheses are historical drafting guidance only; the quoted text is the anchor, and a hunk that meets an earlier plan's edit of the same lines applies its intent on top of it, the hunk rule of the Global Constraints):
 - Create: `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv`, `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`
 - Modify: `charts/sentio-node/values.yaml` (`storageIntegrity.replicaReads`, commented, after `  # clickhousePasswordSecret: {name: <release>-clickhouse, key: snode-password}` `:207`; `siMember.serve`, commented, after `  reconciler:` / `    enabled: false` `:308`)
 - Modify: `charts/sentio-node/templates/node.yaml` (the guards after the `ownerAudit` refusal `:133`; `replica_reads` after `owner_audit` `:425`; the token env before the `STORAGE_INTEGRITY_CLICKHOUSE_PASSWORD` env of the `sentio-node` container `:729`), `charts/sentio-node/templates/si-member.yaml` (Plan S3-C3 Task 38's: the `serve` block at the end of `sentio-node.siMember.config` and the new `sentio-node.siMember.serve` before `{{- $member := .Values.siMember -}}` `:50`; the serve guards after the reconciler refusal `:53`)
@@ -21312,98 +23370,282 @@ Contract §32.1–§32.4 (binding), §32.5 (the live commits the runbook makes),
 - Leave unchanged: the host's `checksum/config` dict (`templates/node.yaml`, `node`, `housegate`, `storageIntegrity`, `housegateSidecar`; the P3 values are commented, so it never moves on merge); every devnet2 overlay and CHI manifest (their P3 lines are Task 48's single-service commits); `test_sidecar_stays_on_legacy_lanes` and `test_dind_and_the_clickhouse_config_never_change`; `scripts/storage-integrity/` (no script: the token Secrets are Plan S3-C3's, D29).
 
 **Interfaces:**
-- Consumes (ledger, read only with `s3-ledger.py get`, never typed): `SN_COMMIT_P3` (40 hex) and `SN_DIGEST_P3` (`sha256:` + 64 hex) (Task 46), `HG_TAG_P3` (`vX.Y.Z`) and `HG_DIGEST_P3` (Task 44), `CORE_TAG_P3` (Task 45), `INDEXER_C_ID` (Plan S3-B Task 21), `ARBITER_PIN_P2` (40 hex, Plan S3-C2 Task 36, with its run record `arbiter pin and integration run`), `P2_END` (`YYYY-MM-DD`, Plan S3-C3 Task 41, with its run record `P2 members, soak and exit`), and `P3_PR` empty.
+- Consumes (ledger, read only with `s3-ledger.py get`, never typed): `SN_COMMIT_P3` (40 hex) and `SN_DIGEST_P3` (`sha256:` + 64 hex) (Task 46), `HG_TAG_P3` (`vX.Y.Z`) and `HG_DIGEST_P3` (Task 44), `CORE_TAG_P3` (Task 45), `INDEXER_C_ID` (Plan S3-B Task 21), `ARBITER_PIN_P2` (40 hex, Plan S3-C2 Task 36, with its run record `arbiter pin and integration run`), `P2_INTEGRATION_SOAK` (integer at least 500, that same Task36 release-path record), `P2_END` (`YYYY-MM-DD`, Plan S3-C3 Task 41, with its run record `P2 members, soak and exit`), and `P3_PR` empty.
 - Consumes (Plan S3-C3, contract §25–§28): `siMember` (`enabled`, `image`, `nodeID`, `secret.{name, passwordKey}`, `statusTokenSecret.{name, key}`, `config`, `statusPort` 9096), `templates/si-member.yaml` (`sentio-node.siMember.config`, ConfigMap `<release>-si-member-config` with `checksum/si-member-config`, StatefulSet and Service `<release>-si-member`, container `si-member` with `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN` from `statusTokenSecret`), the Secrets `storage-integrity-si-v2-member-<network|indexer-b|indexer-c>` and `<release>-si-member-status-token` (key `status-token`); `monitoring.members.{releases, runbookURL}`, the members scrape (`si_component="member"`, labels `release`, `member`) and group; `test_render.py`'s `DEVNET2_P2_STAGE`, `P2_STAGES`, `p2_overrides`, `p2_engine_grants`, `without_p2_users`, `without_p2_chi`, `p2_chi`, `_p2_strip_manifest_lines`, `_block_end`, `p2_manifest_text`, `p2_overlay_text`, `DEVNET2_INDEXER_IDS`, `DEVNET2_MEMBER_IDS`, `DEVNET2_MEMBER_CHIS`, `DEVNET2_MEMBER_IMAGE`, `MEMBER_IMAGES`, `DEVNET2_MEMBER_ROLLOUT`, `SI_MEMBER_CONFIG_KEYS`, `MonitoringTest.MEMBERS`, `members_monitored`, `si_release_values`, `render_si_release`, `member_values`, `si_member_config`; the P2 runbook's §0 helpers `si_member_pod`, `si_member_metrics`, `si_copies_check`, `si_budget_capture`, `si_budget`.
 - Consumes (Plan S3-B): `DEVNET2_STAGE3_SOURCE_IMAGE`, `WRITER_AUTHORIZATION_IMAGES`, `STAGE3_HOST_IMAGES`, `FRESH_SOURCE_IMAGE`, `INDEXER_B_SOURCE_IMAGE`, `INDEXER_C_SOURCE_IMAGE`, `INDEXER_B_CHI`, `INDEXER_C_CHI`, `DEVNET2_CLICKHOUSE_POSTURE`, `SI_CLICKHOUSE_GRANTS`, `MONITORING_ALERTS`, `clickhouse_access`, `grant_atoms`, `role_atoms`, `atom_granted`, `atom_exercises`, `vm_rules`, `promql_selectors`, `markdown_anchor`, `secret_references`, `host_config`, `render`, `render_sentio_node`, `documents`, `release_chart_values`, `sentio_node_helmfiles`, `render-inertness.sh`, the hosts scrape (`si_component="host"`, label `release`); the earlier runbooks' §0 helpers of the chain (D20): `si_kubectl`, `si_arbiter`, `si_voter`, `si_leader`, `si_rpc_on` (`a|b|c`), `si_info`, `si_status`, `si_refusal`, `si_tracks`, `si_track`, `si_track_published`, `si_wait_track`, `si_accept_a_track`, `si_agent_start` (log `$si_backup/agent.log`), `si_agent_ch`, `si_agent_stop`, `si_head_is`, `si_vm_query`, `si_vmalert_groups`, `si_ch_exec`, `si_ch_admin`, `si_grants`, `si_chi_state`, `si_wait_chi`, `si_render_diff`, `si_lockdown_dir`; the indexer-c runbook's `acceptance-db` file and `<acceptance-db>.s3e_e2e` (`id UInt64, v String`, rows 1 to 3).
 - Consumes (this plan): §31.2–§31.3's keys and refusals (`replica_reads.member_status_url`, `member.serve.{enabled, listen, owner_unreachable_after, lease_ttl, owner_housegate}` as `map[uint64]string`, env `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN`), §31.4's host series (`sentio_node_storage_integrity_replica_serving{database}`, `sentio_node_storage_integrity_member_status_up`, `sentio_node_storage_integrity_replica_reads_in_flight{database}`, `sentio_node_storage_integrity_replica_lease_releases_total{outcome}`, `sentio_node_storage_integrity_tables{status="replica"}`), §30.5's member series (`sentio_node_si_member_serve_{databases{state}, not_serving{reason}, owner_unreachable{owner}, revoking_seconds}`), §31.7's `sentio-node storage-integrity member-serving --config-path`, §30.3's `ServingView` JSON, §29.1's `replica_of`, `served_from`, `owner_entry`, `frozen_since`, §29.2's safe-mode text, §29.3's log line `agent: replica failover` and the agent's `-version` (`housegate <tag> …`, `pkg/version.Info`); `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19).
 - Produces (contract §32, verbatim): the values, guards, rule group, alerts, probe file, constants, tests and runbook names of §32.1–§32.4, and `P3_PR` (the PR number) with the run record `P3 PR`.
-- Produces (this task's names, recorded in Appendix B): the refusals `siMember.serve must be a map of endpoint, enabled, ownerUnreachableAfter, leaseTTL and ownerHouseGate`, `siMember.serve.endpoint and siMember.serve.enabled must be true or false`, `siMember.serve.ownerUnreachableAfter must be at least 15s and siMember.serve.leaseTTL at least 10s, each written <n>s or <n>m` and `monitoring.replicaReads.enabled requires monitoring.hosts.releases and monitoring.members.releases: its rules read the hosts' and the si-members' series`; the named template `sentio-node.siMember.serve`; the constants `DEVNET2_V0150_AGENT_SIDECAR_IMAGE`, `AGENT_SIDECAR_IMAGES`, `REPLICA_GRANT_PROBE`, `SI_MEMBER_P3_CONFIG_KEYS`, `STAGE3_P3_RUNBOOK`, `STAGE3_P3_RUNBOOK_SECTIONS`, `STAGE3_P3_RULE_SECTIONS`, `MONITORING_ALERTS["replica-reads"]`; the helpers `replica_probe_rows`, `replica_probe_atoms`, `devnet2_p3_state`, `p3_rollout_problems`, `MonitoringTest.replica_reads_monitored`, `ActualFreshNetworkTest.si_host_docs`; the test `ReplicaReadsTest.test_member_serving_endpoint_renders_only_in_the_member`; the runbook helpers beyond §32.4's six: `si_p3_pin`, `si_p3_image`, `si_p3_sidecar`, `si_c_id`, `si_host_release`, `si_acceptance_db`, `si_container_image`, `si_pod_state`, `si_serving_db`, `si_host_replica_metrics`, `si_wait_not_serving`, `si_local_agent_version`, `si_sync`, `si_render_diff_is`, `si_p3_message`, `si_p3_commit`, `si_p3_push`, `si_apply_chi`, `si_grant_snapshot`, `si_grant_check`, `si_run_record`, `si_revert_p3`, `si_p3_edit`; the commit labels `G-b`, `G-c`, `G-n`, `W-<x>-m`, `W-<x>-h`, `S-<x>`, `M` and their records under `$si_backup` (`grant-<installation>-commit`, `window-<x>-member-commit`, `window-<x>-host-commit`, `serve-<x>-commit`, `monitoring-commit`); the evidence files beyond §32.4's: `identities.txt`, `arbiter-pin-record.txt`, `window-<x>.txt`, `serve-<x>.txt`, `monitoring.txt`, `accept-5301.txt`, `drill-count`, `copies-after-baseline.txt`, `quarantine-generation-before`, `budget-live-seq-start`, `budget-end.txt`; indexer-a's acceptance value `5301`; the `devuser1` owner's baseline row `(4, 'p3-6.1-4')` and refused row `5`.
+- Produces (this task's names, recorded in Appendix B): the refusals `siMember.serve must be a map of endpoint, enabled, ownerUnreachableAfter, leaseTTL and ownerHouseGate`, `siMember.serve.endpoint and siMember.serve.enabled must be true or false`, `siMember.serve.ownerUnreachableAfter must be at least 15s and siMember.serve.leaseTTL at least 10s, each written <n>s or <n>m` and `monitoring.replicaReads.enabled requires monitoring.hosts.releases and monitoring.members.releases: its rules read the hosts' and the si-members' series`; the named template `sentio-node.siMember.serve`; the constants `DEVNET2_V0150_AGENT_SIDECAR_IMAGE`, `AGENT_SIDECAR_IMAGES`, `REPLICA_GRANT_PROBE`, `SI_MEMBER_P3_CONFIG_KEYS`, `STAGE3_P3_RUNBOOK`, `STAGE3_P3_RUNBOOK_SECTIONS`, `STAGE3_P3_RULE_SECTIONS`, `MONITORING_ALERTS["replica-reads"]`; the helpers `replica_probe_rows`, `replica_probe_atoms`, `devnet2_p3_state`, `p3_rollout_problems`, `MonitoringTest.replica_reads_monitored`, `ActualFreshNetworkTest.si_host_docs`; the test `ReplicaReadsTest.test_member_serving_endpoint_renders_only_in_the_member`; the runbook helpers beyond §32.4's six: `si_p3_pin`, `si_p3_image`, `si_p3_sidecar`, `si_c_id`, `si_host_release`, `si_acceptance_db`, `si_container_image`, `si_pod_state`, `si_serving_db`, `si_host_replica_metrics`, `si_wait_not_serving`, `si_local_agent_version`, `si_p3_user_terminal`, `si_p3_signed`, `si_p3_docker`, `si_p3_parity_cleanup`, `si_p3_deps`, `si_sync`, `si_render_diff_is`, `si_p3_message`, `si_p3_commit`, `si_p3_push`, `si_apply_chi`, `si_grant_snapshot`, `si_grant_check`, `si_run_record`, `si_revert_p3`, `si_p3_edit`; the commit labels `G-b`, `G-c`, `G-n`, `W-<x>-m`, `W-<x>-h`, `S-<x>`, `M` and their records under `$si_backup` (`grant-<installation>-commit`, `window-<x>-member-commit`, `window-<x>-host-commit`, `serve-<x>-commit`, `monitoring-commit`); the evidence files beyond §32.4's: `identities.txt`, `arbiter-pin-record.txt`, `window-<x>.txt`, `serve-<x>.txt`, `monitoring.txt`, `accept-5301.txt`, `drill-count`, `copies-after-baseline.txt`, `quarantine-generation-before`, `budget-live-seq-start`, `budget-end.txt`; indexer-a's acceptance value `5301`; the `devuser1` owner's baseline row `(4, 'p3-6.1-4')` and refused row `5`.
 
 Notes:
-- **Inert on merge.** Every P3 value of `charts/sentio-node` is a comment in `values.yaml`, because `storageIntegrity` and `housegateSidecar` are in the host pod's `checksum/config` (any new default key there would roll every SI host on its next sync), and `serve` renders only with `endpoint`; the storage-integrity values default to `false`, and the replica group renders only with `monitoring.enabled` and its own flag. Steps 3, 4 and 9 prove with `render-inertness.sh` that every release renders byte-identically to the base, and merging syncs or applies nothing (no GitOps on sea, validation-only workflows). Every live change is one of Task 48's single-service commits, made by the runbook's `si_p3_edit` and each confirmed in chat.
-- **No remote or live action without confirmation.** Steps 1 and 12 read remotes (GitHub, ghcr.io), Step 10 pushes, Step 11 opens the PR, Step 13 merges it and records `P3_PR`: each such block needs explicit user confirmation in chat before it runs. This task runs no `helmfile sync`, `kubectl` or registry write; Step 8's rehearsal pushes only to a local bare repository and stubs every sync and apply.
+- **Inert on merge.** Every P3 value of `charts/sentio-node` is a comment in `values.yaml`, because `storageIntegrity` and `housegateSidecar` are in the host pod's `checksum/config` (any new default key there would roll every SI host on its next sync), and `serve` renders only with `endpoint`; the storage-integrity values default to `false`, and the replica group renders only with `monitoring.enabled` and its own flag. Steps 3, 4 and 9 prove with the task-local direct-Helm renderer that every release renders byte-identically to the base, and merging syncs or applies nothing (no GitOps on sea, validation-only workflows). Every live change is one of Task 48's single-service commits, made by the runbook's `si_p3_edit` and each confirmed in chat.
+- **No remote or live action without confirmation.** Steps 1 and 12 read remotes (GitHub, ghcr.io), Step 10 pushes, Step 11 opens the PR, Step 13 merges it and records `P3_PR`: each such block needs explicit user confirmation in chat before it runs. This task runs no `helmfile sync`, `kubectl` or registry write; Step8's rehearsal pushes only to a local bare repository and excludes the live apply/sync tail without a successful placeholder.
 - **Ledger values** enter `test_render.py` and the runbook only through Step 1's fill tool, from `ledger.env`, which `s3-ledger.py get` writes; a value that is not recorded stops Step 1. The runbook keeps its runtime placeholders (`<acceptance-db>`, `<x>`, `<n>`, `/path/to/devuser1-owner.key`, `/path/to/housegate`), which its blocks read or refuse at run time.
-- **Why the guards look like this.** The host guards run whether or not anything else of storage integrity is set, so a token Secret without a URL is refused as a bad URL (nothing would read it), and the password Secret is refused by name; the member's serve guards run whether or not the member is enabled. The duration guard mirrors §31.3's minimums so that a bad value fails the render instead of the member's start, and only the forms `<n>s` and `<n>m` are accepted, which yaml.v3 decodes into a `time.Duration`. `ownerHouseGate` keys render bare: §31.3 decodes a `map[uint64]string` and refuses a quoted key (Task 46, `cannot unmarshal !!str`). While drafting, the four rendered member files of Step 8's end and window states were decoded with `gopkg.in/yaml.v3` v3.0.1 and `KnownFields(true)` into contract §31.3's shape without an error (`OwnerUnreachableAfter:1m0s LeaseTTL:30s OwnerHouseGate:map[0:… 2:…]`).
+- **Why the guards look like this.** The host guards run whether or not anything else of storage integrity is set, so a token Secret without a URL is refused as a bad URL (nothing would read it), and the password Secret is refused by name; the member's serve guards run whether or not the member is enabled. The duration guard mirrors §31.3's minimums so that a bad value fails the render instead of the member's start, and only the forms `<n>s` and `<n>m` are accepted, which yaml.v3 decodes into a `time.Duration`. `ownerHouseGate` keys render bare: §31.3 decodes a `map[uint64]string` and refuses a quoted key (Task 46, `cannot unmarshal !!str`). In the current review, three actual Helm-rendered member configurations decode with `gopkg.in/yaml.v3` v3.0.1 and `KnownFields(true)` into contract §31.3's shape, including the maximum uint64 owner ID and supported duration forms.
 - **Why the rules look like this.** As Plans S3-B and S3-C3's: every expression selects `network` and `si_component` (`host` for the hosts scrape's `sentio_node_storage_integrity_*`, `member` for the members scrape's `sentio_node_si_member_serve_*`), every `by()` keeps `cluster` and `network`, and the contract's terms are kept inside (`release, database`; `release`; `pod`, with the members scrape's `release` and `member` added so the alert names the member even where a pod label is missing; `owner`). The anchors are §32.2's subsections `91-replica-serving`, `92-member-status-endpoint` and `93-leases`, so the group stays out of `MONITORING_GROUP_RUNBOOKS` (whose test requires top-level anchors) and `test_replica_read_rules_read_only_this_networks_series` checks them against the runbook's `###` headings. The group needs listed hosts and members because both lists gate their scrapes; the refusal says so instead of rendering rules that can never fire.
 - **The grant on hand-applied manifests.** indexer-b's and indexer-c's CHI manifests are applied with `kubectl` (K22) and rewritten line by line by Plan S3-C3's `p2_manifest_text`, which the P2 tests hold every manifest to. Task 48's `G-b` and `G-c` append `GRANT SELECT ON hg_replica.*` as `si_gateway`'s last grant line, so Step 4 teaches those helpers to keep that line last at every P2 stage and `p2_overrides` to render the network chart with an indexer installation's own grant (`DEVNET2_REPLICA_READ_GRANTS`) when the P2 tests compare a manifest with the chart by role.
 - **The rollout guards.** `p3_rollout_problems` encodes K47's order for the state the files declare: grants in the order indexer-b, indexer-c, network; each host's window (its member's endpoint, then its host image, sidecar and replica reads together) only after the grants and after the previous host's window; serving per member only after every window, on a locked and granted installation, in the order b, c, a; monitoring only once every member serves; and every state of the reverse order passes too, so each of §8's reverts keeps the suite green. The guards pass on the PR (nothing has moved); Step 4 makes them bite on scratch mutations and Step 8 runs every live commit and revert and eight out-of-order sequences through them.
-- **Verified while drafting (2026-10-16).** On a scratch production tree rebuilt from `origin/main` (`206c42357`, SI paths byte-identical to `9d3d0326b`) with stand-ins for Plans S3-B, S3-C1 and S3-C3 Tasks 37–39 (their drafts, applied as their tasks say) and Tasks 40–41's live commits (every installation at its member stage, three members on, member monitoring), with stand-in ledger values (`INDEXER_C_ID=2`, `HG_TAG_P3=v0.21.0`): `test_render.py` ran 163 tests OK at the base, 170 with 3 errors and 14 failures after Step 2, 170 OK after Step 3, 174 OK after Steps 4 and 6; the three `helm lint --strict` profiles and `helm lint charts/sentio-node --strict` passed; `render-inertness.sh` printed the eight `identical` lines; Step 6's checker passed (35 headings, one bash block in §0, 63 bash blocks under bash 5 and `/bin/bash` 3.2, 3 fish blocks under `fish --no-execute`, 33 mutating blocks each confirmed, no undefined helper, `shellcheck -S warning` clean with the §0 chain prepended); Step 8's rehearsal pushed the 13 commits of §32.5 in order (each with the suite OK and exactly the rendered objects §3–§5 name), refused a second push, reverted all 13 in §8's order with the suite OK after each and ended byte-identical to the PR, and the eight out-of-order sequences were refused (seven by the render tests, `S-b` first by `si_p3_edit`). On a local `clickhouse/clickhouse-server:26.3` (26.3.51.7) with `table_engines_require_grant` and `si_gateway`'s grants plus the replica grant, `system.grants` answered `{"user_name":"si_gateway","access_type":"SELECT","access_object":"","database":"hg_replica","table":null,"column":null,"is_partial_revoke":0,"grant_option":0}` (the row `si_grant_check` expects) and the probe's four rows answered `2`, then 497 for `INSERT(value) ON hg_replica.t_copy`, `ALTER DELETE` and `CREATE TABLE`, with `hg_replica.si_probe_denied` absent afterwards. Not run: anything against GitHub, a registry or the cluster, and runbook §2's parity block (it needs `HG_TAG_P3` and the private rewriter image; Task 43 ran the same tests).
+- **Current adversarial-review evidence (2026-10-17).** The protected-path-excluded fresh source chain has 185 passing baseline tests; the exact Step2 additions produce 192 tests with 14 failures and 3 errors; amended chart support and rollout tests produce 196 passing tests. Eight releases render byte-for-byte and object-for-object unchanged using audited direct Helm, with four strict lint profiles passing. Actual Helm output decodes with yaml.v3 KnownFields into the §31.3 shape. Source-only forward/inverse replay and final mutation/checker receipts belong to the review report; none replaces execution-time records. Bash fixtures exercise probe errors, strict grant/pod censuses, fill and REST validation, signed-workflow stop conditions, container ownership/cleanup, and user-terminal admission. No GPG, Docker, Helmfile, real endpoint, cluster or cloud action ran in this review. The complete isolated signed local rehearsal, actual grant runtime and parity image run remain explicit execution gates; historical drafting claims from a different baseline do not satisfy them.
 - **Contract notes.** §32.8 says the workflow paths "gain the new TSV"; `charts/storage-integrity/**` matches it already, so the paths gain the runbook, which `test_replica_read_rules_read_only_this_networks_series` reads. §32.2's grant goes into `_helpers.tpl`'s `storage-integrity.clickhouseUsers`, which `templates/clickhouse.yaml` includes (the middle part's file list names `clickhouse.yaml`). `StorageIntegrityReplicaLeaseStuck` groups by `cluster, network, release, member, pod` around §32.2's `pod`.
 
 - [ ] **Step 1: Worktree, ledger inputs and baseline**
 
-Requires: Plan S3-C3's last record PR merged into production `main` (P2 is over and `P2_END` is recorded); Tasks 44, 45 and 46's records past their R4 check; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19; if it is missing, write it with the Write tool from the end of that section, verbatim). The production fetch below reads a remote: this block needs explicit user confirmation in chat before it runs. The commands are written for the Bash tool's shell (zsh) as well as bash; the Bash tool keeps no variables between calls, so every later block starts with `W=<path>;` (this block's worktree path) where it needs it.
+Requires: Python3 with PyYAML available to the same interpreter (`python3 -I -c 'import yaml'`; stop until it succeeds), then Plan S3-C3's last record PR merged into production `main` (P2 is over and `P2_END` is recorded); Tasks 44, 45 and 46's records past their R4 check; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19; if it is missing, write it with the Write tool from the end of that section, verbatim). The production fetch below reads a remote: this block needs explicit user confirmation in chat before it runs. The commands are written for the Bash tool's shell (zsh) as well as bash. Because the tool retains no variables between calls, each later block restores `W` from the validated actual JSON path in `$HOME/.cache/s3-worktrees/s3c4-production.json`.
 
 ```bash
 P=/Users/uranuswch/Dev/projects/sentio-network/production
-git -C "$P" fetch -q origin
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" claude multi-source-s3c4)"
+L="$HOME/.cache/s3-worktrees"
+git -C "$P" fetch -q origin || exit 1
+mkdir -p "$L" && chmod 700 "$L" || exit 1
+[ ! -e "$L/s3c4-production.json" ] || { echo "saved URWT state exists: reconcile the prior attempt before an explicit resume; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3c4 urwt/codex/multi-source-s3c4 origin/main)" || exit 1
+(set -C; printf '%s\n' "$out" > "$L/s3c4-production.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+[ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["action"])' "$L/s3c4-production.json")" = created ] || { echo "URWT returned existing: preserve its actual path and reconcile before reuse; stop"; exit 1; }
+si_checked_read_143="$(git -C "$W" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_143}" = urwt/codex/multi-source-s3c4 ] || exit 1
+si_checked_read_145="$(git -C "$W" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_145" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_144="$(git -C "$P" rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_144" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_145}" = "${si_checked_read_144}" ] || exit 1
+si_checked_read_146="$(git -C "$W" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -z "${si_checked_read_146}" ] || exit 1
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_p="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_w" "$common_p" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 printf '%s\n' "$out"
-W="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { echo "the worktree is not new (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$W" status --porcelain | wc -l | tr -d ' '
-git -C "$W" branch --show-current
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] && echo "the branch starts at origin/main"
+echo "new clean code worktree starts at origin/main; worktree identity poetry <chen@sentio.xyz>, signing enabled"
 ```
 
-Expected: one JSON object with `"action":"created"` and the path `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c4`; `0`; `urwt/claude/multi-source-s3c4`; `the branch starts at origin/main`.
+Expected: the retained JSON with `action=created` and its actual absolute `path`, then the final gate line. The path can contain spaces or preserve an absolute symlink spelling; never reconstruct it from a template. Codex uses runtime `codex`; D34's fixed Claude ledger-copy ref and the six existing stack worktrees remain unchanged. A URWT approval-hook failure stops for the user; never add `--yes` or `--clobber`. Every later `W` is restored from this saved JSON. On signing cancellation, stop and ask the user to unlock the repository's actual key in their fish terminal; never disable signing.
 
-The ledger values (the housegate fetch reads a remote, so this block needs explicit user confirmation in chat as well). They go into `$HOME/.cache/s3c4-task47/ledger.env` exactly as `s3-ledger.py get` prints them, and every later block reads them from there (`set -a; . "$T/ledger.env"; set +a`), so no value is ever typed:
+The ledger values (the housegate fetch reads a remote, so this block needs explicit user confirmation in chat as well). They go into `$HOME/.cache/s3c4-task47/ledger.env` exactly as `s3-ledger.py get` prints them, and every later block reads them from there (`export_values="$(python3 -I "$T/fill.py" --shell "$T/ledger.env")" || exit 1; set -a; eval "$export_values"; set +a`), so no value is ever typed:
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T="$HOME/.cache/s3c4-task47"
-git -C "$h" fetch -q origin
-mkdir -p "$T" && chmod 700 "$T"
-python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P3 SN_DIGEST_P3 HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 INDEXER_C_ID ARBITER_PIN_P2 P2_END > "$T/ledger.env.new" && mv "$T/ledger.env.new" "$T/ledger.env"
+git -C "$h" fetch -q origin || exit 1
+mkdir -p "$T" && chmod 700 "$T" || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P3 SN_DIGEST_P3 HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 INDEXER_C_ID ARBITER_PIN_P2 P2_INTEGRATION_SOAK P2_END > "$T/ledger.env.new" && mv "$T/ledger.env.new" "$T/ledger.env" || exit 1
 cat "$T/ledger.env"
-python3 -I "$L/s3-ledger.py" empty "$h" P3_PR
+python3 -I "$L/s3-ledger.py" empty "$h" P3_PR || exit 1
 ```
 
-Expected: eight lines `SN_COMMIT_P3=<40 hex>`, `SN_DIGEST_P3=sha256:<64 hex>`, `HG_TAG_P3=v<x.y.z>`, `HG_DIGEST_P3=sha256:<64 hex>`, `CORE_TAG_P3=v<x.y.z>`, `INDEXER_C_ID=<id>`, `ARBITER_PIN_P2=<40 hex>`, `P2_END=<YYYY-MM-DD>`, then `s3-ledger: P3_PR not recorded yet in <ref>`. A `stop` means a value is not recorded on its ledger copy yet (its task's R4 did not pass), or `P3_PR` is recorded already: stop and ask; never type a value in.
+Expected: nine lines `SN_COMMIT_P3=<40 hex>`, `SN_DIGEST_P3=sha256:<64 hex>`, `HG_TAG_P3=v<x.y.z>`, `HG_DIGEST_P3=sha256:<64 hex>`, `CORE_TAG_P3=v<x.y.z>`, `INDEXER_C_ID=<id>`, `ARBITER_PIN_P2=<40 hex>`, `P2_INTEGRATION_SOAK=<integer at least 500>`, `P2_END=<YYYY-MM-DD>`, then `s3-ledger: P3_PR not recorded yet in <ref>`. A `stop` means a value is not recorded on its ledger copy yet (its task's R4 did not pass), or `P3_PR` is recorded already: stop and ask; never type a value in.
 
 Write the fill tool `$HOME/.cache/s3c4-task47/fill.py` with the Write tool (local, never committed):
 
 ```python
-"""Fill the PR-time values of Plan S3-C4 Task 47 into files, only from the
-ledger values that s3-ledger.py get wrote. A local tool, never committed.
-
-usage: fill.py <ledger.env> <file>...
-
-Every <NAME> token whose NAME is a line NAME=value of ledger.env is replaced
-by the value; a file that still holds one of the eight PR-time tokens
-afterwards is not written, and the tool stops.
-"""
-import re
-import sys
+"""Validate all nine exact ledger inputs before using them as data or shell literals."""
+import datetime,re,sys
 from pathlib import Path
+TOKENS=("SN_COMMIT_P3","SN_DIGEST_P3","HG_TAG_P3","HG_DIGEST_P3","CORE_TAG_P3","INDEXER_C_ID","ARBITER_PIN_P2","P2_INTEGRATION_SOAK","P2_END")
+args=sys.argv[1:];shell=bool(args and args[0]=="--shell")
+if shell:args=args[1:]
+if not args:sys.exit("usage: fill.py [--shell] <ledger.env> [file...]")
+env={}
+for line in Path(args[0]).read_text().splitlines():
+ name,sep,value=line.partition("=")
+ if not sep or name not in TOKENS or name in env or re.fullmatch(r"[A-Za-z0-9:.-]+",value)is None:sys.exit("fill: malformed, duplicated or unexpected ledger input; stop")
+ env[name]=value
+if set(env)!=set(TOKENS):sys.exit("fill: ledger input must contain all nine names exactly once; stop")
+for key in ("SN_COMMIT_P3","ARBITER_PIN_P2"):
+ if re.fullmatch(r"[0-9a-f]{40}",env[key])is None:sys.exit("fill: invalid commit pin; stop")
+for key in ("SN_DIGEST_P3","HG_DIGEST_P3"):
+ if re.fullmatch(r"sha256:[0-9a-f]{64}",env[key])is None:sys.exit("fill: invalid image digest; stop")
+for key in ("HG_TAG_P3","CORE_TAG_P3"):
+ if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+",env[key])is None:sys.exit("fill: invalid release tag; stop")
+for key,minimum,maximum in (("INDEXER_C_ID",2,2**64-1),("P2_INTEGRATION_SOAK",500,2**64-1)):
+ if re.fullmatch(r"[1-9][0-9]*",env[key])is None or not minimum<=int(env[key])<=maximum:sys.exit("fill: invalid indexer or integration-soak count; stop")
+if datetime.date.fromisoformat(env["P2_END"]).isoformat()!=env["P2_END"]:sys.exit("fill: invalid P2_END date; stop")
+if shell:
+ if len(args)!=1:sys.exit("fill: --shell takes only the ledger file")
+ # The whitelist above excludes shell syntax; names and values are safe literals.
+ print("\n".join(key+"="+env[key]for key in TOKENS))
+else:
+ outputs=[]
+ for name in args[1:]:
+  path=Path(name);text=path.read_text()
+  for key,value in env.items():text=text.replace("<"+key+">",value)
+  if any("<"+key+">"in text for key in TOKENS):sys.exit("fill: unresolved ledger token; no file written; stop")
+  outputs.append((path,text))
+ for path,text in outputs:path.write_text(text);print("filled "+str(path))
+```
 
-TOKENS = ("SN_COMMIT_P3", "SN_DIGEST_P3", "HG_TAG_P3", "HG_DIGEST_P3", "CORE_TAG_P3", "INDEXER_C_ID", "ARBITER_PIN_P2", "P2_END")
-env = {}
-for line in Path(sys.argv[1]).read_text().splitlines():
-    name, sep, value = line.partition("=")
-    if not sep or name not in TOKENS or not re.fullmatch(r"[A-Za-z0-9:.-]+", value):
-        sys.exit(f"fill: unexpected line {line!r} in {sys.argv[1]}; stop")
-    env[name] = value
-for name in sys.argv[2:]:
-    path = Path(name)
-    text = path.read_text()
-    for key, value in env.items():
-        text = text.replace(f"<{key}>", value)
-    left = sorted({token for token in TOKENS if f"<{token}>" in text})
-    if left:
-        sys.exit(f"fill: {name} would still hold {', '.join('<' + t + '>' for t in left)}; nothing written; stop")
-    path.write_text(text)
-    print(f"filled {name}")
+Write the local, never committed `$HOME/.cache/s3c4-task47/local_render.py` below. It replaces the Helmfile-based inertness wrapper for this task's local checks: exact ordered values, inline selectors, set-file, release and namespace are retained; unsupported grammar stops. Both credential-bearing ClickHouse YAML files are excluded before archive access; no source symlink is followed. Deployment-only options are not executed. This checks local Helm output, never a live apply or sync.
+
+```python
+#!/usr/bin/env python3
+"""Local direct-Helm rendering only; deployment context/order options are not used."""
+import argparse,hashlib,json,os,re,subprocess,tempfile
+from pathlib import Path
+import yaml
+class UniqueLoader(yaml.SafeLoader):
+    pass
+def unique_mapping(loader,node,deep=False):
+    result={}
+    for key_node,value_node in node.value:
+        key=loader.construct_object(key_node,deep=deep)
+        if key in result:raise ValueError('duplicate YAML key')
+        result[key]=loader.construct_object(value_node,deep=deep)
+    return result
+UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,unique_mapping)
+FORBIDDEN={'k8s-sea/clickhouse/clickhouse.yaml','k8s-sea/clickhouse/clickhouse-extra.yaml'}
+def require(ok):
+    if not ok: raise ValueError('unsupported or unsafe local render input; details withheld')
+def plain(x):
+    if isinstance(x,str):require('{{' not in x and '}}' not in x and '\x00' not in x)
+    elif isinstance(x,dict):
+        for k,v in x.items():plain(k);plain(v)
+    elif isinstance(x,list):
+        for v in x:plain(v)
+    else:require(x is None or isinstance(x,(int,float,bool)))
+def checked(root,parent,value,folder=False):
+    require(isinstance(value,str) and not Path(value).is_absolute());plain(value)
+    p=(parent/value).resolve(); require(p.is_relative_to(root));require(str(p.relative_to(root)) not in FORBIDDEN)
+    require(p.is_dir() if folder else p.is_file());return p
+def load(root,file,name):
+    root=Path(root).resolve();path=checked(root,root,file)
+    raw=path.read_text();plain(raw);doc=yaml.load(raw,Loader=UniqueLoader)
+    require(isinstance(doc,dict) and not set(doc)-{'helmDefaults','releases'})
+    defaults=doc.get('helmDefaults',{});require(isinstance(defaults,dict) and not set(defaults)-{'kubeContext','createNamespace'})
+    require(defaults.get('kubeContext','sentio-sea')=='sentio-sea' and defaults.get('createNamespace',False) is False)
+    require(isinstance(doc.get('releases'),list));rows=[r for r in doc['releases'] if isinstance(r,dict) and r.get('name')==name]
+    if not rows:return None
+    require(len(rows)==1);row=rows[0];require(not set(row)-{'name','namespace','chart','needs','set','values','wait','timeout'})
+    require(re.fullmatch('[a-z0-9][a-z0-9-]*',name) is not None);require(isinstance(row.get('namespace'),str));plain(row)
+    require(isinstance(row.get('needs',[]),list) and all(isinstance(s,str) for s in row.get('needs',[])))
+    require(isinstance(row.get('wait',False),bool));require(type(row.get('timeout',1)) is int)
+    chart=checked(root,path.parent,row['chart'],True)
+    require(str(chart.relative_to(root)) in {'charts/storage-integrity','charts/sentio-node'})
+    require(isinstance(row.get('values',[]),list) and isinstance(row.get('set',[]),list))
+    vals=[]
+    for v in row.get('values',[]):
+        if isinstance(v,str):vals.append(('file',checked(root,path.parent,v)))
+        else:
+            require(isinstance(v,dict) and set(v)=={'nodeSelector'} and isinstance(v['nodeSelector'],dict))
+            require(all(isinstance(k,str) and isinstance(s,str) for k,s in v['nodeSelector'].items())); vals.append(('inline',v))
+    sets=[]
+    for v in row.get('set',[]):
+        require(isinstance(v,dict) and set(v)=={'name','file'} and v['name']=='service.chainsConfig')
+        sets.append((v['name'],checked(root,path.parent,v['file'])))
+    require(len(sets)<=1)
+    return root,path,row,chart,vals,sets
+
+def render(tree,file,release,output):
+    data=load(tree,file,release)
+    if data is None:raise LookupError('selected release absent')
+    root,path,row,chart,vals,sets=data
+    out=Path(output);out.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='direct-helm-inline-') as td:
+        args=['helm','template',release,str(chart),'--namespace',row['namespace']]
+        for i,(kind,value) in enumerate(vals):
+            if kind=='inline':
+                value_path=Path(td)/f'inline-{i}.yaml';value_path.write_text(yaml.safe_dump(value));value_path.chmod(0o600)
+            else:value_path=value
+            args+=['-f',str(value_path)]
+        for name,p in sets:args+=['--set-file',name+'='+str(p)]
+        run=subprocess.run(args,cwd=path.parent,capture_output=True,timeout=120)
+        require(run.returncode==0 and bool(run.stdout.strip()))
+        objects=list(yaml.safe_load_all(run.stdout));require(objects and all(isinstance(x,dict) and x.get('apiVersion') and x.get('kind') and isinstance(x.get('metadata'),dict) and x['metadata'].get('name') for x in objects))
+        keys=[(x['apiVersion'],x['kind'],x['metadata'].get('namespace',''),x['metadata']['name']) for x in objects];require(len(keys)==len(set(keys)))
+        out.write_bytes(run.stdout);out.chmod(0o600)
+        meta={'release':release,'namespace':row['namespace'],'helmfile':file,'chart':str(chart.relative_to(root)),'ordered_values':[str(v.relative_to(root)) if k=='file' else {'inline_keys':sorted(v)} for k,v in vals], 'set_file_names':[k for k,v in sets], 'ignored_operational_fields':sorted(set(row)&{'needs','wait','timeout'}),'ignored_defaults':sorted(load_defaults(path)), 'sha256':hashlib.sha256(run.stdout).hexdigest(),'objects':len(keys),'object_keys_sha256':hashlib.sha256(json.dumps(sorted(keys)).encode()).hexdigest()}
+        out.with_suffix(out.suffix+'.meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+        return meta
+
+def load_defaults(path):return yaml.load(path.read_text(),Loader=UniqueLoader).get('helmDefaults',{})
+
+def compare(base_tree,head_tree,entries,new_releases,output_dir):
+    """Compare exact bytes and resource identities; permit only genuinely new named releases."""
+    names=[n for f,n in entries];require(len(names)==len(set(names)))
+    require(len(new_releases)==len(set(new_releases)) and set(new_releases)<=set(names))
+    results=[]
+    for file,name in entries:
+        require(load(head_tree,file,name)is not None)
+        head=render(head_tree,file,name,Path(output_dir)/('head-'+name+'.yaml'))
+        absent=load(base_tree,file,name)is None
+        if absent:
+            require(name in new_releases);results.append({'release':name,'status':'new','head':head});continue
+        require(name not in new_releases)
+        base=render(base_tree,file,name,Path(output_dir)/('base-'+name+'.yaml'))
+        require(base['sha256']==head['sha256'] and base['object_keys_sha256']==head['object_keys_sha256'])
+        results.append({'release':name,'status':'identical','base':base,'head':head})
+    return results
+
+ENTRIES=[
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","storage-integrity-si-v2"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-a"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-b"),
+ ("k8s-sea/sentio-network-devnet2/helmfile.yaml","sentio-node-devnet2-observer"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-a"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-b"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-observer"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-c"),
+]
+def export_base(tree,ref,destination):
+    import tarfile
+    tree=Path(tree).resolve()
+    # Ref and filename metadata are validated before archive reads any content.
+    require(isinstance(ref,str) and bool(ref) and not ref.startswith("-") and "\x00" not in ref)
+    sha=subprocess.check_output(["git","-C",str(tree),"rev-parse","--verify",ref+"^{commit}"],text=True).strip()
+    require(re.fullmatch("[0-9a-f]{40}",sha)is not None)
+    names=subprocess.check_output(["git","-C",str(tree),"ls-tree","-rz","--name-only",sha],text=True).split("\x00")
+    # The two credential-bearing files are excluded at the archive argument layer.
+    args=["git","-C",str(tree),"archive",sha,"--",".",*[(":(exclude)"+n) for n in sorted(FORBIDDEN)]]
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    try:
+        with tarfile.open(fileobj=process.stdout,mode="r|") as archive:
+            for member in archive:
+                require(member.name not in FORBIDDEN)
+                p=(Path(destination)/member.name).resolve();require(p.is_relative_to(Path(destination).resolve()))
+                # Deployment inputs must be regular files; never follow source symlinks.
+                if member.isdir() or member.isfile():archive.extract(member,destination)
+                else:require(member.issym())
+        require(process.wait(timeout=30)==0)
+    except Exception:
+        process.kill();process.wait();raise
+    require(all(not(Path(destination)/n).exists() for n in FORBIDDEN))
+    return sha
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument("action",choices=["compare","diff"])
+    parser.add_argument("--tree",required=True);parser.add_argument("--base-ref",required=True);parser.add_argument("--release")
+    args=parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="si-p3-direct-render-") as td:
+        base=Path(td)/"base";base.mkdir();export_base(args.tree,args.base_ref,base)
+        out=Path(td)/"renders"
+        if args.action=="compare":
+            require(args.release is None)
+            results=compare(base,args.tree,ENTRIES,[],out)
+            for result in results:print(result["release"]+" identical")
+        else:
+            entries=[(file,name)for file,name in ENTRIES if name==args.release];require(len(entries)==1)
+            file,name=entries[0];a=out/"base.yaml";b=out/"head.yaml"
+            render(base,file,name,a);render(args.tree,file,name,b)
+            def objects(p):
+                return {(x["kind"],x["metadata"]["name"]):x for x in yaml.safe_load_all(p.read_text())}
+            before,after=objects(a),objects(b)
+            for key in sorted(set(before)|set(after)):
+                if before.get(key)!=after.get(key):print("changed "+"/".join(key))
+if __name__=="__main__":
+    try:main()
+    except Exception:raise SystemExit("direct-render: unsupported grammar, missing input or local render failure; details withheld; stop")
 ```
 
 Then, local only:
 
 ```bash
-T="$HOME/.cache/s3c4-task47"; set -a; . "$T/ledger.env"; set +a
+T="$HOME/.cache/s3c4-task47"; export_values="$(python3 -I "$T/fill.py" --shell "$T/ledger.env")" || exit 1; set -a; eval "$export_values"; set +a
 printf '%s %s\n' "$SN_COMMIT_P3" "$ARBITER_PIN_P2" | grep -Eqx '[0-9a-f]{40} [0-9a-f]{40}' && printf '%s %s\n' "$SN_DIGEST_P3" "$HG_DIGEST_P3" | grep -Eqx 'sha256:[0-9a-f]{64} sha256:[0-9a-f]{64}' \
   && printf '%s %s\n' "$HG_TAG_P3" "$CORE_TAG_P3" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+ v[0-9]+\.[0-9]+\.[0-9]+' && printf '%s\n' "$INDEXER_C_ID" | grep -Eqx '[1-9][0-9]*' && [ "$INDEXER_C_ID" -ge 2 ] \
-  && printf '%s\n' "$P2_END" | grep -Eqx '20[0-9]{2}-[01][0-9]-[0-3][0-9]' && echo "ledger values well-formed"
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+  && printf '%s\n' "$P2_END" | grep -Eqx '20[0-9]{2}-[01][0-9]-[0-3][0-9]' && [[ "$P2_INTEGRATION_SOAK" =~ ^[0-9]+$ ]] && [ "$P2_INTEGRATION_SOAK" -ge 500 ] && echo "ledger values well-formed" || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 python3 -I -B - <<'PY'
 import sys
 sys.path.insert(0, "charts/storage-integrity/tests")
@@ -21424,11 +23666,11 @@ Expected: `ledger values well-formed`; `Ran <N0> tests` and `OK` (write down `N0
 The registry and sentio-node reads (remote reads: explicit user confirmation in chat first):
 
 ```bash
-T="$HOME/.cache/s3c4-task47"; set -a; . "$T/ledger.env"; set +a
+T="$HOME/.cache/s3c4-task47"; export_values="$(python3 -I "$T/fill.py" --shell "$T/ledger.env")" || exit 1; set -a; eval "$export_values"; set +a
 [ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3" --format '{{json .Manifest}}' | jq -r .digest)" = "$SN_DIGEST_P3" ] && echo "SN_DIGEST_P3 resolves"
 [ "$(docker buildx imagetools inspect "ghcr.io/housegate/housegate:$HG_TAG_P3" --format '{{json .Manifest}}' | jq -r .digest)" = "$HG_DIGEST_P3" ] && echo "HG_DIGEST_P3 resolves"
 s=/Users/uranuswch/Dev/projects/sentio-network/sentio-node
-git -C "$s" fetch -q origin
+git -C "$s" fetch -q origin || exit 1
 git -C "$s" show "$SN_COMMIT_P3:go.mod" | grep -cE "^(require )?[[:space:]]*github.com/(housegate/housegate $HG_TAG_P3|sentioxyz/arbiter-core $CORE_TAG_P3)( //.*)?$"
 ```
 
@@ -21637,11 +23879,11 @@ The reviewed alert names include the new group, rendered with its flag. In `char
                 self.assertEqual(replica, {**users, "si_gateway/grants/query": users["si_gateway/grants/query"] + [SI_GATEWAY_REPLICA_GRANT]})
 ```
 
-`ClickHouseAccessTest.test_grant_probe_covers_every_protocol_grant`: it also reads the replica probe file. In `charts/storage-integrity/tests/test_render.py`, insert right after these lines (`:3455`):
+`ClickHouseAccessTest.test_grant_probe_covers_every_protocol_grant`: it also reads the replica probe file. In `charts/storage-integrity/tests/test_render.py`, insert after the final P1 remote-write refusals (preserving the seam Plan S3-D Task53 extends):
 
 ```python
-        self.assertTrue(refused("si_reader", lambda atom: atom[:2] == ("SELECT", "system.parts")
-                                and atom[2] is not None and not atom[2] <= reader_columns))
+        for role in ("si_backup", "si_restore"):
+            self.assertTrue(refused(role, lambda atom: atom[:2] == ("WRITE", "REMOTE")), role)
 ```
 
 this block:
@@ -21870,10 +24112,11 @@ class ReplicaReadsTest(unittest.TestCase):
             "housegate": {"storageIntegrity": {"enabled": False}},
             "housegateSidecar": {"storageIntegrity": {"enabled": False}},
             "siMember": {"enabled": False},
+            "siBackup": {"enabled": False},
         }
         self.assert_host_rejected("storageIntegrity.replicaReads requires storageIntegrity.enabled", off, self.HOST)
         url = "storageIntegrity.replicaReads.memberStatusURL must be http://<host>:<port>"
-        for bad in ("https://member:9096", "http://member", "http://member:9096/v1", "member:9096", "http://Member_A:9096", "http://member:0", 9096):
+        for bad in ("https://member:9096", "http://member", "http://member:9096/v1", "member:9096", "http://Member_A:9096", "http://member:0", "http://member:65536", "http://member:99999", 9096):
             with self.subTest(url=bad):
                 self.assert_host_rejected(url, self.HOST, {"storageIntegrity": {"replicaReads": {"memberStatusURL": bad}}})
         self.assert_host_rejected(url, {"storageIntegrity": {"replicaReads": {"memberStatusTokenSecret": {"name": self.TOKEN_SECRET}}}})
@@ -21886,6 +24129,9 @@ class ReplicaReadsTest(unittest.TestCase):
             {"storageIntegrity": {"replicaReads": {"memberStatusURL": self.URL, "memberStatusTokenSecret": {"name": self.PASSWORD_SECRET}}}},
         )
         self.assert_host_rejected("siMember.serve.enabled requires siMember.serve.endpoint", {"siMember": {"serve": {"enabled": True}}})
+        for bad in (False, True, 1, "invalid", ["endpoint"]):
+            with self.subTest(serve_shape=bad):
+                self.assert_host_rejected("siMember.serve must be a map", {"siMember": {"serve": bad}})
         # Refused whether or not the member is enabled.
         self.assert_host_rejected("siMember.serve.enabled requires siMember.serve.endpoint", {"siMember": {"enabled": False, "serve": {"enabled": True}}})
         self.assert_host_rejected(
@@ -21897,7 +24143,7 @@ class ReplicaReadsTest(unittest.TestCase):
             {"siMember": {"config": {"serve": {"enabled": True}}}},
         )
         owners = "siMember.serve.ownerHouseGate keys must be indexer ids and values host:port"
-        for bad in ({"a": "member:33001"}, {"01": "member:33001"}, {"1": "member"}, {"1": "http://member:33001"}, {"1": "member:33001:1"}, {"1": 33001}):
+        for bad in ({"a": "member:33001"}, {"01": "member:33001"}, {"1": "member"}, {"1": "http://member:33001"}, {"1": "member:33001:1"}, {"1": 33001}, {"1": "member:65536"}, {"18446744073709551616": "member:33001"}, {"99999999999999999999": "member:33001"}, False):
             with self.subTest(owners=bad):
                 self.assert_host_rejected(owners, {"siMember": {"serve": {"endpoint": True, "ownerHouseGate": bad}}})
         durations = "siMember.serve.ownerUnreachableAfter must be at least 15s and siMember.serve.leaseTTL at least 10s, each written <n>s or <n>m"
@@ -22006,13 +24252,14 @@ class ReplicaReadsTest(unittest.TestCase):
 Create `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv` (tab-separated; written by this block, so no tab is lost in copying):
 
 ```bash
-W=<path>; cd "$W" && python3 -I - charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv <<'PY'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && python3 -I - charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv <<'PY'
 import sys
 # Comment lines as strings, rows as (role, expect, statement), joined by tabs.
 rows = [
     "# The replica grant probe of stage 3 P3 (housegate spec 2026-10-14 §11; Plan S3-C4 K48, contract §32.3): si_gateway's one grant on the members' copies, GRANT SELECT ON hg_replica.*.",
     '# docs/storage-integrity-devnet2-stage3-p3-replica-reads.md §3 (si_replica_grant_probe) runs every row in file order as its role over loopback on the source ClickHouse of each member-hosting installation, after replacing {copy} with the first hg_replica table of system.tables there.',
-    '# expect ok: the statement is not refused with code 497; denied: it is refused with code 497. The denied rows write nothing while the grant is SELECT only.',
+    '# expect ok: the statement exits successfully; denied: it is refused with code 497. The denied rows write nothing while the grant is SELECT only.',
     ('role', 'expect', 'statement'),
     ('si_gateway', 'ok', 'SELECT count() FROM hg_replica.{copy}'),
     ('si_gateway', 'denied', 'INSERT INTO hg_replica.{copy} SELECT * FROM hg_replica.{copy} LIMIT 0'),
@@ -22030,7 +24277,8 @@ Expected: no output (the file did not exist; `open(..., "x")` refuses to overwri
 Fill the ledger values (local):
 
 ```bash
-W=<path>; T="$HOME/.cache/s3c4-task47"; cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" charts/storage-integrity/tests/test_render.py
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ T="$HOME/.cache/s3c4-task47"; cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" charts/storage-integrity/tests/test_render.py
 grep -c '<[A-Z][A-Z0-9_]*_P3>\|<INDEXER_C_ID>' charts/storage-integrity/tests/test_render.py || true
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | sed 's/ (__main__\.[^)]*)//' | sort | uniq -c
 ```
@@ -22125,7 +24373,7 @@ token Secret without a URL is refused too: nothing would read it. */ -}}
 {{- if not .Values.storageIntegrity.enabled -}}
 {{- fail "storageIntegrity.replicaReads requires storageIntegrity.enabled" -}}
 {{- end -}}
-{{- if not (regexMatch "^http://[a-z0-9]([-a-z0-9.]*[a-z0-9])?:[1-9][0-9]{0,4}$" $memberStatusURL) -}}
+{{- if or (not (regexMatch "^http://[a-z0-9]([-a-z0-9.]*[a-z0-9])?:[1-9][0-9]{0,4}$" $memberStatusURL)) (gt (atoi (regexFind "[0-9]+$" $memberStatusURL)) 65535) -}}
 {{- fail "storageIntegrity.replicaReads.memberStatusURL must be http://<host>:<port>" -}}
 {{- end -}}
 {{- if empty $memberStatusToken.name -}}
@@ -22223,6 +24471,9 @@ this block:
 ```yaml
 {{- /* The serving endpoint (stage 3 P3): its values are refused whether or not
 the member is enabled, so a bad value never waits for the member to start. */ -}}
+{{- if and (hasKey $member "serve") (not (kindIs "invalid" $member.serve)) (not (kindIs "map" $member.serve)) -}}
+{{- fail "siMember.serve must be a map of endpoint, enabled, ownerUnreachableAfter, leaseTTL and ownerHouseGate" -}}
+{{- end -}}
 {{- $serve := $member.serve | default dict -}}
 {{- if not (kindIs "map" $serve) -}}
 {{- fail "siMember.serve must be a map of endpoint, enabled, ownerUnreachableAfter, leaseTTL and ownerHouseGate" -}}
@@ -22238,11 +24489,13 @@ the member is enabled, so a bad value never waits for the member to start. */ -}
 {{- if and (kindIs "map" $member.config) (hasKey $member.config "serve") -}}
 {{- fail "siMember.config may not set serve: it comes from siMember.serve values" -}}
 {{- end -}}
-{{- if not (kindIs "map" ($serve.ownerHouseGate | default dict)) -}}
+{{- if and (hasKey $serve "ownerHouseGate") (not (kindIs "invalid" $serve.ownerHouseGate)) (not (kindIs "map" $serve.ownerHouseGate)) -}}
 {{- fail "siMember.serve.ownerHouseGate keys must be indexer ids and values host:port" -}}
 {{- end -}}
 {{- range $id, $address := $serve.ownerHouseGate | default dict -}}
-{{- if not (and (regexMatch "^(0|[1-9][0-9]{0,19})$" (toString $id)) (kindIs "string" $address) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?:[1-9][0-9]{0,4}$" (toString $address))) -}}
+{{- $idText := toString $id -}}
+{{- $addressText := toString $address -}}
+{{- if not (and (regexMatch "^(0|[1-9][0-9]{0,19})$" $idText) (or (lt (len $idText) 20) (le $idText "18446744073709551615")) (kindIs "string" $address) (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?:[1-9][0-9]{0,4}$" $addressText) (le (atoi (regexFind "[0-9]+$" $addressText)) 65535)) -}}
 {{- fail "siMember.serve.ownerHouseGate keys must be indexer ids and values host:port" -}}
 {{- end -}}
 {{- end -}}
@@ -22303,13 +24556,13 @@ The monitoring values, after `monitoring.members`. In `charts/storage-integrity/
 `values.schema.json`: In `charts/storage-integrity/values.schema.json`, replace (`:105`):
 
 ```json
-          "required": ["users", "lockDefault", "passwordSha256", "bootstrapPasswordSecret", "engineGrants", "member"],
+          "required": ["users", "lockDefault", "backupUser", "passwordSha256", "bootstrapPasswordSecret", "engineGrants", "member"],
 ```
 
 with:
 
 ```json
-          "required": ["users", "lockDefault", "passwordSha256", "bootstrapPasswordSecret", "engineGrants", "member", "replicaReads"],
+          "required": ["users", "lockDefault", "backupUser", "passwordSha256", "bootstrapPasswordSecret", "engineGrants", "member", "replicaReads"],
 ```
 
 In `charts/storage-integrity/values.schema.json`, replace (`:134`):
@@ -22443,12 +24696,13 @@ this block:
 Run (local):
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict 2>&1 | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict 2>&1 | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict 2>&1 | tail -1
 helm lint charts/sentio-node --strict 2>&1 | tail -1
-bash scripts/storage-integrity/render-inertness.sh origin/main
+python3 -I "$HOME/.cache/s3c4-task47/local_render.py" compare --tree "$W" --base-ref origin/main
 ```
 
 Expected: `Ran <N0+7> tests` and `OK`; four times `1 chart(s) linted, 0 chart(s) failed`; `storage-integrity-si-v2 identical`, `sentio-node-devnet2-indexer-a identical`, `sentio-node-devnet2-indexer-b identical`, `sentio-node-devnet2-observer identical`, `sentio-node-testnet-v2-indexer-a identical`, `sentio-node-testnet-v2-indexer-b identical`, `sentio-node-observer identical` and `sentio-node-devnet2-indexer-c identical`. A release that renders differently: the change is not inert; stop and find the hunk.
@@ -23064,17 +25318,19 @@ The three `ActualFreshNetworkTest` tests, at the end of the class. In `charts/st
 Run (local):
 
 ```bash
-W=<path>; cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 python3 -B charts/storage-integrity/tests/test_render.py ReplicaReadsTest ActualFreshNetworkTest.test_devnet2_replica_reads_follow_the_rollout ActualFreshNetworkTest.test_every_si_host_runs_one_reviewed_agent_sidecar ActualFreshNetworkTest.test_devnet2_member_owner_housegate_names_every_other_si_host 2>&1 | tail -3
-bash scripts/storage-integrity/render-inertness.sh origin/main | grep -vc ' identical$' || true
+python3 -I "$HOME/.cache/s3c4-task47/local_render.py" compare --tree "$W" --base-ref origin/main | grep -vc ' identical$' || true
 grep -c 'DEVNET2_SIDECAR_VERSION' charts/storage-integrity/tests/test_render.py || true
 ```
 
 Expected: `Ran <N0+11> tests` and `OK`; `Ran 11 tests` and `OK`; `0`; `0` (a later plan's test that still names `DEVNET2_SIDECAR_VERSION` reads `DEVNET2_AGENT_SIDECAR_IMAGES[<its release>]` instead, as the indexer-a test above does). The bite check, on a scratch copy of the worktree (local only): each mirror moved without its file, as a commit that forgets one of them would leave it.
 
 ```bash
-W=<path>; d="$(mktemp -d)"
-rsync -a --exclude .git "$W/" "$d/tree/" && git -C "$d/tree" init -q && git -C "$d/tree" add -A && git -C "$d/tree" -c user.email=t@t -c user.name=t commit -qm base
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ d="$(mktemp -d)"
+rsync -a --exclude .git --exclude /k8s-sea/clickhouse/clickhouse.yaml --exclude /k8s-sea/clickhouse/clickhouse-extra.yaml "$W/" "$d/tree/" && git -C "$d/tree" init -q && git -C "$d/tree" add -A && git -C "$d/tree" -c user.email=t@t -c user.name=t commit -qm base
 cd "$d/tree" && python3 -I - <<'PY'
 import re
 import subprocess
@@ -23103,6 +25359,7 @@ for name, change in cases:
     assert text != base, name
     path.write_text(text)
     run = subprocess.run([sys.executable, "-B", str(path), "ActualFreshNetworkTest.test_devnet2_replica_reads_follow_the_rollout"], capture_output=True, text=True)
+    assert run.returncode == 1 and re.search(r"^FAILED \(failures=1\)$", run.stderr, re.M), (name, run.returncode, run.stderr[-200:])
     print(f"{name} moved alone: {run.stderr.strip().splitlines()[-1]}")
 path.write_text(base)
 PY
@@ -23114,18 +25371,30 @@ Expected: `DEVNET2_REPLICA_READS moved alone: FAILED (failures=1)`, and the same
 - [ ] **Step 5: Commit the chart support**
 
 ```bash
-W=<path>; cd "$W" && git status --short
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && git status --short
 git add charts/sentio-node/values.yaml charts/sentio-node/templates/node.yaml charts/sentio-node/templates/si-member.yaml \
   charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/_helpers.tpl \
   charts/storage-integrity/templates/validate.yaml charts/storage-integrity/templates/monitoring.yaml \
-  charts/storage-integrity/tests/test_render.py charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv
-git commit -q -F - <<'EOF'
+  charts/storage-integrity/tests/test_render.py charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv || exit 1
+before_head="$(git rev-parse HEAD)" || exit 1
+if ! git commit -S -q -F - <<'EOF'
 feat(storage-integrity): stage-3 P3 replica reads, member serving, si_gateway replica grant and replica-read monitoring (off by default)
 
 charts/sentio-node: storageIntegrity.replicaReads (the host's member_status_url, and the member status token from its own Secret on the sentio-node container only, decision D29) and siMember.serve (the si-member's serving endpoint on its status port, serving, owner probe and lease), both commented; charts/storage-integrity: clickhouse.access.replicaReads (GRANT SELECT ON hg_replica.* as si_gateway's last grant) and the replica-reads rule group; their guards; the replica grant probe; render tests, the devnet2 rollout guards of Plan S3-C4 K47 and the earlier plans' tests kept green through it. Every release renders unchanged.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
+then
+  echo "commit/signature failed: preserve staged work, unlock the actual signing key and retry; stop" >&2
+  exit 1
+fi
+si_checked_read_147="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_147" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_147}" != "$before_head" ] || exit 1
+si_checked_read_148="$(git log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_148}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
 git show --stat --oneline HEAD | cat
 ```
 
@@ -23133,7 +25402,7 @@ Expected: ` M` for the nine files and `??` for the TSV before the commit, nothin
 
 - [ ] **Step 6: The P3 runbook, the pointers and the workflow paths**
 
-This step changes documentation and CI paths only, so its gate is the runbook checker below and the suite (whose `test_replica_read_rules_read_only_this_networks_series` now reads the runbook's headings). The runbook is written with its eight PR-time values in angle brackets (`<SN_COMMIT_P3>`, `<SN_DIGEST_P3>`, `<HG_TAG_P3>`, `<HG_DIGEST_P3>`, `<CORE_TAG_P3>`, `<INDEXER_C_ID>`, `<ARBITER_PIN_P2>`, `<P2_END>`), which the fill below replaces from `ledger.env`; its runtime placeholders stay. Its §0 holds every helper in one bash block (D20), the editor `si_p3_edit` included as a Python heredoc.
+This step changes documentation and CI paths only, so its gate is the runbook checker below and the suite (whose `test_replica_read_rules_read_only_this_networks_series` now reads the runbook's headings). The runbook is written with its nine PR-time values in angle brackets (`<SN_COMMIT_P3>`, `<SN_DIGEST_P3>`, `<HG_TAG_P3>`, `<HG_DIGEST_P3>`, `<CORE_TAG_P3>`, `<INDEXER_C_ID>`, `<ARBITER_PIN_P2>`, `<P2_INTEGRATION_SOAK>`, `<P2_END>`), which the fill below replaces from `ledger.env`; its runtime placeholders stay. Its §0 holds every helper in one bash block (D20), the editor `si_p3_edit` included as a Python heredoc.
 
 Create `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md` with:
 
@@ -23177,6 +25446,7 @@ Define the helpers of §0 of [storage-integrity-devnet2-dynamic-table-set.md](st
 ```bash
 si_backup="$HOME/si-devnet2-stage3-p3"
 si_p3_pin() { sed -n "s/^$1=//p" "$si_backup/pins"; } # $1 a name of §1.1's pins file: its value
+si_p3_deps() { awk '$1 == "github.com/housegate/housegate" || $1 == "github.com/sentioxyz/arbiter-core" {print $1, $2}' | sort | tr '\n' ' '; }
 si_p3_image() { printf 'ghcr.io/sentioxyz/sentio-node:sha-%s@%s\n' "$(si_p3_pin SN_COMMIT_P3)" "$(si_p3_pin SN_DIGEST_P3)"; } # the P3 host and member image
 si_p3_sidecar() { printf 'ghcr.io/housegate/housegate:%s@%s\n' "$(si_p3_pin HG_TAG_P3)" "$(si_p3_pin HG_DIGEST_P3)"; } # the P3 agent sidecar
 si_c_id() { si_p3_pin INDEXER_C_ID; } # indexer-c's SI indexer id
@@ -23224,12 +25494,51 @@ si_wait_not_serving() { # $1 a|b|c, $2 database, $3 reason: polls for up to 300 
   return 1
 }
 si_failovers() { grep -F 'agent: replica failover' "$si_backup/agent.log" || true; } # the local agent's replica failover lines
+si_p3_user_terminal() { # user-only D40 blocks call this before their own tee pipeline, before naming or reading a signing key
+  [ -t 0 ] && [ -t 1 ] && [ -t 2 ] || { echo "D40: run this block yourself in your own terminal; non-terminal execution or an outer pipe is refused" >&2; return 1; }
+  (exec 9<> /dev/tty && [ -t 9 ]) || { echo "D40: no controlling user terminal; stop" >&2; return 1; }
+}
 si_local_agent_version() { # the user's local agent: prints housegate -version and fails unless it starts with "housegate <HG_TAG_P3> "
   local v
   v="$(housegate -version 2>&1 | head -n 1)" || v=""
   printf '%s\n' "$v"
   case "$v" in "housegate $(si_p3_pin HG_TAG_P3) "*) return 0 ;; esac
   echo "the local agent is not housegate $(si_p3_pin HG_TAG_P3): the user upgrades it in their own terminal (D40); stop" >&2
+  return 1
+}
+si_p3_docker() { # $1 timeout seconds, then local Docker argv; never prints failure output or credentials
+  python3 -I - "$@" <<'PY'
+import subprocess,sys
+try:
+    r=subprocess.run(["docker",*sys.argv[2:]],capture_output=True,timeout=int(sys.argv[1]))
+    if r.returncode:raise RuntimeError("local Docker step failed")
+    sys.stdout.buffer.write(r.stdout)
+except Exception:sys.exit("local Docker step failed or timed out; details withheld; stop")
+PY
+}
+si_p3_parity_cleanup() { # exact unique name, owner label, optional known full container id; three definite absences over30s after removal
+  local name="$1" owner="$2" wanted="$3" deadline=$((SECONDS + 180)) left ids meta id actual_name actual_owner absent=0
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    left=$((deadline - SECONDS))
+    ids="$(si_p3_docker "$left" ps -aq --filter "name=^/$name$")" || return 1
+    if [ -z "$ids" ]; then
+      absent=$((absent + 1))
+      [ "$absent" -lt 3 ] || return 0
+    else
+      [[ "$ids" =~ ^[0-9a-f]{12,64}$ ]] || return 1
+      left=$((deadline - SECONDS)); [ "$left" -gt 0 ] || return 1
+      meta="$(si_p3_docker "$left" inspect --format '{{.Id}}|{{.Name}}|{{index .Config.Labels "sentio.si.p3-parity"}}' "$ids")" || return 1
+      IFS='|' read -r id actual_name actual_owner <<< "$meta"
+      [[ "$id" =~ ^[0-9a-f]{64}$ ]] && [ "$actual_name" = "/$name" ] && [ "$actual_owner" = "$owner" ] || { echo "parity container ownership cannot be proved; preserve it and stop" >&2; return 1; }
+      [ -z "$wanted" ] || [ "$id" = "$wanted" ] || return 1
+      left=$((deadline - SECONDS)); [ "$left" -gt 0 ] || return 1
+      si_p3_docker "$left" rm -f "$id" > /dev/null || return 1
+      absent=0
+    fi
+    [ "$((deadline - SECONDS))" -ge 15 ] || break
+    sleep 15
+  done
+  echo "parity cleanup did not prove stable absence; stop" >&2
   return 1
 }
 si_sync() { helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector "name=$1"; } # $1 release of the SI helmfile
@@ -23252,24 +25561,63 @@ si_p3_message() { # $1 commit label: its commit subject
     *) echo "unknown commit label $1" >&2; return 2 ;;
   esac
 }
+si_p3_signed() { # current HEAD must be authored by poetry, signed by a trusted key, and have only the canonical Claude trailer
+  local si_checked_read_149
+  si_checked_read_149="$(git log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ "${si_checked_read_149}" = 'poetry <chen@sentio.xyz> G' ] || { echo "wrong author or invalid/untrusted signature; stop" >&2; return 1; }
+  git verify-commit HEAD || return 1
+  git log -1 --format=%B | python3 -I -c '
+import re,sys
+lines=sys.stdin.read().splitlines()
+trailers=[s for s in lines if re.match(r"(?i)^co-authored-by\s*:",s)]
+assert trailers==["Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"],"unexpected coauthor trailer"
+' || return 1
+}
 si_p3_commit() { # $1 commit label: on a clean checkout at a freshly fetched origin/main, makes that label's edits (si_p3_edit) and commits exactly them; prints the files
-  local files msg
+  local files msg before_head
+  local si_checked_read_150
+  si_checked_read_150="$(git rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ "${si_checked_read_150}" = HEAD ] || { echo "the live worktree must be detached at origin/main" >&2; return 1; }
+  local si_checked_read_153
+  si_checked_read_153="$(git config --worktree user.name)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  local si_checked_read_152
+  si_checked_read_152="$(git config --worktree user.email)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  local si_checked_read_151
+  si_checked_read_151="$(git config --worktree --bool commit.gpgsign)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ "${si_checked_read_153}" = poetry ] && [ "${si_checked_read_152}" = chen@sentio.xyz ] && [ "${si_checked_read_151}" = true ] || { echo "set the live worktree's poetry identity and signed commits before continuing" >&2; return 1; }
   git fetch -q origin main || return 1
-  [ -z "$(git status --porcelain --untracked-files=no)" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the checkout is not a clean, freshly fetched origin/main" >&2; return 1; }
+  local si_checked_read_156
+  si_checked_read_156="$(git status --porcelain --untracked-files=no)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  local si_checked_read_155
+  si_checked_read_155="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_155" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  local si_checked_read_154
+  si_checked_read_154="$(git rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_154" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ -z "${si_checked_read_156}" ] && [ "${si_checked_read_155}" = "${si_checked_read_154}" ] || { echo "the checkout is not a clean, freshly fetched origin/main" >&2; return 1; }
   msg="$(si_p3_message "$1")" || return 1
   files="$(si_p3_edit "$1")" || { git checkout -q -- .; return 1; }
   # shellcheck disable=SC2086 # one word per file
-  git commit -q -m "$msg" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- $files || return 1
+  before_head="$(git rev-parse HEAD)" || return 1
+  # shellcheck disable=SC2086 # one validated repository-relative path per word
+  git commit -S -q -m "$msg" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- $files || { echo "signed commit failed; preserve work and ask the user to unlock this repository's actual key; stop" >&2; return 1; }
+  local si_checked_read_157
+  si_checked_read_157="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_157" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ "${si_checked_read_157}" != "$before_head" ] || return 1
+  si_p3_signed || return 1
   echo "$files"
 }
 si_p3_push() { # $1 commit record under $si_backup, then every file HEAD must change: render tests, HEAD check, record, push to main; refuses a commit pushed already
   local f="$si_backup/$1"
   shift
   [ ! -e "$f" ] || { echo "$f exists: that commit was pushed already; never re-run a confirmed block" >&2; return 1; }
+  si_p3_signed || return 1
   python3 -B charts/storage-integrity/tests/test_render.py || return 1
   si_head_is "$@" || return 1
-  git rev-parse HEAD > "$f"
-  git push origin HEAD:main
+  si_p3_signed || return 1
+  git rev-parse HEAD > "$f" || return 1
+  git push origin HEAD:main || { echo "push failed or outcome unknown: preserve the intent record; fetch and reconcile that exact HEAD before any retry" >&2; return 1; }
 }
 si_apply_chi() { # $1 CHI manifest, $2 CHI name: server dry run, apply, wait for Completed
   si_kubectl apply --dry-run=server -f "$1" && si_kubectl apply -f "$1" && si_wait_chi "$2"
@@ -23282,27 +25630,48 @@ si_grant_snapshot() { # $1 phase (before|after), $2 CHI, then its hosts: every s
   done
   si_chi_state "$chi" | grep '^pod ' | while IFS= read -r row; do printf '%s\tpod\t%s\t%s\n' "$phase" "$chi" "$row"; done
 }
-si_grant_check() { # $1 grants file of si_grant_snapshot: on every host, after = before plus exactly si_gateway SELECT ON hg_replica.*, and no ClickHouse pod restarted
-  python3 -I - "$1" <<'PY'
-import json, sys
-rows = {}
-for line in open(sys.argv[1]):
-    phase, kind, host, body = line.rstrip("\n").split("\t", 3)
-    rows.setdefault((phase, kind, host), set()).add(body)
-want = {"user_name": "si_gateway", "access_type": "SELECT", "access_object": "", "database": "hg_replica", "table": None, "column": None, "is_partial_revoke": 0, "grant_option": 0}
-hosts = sorted({host for _, kind, host in rows if kind == "grant"})
-if not hosts:
-    sys.exit("no grants in %s; stop" % sys.argv[1])
-for host in hosts:
-    before, after = rows.get(("before", "grant", host), set()), rows.get(("after", "grant", host), set())
-    added = [json.loads(row) for row in after - before]
-    if not before or (before - after) or added != [want]:
-        sys.exit("host %s: the grants changed by %s and lost %s; stop" % (host, added, sorted(before - after)))
-    print("host %s: si_gateway SELECT ON hg_replica.* added, nothing else changed" % host)
-for _, kind, chi in sorted(key for key in rows if key[1] == "pod" and key[0] == "before"):
-    if rows[("before", "pod", chi)] != rows.get(("after", "pod", chi)):
-        sys.exit("%s: a ClickHouse pod restarted or moved: %s; stop" % (chi, sorted(rows.get(("after", "pod", chi), set()))))
-    print("%s: every ClickHouse pod kept its uid, restart count and start time" % chi)
+si_grant_check() { # $1 grants TSV, $2 exact CHI: exact source/host/pod census, then the one grant delta and unchanged pod identities
+  [ "$#" = 2 ] || { echo "usage: si_grant_check <grants.tsv> <CHI>" >&2; return 2; }
+  python3 -I - "$1" "$2" <<'PY'
+import json,re,sys
+from datetime import datetime
+path,chi=sys.argv[1:]
+scopes={"storage-integrity-si-v2":("a","v1","v2","v3"),"storage-integrity-si-v2-indexer-b":("b",),"storage-integrity-si-v2-indexer-c":("c",)}
+if chi not in scopes:sys.exit("unknown grant-check installation; stop")
+pods={"a":"storage-integrity-si-v2-source-0-0-0","b":"storage-integrity-si-v2-indexer-b-source-0-0-0","c":"storage-integrity-si-v2-indexer-c-source-0-0-0",**{f"v{i}":f"storage-integrity-si-v2-verifier-{i}-0-0-0" for i in range(1,4)}}
+rows={};seen=set()
+for line in open(path):
+ fields=line.rstrip("\n").split("\t",3)
+ if len(fields)!=4:sys.exit("malformed grant/pod record; stop")
+ phase,kind,host,body=fields
+ if phase not in ("before","after") or kind not in ("grant","pod") or not body or tuple(fields) in seen:sys.exit("malformed or duplicated grant/pod record; stop")
+ seen.add(tuple(fields));rows.setdefault((phase,kind,host),set()).add(body)
+expected={(phase,"grant",h) for phase in ("before","after") for h in scopes[chi]}|{(phase,"pod",chi) for phase in ("before","after")}
+if set(rows)!=expected:sys.exit("grant/pod evidence does not cover exactly this installation before and after; stop")
+want={"user_name":"si_gateway","access_type":"SELECT","access_object":"","database":"hg_replica","table":None,"column":None,"is_partial_revoke":0,"grant_option":0}
+def grants(values):
+ out=set()
+ for body in values:
+  r=json.loads(body)
+  if set(r)!=set(want) or not isinstance(r["user_name"],str) or not r["user_name"].startswith("si_") or any(type(r[k])is not int or r[k]not in (0,1) for k in ("is_partial_revoke","grant_option")):sys.exit("malformed system.grants row; stop")
+  item=json.dumps(r,sort_keys=True,separators=(",",":"))
+  if item in out:sys.exit("duplicated semantic system.grants row; stop")
+  out.add(item)
+ return out
+for host in scopes[chi]:
+ before,after=(grants(rows[(phase,"grant",host)])for phase in ("before","after"))
+ if after-before!={json.dumps(want,sort_keys=True,separators=(",",":"))} or before-after:sys.exit("host %s: grant delta is not exactly si_gateway SELECT ON hg_replica.*; stop"%host)
+ print("host %s: si_gateway SELECT ON hg_replica.* added, nothing else changed"%host)
+expected_pods={pods[h]for h in scopes[chi]}
+for phase in ("before","after"):
+ observed=set()
+ for body in rows[(phase,"pod",chi)]:
+  m=re.fullmatch(r"pod ([a-z0-9-]+) uid=([0-9a-f-]{36}) restarts=([0-9]+) started=(\S+)",body)
+  if not m or m[1]in observed:sys.exit("malformed or duplicate ClickHouse pod identity; stop")
+  datetime.fromisoformat(m[4].replace("Z","+00:00"));observed.add(m[1])
+ if observed!=expected_pods:sys.exit("ClickHouse pod evidence is incomplete or foreign; stop")
+if rows[("before","pod",chi)]!=rows[("after","pod",chi)]:sys.exit("a ClickHouse pod restarted or moved; stop")
+print("%s: every ClickHouse pod kept its uid, restart count and start time"%chi)
 PY
 }
 si_replica_grant_probe() { # $1 network|indexer-b|indexer-c: the replica grant probe as si_gateway on that installation's source ClickHouse ({copy}: its first hg_replica table); one TSV line per row; fails on any row whose outcome differs from its expect column
@@ -23324,7 +25693,7 @@ si_replica_grant_probe() { # $1 network|indexer-b|indexer-c: the replica grant p
       code="$(printf '%s\n' "$out" | sed -n 's/.*Code: \([0-9][0-9]*\)\..*/\1/p' | head -n 1)"
       code="${code:-unknown}"
     fi
-    case "$code" in 0) got=ok ;; 497) got=denied ;; 516|unknown) got=error ;; *) got=ok ;; esac
+    case "$code" in 0) got=ok ;; 497) got=denied ;; *) got=error ;; esac
     [ "$got" = "$expect" ] || bad=$((bad + 1))
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$role" "$expect" "$got" "$code" "$stmt"
   done 3< "$corpus"
@@ -23353,19 +25722,38 @@ print("\n".join(out))
 ' "$2"
 }
 si_revert_p3() { # $1 commit record under $si_backup, $2 what to apply after the revert: a release of the SI helmfile, or chi:<manifest>:<CHI name>; a revert pushed already is only applied again
-  local f="$si_backup/$1" c manifest chi
+  local f="$si_backup/$1" c c_before manifest chi
   [ -f "$f" ] || { echo "no $1: nothing to revert"; return 0; }
+  [ ! -e "$f.revert-intent" ] || { echo "revert push outcome unresolved: reconcile the recorded HEAD before any retry" >&2; return 1; }
   if [ -f "$f.reverted" ]; then
     echo "$1 is reverted on main already ($(cat "$f.reverted")): applying only"
   else
     git fetch -q origin main || return 1
-    [ -z "$(git status --porcelain --untracked-files=no)" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the checkout is not a clean, freshly fetched origin/main" >&2; return 1; }
+    local si_checked_read_160
+    si_checked_read_160="$(git status --porcelain --untracked-files=no)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+    local si_checked_read_159
+    si_checked_read_159="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+    [[ "$si_checked_read_159" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+    local si_checked_read_158
+    si_checked_read_158="$(git rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+    [[ "$si_checked_read_158" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+    [ -z "${si_checked_read_160}" ] && [ "${si_checked_read_159}" = "${si_checked_read_158}" ] || { echo "the checkout is not a clean, freshly fetched origin/main" >&2; return 1; }
     c="$(cat "$f")"
     git show --stat "$c" | cat
-    git revert --no-edit "$c" || { git revert --abort; echo "reverting $1 conflicts with a later commit on main: aborted, nothing changed; revert the later one first (§8)" >&2; return 1; }
+    c_before="$(git rev-parse HEAD)" || return 1
+    git revert --no-commit "$c" || { git revert --abort; echo "reverting $1 conflicts with a later commit on main: aborted, nothing changed; revert the later one first (§8)" >&2; return 1; }
+    local si_checked_read_161
+    si_checked_read_161="$(git show -s --format=%s "$c")" || { echo "Git read failed; stop" >&2; return 1; }
+    git commit -S -q -m "Revert $c: ${si_checked_read_161}" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed revert commit failed; preserve the pending revert and unlock the actual key before any retry" >&2; return 1; }
+    local si_checked_read_162
+    si_checked_read_162="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+    [[ "$si_checked_read_162" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+    [ "${si_checked_read_162}" != "$c_before" ] || return 1
+    si_p3_signed || return 1
     python3 -B charts/storage-integrity/tests/test_render.py || { git reset -q --hard HEAD~1; echo "the revert of $1 fails the render tests: dropped, nothing pushed; revert the later commits first (§8)" >&2; return 1; }
-    git push origin HEAD:main || return 1
-    git rev-parse HEAD > "$f.reverted"
+    git rev-parse HEAD > "$f.revert-intent" || return 1
+    git push origin HEAD:main || { echo "revert push failed or outcome unknown: preserve the revert intent and reconcile before retry" >&2; return 1; }
+    mv "$f.revert-intent" "$f.reverted" || return 1
   fi
   case "$2" in
     chi:*)
@@ -23720,7 +26108,7 @@ PY
 
 `si_p3_edit` writes the edits of one commit label and the matching mirrors in `charts/storage-integrity/tests/test_render.py`, then prints the files it changed. Before writing anything it parses every file it touches as YAML before and after and stops unless the result is exactly the intended change (one grant appended last to `si_gateway`; `clickhouse.access.replicaReads`, `monitoring.replicaReads.enabled`, `siMember.serve` or `storageIntegrity.replicaReads` added; an image or tag replaced), so a file that moved since this runbook was written stops it instead of being edited blind. Every comment it writes names this runbook's section and the rollback target.
 
-`si_replica_grant_probe` runs `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv` as `si_gateway` over loopback in the installation's source ClickHouse pod, its password piped from the host's Secret by the lockdown runbook's `si_ch_exec`; `ok` is any answer but 497, `denied` is 497, and a login failure is an error. Its denied rows write nothing while the grant is only `SELECT`; should `si_gateway` ever be able to create `hg_replica.si_probe_denied`, the helper drops it as `default` and stops. It is a mutating helper, so every call sits in a confirmed block.
+`si_replica_grant_probe` runs `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv` as `si_gateway` over loopback in the installation's source ClickHouse pod, its password piped from the host's Secret by the lockdown runbook's `si_ch_exec`; `ok` requires exit 0, `denied` requires code 497, and every other SQL, protocol, transport or login failure is an error. Its denied rows write nothing while the grant is only `SELECT`; should `si_gateway` ever be able to create `hg_replica.si_probe_denied`, the helper drops it as `default` and stops. It is a mutating helper, so every call sits in a confirmed block.
 
 ## 1. Preparation
 
@@ -23736,13 +26124,21 @@ PY
 
 Before this runbook every host runs the host image its `sentio-node-indexer-<x>-storage-integrity-si-v2-source-image.yaml` names at `origin/main` with the `v0.15.0@sha256:1b51de76b7b7a15a8006d0ac06febb10012c74c92d4950d07e4e5a5b77b3570f` agent sidecar, and every si-member the P2 image: those are the rollback targets of §8, and each is the parent of a commit this runbook makes.
 
-Set the two local clones (any clones with the release tags; the block only fetches and reads), then:
+Set the two local clones (any clones with the release tags; the block fetches public release refs and configures only the actual detached live worktree). These remote reads need explicit user confirmation in chat.
+
+Confirm before running.
 
 ```bash
 housegate_repo=/path/to/housegate; sentio_node_repo=/path/to/sentio-node
 HG_TAG_P3='<HG_TAG_P3>'; HG_DIGEST_P3='<HG_DIGEST_P3>'; CORE_TAG_P3='<CORE_TAG_P3>'; SN_COMMIT_P3='<SN_COMMIT_P3>'; SN_DIGEST_P3='<SN_DIGEST_P3>'
-INDEXER_C_ID='<INDEXER_C_ID>'; ARBITER_PIN_P2='<ARBITER_PIN_P2>'; P2_END='<P2_END>'
-case "$HG_TAG_P3$HG_DIGEST_P3$CORE_TAG_P3$SN_COMMIT_P3$SN_DIGEST_P3$INDEXER_C_ID$ARBITER_PIN_P2$P2_END" in *'<'*) echo "pins are still placeholders; stop"; exit 1 ;; esac
+INDEXER_C_ID='<INDEXER_C_ID>'; ARBITER_PIN_P2='<ARBITER_PIN_P2>'; P2_END='<P2_END>'; P2_INTEGRATION_SOAK='<P2_INTEGRATION_SOAK>'
+case "$HG_TAG_P3$HG_DIGEST_P3$CORE_TAG_P3$SN_COMMIT_P3$SN_DIGEST_P3$INDEXER_C_ID$ARBITER_PIN_P2$P2_END$P2_INTEGRATION_SOAK" in *'<'*) echo "pins are still placeholders; stop"; exit 1 ;; esac
+si_checked_read_163="$(git rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -f .git ] && [ "${si_checked_read_163}" = HEAD ] || { echo "use Task48's actual detached URWT live worktree, never a real clone or main; stop"; exit 1; }
+git config extensions.worktreeConfig true || exit 1
+git config --worktree user.name poetry || exit 1
+git config --worktree user.email chen@sentio.xyz || exit 1
+git config --worktree commit.gpgsign true || exit 1
 for r in "$housegate_repo" "$sentio_node_repo"; do
   git -C "$r" rev-parse --git-dir > /dev/null 2>&1 || { echo "set housegate_repo and sentio_node_repo to local clones first ($r is none)"; exit 1; }
 done
@@ -23753,11 +26149,12 @@ if [ -e "$si_backup" ]; then
 else
   mkdir -m 700 "$si_backup"
 fi
-git -C "$housegate_repo" fetch -q --tags origin; git -C "$sentio_node_repo" fetch -q origin
+git -C "$housegate_repo" fetch -q --tags origin || exit 1
+git -C "$sentio_node_repo" fetch -q origin || exit 1
 git -C "$housegate_repo" rev-parse -q --verify "$HG_TAG_P3^{commit}" > /dev/null || { echo "housegate has no tag $HG_TAG_P3; stop"; exit 1; }
-deps() { awk '$1 == "github.com/housegate/housegate" || $1 == "github.com/sentioxyz/arbiter-core" {print $1, $2}' | sort | tr '\n' ' '; }
 want="github.com/housegate/housegate $HG_TAG_P3 github.com/sentioxyz/arbiter-core $CORE_TAG_P3 "
-[ "$(git -C "$sentio_node_repo" show "$SN_COMMIT_P3:go.mod" | deps)" = "$want" ] || { echo "sentio-node $SN_COMMIT_P3 does not pin exactly $want; stop"; exit 1; }
+si_checked_read_164="$(git -C "$sentio_node_repo" show "$SN_COMMIT_P3:go.mod" | si_p3_deps)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_164}" = "$want" ] || { echo "sentio-node $SN_COMMIT_P3 does not pin exactly $want; stop"; exit 1; }
 [ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P3" --format '{{json .Manifest}}' | jq -r .digest)" = "$SN_DIGEST_P3" ] || { echo "the sentio-node image digest is not $SN_DIGEST_P3; stop"; exit 1; }
 [ "$(docker buildx imagetools inspect "ghcr.io/housegate/housegate:$HG_TAG_P3" --format '{{json .Manifest}}' | jq -r .digest)" = "$HG_DIGEST_P3" ] || { echo "the housegate image digest is not $HG_DIGEST_P3; stop"; exit 1; }
 python3 -I -B - "$SN_COMMIT_P3" "$SN_DIGEST_P3" "$HG_TAG_P3" "$HG_DIGEST_P3" <<'EOF'
@@ -23773,7 +26170,7 @@ assert sidecar in t.AGENT_SIDECAR_IMAGES, "the P3 agent is not reviewed"
 print("test_render.py reviews the P3 host, member and agent images")
 EOF
 printf '%s\n' "HG_TAG_P3=$HG_TAG_P3" "HG_DIGEST_P3=$HG_DIGEST_P3" "CORE_TAG_P3=$CORE_TAG_P3" "SN_COMMIT_P3=$SN_COMMIT_P3" "SN_DIGEST_P3=$SN_DIGEST_P3" \
-  "INDEXER_C_ID=$INDEXER_C_ID" "ARBITER_PIN_P2=$ARBITER_PIN_P2" "P2_END=$P2_END" "HOUSEGATE_REPO=$housegate_repo" "SENTIO_NODE_REPO=$sentio_node_repo" > "$si_backup/pins.new"
+  "INDEXER_C_ID=$INDEXER_C_ID" "ARBITER_PIN_P2=$ARBITER_PIN_P2" "P2_END=$P2_END" "P2_INTEGRATION_SOAK=$P2_INTEGRATION_SOAK" "HOUSEGATE_REPO=$housegate_repo" "SENTIO_NODE_REPO=$sentio_node_repo" > "$si_backup/pins.new"
 if [ -f "$si_backup/pins" ] && ! cmp -s "$si_backup/pins.new" "$si_backup/pins"; then echo "$si_backup/pins records other pins; stop"; exit 1; fi
 mv "$si_backup/pins.new" "$si_backup/pins"
 echo "pins resolve"
@@ -23832,6 +26229,7 @@ Read-only:
   echo "== rejected rows never reach a copy (Plan S3-C2 Task 36, ARBITER_PIN_P2=$(si_p3_pin ARBITER_PIN_P2))"
   si_run_record s3c2 "arbiter pin and integration run (Task 36)" > "$si_backup/arbiter-pin-record.txt"
   grep -qF "$(si_p3_pin ARBITER_PIN_P2)" "$si_backup/arbiter-pin-record.txt" || { echo "the Task 36 run record does not name ARBITER_PIN_P2; stop"; exit 1; }
+  si_p2_release_record "$si_backup/arbiter-pin-record.txt" "$(si_p3_pin ARBITER_PIN_P2)" "$(si_p3_pin P2_INTEGRATION_SOAK)" || { echo "Task36 is not an exact successful release-path head with all four tests and at least500 shadow blocks; stop"; exit 1; }
   grep -E 'PASS:? +TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement' "$si_backup/arbiter-pin-record.txt" | tee "$si_backup/rejected-rows-test.txt"
   [ -s "$si_backup/rejected-rows-test.txt" ] || { echo "no PASS line of TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement at ARBITER_PIN_P2; stop"; exit 1; }
   echo "== token Secrets (key names only, D29)"
@@ -23880,30 +26278,46 @@ The block below runs that image as a local container and housegate `<HG_TAG_P3>`
 Confirm before running.
 
 ```bash
+(
 work="$si_backup/parity"
 [ ! -e "$work" ] || { echo "$work exists: the parity run ran already; read rewriter-parity.txt"; exit 1; }
 image="$(python3 -I -c 'import sys, yaml; i = yaml.safe_load(open(sys.argv[1]))["rewriter"]["image"]; print(i["repository"] + ":" + i["tag"])' k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml)"
-docker image inspect "$image" > /dev/null 2>&1 || { echo "$image is not pulled: the user pulls it in their own terminal first; stop"; exit 1; }
+si_p3_docker 30 image inspect "$image" > /dev/null 2>&1 || { echo "$image is not pulled: the user pulls it in their own terminal first; stop"; exit 1; }
 mkdir -m 700 "$work"
 git -C "$(si_p3_pin HOUSEGATE_REPO)" archive "$(si_p3_pin HG_TAG_P3)" | tar -x -C "$work"
 rg_tag="$(awk '$1 == "github.com/housegate/rewriter-go" {print $2}' "$work/go.mod")"
 [ -n "$rg_tag" ] || { echo "housegate $(si_p3_pin HG_TAG_P3)'s go.mod pins no rewriter-go; stop"; exit 1; }
-docker rm -f si-p3-rewriter > /dev/null 2>&1 || true
-trap 'docker rm -f si-p3-rewriter > /dev/null 2>&1 || true' EXIT
+owner="$(python3 -I -c 'import secrets;print(secrets.token_hex(12))')"
+name="si-p3-rewriter-$owner"; cid=""
+trap 'si_p3_parity_cleanup "$name" "$owner" "$cid" || exit 1' EXIT
 {
   echo "rewriter-go $rg_tag, rewriter image $image"
-  docker run -d --rm --name si-p3-rewriter -p 127.0.0.1:50551:50051 "$image" /clickhousegate_rewriter 50051 80
-  for _ in $(seq 1 120); do docker logs si-p3-rewriter 2>&1 | grep -q 'Server listening on 0.0.0.0:50051 (gRPC)' && break; sleep 1; done
-  docker logs si-p3-rewriter 2>&1 | head -n 3
+  cid="$(si_p3_docker 120 run -d --rm --name "$name" --label "sentio.si.p3-parity=$owner" -p 127.0.0.1::50051 "$image" /clickhousegate_rewriter 50051 80)" || exit 1
+  [[ "$cid" =~ ^[0-9a-f]{64}$ ]] || exit 1
+  addr="$(si_p3_docker 10 port "$cid" 50051/tcp)" || exit 1
+  [[ "$addr" =~ ^127\.0\.0\.1:[1-9][0-9]{0,4}$ ]] || exit 1
+  deadline=$((SECONDS + 120)); ready=0
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    left=$((deadline - SECONDS)); [ "$left" -le 10 ] || left=10
+    if si_p3_docker "$left" logs "$cid" | grep -qF 'Server listening on 0.0.0.0:50051 (gRPC)'; then ready=1; break; fi
+    sleep 1
+  done
+  [ "$ready" = 1 ] || { echo "the owned rewriter never became ready; stop"; exit 1; }
+  echo 'Server listening on 0.0.0.0:50051 (gRPC)' 
   ffi="$(cd "$work" && bazel run //cmd:housegate -- fetch-rewriter-lib --tag "$rg_tag" | tail -n 1)"
   echo "native library $ffi"
   (cd "$work" && bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' \
-    --test_env=POLYGLOT_SQL_FFI_PATH="$ffi" --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551 --test_output=all --test_arg=-test.v --nocache_test_results)
+    --test_env=POLYGLOT_SQL_FFI_PATH="$ffi" --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR="$addr" --test_output=all --test_arg=-test.v --nocache_test_results)
 } 2>&1 | tee "$si_backup/rewriter-parity.txt"
-grep -cE -- '--- PASS: Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' "$si_backup/rewriter-parity.txt"
+for engine in Native GRPC; do
+  [ "$(grep -cE -- "--- PASS: Test${engine}EngineReplicaTableResolvesBeforeRemoteMapping([[:space:]]|$)" "$si_backup/rewriter-parity.txt")" = 1 ] || { echo "one exact PASS for each parity engine is required; stop"; exit 1; }
+done
+! grep -qE -- '--- SKIP: Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' "$si_backup/rewriter-parity.txt" || { echo "parity test skipped; stop"; exit 1; }
+echo 2
+)
 ```
 
-Expected: the rewriter image of `sentio-node-indexer-a-storage-integrity-si-v2.yaml` (`housegate-rewriter:0.17.0@sha256:…`); the rewriter's log with `Server listening on 0.0.0.0:50051 (gRPC)` (on Apple silicon the `linux/amd64` image runs emulated, and `docker run` warns about the platform); a native library path ending `libpolyglot_sql_ffi.dylib`; `native rewriter engine loaded` and `connected to rewriter service service_addr=127.0.0.1:50551` in the test log; both tests `--- PASS` (never `--- SKIP`: a skipped test means its address or library did not reach it), and `2`. The container is removed when the block ends. Anything else: stop; the rewriter pin moves only together with a sentio-node pin (stage-1 runbook §11), never in this runbook.
+Expected: the rewriter image of `sentio-node-indexer-a-storage-integrity-si-v2.yaml` (`housegate-rewriter:0.17.0@sha256:…`); the rewriter's log with `Server listening on 0.0.0.0:50051 (gRPC)` (on Apple silicon the `linux/amd64` image runs emulated, and `docker run` warns about the platform); a native library path ending `libpolyglot_sql_ffi.dylib`; `native rewriter engine loaded` and `connected to rewriter service service_addr=127.0.0.1:<allocated port>` in the test log; both tests `--- PASS` (never `--- SKIP`: a skipped test means its address or library did not reach it), and `2`. The subshell owns a unique labelled container and its dynamically allocated loopback port. Its EXIT cleanup removes only that owned container and requires three definite absences spanning at least30seconds; a Docker/API error or ownership mismatch stops without removing a foreign container. The container is removed when the block ends, and the outer session's EXIT traps remain unchanged. Anything else: stop; the rewriter pin moves only together with a sentio-node pin (stage-1 runbook §11), never in this runbook.
 
 ## 3. Grants
 
@@ -23932,7 +26346,7 @@ Then, read-only (the users reload within a minute or two):
 for n in $(seq 1 30); do si_grants b | grep -q '"user_name":"si_gateway","access_type":"SELECT","access_object":"","database":"hg_replica"' && break; sleep 10; done
 echo "polls: $n"
 si_grant_snapshot after storage-integrity-si-v2-indexer-b b | tee -a "$si_backup/grants-indexer-b.tsv"
-si_grant_check "$si_backup/grants-indexer-b.tsv"
+si_grant_check "$si_backup/grants-indexer-b.tsv" storage-integrity-si-v2-indexer-b
 ```
 
 Expected: `host b: si_gateway SELECT ON hg_replica.* added, nothing else changed` and `storage-integrity-si-v2-indexer-b: every ClickHouse pod kept its uid, restart count and start time`. Then the probe:
@@ -23968,7 +26382,7 @@ Then, read-only:
 for n in $(seq 1 30); do si_grants c | grep -q '"user_name":"si_gateway","access_type":"SELECT","access_object":"","database":"hg_replica"' && break; sleep 10; done
 echo "polls: $n"
 si_grant_snapshot after storage-integrity-si-v2-indexer-c c | tee -a "$si_backup/grants-indexer-c.tsv"
-si_grant_check "$si_backup/grants-indexer-c.tsv"
+si_grant_check "$si_backup/grants-indexer-c.tsv" storage-integrity-si-v2-indexer-c
 ```
 
 Expected: as in §3.1 for host `c` and `storage-integrity-si-v2-indexer-c`.
@@ -24005,7 +26419,7 @@ Then, read-only:
 ```bash
 for h in a v1 v2 v3; do for n in $(seq 1 30); do si_grants "$h" | grep -q '"user_name":"si_gateway","access_type":"SELECT","access_object":"","database":"hg_replica"' && break; sleep 10; done; echo "$h polls: $n"; done
 si_grant_snapshot after storage-integrity-si-v2 a v1 v2 v3 | tee -a "$si_backup/grants-network.tsv"
-si_grant_check "$si_backup/grants-network.tsv"
+si_grant_check "$si_backup/grants-network.tsv" storage-integrity-si-v2
 ```
 
 Expected: one `si_gateway SELECT ON hg_replica.* added, nothing else changed` line for each of `a`, `v1`, `v2` and `v3`, and `storage-integrity-si-v2: every ClickHouse pod kept its uid, restart count and start time`.
@@ -24384,6 +26798,7 @@ Then the `devuser1` owner writes row 4 and waits until both members' copies equa
 Confirm before running.
 
 ```bash
+si_p3_user_terminal || exit 1
 key_file=/path/to/devuser1-owner.key
 db="$(si_acceptance_db)"
 {
@@ -24398,13 +26813,18 @@ db="$(si_acceptance_db)"
   echo "safe count: $before before, $after after"
   [ "$after" = "$((before + 1))" ] || { echo "the safe count did not grow by one; stop"; exit 1; }
   echo "$after" > "$si_backup/drill-count"
-  for n in $(seq 1 30); do si_copies_check > "$si_backup/copies-after-baseline.txt" 2>&1; grep -qE '^copies equal: ([0-9]+) of \1$' "$si_backup/copies-after-baseline.txt" && break; sleep 10; done
+  copy_ready=0
+  for n in $(seq 1 30); do
+    if si_copies_check > "$si_backup/copies-after-baseline.txt" 2>&1 && grep -qx 'copies equal: 6 of 6' "$si_backup/copies-after-baseline.txt"; then copy_ready=1; break; fi
+    sleep 10
+  done
+  [ "$copy_ready" = 1 ] || { echo "all six copies did not reach the published entries after 300s; stop before quarantine"; exit 1; }
   cat "$si_backup/copies-after-baseline.txt"
   echo "failover lines before the quarantine: $(si_failovers | wc -l | tr -d ' ')"
 } 2>&1 | tee "$si_backup/drill-baseline.txt"
 ```
 
-Expected: `housegate <HG_TAG_P3> …` twice (the check and `si_agent_start`'s own line: the user's agent is still the upgraded one); `track <INDEXER_C_ID> published <x> -> <y>`; `safe count: <n> before, <n+1> after` (`<n>` is 3 unless an earlier runbook wrote more), recorded in `drill-count`; `copies equal: <m> of <m>`; `failover lines before the quarantine: 0`. Only on a retryable 733 for the INSERT (an owner audit or activation after §4.2), wait 35 s and run this block once more; never a third time.
+Expected: `housegate <HG_TAG_P3> …` twice (the check and `si_agent_start`'s own line: the user's agent is still the upgraded one); `track <INDEXER_C_ID> published <x> -> <y>`; `safe count: <n> before, <n+1> after` (`<n>` is 3 unless an earlier runbook wrote more), recorded in `drill-count`; `copies equal: 6 of 6`; `failover lines before the quarantine: 0`. Only on a retryable 733 for the INSERT (an owner audit or activation after §4.2), wait 35 s and run this block once more; never a third time.
 
 ### 6.2 Quarantine indexer-c
 
@@ -24449,6 +26869,7 @@ Twelve sessions, each a new client connection through the user's local agent (`-
 Confirm before running.
 
 ```bash
+si_p3_user_terminal || exit 1
 key_file=/path/to/devuser1-owner.key
 db="$(si_acceptance_db)"
 want="$(cat "$si_backup/drill-count")"
@@ -24469,7 +26890,7 @@ want="$(cat "$si_backup/drill-count")"
   done
   si_agent_stop
   si_failovers
-  if [ -n "$ok" ] && [ "$good" = 12 ]; then echo "failover reason owner_quarantined seen; 12 of 12 sessions answered $want"; else echo "no failover with reason owner_quarantined in three rounds, or a session of the last round answered otherwise; stop"; fi
+  if [ -n "$ok" ] && [ "$good" = 12 ]; then echo "failover reason owner_quarantined seen; 12 of 12 sessions answered $want"; else echo "no failover with reason owner_quarantined in three rounds, or a session of the last round answered otherwise; release indexer-c with §6.4 and report; stop"; exit 1; fi
 } 2>&1 | tee "$si_backup/drill-reads.txt"
 ```
 
@@ -24480,6 +26901,7 @@ Then the refusals: a write is never failed over and is refused 392 by the owner,
 Confirm before running.
 
 ```bash
+si_p3_user_terminal || exit 1
 key_file=/path/to/devuser1-owner.key
 db="$(si_acceptance_db)"
 c="$(si_c_id)"
@@ -24524,6 +26946,7 @@ c="$(si_c_id)"; db="$(si_acceptance_db)"
   echo "generation before the drill $(cat "$si_backup/quarantine-generation-before")"
   si_info c | jq -c '{si_indexer_id, quarantined}'
   for n in $(seq 1 24); do s="$(si_status c "$db" s3e_e2e | jq -r .status)"; [ "$s" = active ] && break; sleep 5; done
+  [ "$s" = active ] || { echo "indexer-c did not return active within 120s; stop"; exit 1; }
   echo "indexer-c answers $s after $n polls"
 } 2>&1 | tee "$si_backup/verify-release.txt"
 ```
@@ -24552,6 +26975,7 @@ Then one more read through the user's agent, which now reaches the owner without
 Confirm before running.
 
 ```bash
+si_p3_user_terminal || exit 1
 key_file=/path/to/devuser1-owner.key
 db="$(si_acceptance_db)"
 {
@@ -24813,7 +27237,7 @@ WANT = [
 ]
 ANCHORS = ("91-replica-serving", "92-member-status-endpoint", "93-leases")
 MUTATING = re.compile(
-    r"git push|git revert|helmfile .* sync|\bsi_sync\b|(si_)?kubectl (apply|delete|create|patch|run|rollout restart)|si_apply_chi"
+    r"git push|git revert|git -C [^\n]+ fetch|docker buildx imagetools inspect|si_p3_docker [0-9]+ run|helmfile .* sync|\bsi_sync\b|(si_)?kubectl (apply|delete|create|patch|run|rollout restart)|si_apply_chi"
     r"|si_p3_commit|si_p3_push|si_revert_p3|si_accept_a_track|si_agent_start|si_replica_grant_probe|docker run"
     r"|arbiter-admin indexer (quarantine|release)"
     r"|si_(ch_admin|ch_exec) [^\"]*\"(CREATE|INSERT|DROP|ALTER|TRUNCATE|OPTIMIZE|SYSTEM|ATTACH|RENAME)"
@@ -24942,7 +27366,8 @@ print(f"shellcheck -S warning clean ({len(bashes)} blocks, the §0 chain and §0
 Then fill and check (local; `shellcheck` and `fish` must be installed, `brew install shellcheck fish` in the user's terminal if not):
 
 ```bash
-W=<path>; T="$HOME/.cache/s3c4-task47"; cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" docs/storage-integrity-devnet2-stage3-p3-replica-reads.md
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ T="$HOME/.cache/s3c4-task47"; cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" docs/storage-integrity-devnet2-stage3-p3-replica-reads.md
 python3 -I "$T/chain.py" docs storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md storage-integrity-devnet2-multi-source-tracks.md \
   storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md storage-integrity-devnet2-stage3-indexer-c.md \
   storage-integrity-devnet2-stage3-p1-backups.md storage-integrity-devnet2-stage3-p2-members.md > "$T/helpers-chain.sh"
@@ -24952,20 +27377,32 @@ grep -c 'storage-integrity-devnet2-stage3-p3-replica-reads.md' .github/workflows
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 ```
 
-Expected: `filled docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`; `8`; then the checker's lines `headings ok (35), anchors 91-replica-serving, 92-member-status-endpoint, 93-leases`, `one bash block in §0`, `blocks parse (63 bash under bash, /bin/bash, 3 fish under fish --no-execute)`, `mutating blocks confirmed (33); confirmed blocks the pattern does not see as mutating: []`, `no hard-wrapped prose`, `helpers: 29 defined in §0, redefining from the chain: []; used but undefined: []; defined but used nowhere: []` and `shellcheck -S warning clean (63 blocks, the §0 chain and §0 prepended)`; `…chart.yml:2`, `…multi-source.md:2`, `…multi-source-tracks.md:2`; `Ran <N0+11> tests` and `OK`. A redefinition from the chain or an undefined helper means an earlier runbook's §0 changed since this task was drafted: rename this runbook's helper or use the earlier one, then run the checks again. If Plan S3-C1's runbook has more than one bash block in its §0, `chain.py` takes its first only (D20): a helper the P3 runbook needs from a later block shows up as undefined here.
+Expected: `filled docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`; `8`; then the checker's lines `headings ok (35), anchors 91-replica-serving, 92-member-status-endpoint, 93-leases`, `one bash block in §0`, `blocks parse (63 bash under bash, /bin/bash, 3 fish under fish --no-execute)`, `mutating blocks confirmed (34); confirmed blocks the pattern does not see as mutating: []`, `no hard-wrapped prose`, `helpers: 34 defined in §0, redefining from the chain: []; used but undefined: []; defined but used nowhere: []` and `shellcheck -S warning clean (63 blocks, the §0 chain and §0 prepended)`; `…chart.yml:2`, `…multi-source.md:2`, `…multi-source-tracks.md:2`; `Ran <N0+11> tests` and `OK`. A redefinition from the chain or an undefined helper means an earlier runbook's §0 changed since this task was drafted: rename this runbook's helper or use the earlier one, then run the checks again. If Plan S3-C1's runbook has more than one bash block in its §0, `chain.py` takes its first only (D20): a helper the P3 runbook needs from a later block shows up as undefined here.
 
 - [ ] **Step 7: Commit the runbook**
 
 ```bash
-W=<path>; cd "$W" && git status --short
-git add docs/storage-integrity-devnet2-stage3-p3-replica-reads.md docs/storage-integrity-devnet2-multi-source.md docs/storage-integrity-devnet2-multi-source-tracks.md .github/workflows/storage-integrity-chart.yml
-git commit -q -F - <<'EOF'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && git status --short
+git add docs/storage-integrity-devnet2-stage3-p3-replica-reads.md docs/storage-integrity-devnet2-multi-source.md docs/storage-integrity-devnet2-multi-source-tracks.md .github/workflows/storage-integrity-chart.yml || exit 1
+before_head="$(git rev-parse HEAD)" || exit 1
+if ! git commit -S -q -F - <<'EOF'
 docs(storage-integrity): stage-3 P3 replica-reads runbook
 
 docs/storage-integrity-devnet2-stage3-p3-replica-reads.md: entry checks (the P2 exit record, the rejected-rows test at ARBITER_PIN_P2, the token Secrets by key name, the rewriter parity), the si_gateway replica grant per installation, the agent window per host (member image with its serving endpoint, then host image, HouseGate agent sidecar and replica reads), serving on per member after the user's agent upgrade, the replica-read rules, the indexer-c quarantine drill with reads from members through the upgraded local agent, the exit record, rollback and operating rules. The stage-1 runbook's stage 8 and the tracks runbook's stage table and §8.2 point to it; the chart workflow runs on it.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
+then
+  echo "commit/signature failed: preserve staged work, unlock the actual signing key and retry; stop" >&2
+  exit 1
+fi
+si_checked_read_165="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_165" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_165}" != "$before_head" ] || exit 1
+si_checked_read_166="$(git log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_166}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
 git show --stat --oneline HEAD | cat
 git log --oneline origin/main..HEAD | cat
 ```
@@ -24974,45 +27411,86 @@ Expected: ` M` for the two runbooks and the workflow and `??` for the new runboo
 
 - [ ] **Step 8: Rehearse the runbook's commits and reverts (local only)**
 
-The runbook's own helpers make Task 48's 13 single-service commits against a local bare repository whose `main` is this branch's `HEAD`: `si_p3_commit` (with `si_p3_edit`), `si_render_diff_is` with the rendered objects §3 to §5 name, `si_p3_push` (the render tests, `si_head_is`, the record, the push); then a second push of a pushed commit, which must be refused; then `si_revert_p3` of all 13 in §8's order; then eight out-of-order sequences, which `si_p3_edit` or the render tests must refuse. `HOME` is a scratch directory, `si_sync`, `si_apply_chi` and `si_wait_chi` are stubs, and nothing reaches GitHub or a cluster. Write `$HOME/.cache/s3c4-task47/rehearse.sh` with the Write tool:
+The runbook's own helpers make Task 48's 13 single-service commits against a new local bare repository whose `main` has this branch's source files after the two protected credential-bearing paths are excluded before export: `si_p3_commit` (with `si_p3_edit`), `si_render_diff_is` with the rendered objects §3 to §5 name, `si_p3_push` (the render tests, `si_head_is`, the record, the push); then a second push of a pushed commit, which must be refused; then `si_revert_p3` of all 13 in §8's order; then eight out-of-order sequences, which `si_p3_edit` or the render tests must refuse. The evidence and disposable signing home are private scratch directories. The exact local revert prefix is extracted before its apply/sync case; that live tail is neither run nor stubbed. Rendering uses the task-local direct-Helm tool, and every push targets the new local bare repository. Nothing reaches GitHub or a cluster. Write `$HOME/.cache/s3c4-task47/rehearse.sh` with the Write tool:
 
 ```bash
 #!/usr/bin/env bash
 # Rehearses the stage-3 P3 runbook's single-service commits (§3 to §5) and their
 # reverts (§8) with the runbook's own §0 helpers, against a local bare origin
 # whose main is this branch's HEAD, then the out-of-order commits the render
-# tests must refuse. A local tool of Plan S3-C4 Task 47, never committed: HOME
-# is a scratch directory, si_sync, si_apply_chi and si_wait_chi are stubs, and
-# nothing reaches GitHub or a cluster.
+# tests must refuse. A local tool of Plan S3-C4 Task47, never committed: disposable isolated
+# signing, private evidence, direct local Helm and the exact local revert
+# prefix only. No apply/sync tail or forbidden command is run or stubbed.
 #
-# usage: rehearse.sh <production worktree> <ledger.env> <chain.py>
+# usage: rehearse.sh <production worktree> <ledger.env> <chain.py> <local_render.py>
 set -eo pipefail
-W=$1 LEDGER=$2 CHAIN=$3
+W=$1 LEDGER=$2 CHAIN=$3 DIRECT=$4
 L="$(mktemp -d)"
 echo "rehearsal directory $L"
+# Export before copying: never materialize the two protected production files
+# or clone production history into scratch. The new repository has fixture history only.
+python3 -I - "$DIRECT" "$W" "$L/seed" <<'PY_EXPORT'
+import importlib.util,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("direct",sys.argv[1]);tool=importlib.util.module_from_spec(spec);spec.loader.exec_module(tool)
+seed=Path(sys.argv[3]);seed.mkdir();tool.export_base(sys.argv[2],"HEAD",seed)
+PY_EXPORT
+git -C "$L/seed" init -q
+git -C "$L/seed" config user.email chen@sentio.xyz
+git -C "$L/seed" config user.name poetry
+git -C "$L/seed" config commit.gpgsign true
+# Disposable fixture-only signing; never use the user's GNUPGHOME or signing key.
+export GNUPGHOME="$L/gnupg"
+mkdir -m 700 "$GNUPGHOME"
+gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key 'Task47 rehearsal <fixture@example.invalid>' ed25519 sign 0 > "$L/keygen.log" 2>&1
+fingerprint="$(gpg --batch --with-colons --list-secret-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}')"
+[[ "$fingerprint" =~ ^[0-9A-F]{40}$ ]] || exit 1
+git -C "$L/seed" config user.signingkey "$fingerprint"
+git -C "$L/seed" config gpg.program "$(command -v gpg)"
+trap 'gpgconf --homedir "$GNUPGHOME" --kill gpg-agent >/dev/null 2>&1 || true' EXIT
+git -C "$L/seed" add -f -A # preserve every safely exported regular file, including tracked source ignored by a fresh Git index
+git -C "$L/seed" commit -S -q -m "Task47 protected-path-excluded fixture source" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+BASE="$(git -C "$L/seed" rev-parse HEAD)"
 git init -q --bare "$L/origin.git"
-git -C "$W" push -q "$L/origin.git" HEAD:refs/heads/main
-git clone -q "$L/origin.git" "$L/work"
+git -C "$L/seed" push -q "$L/origin.git" HEAD:refs/heads/main
+git clone -q --branch main "$L/origin.git" "$L/work"
 cd "$L/work"
-git config user.email rehearsal@localhost
-git config user.name rehearsal
+git config extensions.worktreeConfig true
+git config --worktree user.email chen@sentio.xyz
+git config --worktree user.name poetry
+git config --worktree commit.gpgsign true
+git config --worktree user.signingkey "$fingerprint"
+git config --worktree gpg.program "$(command -v gpg)"
 git checkout -q --detach origin/main
 python3 -I "$CHAIN" docs storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md \
   storage-integrity-devnet2-multi-source-tracks.md storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md \
   storage-integrity-devnet2-stage3-indexer-c.md storage-integrity-devnet2-stage3-p1-backups.md storage-integrity-devnet2-stage3-p2-members.md > "$L/chain.sh"
 python3 -I "$CHAIN" docs storage-integrity-devnet2-stage3-p3-replica-reads.md > "$L/p3.sh"
-export HOME="$L/home"
-mkdir -p "$HOME"
 # shellcheck disable=SC1091
-source "$L/chain.sh" > /dev/null 2>&1 || true
+source "$L/chain.sh"
 # shellcheck disable=SC1091
 source "$L/p3.sh"
+si_backup="$L/evidence"
 # shellcheck disable=SC2154 # si_backup is set by the runbook's §0 (p3.sh)
 mkdir -m 700 "$si_backup"
 { cat "$LEDGER"; echo "HOUSEGATE_REPO=$L/none"; echo "SENTIO_NODE_REPO=$L/none"; } > "$si_backup/pins"
-si_sync() { echo "(stub) helmfile sync --selector name=$1"; }
-si_apply_chi() { echo "(stub) kubectl apply --dry-run=server -f $1; kubectl apply -f $1; wait for $2"; }
-si_wait_chi() { echo "(stub) wait for $1"; }
+# Actual audited local rendering replaces the inherited Helmfile renderer;
+# no successful placeholder stands in for a forbidden command.
+si_render_diff() { python3 -I "$DIRECT" diff --tree "$PWD" --base-ref HEAD^ --release "$1"; }
+# Verify the canonical revert's exact local prefix only. Its live apply/sync
+# case is neither executed nor stubbed, and is not claimed by this rehearsal.
+python3 -I - "$L/p3.sh" "$L/revert-prefix.sh" <<'PY'
+import sys
+from pathlib import Path
+text=Path(sys.argv[1]).read_text()
+start=text.index("si_revert_p3() {")
+end=text.index('\n  case "$2" in',start)
+prefix=text[start:end].replace("si_revert_p3() {","si_p3_revert_prefix() {",1)+"\n}\n"
+assert "si_sync" not in prefix and "si_apply_chi" not in prefix
+Path(sys.argv[2]).write_text(prefix)
+PY
+# shellcheck disable=SC1091
+source "$L/revert-prefix.sh"
 step() { # $1 label, $2 commit record, $3 release or empty, then the objects its render must change
   local label="$1" record="$2" rel="$3" files
   shift 3
@@ -25040,7 +27518,7 @@ if si_p3_push monitoring-commit k8s-sea/sentio-network-devnet2/storage-integrity
   echo "si_p3_push pushed a commit twice"; exit 1
 fi
 grep -o 'that commit was pushed already; never re-run a confirmed block' "$L/repush.log"
-revert() { si_revert_p3 "$1" "$2" > "$L/revert-$1.log" 2>&1 || { tail -n 20 "$L/revert-$1.log"; return 1; }; echo "reverted $1 ($(grep -E '^(OK|FAILED)' "$L/revert-$1.log"))"; }
+revert() { si_p3_revert_prefix "$1" "$2" > "$L/revert-$1.log" 2>&1 || { tail -n 20 "$L/revert-$1.log"; return 1; }; echo "reverted $1 ($(grep -E '^(OK|FAILED)' "$L/revert-$1.log"))"; }
 revert monitoring-commit storage-integrity-si-v2
 for x in a c b; do revert "serve-$x-commit" "sentio-node-devnet2-indexer-$x"; done
 for x in a c b; do
@@ -25051,11 +27529,12 @@ revert grant-network-commit storage-integrity-si-v2
 revert grant-indexer-c-commit chi:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml:storage-integrity-si-v2-indexer-c
 revert grant-indexer-b-commit chi:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml:storage-integrity-si-v2-indexer-b
 git fetch -q origin main
-git diff --quiet "$(git -C "$W" rev-parse HEAD)" origin/main && echo "after the 13 reverts every file is the PR's again"
+git diff --quiet "$BASE" origin/main || { echo "rehearsal tree comparison failed or found differences; stop" >&2; exit 1; }
+echo "after the 13 reverts every exported source file is the PR's again"
 # Out of order: the last label of each sequence is refused by si_p3_edit or by the render tests.
 for seq in "G-n" "W-b-m" "G-b G-c G-n W-b-h" "G-b G-c G-n W-c-m" "G-b G-c G-n W-b-m W-b-h W-a-m" "S-b" \
   "G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-c" "G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-b M"; do
-  git checkout -q --detach "$(git -C "$W" rev-parse HEAD)"
+  git checkout -q --detach "$BASE"
   last=${seq##* }
   for label in $seq; do
     if ! files="$(si_p3_edit "$label" 2> "$L/edit.err")"; then echo "[$seq] $label: refused by si_p3_edit: $(tail -n 1 "$L/edit.err")"; git checkout -q -- .; break; fi
@@ -25070,25 +27549,27 @@ for seq in "G-n" "W-b-m" "G-b G-c G-n W-b-h" "G-b G-c G-n W-c-m" "G-b G-c G-n W-
 done
 ```
 
-Then run it (about 20 minutes; the suite runs 26 times):
+Then run it (allow at least one hour on a busy host; the suite runs26 times plus8 negative cases):
 
 ```bash
-W=<path>; T="$HOME/.cache/s3c4-task47"
-bash "$T/rehearse.sh" "$W" "$T/ledger.env" "$T/chain.py" 2>&1 | tee "$T/rehearse.log" | grep -v '^Templating release='
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ T="$HOME/.cache/s3c4-task47"
+bash "$T/rehearse.sh" "$W" "$T/ledger.env" "$T/chain.py" "$T/local_render.py" 2>&1 | tee "$T/rehearse.log" | grep -v '^Templating release='
 ```
 
-Expected, in order: `rehearsal directory <dir>`; for each label `G-b`, `G-c`, `G-n`, `W-b-m`, `W-b-h`, `W-c-m`, `W-c-h`, `W-a-m`, `W-a-h`, `S-b`, `S-c`, `S-a`, `M` a line `<label> pushed (OK): chore(devnet2): stage-3 P3 …` (its subject from `si_p3_message`), each but `G-b` and `G-c` preceded by `render diff of <release>: …` naming exactly `ClickHouseInstallation/storage-integrity-si-v2` (`G-n`), the release's `ConfigMap/…-si-member-config` and `StatefulSet/…-si-member` (`W-<x>-m`, `S-<x>`), its `ConfigMap/…-node-config` and `StatefulSet/<release>` (`W-<x>-h`), and `VMRule/storage-integrity-si-v2` (`M`); `that commit was pushed already; never re-run a confirmed block`; 13 lines `reverted <record> (OK)` from `monitoring-commit` to `grant-indexer-b-commit`; `after the 13 reverts every file is the PR's again`; then, in this order, `[G-n] G-n: refused by the render tests (FAILED (failures=2))`, `[W-b-m] W-b-m: refused by the render tests (…)`, `[G-b G-c G-n W-b-h] W-b-h: …`, `[G-b G-c G-n W-c-m] W-c-m: …`, `[G-b G-c G-n W-b-m W-b-h W-a-m] W-a-m: …`, `[S-b] S-b: refused by si_p3_edit: si_p3_edit S-b: no key siMember.serve`, `[… W-a-h S-c] S-c: …` and `[… S-b M] M: …`, each of the others refused by the render tests. A label that fails, a render diff that names another object, or an out-of-order sequence that passes: stop and fix the runbook, the editor or the tests on the branch (a new commit, then Steps 6 to 8 again).
+Expected, in order: `rehearsal directory <dir>`; for each label `G-b`, `G-c`, `G-n`, `W-b-m`, `W-b-h`, `W-c-m`, `W-c-h`, `W-a-m`, `W-a-h`, `S-b`, `S-c`, `S-a`, `M` a line `<label> pushed (OK): chore(devnet2): stage-3 P3 …` (its subject from `si_p3_message`), each but `G-b` and `G-c` preceded by `render diff of <release>: …` naming exactly `ClickHouseInstallation/storage-integrity-si-v2` (`G-n`), the release's `ConfigMap/…-si-member-config` and `StatefulSet/…-si-member` (`W-<x>-m`, `S-<x>`), its `ConfigMap/…-node-config` and `StatefulSet/<release>` (`W-<x>-h`), and `VMRule/storage-integrity-si-v2` (`M`); `that commit was pushed already; never re-run a confirmed block`; 13 lines `reverted <record> (OK)` from `monitoring-commit` to `grant-indexer-b-commit`; `after the 13 reverts every exported source file is the PR's again`; then, in this order, `[G-n] G-n: refused by the render tests (FAILED (failures=2))`, `[W-b-m] W-b-m: refused by the render tests (…)`, `[G-b G-c G-n W-b-h] W-b-h: …`, `[G-b G-c G-n W-c-m] W-c-m: …`, `[G-b G-c G-n W-b-m W-b-h W-a-m] W-a-m: …`, `[S-b] S-b: refused by si_p3_edit: si_p3_edit S-b: no key siMember.serve`, `[… W-a-h S-c] S-c: …` and `[… S-b M] M: …`, each of the others refused by the render tests. A label that fails, a render diff that names another object, or an out-of-order sequence that passes: stop and fix the runbook, the editor or the tests on the branch (a new commit, then Steps 6 to 8 again).
 
 - [ ] **Step 9: Full production checks**
 
 ```bash
-W=<path>; cd "$W" && git status --porcelain | wc -l | tr -d ' '
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && git status --porcelain | wc -l | tr -d ' '
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict 2>&1 | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict 2>&1 | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict 2>&1 | tail -1
 helm lint charts/sentio-node --strict 2>&1 | tail -1
-bash scripts/storage-integrity/render-inertness.sh origin/main
+python3 -I "$HOME/.cache/s3c4-task47/local_render.py" compare --tree "$W" --base-ref origin/main
 git diff --stat origin/main...HEAD | tail -1
 ```
 
@@ -25099,17 +27580,31 @@ Expected: `0`; `Ran <N0+11> tests` and `OK` (write down this count for the PR); 
 This step needs explicit user confirmation in chat. It publishes the branch; nothing is applied or synced.
 
 ```bash
-W=<path>; cd "$W" && git push -u origin HEAD
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" || exit 1
+si_checked_read_167="$(git branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_167}" = urwt/codex/multi-source-s3c4 ] || exit 1
+si_checked_read_168="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -z "${si_checked_read_168}" ] || exit 1
+commits="$(git rev-list origin/main..HEAD)" || exit 1
+[ -n "$commits" ] || exit 1
+for c in $commits; do
+  si_checked_read_169="$(git log -1 --format='%an <%ae> %G?' "$c")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  [ "${si_checked_read_169}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git verify-commit "$c" || exit 1
+done
+git push -u origin HEAD || exit 1
 ```
 
-Expected: `branch 'urwt/claude/multi-source-s3c4' set up to track 'origin/urwt/claude/multi-source-s3c4'`.
+Expected: `branch 'urwt/codex/multi-source-s3c4' set up to track 'origin/urwt/codex/multi-source-s3c4'`.
 
 - [ ] **Step 11: PR (requires explicit user confirmation)**
 
 This step needs explicit user confirmation in chat. P3 adds a grant, a host flag and new chart surfaces that widen the blast radius, so it goes through review (the user's production rule).
 
 ```bash
-W=<path>; cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p')" && [ -n "$count" ] && body="$(mktemp)" && cat > "$body" <<'EOF'
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+ cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p')" && [ -n "$count" ] && body="$(mktemp)" && cat > "$body" <<'EOF'
 ## Summary
 - Multi-source SI stage 3 P3, reads from members (housegate spec 2026-10-14 §11; Plan S3-C4): a host serves a quarantined or unreachable owner's SI databases read-only, in safe mode, from its si-member's copies.
 - `charts/sentio-node`: `storageIntegrity.replicaReads` (the host's `storage_integrity.replica_reads.member_status_url`, and the member status token from its own Secret `<release>-si-member-status-token` on the `sentio-node` container only; no other container, volume or ConfigMap of the host pod names it, and none names the `si_member` password Secret) and `siMember.serve` (the si-member's serving endpoint on its `status` port, serving, the owner probe and the lease, in the member's own config file and checksum). Both are comments by default.
@@ -25122,15 +27617,15 @@ Inert on merge: nothing on sea applies or syncs on merge, and every release rend
 ## Test plan
 - [x] `python3 -B charts/storage-integrity/tests/test_render.py` (TEST_COUNT tests)
 - [x] the three `helm lint --strict` profiles and `helm lint charts/sentio-node --strict`
-- [x] `scripts/storage-integrity/render-inertness.sh origin/main`: the eight releases identical
+- [x] task-local direct-Helm inertness: eight releases identical; no Helmfile command run
 - [x] the runbook: the sections of the plan's contract, `Confirm before running.` before every block that writes, `bash -n`, `fish --no-execute` and `shellcheck -S warning` on every block with the earlier runbooks' §0 helpers, every helper defined
 - [x] a local rehearsal of the 13 single-service commits and their 13 reverts with the runbook's own helpers (render tests after each, exactly the expected rendered objects), and eight out-of-order sequences refused
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 sed -i '' "s/TEST_COUNT/$count/" "$body"
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3c4 --title "storage-integrity: multi-source SI stage 3 P3 (replica reads, agent window, runbook)" --body-file "$body"
-gh pr view urwt/claude/multi-source-s3c4 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3c4 --title "storage-integrity: multi-source SI stage 3 P3 (replica reads, agent window, runbook)" --body-file "$body"
+gh pr view urwt/codex/multi-source-s3c4 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
 ```
 
 Expected: the PR URL, then `<number> <url>`. Prefix the commands of Steps 12 and 13 with `pr=<number>;`.
@@ -25146,36 +27641,94 @@ gh pr checks "$pr" --repo sentioxyz/production --watch
 
 Expected: `validate` of `Storage-integrity chart validation` passes (its paths cover `charts/**` and, since Step 6, the runbook). A failure: read it with `gh run view --repo sentioxyz/production --log-failed` (a remote read, confirmed with this step), fix it on the branch in a new commit, run Steps 8 and 9 again, push only after its own confirmation, and watch again.
 
+Write the local, never committed `$HOME/.cache/s3c4-task47/check-identities.py` before the next step. It consumes the complete paginated REST commit listing, checks primary authors separately from GitHub coauthors, permits no coauthor or exactly the canonical Claude trailer, and binds the final REST commit to the locally verified head. Empty, malformed, duplicated or REST-limit listings stop the merge. Ordinary task commits still require the canonical trailer.
+
+```python
+"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+```
+
 - [ ] **Step 13: Merge and record `P3_PR` (explicit user confirmation for the merge, and again for each of the record's remote steps)**
 
 The merge needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 48 runs the runbook.
 
 ```bash
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 11 first"; exit 1; }
-gh pr merge "$pr" --repo sentioxyz/production --squash
+set -eo pipefail
+T="$HOME/.cache/s3c4-task47"
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3-worktrees/s3c4-production.json")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+si_checked_read_170="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_170" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_170}" = "$head" ] || exit 1
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I "$T/check-identities.py" "$head" || exit 1
+si_checked_read_171="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_171" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_171}" = "$head" ] || exit 1
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$head" || exit 1
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 ```
 
-Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P3_PR`, the PR number, with the record procedure (contract §32.7, Plan S3-C1 contract §19, decision D23), never predicting it. First write the run record `$HOME/.cache/s3-ledger/record-s3c4-47.md` with the Write tool: one paragraph, `sentioxyz/production#<pr>` (Plan S3-C4 Task 47: host replica reads, member serving, the si_gateway replica grant, replica-read monitoring, render tests and the P3 runbook) squash-merged as `<sha>` at <mergedAt> UTC; then the sub-items `- test_render.py <N> tests OK (Step 9)`, `- the three helm lint --strict profiles and charts/sentio-node passed; render-inertness.sh origin/main printed eight identical lines`, `- runbook checker: 35 headings, 63 bash and 3 fish blocks, 33 mutating blocks confirmed, shellcheck -S warning clean`, `- local rehearsal: 13 commits pushed and 13 reverts with the suite OK after each; eight out-of-order sequences refused`, `- CI validate passed`.
+Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P3_PR`, the PR number, with the record procedure (contract §32.7, Plan S3-C1 contract §19, decision D23), never predicting it. First write the run record `$HOME/.cache/s3-ledger/record-s3c4-47.md` with the Write tool: one paragraph, `sentioxyz/production#<pr>` (Plan S3-C4 Task 47: host replica reads, member serving, the si_gateway replica grant, replica-read monitoring, render tests and the P3 runbook) squash-merged as `<sha>` at <mergedAt> UTC; then the sub-items `- test_render.py <N> tests OK (Step 9)`, `- the three helm lint --strict profiles and charts/sentio-node passed; task-local direct-Helm comparison printed eight identical lines; canonical Helmfile wrapper was not executed`, `- runbook checker: 35 headings, 63 bash and 3 fish blocks, 34 mutating blocks confirmed, shellcheck -S warning clean`, `- local rehearsal: 13 commits pushed and 13 reverts with the suite OK after each; eight out-of-order sequences refused`, `- CI validate passed`.
 
 R1 (local; its housegate fetch reads a remote, so it needs explicit user confirmation in chat), with `pr=<number>;` as its prefix:
 
 ```bash
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 11 first"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" = MERGED ] || { echo "the P3 PR is not merged: stop"; exit 1; }
+si_checked_read_172="$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_172}" = MERGED ] || { echo "the P3 PR is not merged: stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=47
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
-git -C "$h" fetch -q origin
+git -C "$h" fetch -q origin || exit 1
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c4-ledger-$n" "urwt/claude/multi-source-s3c4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+[ ! -e "$L/record-s3c4-$n.urwt.json" ] || { echo "saved ledger URWT exists: reconcile before an explicit resume"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c4-ledger-$n" "urwt/codex/multi-source-s3c4-ledger-$n" "$ref")" || exit 1
+(set -C; printf '%s\n' "$out" > "$L/record-s3c4-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3c4-$n.urwt.json")" || exit 1
+si_checked_read_175="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_175" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_174="$(git -C "$h" rev-parse "$ref")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_174" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_173="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${si_checked_read_175}" = "${si_checked_read_174}" ] && [ -z "${si_checked_read_173}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-$n"
+si_checked_read_176="$(git -C "$d" branch --show-current)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_176}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || exit 1
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+before_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c4-$n.md" P3_PR="$pr" || exit 1
-git -C "$d" commit -q -m "docs(plan): record P3_PR of Plan S3-C4 (Task 47)
+git -C "$d" commit -S -q -m "docs(plan): record P3_PR of Plan S3-C4 (Task 47)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "signed ledger commit failed; preserve changes and unlock this repository's actual key; stop"; exit 1; }
+si_checked_read_177="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_177" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_177}" != "$before_head" ] || exit 1
+si_checked_read_178="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_178}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
@@ -25186,25 +27739,50 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 ```bash
 L="$HOME/.cache/s3-ledger"; n=47
 d="$(sed -n 1p "$L/record-s3c4-$n")"; ref="$(sed -n 2p "$L/record-s3c4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+si_checked_read_179="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_179}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+si_checked_read_181="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_180="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_181}" = 1 ] && [ -z "${si_checked_read_180}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  si_record_subject="$(git -C "$d" log -1 --format=%s)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  printf '%s\n\n%s\n' "${si_record_subject}: Appendix C of Plan S3-C4 only, docs only (contract §32.7, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${si_record_subject}" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 47's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the ledger PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 47's ledger record"). After that confirmation, set `pr` to this ledger PR number and run:
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; T="$HOME/.cache/s3c4-task47"; n=47
+[[ "${pr:-}" =~ ^[1-9][0-9]*$ ]] || exit 1
+d="$(sed -n 1p "$L/record-s3c4-$n")" || exit 1
+head="$(git -C "$d" rev-parse HEAD)" || exit 1
+si_checked_read_183="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_183}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+si_checked_read_184="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_184" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_184}" = "$head" ] || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I "$T/check-identities.py" "$head" || exit 1
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+```
+
+Expected: `PR commit identities and pinned head verified`, then the squash merge. Any identity, trailer, pagination or head mismatch stops before merging. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
+git -C "$h" fetch -q origin || exit 1
 python3 -I "$L/s3-ledger.py" get "$h" P3_PR
 ```
 
 Expected: `P3_PR=<the value written>`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints `P3_PR`. Task 48 reads it from there, waits for `P2_END` on its ledger copy, and runs the runbook from its live worktree (`multi-source-s3c4-live`, held at a detached, freshly fetched `origin/main`), never from this worktree.
+
 
 ---
 
@@ -25219,7 +27797,9 @@ Contract §32.4–§32.7, as clarified by K44–K50 and decisions D19, D24, D29,
 
 Nothing here changes the consensus format, a voter, arbiter or arbiter-proto (contract §0, §7). The drill's quarantine and release of indexer-c (`INDEXER_C_ID`) are the only consensus writes: two authority-signed commands outside the consensus update, each confirmed, which leave indexer-c's `quarantine_generation` two higher for good (harmless). Every commit is undone by its own revert (runbook §8; "What rollback means here" at the end of this task), so no step is irreversible. What stays: indexer-a's acceptance value `5301` in `devnet101.swap_new2`, row `(4, 'p3-6.1-4')` of `<acceptance-db>.s3e_e2e` and their two promotions, spent within half of the promotion budget.
 
-**Files** (anchors: production `origin/main` once `P3_PR` merged, that is base `75514e3de` with Plans S3-B, S3-C1 and S3-C3 and Task 47 applied). Every live edit is made by a confirmed runbook block (`si_p3_commit <label>`, which writes it with the runbook's `si_p3_edit`, commits exactly its files with the subject `si_p3_message <label>` and the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and `si_p3_push`, which pushes it as `HEAD:main` and records its hash). Both editors find their anchors by YAML structure and AST, never by a line number, so they apply on top of the earlier plans' hunks; the comment text below is `si_p3_edit`'s.
+**Review boundary.** The safe final Task47 fixture is `e14afbc4aa9bf065fbbf2d438c26233e6703ae2b` (1765 tracked files); the separate immutable pre-P3 upstream export has 1773 regular files at `cf3a86887d4c29dbc4cdf8cdc1732aaab3c3b615`. Both private production paths are excluded before archive or copy. These are source-review fixtures, never release or ledger evidence. Tasks44–46 release metadata, C2 successful 500-block integration and C3 final exit records remain execution stop gates. This task describes future operations; no live execution is claimed.
+
+**Files** (anchors: production `origin/main` once `P3_PR` merged, that is actual main `efe5c77859e98d0465838cb5763c7f1fcbd89ee3` with Plans S3-B, S3-C1 and S3-C3 and Task 47 applied). Every live edit is made by a confirmed runbook block (`si_p3_commit <label>`, which writes it with the runbook's `si_p3_edit`, commits exactly its files with the subject `si_p3_message <label>` and the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, and `si_p3_push`, which pushes it as `HEAD:main` and records its hash). Both editors find their anchors by YAML structure and AST, never by a line number, so they apply on top of the earlier plans' hunks; the comment text below is `si_p3_edit`'s.
 - Modify, commit G-b (Step 5, runbook §3.1 block 2; record `grant-indexer-b-commit`): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml` — the list `spec.configuration.users["si_gateway/grants/query"]` (Plan S3-B Task 18's posture C users, which replace base `:85-89`, ending with Plan S3-C3 Task 40's by-name engine grants) gains one last item `GRANT SELECT ON hg_replica.*`, in the quoting of the item before it and without a comment line; `charts/storage-integrity/tests/test_render.py` — `DEVNET2_REPLICA_READ_GRANTS["storage-integrity-si-v2-indexer-b"]` `False` → `True`. Subject `chore(devnet2): stage-3 P3 si_gateway hg_replica grant on indexer-b (users reload)`.
 - Modify, commit G-c (Step 6, runbook §3.2 block 2; `grant-indexer-c-commit`): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml` (Plan S3-B Task 19's file) — the same item; `DEVNET2_REPLICA_READ_GRANTS["storage-integrity-si-v2-indexer-c"]` → `True`. Subject `chore(devnet2): stage-3 P3 si_gateway hg_replica grant on indexer-c (users reload)`.
 - Modify, commit G-n (Step 7, runbook §3.3 block 2; `grant-network-commit`): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — at the end of `clickhouse.access` (Plan S3-B Task 18's block, before `da:` at base `:47`, ending with Plan S3-C3's `member: true`) the three comment lines `# Stage 3 P3 (docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`, `# §3.3): si_gateway reads its members' copies (GRANT SELECT ON`, `# hg_replica.*, its last grant; a users reload).` and `replicaReads: true`, in `access`'s indent; `DEVNET2_REPLICA_READ_GRANTS["storage-integrity-si-v2"]` → `True`. Subject `chore(devnet2): stage-3 P3 si_gateway hg_replica grant on the network installation (users reload)`.
@@ -25227,22 +27807,22 @@ Nothing here changes the consensus format, a voter, arbiter or arbiter-proto (co
 - Modify, commits W-b-h, W-c-h, W-a-h (Steps 8, 9, 10; runbook §4.1, §4.2, §4.3 block 4; `window-<x>-host-commit`): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-<x>-storage-integrity-si-v2-source-image.yaml` (base `:23` for a, `:19` for b; Plan S3-B Task 19's file for c) rewritten whole: a twelve-line header (`# Merged LAST into indexer-<x> by storage-integrity-si-v2.helmfile.yaml: the`, naming sentio-node `<SN_COMMIT_P3>` on housegate `<HG_TAG_P3>` and arbiter-core `<CORE_TAG_P3>`, the test constant that mirrors the pin, the rewriter it needs and, last, the rollback target, the image it replaces) and `node.image` with `repository: ghcr.io/sentioxyz/sentio-node`, `tag: "sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>"`, `pullPolicy: IfNotPresent`; for indexer-a also `docs/examples/storage-integrity-fresh-source-image.yaml` (base `:12`), the same under four more header lines that name it the copy of indexer-a's pin; in `sentio-node-indexer-<x>-storage-integrity-si-v2.yaml`, `housegateSidecar.image.tag` (base `:125` for a, `:122` for b) → `"<HG_TAG_P3>@<HG_DIGEST_P3>"`, the comment lines directly above it replaced by six lines (`# housegate <HG_TAG_P3>, the stage-3 P3 agent` … `# reached; lanes stay off. Rollback target (only while no member serves):`, `# v0.15.0@sha256:1b51de76b7b7a15a8006d0ac06febb10012c74c92d4950d07e4e5a5b77b3570f`), and at the end of `storageIntegrity` (after `snode`, base `:114` for a and `:115` for b) three comment lines and `replicaReads:` with `memberStatusURL: http://sentio-node-devnet2-indexer-<x>-si-member:9096` and `memberStatusTokenSecret:` `name: sentio-node-devnet2-indexer-<x>-si-member-status-token`, `key: status-token` (D29); `test_render.py` — the source constant (`FRESH_SOURCE_IMAGE` at base `:48`, `INDEXER_B_SOURCE_IMAGE` at base `:107`, `INDEXER_C_SOURCE_IMAGE` of Plan S3-B Task 19) → the P3 image as a two-line literal, `DEVNET2_AGENT_SIDECAR_IMAGES["sentio-node-devnet2-indexer-<x>"]` → `DEVNET2_P3_AGENT_SIDECAR_IMAGE`, `DEVNET2_REPLICA_READS["sentio-node-devnet2-indexer-<x>"]` → `"http://sentio-node-devnet2-indexer-<x>-si-member:9096"`. Subject `chore(devnet2): stage-3 P3 host image, agent sidecar <HG_TAG_P3> and replica reads on sentio-node-devnet2-indexer-<x>`.
 - Modify, commits S-b, S-c, S-a (Steps 12, 13, 14; runbook §5.1, §5.2, §5.3 block 1; `serve-<x>-commit`): `sentio-node-indexer-<x>-storage-integrity-si-v2.yaml` — at the end of `siMember.serve`, `# Serving on (docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`, `# §5.<n>), with the owner probe of every other SI indexer.`, `enabled: true` and `ownerHouseGate:` with the two other SI hosts of `DEVNET2_OWNER_HOUSEGATE`, quoted indexer-id keys in ascending order (member-b: `"0": sentio-node-devnet2-indexer-a:32001`, `"<C>": sentio-node-devnet2-indexer-c:34001`; member-c: `"0"`, `"1": sentio-node-devnet2-indexer-b:33001`; member-a: `"1"`, `"<C>"`); `DEVNET2_MEMBER_SERVE["sentio-node-devnet2-indexer-<x>"]` → `True`. Subject `chore(devnet2): stage-3 P3 serving on for member-<x>`.
 - Modify, commit M (Step 15, runbook §5.4 block 1; `monitoring-commit`): `storage-integrity-si-v2.yaml` — at the end of the top-level `monitoring` block (Plan S3-B Task 13's, with Plan S3-C3's `members`) `# Stage 3 P3 (docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`, `# §5.4): the replica-reads rules.`, `replicaReads:` / `enabled: true`; `DEVNET2_REPLICA_READ_MONITORING` → `True`. Subject `chore(devnet2): stage-3 P3 replica-read monitoring`.
-- Modify, the record PR (Step 22): `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md` — one paragraph `Record of the first run: …` at the end of `## 7. End`, right before `## 8. Rollback`; docs only, branch `urwt/claude/multi-source-s3c4-record`.
+- Modify, the record PR (Step 22): `docs/storage-integrity-devnet2-stage3-p3-replica-reads.md` — one paragraph `Record of the first run: …` at the end of `## 7. End`, right before `## 8. Rollback`; docs only, branch `urwt/codex/multi-source-s3c4-record`.
 - Modify, housegate (Step 23): `docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` Appendix C — the row `P3_END` and the run record `- P3 run (Task 48):` on the ledger copy that `s3-ledger.py ref <housegate> s3c4` prints (D34), with the record procedure of contract §32.7 from the URWT worktree `multi-source-s3c4-ledger-48`.
 - Create, local only and never committed: the session `$HOME/si-devnet2-stage3-p3-session` (`$S`, mode 700) with `live-path`, `ledger.env`, `helpers.sh`, `blocks/` (the block file of every block run, D24) and `task48/` (`$T48`, mode 700: the tools `p3-helpers.py`, `p3-edit.py`, `task48.sh`; the user scripts `user-6.1-baseline.sh`, `user-6.3-reads.sh`, `user-6.3-refusals.sh`, `user-6.5-read.sh`, which `p3_user_script` writes from the runbook's user blocks; Step 3's `rehearsal/` clone and each preview's clone `preview-<label>-<n>/`); the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19, verbatim) with `record-s3c4-48`, `record-s3c4-48.md` and, for a docs PR, `record-s3c4-48-pr.md` and `record-s3c4-48-pr-url`; under the evidence directory `$HOME/si-devnet2-stage3-p3` (`$si_backup`, mode 700, created by runbook §1.1) the contract §32.4 evidence the runbook's blocks write and this task's own `task48-*` files and markers.
 - Test: `p3_edit_check` (`p3-edit.py` `state`, `apply` and `same` against `si_p3_edit`'s edit, and `p3_tests`, the render tests with the count Step 2 records) and `p3_render_check` (the runbook's `si_render_diff_is`, or for a CHI commit exactly one added manifest line) on every preview and at every stage of Step 3's rehearsal, which also reverts the thirteen stages in reverse order and checks that each revert reads as the stage before; `p3_pushed_is` after every push; for the two CHI commits, the live users compared with git's and a server-side `kubectl diff` of the previewed manifest.
 
 **Interfaces:**
-- Consumes (ledger, read in Step 1 with `s3-ledger.py get` from each name's ledger copy, never predicted, never from a local checkout or a pending PR): Plan S3-A `ARBITER_DIGEST`; Plan S3-B `INDEXER_C_ID`, `ENROLMENT_EPOCH`, `OPERATOR_CHART_VERSION`; Plan S3-C2 `SN_COMMIT_P2`, `SN_DIGEST_P2` (the member image before Step 8 and its rollback target), `ARBITER_PIN_P2`, `CORE_TAG_P2` and the Task 36 run record `arbiter pin and integration run (Task 36)` (read with `s3-ledger.py show <housegate> s3c2`); Plan S3-C3 `P2_PR`, `MEMBER_IDS` (`member-a:0,member-b:1,member-c:<INDEXER_C_ID>`), `P2_END`; this plan's `HG_TAG_P3`, `HG_DIGEST_P3` (Task 44), `CORE_TAG_P3` (Task 45), `SN_COMMIT_P3`, `SN_DIGEST_P3` (Task 46) and `P3_PR` (Task 47). It writes `P3_END` only (`empty` before, `get` after). Task 47's ledger record must have passed its R4 before Step 1.
+- Consumes (ledger, read in Step 1 with `s3-ledger.py get` from each name's ledger copy, never predicted, never from a local checkout or a pending PR): Plan S3-A `ARBITER_DIGEST`; Plan S3-B `INDEXER_C_ID`, `ENROLMENT_EPOCH`, `OPERATOR_CHART_VERSION`; Plan S3-C2 `SN_COMMIT_P2`, `SN_DIGEST_P2` (the member image before Step 8 and its rollback target), `ARBITER_PIN_P2`, `P2_INTEGRATION_SOAK` (at least500), `CORE_TAG_P2` and the Task 36 run record `arbiter pin and integration run (Task 36)` (read with `s3-ledger.py show <housegate> s3c2`); Plan S3-C3 `P2_PR`, `MEMBER_IDS` (`member-a:0,member-b:1,member-c:<INDEXER_C_ID>`), `P2_END`; this plan's `HG_TAG_P3`, `HG_DIGEST_P3` (Task 44), `CORE_TAG_P3` (Task 45), `SN_COMMIT_P3`, `SN_DIGEST_P3` (Task 46) and `P3_PR` (Task 47). It writes `P3_END` only (`empty` before, `get` after). Task 47's ledger record must have passed its R4 before Step 1.
 - Consumes (Task 47, contract §32.1–§32.3, at their PR values): the values `storageIntegrity.replicaReads.{memberStatusURL, memberStatusTokenSecret{name, key}}`, `siMember.serve.{endpoint, enabled, ownerUnreachableAfter, leaseTTL, ownerHouseGate}`, `clickhouse.access.replicaReads`, `monitoring.replicaReads.enabled`; the rule group `storage-integrity-si-v2.replica-reads` with `StorageIntegrityReplicaServing`, `StorageIntegrityMemberStatusUnreachable`, `StorageIntegrityReplicaLeaseStuck`, `StorageIntegrityOwnerUnreachableFromMember`; `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv`; the constants `SI_GATEWAY_REPLICA_GRANT`, `DEVNET2_P3_HOST_IMAGE`, `REPLICA_READ_HOST_IMAGES`, `DEVNET2_P3_AGENT_SIDECAR_IMAGE`, `DEVNET2_AGENT_SIDECAR_IMAGES`, `DEVNET2_REPLICA_READS`, `DEVNET2_MEMBER_SERVE`, `DEVNET2_MEMBER_STATUS_TOKEN_SECRETS`, `DEVNET2_REPLICA_READ_GRANTS`, `DEVNET2_OWNER_HOUSEGATE`, `DEVNET2_MEMBER_SERVING_PORT`, `DEVNET2_REPLICA_READ_MONITORING`, `MONITORING_ALERTS["replica-reads"]`; and, beyond §32.3's list, the P3 image in the reviewed image sets the devnet2 overlays are checked against (Plan S3-B's `STAGE3_HOST_IMAGES` and `WRITER_AUTHORIZATION_IMAGES`, Plan S3-C3's `MEMBER_IMAGES`), Plan S3-C3's `DEVNET2_MEMBER_IMAGE` equal to the P2 member image, and `DEVNET2_CLICKHOUSE_POSTURE` `"C"` for all three installations. Step 2's `p3-edit.py check` stops before any live change if one of these is missing or disagrees with the ledger.
-- Consumes (the P3 runbook, contract §32.4, as merged with `P3_PR`): its sections exactly as §32.4 lists them; `si_backup="$HOME/si-devnet2-stage3-p3"`; its bash blocks per section as `p3_runbook_shape` names them (Step 1), each of the thirteen commit blocks making and recording its commit (`files="$(si_p3_commit <label>)"`, `si_p3_push <record> $files`); its §0 helpers of contract §32.4, `si_member_serving a|b|c`, `si_replica_status <a|b|c> <db> <table>`, `si_replica_hosts <a|b|c>`, `si_replica_grant_probe <network|indexer-b|indexer-c>` (a TSV with the header `row`, `role`, `expect`, `got`, `code`, `statement`), `si_wait_serving <x> <db>`, `si_failovers`, and its others that this task's blocks call: `si_p3_edit <label>`, `si_p3_message <label>`, `si_p3_commit`, `si_p3_push`, `si_render_diff_is`, `si_local_agent_version`, `si_acceptance_db`, `si_c_id`; the user blocks §6.1 block 2, §6.3 blocks 1 and 2, §6.5 block 2, each starting with the placeholder line `key_file=/path/to/devuser1-owner.key`; its drill values `(4, 'p3-6.1-4')` (§6.1) and `(5, 'p3-6.3-refused')` (§6.3, refused) and indexer-a's `5301` (§4.3); its evidence files `pins` (§1.1, ten `NAME=value` lines), `identities.txt`, `budget.txt` (one line ending `a drill spends at most <h>`), `budget-live-seq`, `budget-live-seq-start` (§1.3), `entry-checks.txt`, `p2-end-record.md`, `arbiter-pin-record.txt`, `rejected-rows-test.txt`, `token-secrets.txt`, `rewriter-parity.txt` (§2), `grants-<installation>.tsv`, `replica-grant-probe-<installation>.tsv` and the commit records `grant-<installation>-commit` (§3; `<installation>` ∈ `indexer-b`, `indexer-c`, `network`), `window-<x>.txt`, `window-<x>-member-commit`, `window-<x>-host-commit`, `serving-<x>-window.json`, `accept-5301.txt` (§4), `local-agent-version.txt`, `serve-<x>-commit`, `serve-<x>.txt`, `serving-<x>.json`, `monitoring-commit`, `monitoring.txt` (§5), `drill-count`, `copies-after-baseline.txt`, `drill-baseline.txt`, `quarantine-generation-before`, `quarantine.out`, `verify-quarantine.txt`, `serving-quarantined-<x>.json`, `status-replica-<x>.json`, `replica-hosts-<x>.json`, `agent.log`, `drill-reads.txt`, `drill-refusals.txt`, `release.out`, `verify-release.txt`, `serving-ended.txt` (§6), `budget-end.txt` and `p3-end.txt` (§7, whose last line is `P3_END=<YYYY-MM-DD>`).
-- Consumes (the earlier runbooks' §0 helpers through the P3 runbook's chain, D20): `si_kubectl`, `si_arbiter`, `si_voter`, `si_leader`, `si_show`, `si_images` (dynamic-table-set); `si_info`, `si_status`, `si_audit` (multi-source, as the indexer-c runbook extends them to `c`); `si_tracks`, `si_track`, `si_track_published`, `si_refusal`, `si_agent_start`, `si_agent_stop`, `si_agent_ch` (tracks); `si_state_size`, `si_vm_value`, `si_vmalert_groups`, `si_head_is` (stage-3 P0); `si_ch_admin`, `si_chi_state`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff`, `si_lockdown_dir` (lockdown); `si_member_pod`, `si_member_metrics a|b|c [<regexp>]`, `si_copies_check` (prints `copies equal: <n> of <n>`), `si_budget_capture`, `si_budget` (P2).
+- Consumes (the P3 runbook, contract §32.4, as merged with `P3_PR`): its sections exactly as §32.4 lists them; `si_backup="$HOME/si-devnet2-stage3-p3"`; its bash blocks per section as `p3_runbook_shape` names them (Step 1), each of the thirteen commit blocks making and recording its commit (`files="$(si_p3_commit <label>)"`, `si_p3_push <record> $files`); its §0 helpers of contract §32.4, `si_member_serving a|b|c`, `si_replica_status <a|b|c> <db> <table>`, `si_replica_hosts <a|b|c>`, `si_replica_grant_probe <network|indexer-b|indexer-c>` (a TSV with the header `row`, `role`, `expect`, `got`, `code`, `statement`), `si_wait_serving <x> <db>`, `si_failovers`, and its others that this task's blocks call: `si_p3_edit <label>`, `si_p3_message <label>`, `si_p3_commit`, `si_p3_push`, `si_render_diff_is`, `si_local_agent_version`, `si_acceptance_db`, `si_c_id`; the user blocks §6.1 block 2, §6.3 blocks 1 and 2, §6.5 block 2, each starting with `si_p3_user_terminal || exit 1`, then the placeholder line `key_file=/path/to/devuser1-owner.key`; its drill values `(4, 'p3-6.1-4')` (§6.1) and `(5, 'p3-6.3-refused')` (§6.3, refused) and indexer-a's `5301` (§4.3); its evidence files `pins` (§1.1, eleven `NAME=value` lines), `identities.txt`, `budget.txt` (one line ending `a drill spends at most <h>`), `budget-live-seq`, `budget-live-seq-start` (§1.3), `entry-checks.txt`, `p2-end-record.md`, `arbiter-pin-record.txt`, `rejected-rows-test.txt`, `token-secrets.txt`, `rewriter-parity.txt` (§2), `grants-<installation>.tsv`, `replica-grant-probe-<installation>.tsv` and the commit records `grant-<installation>-commit` (§3; `<installation>` ∈ `indexer-b`, `indexer-c`, `network`), `window-<x>.txt`, `window-<x>-member-commit`, `window-<x>-host-commit`, `serving-<x>-window.json`, `accept-5301.txt` (§4), `local-agent-version.txt`, `serve-<x>-commit`, `serve-<x>.txt`, `serving-<x>.json`, `monitoring-commit`, `monitoring.txt` (§5), `drill-count`, `copies-after-baseline.txt`, `drill-baseline.txt`, `quarantine-generation-before`, `quarantine.out`, `verify-quarantine.txt`, `serving-quarantined-<x>.json`, `status-replica-<x>.json`, `replica-hosts-<x>.json`, `agent.log`, `drill-reads.txt`, `drill-refusals.txt`, `release.out`, `verify-release.txt`, `serving-ended.txt` (§6), `budget-end.txt` and `p3-end.txt` (§7, whose last line is `P3_END=<YYYY-MM-DD>`).
+- Consumes (the earlier runbooks' §0 helpers through the P3 runbook's chain, D20): `si_kubectl`, `si_arbiter`, `si_voter`, `si_leader`, `si_show`, `si_images` (dynamic-table-set); `si_info`, `si_status`, `si_audit` (multi-source, as the indexer-c runbook extends them to `c`); `si_tracks`, `si_track`, `si_track_published`, `si_refusal`, `si_agent_start`, `si_agent_stop`, `si_agent_ch` (tracks); `si_state_size`, `si_vm_value`, `si_vmalert_groups`, `si_head_is` (stage-3 P0); `si_ch_admin`, `si_chi_state`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff`, `si_lockdown_dir` (lockdown); `si_member_pod`, `si_member_metrics a|b|c [<regexp>]`, `si_copies_check` (prints `copies equal: 6 of 6`), `si_budget_capture`, `si_budget` (P2).
 - Consumes (code facts, verbatim): the read-side quarantine refusal `storage_integrity: table <id> was refused: indexer_quarantined: <reason>` (`chproto.TableRefusedMessage`, §29.3; the reason `storage-integrity indexer <C> is quarantined`, tracks runbook §8.2); the `unsafe_latest` refusal `storage_integrity read mode unsafe_latest is not available for %s: it is served read-only from a copy of indexer %d's published data; read it with SQL_x_read_mode='safe'` (§29.2); the agent's log line `agent: replica failover` with `database`, `owner`, `reason`, `from`, `to` and the reason `owner_quarantined` (§29.3); the serving view's JSON (`node_id`; per database `database`, `owner`, `serving`, `reason`, `snapshot_id`, `entry`, `frozen_since_unix_ms`, `owner_quarantined`, `owner_unreachable`, `tables`, `lease` with `state`) and its reasons (§30.2–§30.3); the table-status fields `status`, `schema_hash`, `replica_of`, `served_from`, `owner_entry`, `frozen_since` (§29.1, K45) and the info fields `replica_databases`, `replica_hosts` (§31.6); the host series `sentio_node_storage_integrity_member_status_up`, `…_replica_serving{database}`, `…_replica_reads_in_flight{database}`, `…_replica_lease_releases_total{outcome}` (§31.4) and the member series `sentio_node_si_member_serve_databases{state}`, `…_not_serving{reason}`, `…_owner_unreachable{owner}` (§30.5); the owner-audit series `sentio_node_storage_integrity_owner_audit_mode{mode}` and `…_unclean_tables` (Plan S3-B §8); housegate `pkg/version.Info` (`housegate <version> commit <commit> <go version>`); the chart's `HOUSEGATE_SI_LANES` env of the `housegate-sidecar` container (`charts/sentio-node/templates/node.yaml:687`); `arbiter-admin indexer quarantine|release` with `--expected-generation` (tracks runbook §8).
 - Consumes (the user's own actions, D40): the upgrade of the local agent (the `housegate` on the user's `PATH`) to `HG_TAG_P3` (Step 11); the four drill scripts, which start the `devuser1` owner's agent with the owner's key file (Steps 16, 18 and 20).
 - Produces (devnet2): `si_gateway` with `GRANT SELECT ON hg_replica.*` on the three member-hosting installations; every SI host on `SN_DIGEST_P3` with the agent sidecar `HG_TAG_P3` and `storage_integrity.replica_reads`; every si-member on `SN_DIGEST_P3` with its serving endpoint and serving enabled; the rule group `storage-integrity-si-v2.replica-reads`; indexer-c quarantined and released once each; indexer-a's value `5301`; row `(4, 'p3-6.1-4')` of `<acceptance-db>.s3e_e2e`.
 - Produces (production `main`, single-service commits in this order, each made and pushed by its runbook block after this task's preview and the user's confirmation): G-b, G-c, G-n, W-b-m, W-b-h, W-c-m, W-c-h, W-a-m, W-a-h, S-b, S-c, S-a, M; then the record PR (`RECORD_PR`, title `docs(storage-integrity): record the devnet2 stage-3 P3 run`).
 - Produces (Appendix C, Step 23): `P3_END` (`YYYY-MM-DD`, from `p3-end.txt`) and the run record `P3 run` (the run's paragraph, then the steady state after P3 for Plan S3-D as its sub-items).
-- Produces (names added by this task, Appendix B): the session `$S`, `$T48` and its tools; the subcommands of `p3-helpers.py` (`chain`, `map`, `block`) and of `p3-edit.py` (`state`, `check`, `apply <stage>`, `files <stage>`, `same <dir> <file>…`) and its stage names; the helpers of `task48.sh` (`p3_tool`, `p3_record`, `p3_value`, `p3_id`, `p3_installation`, `p3_p3_image`, `p3_p2_image`, `p3_p3_sidecar`, `p3_db`, `p3_fresh_main`, `p3_tests`, `p3_pod`, `p3_pod_key`, `p3_container_image`, `p3_secret_refs`, `p3_token_refs`, `p3_host_metrics`, `p3_replica_series`, `p3_series`, `p3_view_check`, `p3_replica_hosts_check`, `p3_status_is`, `p3_member_window_check`, `p3_host_window_check`, `p3_owner_targets`, `p3_serve_check`, `p3_local_agent`, `p3_probe_ok`, `p3_copies_equal`, `p3_pinned_host_image`, `p3_replica_status_check`, `p3_promotions`, `p3_block`, `p3_user_script`, `p3_clear`, `p3_runbook_shape`, `p3_user_scripts_ok`, `p3_pins_match`, `p3_stage_block`, `p3_prev_stage`, `p3_render_check`, `p3_edit_check`, `p3_preview`, `p3_pushed_is`); the evidence names `task48-record.env` (one `KEY=value` per line, the last line of a key wins: `START_UTC`, `TESTS`, `BUDGET_HALF`, `PROMOTIONS_START`, `EPOCH_START`, `GEN_C_START`, `ACCEPT_5301`, `WINDOW_END_UTC`, `LOCAL_AGENT`, `SERVING_ON_UTC`, `MONITORING_UTC`, `BASELINE_COUNT`, `PUBLISHED_C`, `QUARANTINE_GENERATION`, `QUARANTINE_UTC`, `SERVED_UTC`, `FAILOVERS`, `READ_ROUNDS`, `RELEASE_UTC`, `SERVING_ENDED_UTC`, `END_UTC`, `P3_END`, `PROMOTIONS_END`, `STATE_BYTES`, `RECORD_PR`), `task48-preview-<label>.env`, the markers `task48-cleared-<script>`, `task48-ran-<script>`, `task48-local-agent-ok`, and every `task48-*` file a step names.
+- Produces (names added by this task, Appendix B): the session `$S`, `$T48` and its six tools, the immutable 19-file `$S/frozen.json`, actual `$S/live-urwt.json`, strict `p3-guard.py` commands `env/freeze/check/check-record/probe/preview/record`, complete audited `local_render.py` and `check-identities.py`; the subcommands of `p3-helpers.py` (`chain`, `map`, `block`) and of `p3-edit.py` (`state`, `check`, `apply <stage>`, `files <stage>`, `same <dir> <file>…`) and its stage names; the helpers of `task48.sh` (`p3_tool`, `p3_record`, `p3_value`, `p3_id`, `p3_installation`, `p3_p3_image`, `p3_p2_image`, `p3_p3_sidecar`, `p3_db`, `p3_fresh_main`, `p3_tests`, `p3_pod`, `p3_pod_key`, `p3_container_image`, `p3_secret_refs`, `p3_token_refs`, `p3_host_metrics`, `p3_replica_series`, `p3_series`, `p3_view_check`, `p3_replica_hosts_check`, `p3_status_is`, `p3_member_window_check`, `p3_host_window_check`, `p3_owner_targets`, `p3_serve_check`, `p3_local_agent`, `p3_probe_ok`, `p3_copies_equal`, `p3_pinned_host_image`, `p3_replica_status_check`, `p3_promotions`, `p3_block`, `p3_user_script`, `p3_clear`, `p3_runbook_shape`, `p3_user_scripts_ok`, `p3_pins_match`, `p3_stage_block`, `p3_prev_stage`, `p3_render_check`, `p3_edit_check`, `p3_preview`, `p3_pushed_is`, `p3_sources_ok`, `p3_preview_current`, `p3_before_push`, `p3_scratch_repo`, task-local `si_render_diff` and the checked wrapper `si_p3_push` delegating to unchanged `p3_runbook_push`); the evidence names `task48-record.env` (one `KEY=value` per line, the last line of a key wins: `START_UTC`, `TESTS`, `BUDGET_HALF`, `PROMOTIONS_START`, `EPOCH_START`, `GEN_C_START`, `ACCEPT_5301`, `WINDOW_END_UTC`, `LOCAL_AGENT`, `SERVING_ON_UTC`, `MONITORING_UTC`, `BASELINE_COUNT`, `PUBLISHED_C`, `QUARANTINE_GENERATION`, `QUARANTINE_UTC`, `SERVED_UTC`, `FAILOVERS`, `READ_ROUNDS`, `RELEASE_UTC`, `SERVING_ENDED_UTC`, `END_UTC`, `P3_END`, `PROMOTIONS_END`, `STATE_BYTES`, `RECORD_PR`), `task48-preview-<label>.env`, the markers `task48-cleared-<script>`, `task48-ran-<script>` (attempt only), `task48-done-<script>` (success SHA), `<script>.sha256`, `task48-local-agent-ok`, and every `task48-*` file a step names.
 
 **Conventions for this task.**
 - **Session and block files (D24, S3-B §15).** The agent runs every bash block of Steps 1–23, this task's and the runbook's, from a block file, never inside a heredoc: this task's blocks carry their own `<<'PY'` heredocs and the runbook's carry theirs. Block files are `$HOME/si-devnet2-stage3-p3-session/blocks/<nnn>-<what>.sh` (`<nnn>` counts up from `002` in the order the files are written, one numbering for both kinds; a file is never edited or reused once it ran). The agent writes this task's block files with the Write tool, the first three lines being
@@ -25253,9 +27833,9 @@ Nothing here changes the consensus format, a voter, arbiter or arbiter-proto (co
   cd "$P" || exit 1
   ```
 
-  followed by the block. A runbook block's file is written by `p3_block <section> <n> <confirmed|read-only> [<old line> <new line>]…` (called from a block of this task) as the next numbered file `<nnn>-runbook-<section>-<n>.sh`, whose path it prints: the same three lines, then the `<n>`th bash block of that runbook section of the live checkout's runbook, byte for byte, after checking that it is of the kind the step names and that it parses; only the runtime placeholder lines a step names are replaced, whole (§1.1's clone line, §8.2's `x=a`). Each file runs with the Bash tool as `bash -eo pipefail "$HOME/si-devnet2-stage3-p3-session/blocks/<nnn>-<what>.sh" < /dev/null` (the Bash tool's own shell is zsh, so a block never runs in it directly, and no command of a block can read the tool's stdin). Step 1's first two blocks have no preamble and run from fresh files in the agent's session scratchpad; its third runs from `$HOME/si-devnet2-stage3-p3-session/blocks/001-helpers.sh` without the preamble (it builds `helpers.sh`). A block that may wait longer than 10 minutes runs with `run_in_background: true`; read its output before the next step. A read-only block may run again from a new file; a confirmed block never does.
+  followed by the block. A runbook block's file is written by `p3_block <section> <n> <confirmed|read-only> [<old line> <new line>]…` (called from a block of this task) as the next numbered file `<nnn>-runbook-<section>-<n>.sh`, whose path it prints: the frozen-source check before sourcing helpers, the three setup lines, `p3_sources_ok`, `cd "$P"`, and for a commit its label and preview-parent check, then the `<n>`th bash block of that runbook section of the live checkout's runbook, byte for byte, after checking that it is of the kind the step names and that it parses; only the runtime placeholder lines a step names are replaced, whole (§1.1's clone line, §8.2's `x=a`). Each file runs with the Bash tool as `bash -eo pipefail "$HOME/si-devnet2-stage3-p3-session/blocks/<nnn>-<what>.sh" < /dev/null` (the Bash tool's own shell is zsh, so a block never runs in it directly, and no command of a block can read the tool's stdin). Step 1's first two blocks have no preamble and run from fresh files in the agent's session scratchpad; its third runs from `$HOME/si-devnet2-stage3-p3-session/blocks/001-helpers.sh` without the preamble (it builds `helpers.sh`). A block that may wait longer than 10 minutes runs with `run_in_background: true`; read its output before the next step. A read-only block may run again from a new file; a confirmed block never does.
 - **Runbook blocks (D19).** "Runbook §X block n" is the `n`th bash block of section §X of the merged runbook, counted as `p3_runbook_shape` counts them. A block preceded by `Confirm before running.` runs only after the step's gate has its yes. A confirmed block that stopped is never re-run as is: report its output (Commits below says what to do for a commit block). The runbook's checks are its own and bind; this task's checks come in addition, and a `stop` from either stops. If the runbook and this task disagree on what changes (a file, a value, a release, an order), stop and report before running either; never edit the runbook here (a runbook defect is Task 47's to fix in a reviewed PR).
-- **Explicit user confirmation.** Every remote or live mutation waits for an explicit yes in chat, given for that block only, and each step says so in its own line: each push to production `main` with its apply or sync (the thirteen commit blocks), each probe as `si_gateway`, indexer-a's acceptance write, each drill script the user runs, the quarantine, the release, every revert, the parity run of Step 4 (a download and a local container), the record PR's push, creation and merge, and the housegate ledger push, PR and merge. Before asking, the agent states the step's Gate sentence, saying exactly what will change, and shows the runbook block that will run. Read-only blocks (`kubectl get`/`logs`/`describe`/`diff`, an `exec` that only reads, the `si_*` read helpers, `git fetch`, `gh pr view`, `helmfile template`, local files and the throwaway clones) need none.
+- **Explicit user confirmation.** Every remote or live mutation waits for an explicit yes in chat, given for that block only, and each step says so in its own line: each push to production `main` with its apply or sync (the thirteen commit blocks), each probe as `si_gateway`, indexer-a's acceptance write, each drill script the user runs, the quarantine, the release, every revert, the parity run of Step 4 (a download and a local container), the record PR's push, creation and merge, and the housegate ledger push, PR and merge. Before asking, the agent states the step's Gate sentence, saying exactly what will change, and shows the runbook block that will run. Read-only blocks (`kubectl get`/`logs`/`describe`/`diff`, an `exec` that only reads, the `si_*` read helpers, `git fetch`, `gh pr view`, the audited direct Helm renderer, local files and protected-path-excluded scratch exports) need none.
 - **The user's terminal (D40).** The user upgrades their local agent (Step 11) and runs the four drill scripts (Steps 16, 18 and 20) in their own fish terminal; the agent never installs or replaces the user's `housegate`, never runs a drill script and never sees the `devuser1` owner's key (its file's path is not the key; `si_agent_start` keeps it only in `HOUSEGATE_AGENT_KEY`). Each script is the runbook's user block verbatim but for its `key_file=` line, which takes the path from the script's one argument; it sources `helpers.sh` and runs in the live checkout, once, after the agent's marker for it (`p3_clear`). The scripts need `housegate`, `clickhouse-client`, `jq`, `kubectl` for `sentio-sea` and no `HOUSEGATE_*` variable. Commands handed to the user are fish.
 - **Passwords and tokens (D29, K16).** No step reads, prints or passes a password or the member status token. Secrets are inspected only by their key names (the runbook's `kubectl get secret … | jq '.data | keys'`, `si_secret_keys`), pods only by the names of the Secrets and env variables their containers and volumes reference (`p3_secret_refs`), the serving view only through `si_member_serving` (which never prints the token), and ClickHouse passwords move only through `si_ch_admin` and `si_ch_exec`.
 - **Windows and turns.** Each of Steps 5–10 and 12–15 holds its own windows: one installation, one member or one host, pushed and synced or applied at once; never two of them at once. After a window's last check, report it and end the turn; the next window starts when the user asks for it. The agent-sidecar pin never merges without its sync (stage-1 runbook §11 rule): a pushed host commit whose sync failed is synced again or reverted (its own confirmed step) before anything else. From Step 2 until Step 21 run no other sync, apply, restart or pod deletion against devnet2-si-v2's installations, hosts or members, no consensus update, no other write drill, and no helmfile on `k8s-sea/clickhouse` (K22).
@@ -25284,27 +27864,42 @@ for d in "$S" "$HOME/si-devnet2-stage3-p3"; do
   [ ! -e "$d" ] || { echo "$d exists: a session or evidence directory is never reused; ask the user before moving it aside; stop"; exit 1; }
 done
 [ -s "$L/s3-ledger.py" ] || { echo "$L/s3-ledger.py is missing: write it first; stop"; exit 1; }
-git -C "$prod" fetch -q origin
-git -C "$h" fetch -q origin
-ledger="$(python3 -I "$L/s3-ledger.py" get "$h" ARBITER_DIGEST INDEXER_C_ID ENROLMENT_EPOCH OPERATOR_CHART_VERSION SN_COMMIT_P2 SN_DIGEST_P2 ARBITER_PIN_P2 CORE_TAG_P2 P2_PR MEMBER_IDS P2_END HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 SN_COMMIT_P3 SN_DIGEST_P3 P3_PR)"
-python3 -I "$L/s3-ledger.py" empty "$h" P3_END
+git -C "$prod" fetch -q origin || exit 1
+git -C "$h" fetch -q origin || exit 1
+ledger="$(python3 -I "$L/s3-ledger.py" get "$h" ARBITER_DIGEST INDEXER_C_ID ENROLMENT_EPOCH OPERATOR_CHART_VERSION SN_COMMIT_P2 SN_DIGEST_P2 ARBITER_PIN_P2 P2_INTEGRATION_SOAK CORE_TAG_P2 P2_PR MEMBER_IDS P2_END HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 SN_COMMIT_P3 SN_DIGEST_P3 P3_PR)" || exit 1
+python3 -I "$L/s3-ledger.py" empty "$h" P3_END || exit 1
 c="$(printf '%s\n' "$ledger" | sed -n 's/^INDEXER_C_ID=//p')"
 [ "$(printf '%s\n' "$ledger" | sed -n 's/^MEMBER_IDS=//p')" = "member-a:0,member-b:1,member-c:$c" ] || { echo "MEMBER_IDS is not member-a:0,member-b:1,member-c:$c; stop"; exit 1; }
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$prod" claude multi-source-s3c4-live)"
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$prod" codex multi-source-s3c4-live)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { echo "URWT did not create a new worktree; stop"; exit 1; }
 P="$(printf '%s\n' "$out" | jq -r .path)"
 case "$P" in /*) ;; *) printf '%s\n' "$out"; echo "urwt-create printed no worktree path; stop"; exit 1 ;; esac
-git -C "$P" switch -q --detach origin/main
-[ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live checkout $P has local changes; stop"; exit 1; }
+si_checked_read_186="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_185="$(git -C "$prod" rev-parse --path-format=absolute --git-common-dir)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_186}" = "${si_checked_read_185}" ] || { echo "URWT returned another repository; stop"; exit 1; }
+git -C "$P" switch -q --detach origin/main || exit 1
+si_checked_read_188="$(git -C "$P" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_188" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_187="$(git -C "$prod" rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_187" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_188}" = "${si_checked_read_187}" ] || exit 1
+git -C "$P" config extensions.worktreeConfig true || exit 1
+git -C "$P" config --worktree user.name poetry || exit 1
+git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$P" config --worktree commit.gpgsign true || exit 1
+si_checked_read_189="$(git -C "$P" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -z "${si_checked_read_189}" ] || { echo "the live checkout $P has local changes; stop"; exit 1; }
 mkdir -m 700 "$S" "$S/blocks" "$S/task48"
 printf '%s\n' "$ledger" > "$S/ledger.env"
 printf '%s\n' "$P" > "$S/live-path"
+printf '%s\n' "$out" > "$S/live-urwt.json"
 cat "$S/ledger.env"
 echo "session $S; live checkout $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD)"
 ```
 
-Expected: `s3-ledger: P3_END not recorded yet in origin/urwt/claude/ms-si-stage3-plans-cf:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` (`origin/main:…` once the plans PR merged, D34); the seventeen `NAME=value` lines (`MEMBER_IDS=member-a:0,member-b:1,member-c:<INDEXER_C_ID>`, `P3_PR` the merged PR's number); `session /Users/uranuswch/si-devnet2-stage3-p3-session; live checkout /Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c4-live at origin/main <sha>`. A `stop` from the ledger means a value is missing or malformed on its ledger copy (its task's record did not pass R4) or `P3_END` is recorded already (an earlier run of P3): ask the user, never type a value in. An existing session or evidence directory means an earlier attempt: ask the user, never move evidence by yourself.
+Expected: `s3-ledger: P3_END not recorded yet in origin/urwt/claude/ms-si-stage3-plans-cf:docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md` (`origin/main:…` once the plans PR merged, D34); the eighteen `NAME=value` lines (including `P2_INTEGRATION_SOAK >= 500`) (`MEMBER_IDS=member-a:0,member-b:1,member-c:<INDEXER_C_ID>`, `P3_PR` the merged PR's number); `session /Users/uranuswch/si-devnet2-stage3-p3-session; live checkout /Users/uranuswch/src/remotesrc/codex/production/multi-source-s3c4-live at origin/main <sha>`. A `stop` from the ledger means a value is missing or malformed on its ledger copy (its task's record did not pass R4) or `P3_END` is recorded already (an earlier run of P3): ask the user, never type a value in. An existing session or evidence directory means an earlier attempt: ask the user, never move evidence by yourself.
 
-Then write these three files with exactly this content (Write tool), into `/Users/uranuswch/si-devnet2-stage3-p3-session/task48/`. They are throwaway tools of this task, never committed.
+Then write these six files with exactly this content (Write tool), into `/Users/uranuswch/si-devnet2-stage3-p3-session/task48/`. They are throwaway tools of this task, never committed.
 
 `p3-helpers.py`, which builds `helpers.sh` from the §0 chain of the P3 runbook and copies runbook blocks (the extractor of Plan S3-B Tasks 15, 18 and 21, with `map` and `block` added):
 
@@ -25349,10 +27944,13 @@ def blocks(path):
     """Every fenced block of the file: (section, language, kind, lines), in order."""
     lines = Path(path).read_text().split("\n")
     out, section, i = [], None, 0
+    seen_sections=set()
     while i < len(lines):
         heading = HEADING.match(lines[i])
         if heading:
             section = heading.group(1) or heading.group(2)
+            if section in seen_sections:sys.exit("duplicate runbook section; stop")
+            seen_sections.add(section)
             i += 1
             continue
         opening = FENCE.fullmatch(lines[i])
@@ -25447,6 +28045,8 @@ def block(argv):
     lines = list(lines)
     pairs = argv[4:]
     for old, new in zip(pairs[0::2], pairs[1::2]):
+        allowed=(section=="1.1" and n==1 and old=="housegate_repo=/path/to/housegate; sentio_node_repo=/path/to/sentio-node" and new=="housegate_repo=/Users/uranuswch/Dev/projects/sentio-network/housegate; sentio_node_repo=/Users/uranuswch/Dev/projects/sentio-network/sentio-node") or (section=="8.2" and n in (5,6) and old=="x=a" and new in ("x=b","x=c")) or (section in ("6.1","6.3","6.5") and old=="key_file=/path/to/devuser1-owner.key" and new=='key_file="$1"')
+        if not allowed:sys.exit("replacement is not an approved runtime placeholder; stop")
         hits = [i for i, line in enumerate(lines) if line == old]
         if len(hits) != 1:
             sys.exit(f"p3-helpers: block {n} of section {section} holds the line {old!r} {len(hits)} times, not once; stop")
@@ -25582,11 +28182,12 @@ class Pins:
             name, sep, value = line.partition("=")
             if not sep:
                 fail(f"{path}: {line!r} is not NAME=VALUE")
-            values[name.strip()] = value.strip()
+            if name!=name.strip() or name in values or not value or value!=value.strip():fail("duplicated or malformed ledger name/value")
+            values[name] = value
         for name, form in LEDGER_FORMS.items():
             if not re.fullmatch(form, values.get(name, "")):
                 fail(f"{path}: {name} is {values.get(name)!r}, not of the form {form}")
-        if values["INDEXER_C_ID"] in ("0", "1"):
+        if not re.fullmatch(r"[1-9][0-9]*",values["INDEXER_C_ID"]) or not 2<=int(values["INDEXER_C_ID"])<=2**64-1:
             fail(f"INDEXER_C_ID {values['INDEXER_C_ID']} is indexer-a's or indexer-b's id")
         self.v = values
         self.p2_image = f"{NODE_REPOSITORY}:sha-{values['SN_COMMIT_P2']}@{values['SN_DIGEST_P2']}"
@@ -26276,9 +28877,9 @@ def apply(stage, pins):
     if src.text != src.old:
         out[TESTS] = src.text
     originals = {path: Path(path).read_text() for path in out}
-    for path, text in out.items():
-        Path(path).write_text(text)
     try:
+        for path, text in out.items():
+            Path(path).write_text(text)
         after_consts = constants()
         expected = intended_constants(stage, pins, before_consts)
         changed = sorted(n for n in set(before_consts) | set(after_consts) if before_consts.get(n) != after_consts.get(n))
@@ -26287,7 +28888,7 @@ def apply(stage, pins):
             raise SystemExit(f"p3-edit: {stage} changed the constants {changed}; these differ from the intended values: {wrong}; restored; stop")
         if current_stage(pins, after_consts, quiet=True) != stage:
             raise SystemExit(f"p3-edit: after the edit the checkout does not read as stage {stage}; restored; stop")
-    except SystemExit:
+    except BaseException:
         for path, text in originals.items():
             Path(path).write_text(text)
         raise
@@ -26419,10 +29020,20 @@ p3_db() { # the acceptance database of Plan S3-B (indexer-c owns it), from the i
 
 p3_fresh_main() { # fails unless the live checkout is clean, detached and equal to a freshly fetched origin/main
   git fetch -q origin main || return 1
-  [ -z "$(git status --porcelain)" ] || { echo "the live checkout has local changes; stop" >&2; return 1; }
-  [ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ] || { echo "the live checkout is not detached; stop" >&2; return 1; }
+  local si_checked_read_190
+  si_checked_read_190="$(git status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ -z "${si_checked_read_190}" ] || { echo "the live checkout has local changes; stop" >&2; return 1; }
+  local si_checked_read_191
+  si_checked_read_191="$(git rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ "${si_checked_read_191}" = HEAD ] || { echo "the live checkout is not detached; stop" >&2; return 1; }
   git merge -q --ff-only origin/main || { echo "the live checkout cannot fast-forward to origin/main; stop" >&2; return 1; }
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD holds a commit that is not on origin/main (a push the user declined?); stop and ask" >&2; return 1; }
+  local si_checked_read_193
+  si_checked_read_193="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_193" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  local si_checked_read_192
+  si_checked_read_192="$(git rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_192" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ "${si_checked_read_193}" = "${si_checked_read_192}" ] || { echo "HEAD holds a commit that is not on origin/main (a push the user declined?); stop and ask" >&2; return 1; }
 }
 
 p3_tests() { # the render tests: they pass with the count Step 2 recorded
@@ -26445,7 +29056,7 @@ p3_container_image() { si_kubectl get pod "$1" -o json | jq -r --arg c "$2" '.sp
 
 p3_secret_refs() { # $1 pod: every Secret a container (init containers included) or a volume of the pod references, one line each, sorted
   si_kubectl get pod "$1" -o json | jq -r '
-    [((.spec.initContainers // []) + .spec.containers)[] | . as $c |
+    [((.spec.initContainers // []) + (.spec.ephemeralContainers // []) + .spec.containers)[] | . as $c |
       ((($c.env // [])[] | select(.valueFrom.secretKeyRef != null) | "\($c.name) \(.valueFrom.secretKeyRef.name)/\(.valueFrom.secretKeyRef.key) \(.name)"),
        (($c.envFrom // [])[] | select(.secretRef != null) | "\($c.name) \(.secretRef.name) envFrom"))]
     + [(.spec.volumes // [])[] | . as $v |
@@ -26464,7 +29075,7 @@ p3_token_refs() { # $1 a|b|c, $2 none|sentio-node: the host pod references the m
     sentio-node) [ "$got" = "sentio-node $r-si-member-status-token/status-token STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN" ] || { echo "host pod $r-0 references the status token as: $(printf '%s' "$got" | tr '\n' ';'); stop" >&2; return 1; } ;;
     *) echo "p3_token_refs: none or sentio-node" >&2; return 2 ;;
   esac
-  ! printf '%s\n' "$refs" | grep -qF "storage-integrity-si-v2-member-$(p3_installation "$x")" || { echo "host pod $r-0 references the si_member password Secret; stop" >&2; return 1; }
+  ! printf '%s\n' "$refs" | grep -qE "storage-integrity-si-v2-member-(network|indexer-b|indexer-c)(/|[[:space:]]|$)" || { echo "host pod $r-0 references the si_member password Secret; stop" >&2; return 1; }
   echo "indexer-$x: status token references: ${got:-none}; no reference to storage-integrity-si-v2-member-$(p3_installation "$x")"
 }
 
@@ -26476,7 +29087,13 @@ p3_host_metrics() { # $1 a|b|c, $2 extended regexp of series names: those series
 
 p3_replica_series() { p3_host_metrics "$1" 'sentio_node_storage_integrity_(member_status_up|replica_serving|replica_reads_in_flight|replica_lease_releases_total|tables)'; } # $1 a|b|c
 
-p3_series() { awk -v s="$1" '$1 == s {printf "%.0f\n", $2; found = 1} END {if (!found) exit 1}'; } # $1 one series exactly as printed: its value from stdin, as an integer; fails when absent
+p3_series() { python3 -I -c '
+import decimal,sys
+rows=[s.split() for s in sys.stdin if s.split() and s.split()[0]==sys.argv[1]]
+assert len(rows)==1 and len(rows[0])==2,"missing, duplicated or malformed series"
+v=decimal.Decimal(rows[0][1]);assert v.is_finite() and 0<=v<=2**64-1 and v==v.to_integral_value(),"non-integral or invalid series"
+print(int(v))
+' "$1"; } # $1 one series exactly as printed: its value from stdin, as an integer; fails when absent
 
 p3_view_check() { # $1 a|b|c, $2 that member's ServingView JSON file, $3 mode: off (every database serving_disabled), available (owner_available), drill (the acceptance database of indexer-c served, everything else owner_available)
   python3 -I - "$1" "$2" "$3" "$INDEXER_C_ID" "$(p3_db)" <<'PY'
@@ -26496,8 +29113,16 @@ if not dbs or not set(owners) <= set(peers):
     errors.append(f"the view covers owners {owners}, expected one or both of {peers}")
 served = []
 unserved = []
+seen_databases = set()
 for d in dbs:
     name, owner = d.get("database"), d.get("owner")
+    if not isinstance(name,str) or not name or type(owner) is not int or owner not in peers:
+        errors.append("malformed database/owner row")
+    if name in seen_databases:
+        errors.append("duplicate database row")
+    seen_databases.add(name)
+    if d.get("owner_unreachable") is not False:
+        errors.append(f"{name}: owner is reported unreachable")
     if mode == "drill" and owner == int(c) and x != "c":
         if d.get("owner_quarantined") is not True:
             errors.append(f"{name}: owner {owner} is not reported quarantined")
@@ -26516,7 +29141,7 @@ for d in dbs:
         errors.append(f"{name} (owner {owner}) is serving={d.get('serving')} reason={d.get('reason')!r} lease={d.get('lease')!r}, expected not serving, {want}, no lease")
     if d.get("owner_unreachable") is not False:
         errors.append(f"{name}: owner {owner} is reported unreachable")
-    if owner == int(c) and d.get("owner_quarantined") is not False:
+    if d.get("owner_quarantined") is not False:
         errors.append(f"{name}: owner {owner} is reported quarantined")
 if mode == "drill" and x != "c" and db not in served:
     errors.append(f"the acceptance database {db} is not served")
@@ -26546,7 +29171,7 @@ if not isinstance(hosts, dict) or not hosts:
     errors.append(f"replica_hosts is {hosts!r}")
 else:
     for name, ids in sorted(hosts.items()):
-        if not (isinstance(ids, list) and len(ids) == 2 and ids == sorted(ids) and set(ids) <= {0, 1, c}):
+        if not (isinstance(ids, list) and len(ids) == 2 and len(set(ids)) == 2 and all(type(i) is int for i in ids) and ids == sorted(ids) and set(ids) <= {0, 1, c}):
             errors.append(f"replica_hosts[{name!r}] is {ids!r}: not two of the other SI indexers in ascending order")
     if hosts.get(db) != [0, 1]:
         errors.append(f"replica_hosts[{db!r}] is {hosts.get(db)!r}, expected [0, 1] (owner {c})")
@@ -26573,12 +29198,13 @@ p3_status_is() { # $1 a|b|c, $2 database, $3 table, $4 expected status: polls si
 }
 
 p3_member_window_check() { # $1 a|b|c, $2 the host pod key before (p3_pod_key), after the member commit's sync: the member on the P3 image with its endpoint up and serving off, the host pod untouched
-  local x=$1 m n
+  local x=$1 m n ready=0
   m="$(si_member_pod "$x")"
   for n in $(seq 1 60); do
-    [ "$(si_kubectl get pod "$m" -o jsonpath='{.status.containerStatuses[?(@.name=="si-member")].ready}' 2>/dev/null)" = true ] && break
+    [ "$(si_kubectl get pod "$m" -o jsonpath='{.status.containerStatuses[?(@.name=="si-member")].ready}' 2>/dev/null)" = true ] && { ready=1; break; }
     sleep 10
   done
+  [ "$ready" = 1 ] || { echo "member pod did not become ready within600s; stop" >&2; return 1; }
   p3_pod "$m"
   [ "$(p3_container_image "$m" si-member)" = "$(p3_p3_image)" ] || { echo "member-$x does not run the P3 image; stop" >&2; return 1; }
   [ "$(p3_pod_key "sentio-node-devnet2-indexer-$x-0")" = "$2" ] || { echo "host pod of indexer-$x changed in its member window: $(p3_pod_key "sentio-node-devnet2-indexer-$x-0"), before $2; stop" >&2; return 1; }
@@ -26618,24 +29244,32 @@ p3_host_window_check() { # $1 a|b|c, $2 the member pod key before (p3_pod_key), 
   echo "indexer-$x: P3 host image and agent sidecar, member endpoint up, nothing served"
 }
 
-p3_owner_targets() { # $1 a|b|c: the HouseGate Services the member's owner probe will dial (every other SI host) exist with that port and a ready endpoint
-  local y port
+p3_owner_targets() { # exact HouseGate TCP port and sole ready endpoint owned by the intended source pod
+  local y port service target pod uid endpoints
   for y in a b c; do
     [ "$y" = "$1" ] && continue
     case "$y" in a) port=32001 ;; b) port=33001 ;; c) port=34001 ;; esac
-    [ "$(si_kubectl get service "sentio-node-devnet2-indexer-$y" -o json | jq --argjson p "$port" '[.spec.ports[] | select(.port == $p)] | length')" = 1 ] || { echo "Service sentio-node-devnet2-indexer-$y has no port $port; stop" >&2; return 1; }
-    [ "$(si_kubectl get endpoints "sentio-node-devnet2-indexer-$y" -o json | jq '[.subsets[]? | select(any(.ports[]?; .name == "housegate")) | .addresses[]?] | length')" -ge 1 ] || { echo "Service sentio-node-devnet2-indexer-$y has no ready endpoint for its port housegate ($port); stop" >&2; return 1; }
-    echo "owner probe target sentio-node-devnet2-indexer-$y:$port: Service port and a ready endpoint"
+    pod="sentio-node-devnet2-indexer-$y-0"
+    service="$(si_kubectl get service "sentio-node-devnet2-indexer-$y" -o json)" || return 1
+    target="$(printf '%s\n' "$service" | jq -er --argjson p "$port" '[.spec.ports[] | select(.port == $p and .name == "housegate" and (.protocol // "TCP") == "TCP" and (.targetPort | type) == "number")] | if length == 1 then .[0].targetPort else error("HouseGate Service port differs") end')" || return 1
+    uid="$(si_kubectl get pod "$pod" -o json | jq -er '.metadata.uid | select(type == "string" and length > 0)')" || return 1
+    endpoints="$(si_kubectl get endpoints "sentio-node-devnet2-indexer-$y" -o json)" || return 1
+    printf '%s\n' "$endpoints" | jq -e --argjson p "$target" --arg pod "$pod" --arg uid "$uid" '
+      [.subsets[]? | select(any(.ports[]?; .name == "housegate" and .port == $p and (.protocol // "TCP") == "TCP")) | .addresses[]?] |
+      length == 1 and all(.[]; .targetRef.kind == "Pod" and .targetRef.name == $pod and .targetRef.uid == $uid)' > /dev/null ||
+      { echo "owner HouseGate ready endpoint port or pod identity differs; stop" >&2; return 1; }
+    echo "owner probe target sentio-node-devnet2-indexer-$y:$port: exact Service port and ready pod-owned endpoint"
   done
 }
 
 p3_serve_check() { # $1 a|b|c, $2 the host pod key before (p3_pod_key): after the serving commit's sync and 90 s: the member up with serving on, every owner available and reachable, nothing served, the host pod untouched
-  local x=$1 m n
+  local x=$1 m n ready=0
   m="$(si_member_pod "$x")"
   for n in $(seq 1 60); do
-    [ "$(si_kubectl get pod "$m" -o jsonpath='{.status.containerStatuses[?(@.name=="si-member")].ready}' 2>/dev/null)" = true ] && break
+    [ "$(si_kubectl get pod "$m" -o jsonpath='{.status.containerStatuses[?(@.name=="si-member")].ready}' 2>/dev/null)" = true ] && { ready=1; break; }
     sleep 10
   done
+  [ "$ready" = 1 ] || { echo "member pod did not become ready within600s; stop" >&2; return 1; }
   p3_pod "$m"
   [ "$(p3_pod_key "sentio-node-devnet2-indexer-$x-0")" = "$2" ] || { echo "host pod of indexer-$x changed in its serving window: $(p3_pod_key "sentio-node-devnet2-indexer-$x-0"), before $2; stop" >&2; return 1; }
   sleep 90
@@ -26655,27 +29289,15 @@ p3_local_agent() { # the housegate on this PATH and its version line
   printf '%s %s\n' "$bin" "$(housegate -version 2>&1 | head -n 1)"
 }
 
-p3_probe_ok() { # $1 the TSV of si_replica_grant_probe: four rows, each with got equal to expect
-  python3 -I - "$1" <<'PY'
-import sys
-
-rows = [line.rstrip("\n").split("\t") for line in open(sys.argv[1]) if line.strip()]
-head, body = rows[0], rows[1:]
-if "expect" not in head or "got" not in head:
-    sys.exit(f"{sys.argv[1]}: no expect and got columns in {head}; stop")
-e, g = head.index("expect"), head.index("got")
-bad = [r for r in body if len(r) <= max(e, g) or r[e] != r[g]]
-if len(body) != 4 or bad:
-    sys.exit(f"{sys.argv[1]}: {len(body)} rows, {len(bad)} with got != expect; stop")
-print(f"{sys.argv[1]}: 4 rows, each as expected (ok, denied, denied, denied)")
-PY
+p3_probe_ok() { # strict six-column output of the three-column/four-row replica corpus
+  python3 -I "$T48/p3-guard.py" probe "$1"
 }
 
-p3_copies_equal() { # si_copies_check, which must print "copies equal: <n> of <n>" with n above 0
+p3_copies_equal() { # require successful producer and the complete static six-copy census
   local out
-  out="$(si_copies_check 2>&1)" || true
+  out="$(si_copies_check 2>&1)" || { printf '%s\n' "$out"; echo "copy producer failed; stop" >&2; return 1; }
   printf '%s\n' "$out"
-  printf '%s\n' "$out" | awk '$1 == "copies" && $2 == "equal:" && $4 == "of" && $3 == $5 && $3 > 0 {ok = 1} END {exit !ok}' || { echo "the members' copies are not all equal to the published entries; stop" >&2; return 1; }
+  [ "$(printf '%s\n' "$out" | grep -cx 'copies equal: 6 of 6')" = 1 ] || { echo "all six copies must equal the published entries; stop" >&2; return 1; }
 }
 
 p3_pinned_host_image() { # $1 a|b|c: the host image that host's source-image overlay pins in this checkout
@@ -26698,9 +29320,9 @@ if st.get("replica_of") != c:
     errors.append(f"replica_of is {st.get('replica_of')!r}, not {c}")
 if not st.get("served_from"):
     errors.append("served_from is empty")
-if entry.get("indexer_id") != c or not isinstance(entry.get("safe_block_seq"), int) or not isinstance(entry.get("applied_promotion_seq"), int):
+if entry.get("indexer_id") != c or not all(type(entry.get(k)) is int and 0 <= entry[k] <= 2**64-1 for k in ("indexer_id","safe_block_seq","applied_promotion_seq")):
     errors.append(f"owner_entry is {entry!r}")
-if not (isinstance(st.get("frozen_since"), int) and st["frozen_since"] > 0):
+if not (type(st.get("frozen_since")) is int and st["frozen_since"] > 0):
     errors.append(f"frozen_since is {st.get('frozen_since')!r}")
 if not st.get("schema_hash"):
     errors.append("schema_hash is empty")
@@ -26714,57 +29336,72 @@ p3_promotions() { si_show | jq -r '.promotion_seq | tonumber'; } # the live prom
 
 # ------------------------------------------------------------------ runbook blocks and user scripts
 
-p3_block() { # $1 runbook section (3.1), $2 its bash block (1 = first), $3 confirmed|read-only, then pairs OLD NEW of whole lines to replace (only the runtime placeholder lines a step names): writes the next block file, the preamble and that block of the live checkout's runbook, verbatim; prints its path and the block
-  local sec="$1" n="$2" kind="$3" last num f
+p3_block() { # immutable D24 payload plus checked source/preview preamble; approved runtime substitutions only
+  local sec="$1" n="$2" kind="$3" last num f label="" item bs bn rec
   shift 3
+  p3_sources_ok || return 1
+  for item in G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-b S-c S-a M; do
+    read -r bs bn rec <<< "$(p3_stage_block "$item")"
+    if [ "$bs $bn" = "$sec $n" ]; then label="$item"; break; fi
+  done
   last="$(find "$S/blocks" -maxdepth 1 -name '[0-9][0-9][0-9]-*.sh' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
-  num=0
-  [ -z "$last" ] || num=$((10#${last%%-*}))
+  num=0; [ -z "$last" ] || num=$((10#${last%%-*}))
   f="$(printf '%s/blocks/%03d-runbook-%s-%s.sh' "$S" $((num + 1)) "$sec" "$n")"
-  {
-    # shellcheck disable=SC2016 # the preamble is written literally
-    printf '%s\n' 'source "$HOME/si-devnet2-stage3-p3-session/helpers.sh"' 'source "$HOME/si-devnet2-stage3-p3-session/task48/task48.sh"' 'cd "$P" || exit 1'
-    python3 -I "$T48/p3-helpers.py" block "$P/$p3_runbook" "$sec" "$n" "$kind" "$@"
-  } > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
-  bash -n "$f.tmp" || { rm -f "$f.tmp"; echo "runbook §$sec block $n does not parse; stop" >&2; return 1; }
-  mv "$f.tmp" "$f"
-  echo "runbook §$sec block $n ($kind) -> $f"
-  tail -n +4 "$f"
+  (
+    set -C
+    {
+      printf '%s\n' 'set -eo pipefail' 'python3 -I "$HOME/si-devnet2-stage3-p3-session/task48/p3-guard.py" check "$HOME/si-devnet2-stage3-p3-session/frozen.json" || exit 1' 'source "$HOME/si-devnet2-stage3-p3-session/helpers.sh"' 'source "$HOME/si-devnet2-stage3-p3-session/task48/task48.sh"' 'p3_sources_ok || exit 1' 'cd "$P" || exit 1'
+      if [ -n "$label" ]; then printf 'p3_commit_label=%q\np3_preview_current %q || exit 1\n' "$label" "$label"; fi
+      python3 -I "$T48/p3-helpers.py" block "$P/$p3_runbook" "$sec" "$n" "$kind" "$@"
+    } > "$f.tmp"
+  ) || return 1
+  bash -n "$f.tmp" || { rm -f "$f.tmp"; return 1; }
+  ln "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }
+  rm -f "$f.tmp"
+  echo "runbook §$sec block $n ($kind) -> $f"; cat "$f"
 }
 
-p3_user_script() { # $1 runbook section, $2 its bash block, $3 script name: $T48/<name>, that user block of the runbook verbatim but for its key_file line, which takes the key file's path from the script's one argument; it runs once, after the marker task48-cleared-<name>
-  local f="$T48/$3"
-  [ ! -e "$f" ] || { echo "$f exists: a user script is written once" >&2; return 1; }
-  {
-    # shellcheck disable=SC2016 # the script's lines are written literally
-    printf '%s\n' '#!/usr/bin/env bash' \
-      "# Runbook §$1, bash block $2, of $p3_runbook at production $(git rev-parse --short=9 HEAD)," \
-      '# verbatim but for its key_file line (Plan S3-C4 Task 48). Only the user runs it, once, in their own' \
-      "# terminal: bash $f <key file of the devuser1 owner>" \
-      '# shellcheck disable=SC1091,SC2154' \
-      'set -eo pipefail' \
-      '[ "$#" = 1 ] && [ -r "$1" ] || { echo "usage: bash '"$f"' <key file of the devuser1 owner>"; exit 2; }' \
-      'source "$HOME/si-devnet2-stage3-p3-session/helpers.sh"' \
-      'cd "$P"' \
-      '[ -e "$si_backup/task48-cleared-'"$3"'" ] || { echo "the operator has not cleared '"$3"' yet (Plan S3-C4 Task 48); stop"; exit 1; }' \
-      '[ ! -e "$si_backup/task48-ran-'"$3"'" ] || { echo "'"$3"' ran already: a confirmed block never runs twice; stop"; exit 1; }' \
-      ': > "$si_backup/task48-ran-'"$3"'"'
-    # shellcheck disable=SC2016 # the replacement line is written literally
-    python3 -I "$T48/p3-helpers.py" block "$P/$p3_runbook" "$1" "$2" confirmed 'key_file=/path/to/devuser1-owner.key' 'key_file="$1"'
-  } > "$f.tmp" || { rm -f "$f.tmp"; return 1; }
-  bash -n "$f.tmp" || { rm -f "$f.tmp"; echo "runbook §$1 block $2 does not parse; stop" >&2; return 1; }
-  mv "$f.tmp" "$f"
-  chmod 700 "$f"
-  echo "user script $f (runbook §$1 block $2):"
-  tail -n +13 "$f"
+p3_user_script() { # guarded user-only D24 block, atomic one-shot intent and explicit success receipt
+  local f="$T48/$3" name="$3"
+  case "$name" in user-6.1-baseline.sh|user-6.1-baseline-2.sh|user-6.3-reads.sh|user-6.3-refusals.sh|user-6.5-read.sh) ;; *) return 2 ;; esac
+  p3_sources_ok || return 1
+  [ ! -e "$f" ] && [ ! -e "$f.sha256" ] || return 1
+  (
+    set -C
+    {
+      printf '%s\n' '#!/usr/bin/env bash' '# Only the user runs this script in their own terminal; never pipe it.' 'set -eo pipefail' \
+        'S="$HOME/si-devnet2-stage3-p3-session"' 'T48="$S/task48"' \
+        'python3 -I "$T48/p3-guard.py" check "$S/frozen.json" || exit 1' \
+        'source "$S/helpers.sh"' 'si_p3_user_terminal || exit 1' \
+        '[ "$#" = 1 ] && [ -r "$1" ] || { echo "one readable owner key path is required in your own terminal"; exit 2; }' \
+        'cd "$P" || exit 1' \
+        "name=$name" \
+        'test "$(shasum -a 256 "$0" | awk "{print \$1}")" = "$(cat "$0.sha256")" || exit 1' \
+        '[ -e "$si_backup/task48-cleared-$name" ] || { echo "this exact script has not been cleared after confirmation; stop"; exit 1; }' \
+        '(set -C; : > "$si_backup/task48-ran-$name") || { echo "script was already attempted; preserve evidence and stop"; exit 1; }'
+      python3 -I "$T48/p3-helpers.py" block "$P/$p3_runbook" "$1" "$2" confirmed 'key_file=/path/to/devuser1-owner.key' 'key_file="$1"'
+      printf '%s\n' '(set -C; shasum -a 256 "$0" | awk "{print \$1}" > "$si_backup/task48-done-$name") || exit 1'
+    } > "$f.tmp"
+  ) || return 1
+  bash -n "$f.tmp" || { rm -f "$f.tmp"; return 1; }
+  ln "$f.tmp" "$f" || { rm -f "$f.tmp"; return 1; }; rm -f "$f.tmp"
+  chmod 700 "$f" || return 1
+  (set -C; shasum -a 256 "$f" | awk '{print $1}' > "$f.sha256") || return 1
+  echo "user script $f (runbook §$1 block $2):"; cat "$f"
 }
 
-p3_clear() { [ ! -e "$si_backup/task48-cleared-$1" ] || { echo "$1 was cleared before; stop" >&2; return 1; }; : > "$si_backup/task48-cleared-$1"; echo "cleared $1 for the user"; } # $1 user script name
+p3_clear() { # call only after this script's explicit chat confirmation, before handing its fish command to the user
+  local f="$T48/$1"
+  p3_sources_ok || return 1
+  [ -f "$f" ] && [ "$(shasum -a 256 "$f" | awk '{print $1}')" = "$(cat "$f.sha256")" ] || return 1
+  (set -C; : > "$si_backup/task48-cleared-$1") || { echo "script already cleared; stop" >&2; return 1; }
+  echo "cleared $1 for the user"
+}
 
 p3_runbook_shape() { # the merged runbook holds the bash blocks this task names, of the kinds it names, and each commit block makes and records the commit this task checks
   local got want label sec n rec
   got="$(python3 -I "$T48/p3-helpers.py" map "$p3_runbook")" || return 1
-  want="$(printf '%s\n' '0 r' '1.1 r' '1.2 r' '1.3 r' '2 r c' '3.1 r c r c' '3.2 r c r c' '3.3 r c r c' '4.1 r c r c r' '4.2 r c r c r' \
+  want="$(printf '%s\n' '0 r' '1.1 c' '1.2 r' '1.3 r' '2 r c' '3.1 r c r c' '3.2 r c r c' '3.3 r c r c' '4.1 r c r c r' '4.2 r c r c r' \
     '4.3 r c r c r c' '5 r' '5.1 c r' '5.2 c r' '5.3 c r' '5.4 c r' '6.1 r c' '6.2 c r' '6.3 c c' '6.4 c r' '6.5 r c' '7 r' '8.1 c c c' '8.2 c c c c c c')"
   [ "$got" = "$want" ] || { echo "the runbook's blocks are not the ones this task names:" >&2; diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") >&2; return 1; }
   for label in G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-b S-c S-a M; do
@@ -26776,26 +29413,26 @@ p3_runbook_shape() { # the merged runbook holds the bash blocks this task names,
   echo "runbook blocks as this task names them: $(printf '%s\n' "$got" | wc -l | tr -d ' ') sections, 13 commit blocks"
 }
 
-p3_user_scripts_ok() { # the four user blocks start with the key_file placeholder line this task replaces
+p3_user_scripts_ok() { # the four user blocks start with terminal admission then the key_file placeholder line this task replaces
   local s
   for s in '6.1 2' '6.3 1' '6.3 2' '6.5 2'; do
     # shellcheck disable=SC2086 # section and block number
-    [ "$(python3 -I "$T48/p3-helpers.py" block "$p3_runbook" $s confirmed | head -n 1)" = 'key_file=/path/to/devuser1-owner.key' ] ||
-      { echo "runbook §${s% *} block ${s#* } does not start with key_file=/path/to/devuser1-owner.key; stop" >&2; return 1; }
+    [ "$(python3 -I "$T48/p3-helpers.py" block "$p3_runbook" $s confirmed | head -n 2)" = "$(printf '%s\n' 'si_p3_user_terminal || exit 1' 'key_file=/path/to/devuser1-owner.key')" ] ||
+      { echo "runbook §${s% *} block ${s#* } does not start with the terminal guard then the key placeholder; stop" >&2; return 1; }
   done
-  echo "user blocks §6.1/2, §6.3/1, §6.3/2, §6.5/2 start with the key_file placeholder"
+  echo "user blocks §6.1/2, §6.3/1, §6.3/2, §6.5/2 start with terminal admission then the key_file placeholder"
 }
 
 p3_pins_match() { # $si_backup/pins (runbook §1.1) holds exactly the ledger's values and the two local repositories
   local n v
-  for n in HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 SN_COMMIT_P3 SN_DIGEST_P3 INDEXER_C_ID ARBITER_PIN_P2 P2_END; do
+  for n in HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 SN_COMMIT_P3 SN_DIGEST_P3 INDEXER_C_ID ARBITER_PIN_P2 P2_INTEGRATION_SOAK P2_END; do
     v="$(sed -n "s/^$n=//p" "$si_backup/pins")"
     [ -n "$v" ] && [ "$v" = "${!n}" ] || { echo "runbook §1.1's pins give $n=${v:-nothing}, the ledger ${!n}; stop" >&2; return 1; }
   done
   [ "$(sed -n 's/^HOUSEGATE_REPO=//p' "$si_backup/pins")" = /Users/uranuswch/Dev/projects/sentio-network/housegate ] &&
     [ "$(sed -n 's/^SENTIO_NODE_REPO=//p' "$si_backup/pins")" = /Users/uranuswch/Dev/projects/sentio-network/sentio-node ] ||
     { echo "runbook §1.1's pins name other local repositories; stop" >&2; return 1; }
-  [ "$(wc -l < "$si_backup/pins" | tr -d ' ')" = 10 ] || { echo "runbook §1.1's pins file does not hold exactly ten lines; stop" >&2; return 1; }
+  [ "$(wc -l < "$si_backup/pins" | tr -d ' ')" = 11 ] || { echo "runbook §1.1's pins file does not hold exactly eleven lines; stop" >&2; return 1; }
   echo "runbook §1.1's pins equal the ledger's"
 }
 
@@ -26834,7 +29471,9 @@ p3_render_check() { # $1 commit label: HEAD, that label's commit, renders exactl
     G-b|G-c)
       x="${1#G-}"
       f="k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-$x-source.yaml"
-      [ "$(git diff --numstat HEAD~1 HEAD -- "$f")" = "$(printf '1\t0\t%s' "$f")" ] || { echo "$1: the CHI manifest does not gain exactly one line; stop" >&2; return 1; }
+      local si_checked_read_194
+      si_checked_read_194="$(git diff --numstat HEAD~1 HEAD -- "$f")" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+      [ "${si_checked_read_194}" = "$(printf '1\t0\t%s' "$f")" ] || { echo "$1: the CHI manifest does not gain exactly one line; stop" >&2; return 1; }
       echo "$1: one line added to $f" ;;
     G-n) si_render_diff_is storage-integrity-si-v2 "changed ClickHouseInstallation/storage-integrity-si-v2" ;;
     W-[abc]-m|S-[abc])
@@ -26850,7 +29489,9 @@ p3_render_check() { # $1 commit label: HEAD, that label's commit, renders exactl
 
 p3_edit_check() { # $1 commit label: in this checkout (clean, at the stage before), the runbook's si_p3_edit, checked against p3-edit.py's own edit of contract §32.5 and the render tests, committed locally as si_p3_commit commits; prints the files
   local label="$1" want files exp f
-  [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "the checkout has local changes; stop" >&2; return 1; }
+  local si_checked_read_195
+  si_checked_read_195="$(git status --porcelain --untracked-files=no)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [ -z "${si_checked_read_195}" ] || { echo "the checkout has local changes; stop" >&2; return 1; }
   [ "$(p3_tool state | tail -n 1)" = "stage $(p3_prev_stage "$label")" ] || { echo "the checkout is not at stage $(p3_prev_stage "$label"), which $label needs; stop" >&2; return 1; }
   want="$(p3_tool files "$label")" || return 1
   exp="$(mktemp -d)"
@@ -26865,41 +29506,395 @@ p3_edit_check() { # $1 commit label: in this checkout (clean, at the stage befor
   [ "$(p3_tool state | tail -n 1)" = "stage $label" ] || { git checkout -q -- .; echo "after si_p3_edit $label the checkout does not read as stage $label; stop" >&2; return 1; }
   p3_tests >&2 || { git checkout -q -- .; return 1; }
   # shellcheck disable=SC2086 # one word per file
-  git commit -q -m "$(si_p3_message "$label")" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- $files || return 1
+  f="$(git rev-parse HEAD)" || return 1
+  git commit -S -q -m "$(si_p3_message "$label")" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- $files || return 1
+  local si_checked_read_196
+  si_checked_read_196="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_196" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ "${si_checked_read_196}" != "$f" ] && si_p3_signed || return 1
   echo "$files"
 }
 
-p3_preview() { # $1 commit label: on a new throwaway clone of the live checkout's HEAD, that label's commit as the runbook's block will make it, checked (p3_edit_check, p3_render_check); records its tree, parent and files in task48-preview-<label>.env
-  local label="$1" pv n=1 files
-  rm -f "$si_backup/task48-preview-$label.env"
-  [ -z "$(git status --porcelain --untracked-files=no)" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "the live checkout is not a clean origin/main: run p3_fresh_main first; stop" >&2; return 1; }
+p3_preview() { # safe excluded-path export, independent intent comparison; no production history copied to scratch
+  local label="$1" pv n=1 files parent
+  p3_sources_ok || return 1
+  local si_checked_read_199
+  si_checked_read_199="$(git status --porcelain --untracked-files=no)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  local si_checked_read_198
+  si_checked_read_198="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_198" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  local si_checked_read_197
+  si_checked_read_197="$(git rev-parse origin/main)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_197" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ -z "${si_checked_read_199}" ] && [ "${si_checked_read_198}" = "${si_checked_read_197}" ] || return 1
+  parent="$(git rev-parse HEAD)" || return 1
   while [ -e "$T48/preview-$label-$n" ]; do n=$((n + 1)); done
   pv="$T48/preview-$label-$n"
-  git clone -q --no-checkout "$P" "$pv" || return 1
-  git -C "$pv" checkout -q --detach "$(git rev-parse HEAD)" || return 1
+  p3_scratch_repo "$pv" "$parent" || return 1
   files="$(cd "$pv" && p3_edit_check "$label")" || return 1
   (cd "$pv" && p3_render_check "$label") || return 1
   git -C "$pv" show --format='commit %s' HEAD | cat
-  printf 'tree=%s\nparent=%s\nfiles=%s\nclone=%s\n' "$(git -C "$pv" rev-parse 'HEAD^{tree}')" "$(git -C "$pv" rev-parse HEAD~1)" "$files" "$pv" > "$si_backup/task48-preview-$label.env"
-  echo "preview $label ok on origin/main $(git rev-parse --short=9 HEAD) ($pv): $files"
+  python3 -I - "$pv" "$parent" "$(si_p3_message "$label")" "$files" "$si_backup/task48-preview-$label.json" <<'PY_PREVIEW'
+import hashlib,json,sys
+from pathlib import Path
+pv,parent,subject,names,out=sys.argv[1:];files=names.split();assert files==sorted(set(files)) and files
+x={'parent':parent,'subject':subject,'files':files,'clone':pv,'blobs':{p:hashlib.sha256((Path(pv)/p).read_bytes()).hexdigest()for p in files}}
+with open(out+'.new','x')as f:json.dump(x,f,indent=2);f.write('\n')
+Path(out+'.new').replace(out)
+PY_PREVIEW
+  printf 'clone=%s\n' "$pv" > "$si_backup/task48-preview-$label.env" || return 1
+  echo "preview $label ok on origin/main $parent ($pv): $files"
 }
 
-p3_pushed_is() { # $1 commit label: the commit the runbook's block recorded and pushed is the previewed one, and it is on origin/main
-  local label="$1" sec n name rec pv c
+p3_pushed_is() { # verify signed exact previewed patch and observed remote ancestry; no retry inference
+  local label="$1" sec n name c
   read -r sec n name <<< "$(p3_stage_block "$label")"
-  rec="$si_backup/$name"
-  pv="$si_backup/task48-preview-$label.env"
-  [ -s "$rec" ] && [ -s "$pv" ] || { echo "no $rec or no $pv: runbook §$sec block $n or the preview did not run; stop" >&2; return 1; }
-  c="$(cat "$rec")"
+  [ -s "$si_backup/$name" ] || return 1
+  c="$(cat "$si_backup/$name")"
+  local si_checked_read_200
+  si_checked_read_200="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_200" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ "${si_checked_read_200}" = "$c" ] || return 1
+  p3_before_push "$label" || return 1
   git fetch -q origin main || return 1
-  git merge-base --is-ancestor "$c" origin/main || { echo "$name names $c, which is not on origin/main (the push failed); stop and ask" >&2; return 1; }
-  [ "$(git rev-parse HEAD)" = "$c" ] || { echo "the live checkout is not at the recorded commit $c; stop" >&2; return 1; }
-  [ "$(git rev-parse "$c^{tree}")" = "$(sed -n 's/^tree=//p' "$pv")" ] && [ "$(git rev-parse "$c~1")" = "$(sed -n 's/^parent=//p' "$pv")" ] ||
-    { echo "the pushed commit $c is not the previewed one ($pv); stop" >&2; return 1; }
-  [ "$(git log -1 --format=%s "$c")" = "$(si_p3_message "$label")" ] && git log -1 --format=%B "$c" | grep -qxF 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' ||
-    { echo "the pushed commit $c does not carry the runbook's subject and the trailer; stop" >&2; return 1; }
+  git merge-base --is-ancestor "$c" origin/main || { echo "recorded push not observed on main; preserve intent and reconcile before retry" >&2; return 1; }
   echo "$label pushed to main as $c: the previewed commit"
 }
+
+
+p3_sources_ok() { python3 -I "$T48/p3-guard.py" check "$S/frozen.json"; }
+p3_preview_current() { # pre-commit parent must remain exactly the approved preview's parent
+  p3_sources_ok || return 1
+  local si_checked_read_201
+  si_checked_read_201="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; return 1; }
+  [[ "$si_checked_read_201" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; return 1; }
+  [ "${si_checked_read_201}" = "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["parent"])' "$si_backup/task48-preview-$1.json")" ] || { echo "preview parent changed; stop for a fresh preview and confirmation" >&2; return 1; }
+}
+p3_before_push() { # exact parent/paths/blobs/subject + actual signature before the original producer pushes
+  p3_sources_ok && si_p3_signed || return 1
+  local si_checked_read_202
+  si_checked_read_202="$(git rev-parse HEAD)" || { echo "Git read failed; stop" >&2; return 1; }
+  python3 -I "$T48/p3-guard.py" preview "$si_backup/task48-preview-$1.json" "${si_checked_read_202}"
+}
+p3_scratch_repo() { # export excludes both protected files BEFORE content reads/copy; fresh signed fixture history only
+  local dir="$1" ref="$2" key
+  [ ! -e "$dir" ] || return 1
+  python3 -I - "$T48/local_render.py" "$P" "$ref" "$dir" <<'PY_EXPORT'
+import importlib.util,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('direct',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+d=Path(sys.argv[4]);d.mkdir();m.export_base(sys.argv[2],sys.argv[3],d)
+PY_EXPORT
+  git -C "$dir" init -q || return 1
+  git -C "$dir" config extensions.worktreeConfig true || return 1
+  git -C "$dir" config --worktree user.name poetry || return 1
+  git -C "$dir" config --worktree user.email chen@sentio.xyz || return 1
+  git -C "$dir" config --worktree commit.gpgsign true || return 1
+  key="$(git -C "$P" config user.signingkey)" || { echo "configure the repository's actual signing key first; stop" >&2; return 1; }
+  git -C "$dir" config --worktree user.signingkey "$key" || return 1
+  git -C "$dir" add -f -A || return 1
+  git -C "$dir" commit -S -q -m "Task48 protected-path-excluded local fixture" -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' || { echo "local signing failed; preserve evidence and unlock the actual key in your terminal; stop" >&2; return 1; }
+  (cd "$dir" && si_p3_signed) || return 1
+}
+# This task-local direct-Helm implementation performs real audited rendering.
+# It neither invokes Helmfile nor reports a stubbed forbidden command as proof.
+si_render_diff() { python3 -I "$T48/local_render.py" diff --tree "$PWD" --base-ref HEAD^ --release "$1"; }
+# Preserve the producer verbatim under a private alias, then add the preview gate
+# in the task's caller environment. The D24 payload itself is never edited.
+if declare -F si_p3_push >/dev/null; then
+  eval "$(declare -f si_p3_push | sed '1s/^si_p3_push/p3_runbook_push/')"
+  si_p3_push() { [ -n "${p3_commit_label:-}" ] && p3_before_push "$p3_commit_label" || return 1; p3_runbook_push "$@"; }
+fi
+```
+
+`p3-guard.py` (complete task-local tool; preserve these exact bytes):
+
+```python
+#!/usr/bin/env python3
+"""Strict task-local data/integrity guards; never deploy, sign, fetch or read credentials."""
+import datetime,hashlib,json,re,shlex,subprocess,sys
+from pathlib import Path
+FORBIDDEN={'k8s-sea/clickhouse/clickhouse.yaml','k8s-sea/clickhouse/clickhouse-extra.yaml'}
+NAMES='ARBITER_DIGEST INDEXER_C_ID ENROLMENT_EPOCH OPERATOR_CHART_VERSION SN_COMMIT_P2 SN_DIGEST_P2 ARBITER_PIN_P2 P2_INTEGRATION_SOAK CORE_TAG_P2 P2_PR MEMBER_IDS P2_END HG_TAG_P3 HG_DIGEST_P3 CORE_TAG_P3 SN_COMMIT_P3 SN_DIGEST_P3 P3_PR'.split()
+def require(ok):
+ if not ok:raise ValueError('malformed, stale or incomplete Task48 evidence; stop')
+def digest(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def env(path):
+ out={}
+ for line in Path(path).read_text().splitlines():
+  k,sep,v=line.partition('=');require(sep and k in NAMES and k not in out and bool(v));out[k]=v
+ require(set(out)==set(NAMES))
+ for k,v in out.items():
+  if 'DIGEST'in k:require(re.fullmatch(r'sha256:[0-9a-f]{64}',v))
+  elif k.startswith('SN_COMMIT')or k=='ARBITER_PIN_P2':require(re.fullmatch(r'[0-9a-f]{40}',v))
+  elif k in ('HG_TAG_P3','CORE_TAG_P2','CORE_TAG_P3'):require(re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+',v))
+  elif k=='OPERATOR_CHART_VERSION':require(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',v))
+  elif k in ('INDEXER_C_ID','ENROLMENT_EPOCH','P2_INTEGRATION_SOAK','P2_PR','P3_PR'):
+   require(re.fullmatch(r'[1-9][0-9]*',v));require((500 if k=='P2_INTEGRATION_SOAK'else 2 if k=='INDEXER_C_ID'else 1)<=int(v)<=2**64-1)
+  elif k=='P2_END':require(datetime.date.fromisoformat(v).isoformat()==v)
+ require(out['MEMBER_IDS']==f"member-a:0,member-b:1,member-c:{out['INDEXER_C_ID']}")
+ return out
+def freeze(tree,tools,path):
+ tree,tools=Path(tree),Path(tools);require(not Path(path).exists())
+ import importlib.util
+ spec=importlib.util.spec_from_file_location('extract',tools/'p3-helpers.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);entries=[];mod.collect(tree/'docs','storage-integrity-devnet2-stage3-p3-replica-reads.md',set(),entries);require(len(entries)==9)
+ files=[tree/'docs'/n for n,_ in entries]+[tools/n for n in ['p3-helpers.py','p3-edit.py','task48.sh','p3-guard.py','local_render.py','check-identities.py']]+[tools.parent/n for n in ['helpers.sh','ledger.env','live-path','live-urwt.json']]
+ require(all(p.is_file()and not p.is_symlink()for p in files));data={str(p.absolute()):digest(p)for p in files}
+ with open(path,'x')as f:json.dump(data,f,indent=2);f.write('\n')
+def check(path):
+ x=json.loads(Path(path).read_text());require(isinstance(x,dict)and len(x)==19)
+ for p,h in x.items():require(not any(p.endswith('/'+n)for n in FORBIDDEN)and Path(p).is_absolute()and re.fullmatch('[0-9a-f]{64}',h)and Path(p).is_file()and not Path(p).is_symlink()and digest(p)==h)
+def check_record(path):
+ x=json.loads(Path(path).read_text());require(isinstance(x,dict)and len(x)==19)
+ changed=0
+ for p,h in x.items():
+  require(not any(p.endswith('/'+n)for n in FORBIDDEN)and Path(p).is_absolute()and re.fullmatch('[0-9a-f]{64}',h)and Path(p).is_file()and not Path(p).is_symlink())
+  if p.endswith('/docs/storage-integrity-devnet2-stage3-p3-replica-reads.md')and digest(p)!=h:
+   text=Path(p).read_text();require(text.count('\n## 7. End\n')==1 and text.count('\n## 8. Rollback\n')==1)
+   head,tail=text.split('\n## 8. Rollback\n',1);section=head.split('\n## 7. End\n',1)[1]
+   records=[l for l in section.splitlines()if l.startswith('Record of the first run: ')]
+   require(len(records)==1 and section.count(records[0])==1 and '\n\n'+records[0]+'\n\n' in text)
+   restored=text.replace('\n\n'+records[0]+'\n\n','\n\n',1)
+   require(hashlib.sha256(restored.encode()).hexdigest()==h);changed+=1
+  else:require(digest(p)==h)
+ require(changed==1)
+ print('all19 frozen inputs verified, allowing only the single reviewed section7 record paragraph')
+def probe(path):
+ rows=[l.split('\t')for l in Path(path).read_text().splitlines()if l];require(len(rows)==5 and rows[0]==['row','role','expect','got','code','statement'])
+ copy=rows[1][5].removeprefix('SELECT count() FROM hg_replica.')
+ require(re.fullmatch('[A-Za-z0-9_]+',copy))
+ statements=[f'SELECT count() FROM hg_replica.{copy}',f'INSERT INTO hg_replica.{copy} SELECT * FROM hg_replica.{copy} LIMIT 0',f'ALTER TABLE hg_replica.{copy} DELETE WHERE 1 = 0','CREATE TABLE hg_replica.si_probe_denied (x UInt8) ENGINE = MergeTree ORDER BY x']
+ for n,row in enumerate(rows[1:]):
+  require(len(row)==6 and row[0]==str(n+1)and row[1]=='si_gateway'and row[2]==('ok'if n==0 else'denied')and row[3]==row[2]and row[4]==('0'if n==0 else'497')and row[5]==statements[n])
+ print(str(path)+': 4 rows, each as expected (ok, denied, denied, denied)')
+def preview(path,commit):
+ x=json.loads(Path(path).read_text());require(set(x)=={'parent','subject','files','blobs','clone'}and re.fullmatch('[0-9a-f]{40}',x['parent'])and re.fullmatch('[0-9a-f]{40}',commit));require(x['files']==sorted(set(x['files']))and bool(x['files'])and set(x['blobs'])==set(x['files']))
+ def git(*a):return subprocess.check_output(['git',*a])
+ require(git('rev-parse',commit+'^').decode().strip()==x['parent']);require(git('show','-s','--format=%s',commit).decode().strip()==x['subject'])
+ require(sorted(git('diff-tree','--no-commit-id','--name-only','-r',commit).decode().splitlines())==x['files'])
+ for p,h in x['blobs'].items():
+  require(p not in FORBIDDEN and not Path(p).is_absolute()and '..'not in Path(p).parts and re.fullmatch('[0-9a-f]{64}',h));require(hashlib.sha256(git('show',commit+':'+p)).hexdigest()==h)
+ print('preview parent, exact changed paths and all changed-file blobs verified')
+def record(record_path,ledger_path,backup):
+ x=env(ledger_path);r={};allowed=set('START_UTC TESTS GEN_C_START BUDGET_HALF PROMOTIONS_START EPOCH_START ACCEPT_5301 WINDOW_END_UTC LOCAL_AGENT SERVING_ON_UTC MONITORING_UTC BASELINE_COUNT PUBLISHED_C QUARANTINE_GENERATION QUARANTINE_UTC SERVED_UTC FAILOVERS READ_ROUNDS RELEASE_UTC SERVING_ENDED_UTC END_UTC P3_END PROMOTIONS_END STATE_BYTES RECORD_PR'.split())
+ for line in Path(record_path).read_text().splitlines():
+  k,sep,v=line.partition('=');require(sep and k in allowed and v);r[k]=v
+ needed=allowed-{'RECORD_PR'};require(needed<=set(r))
+ for k,v in r.items():
+  if k.endswith('_UTC'):require(datetime.datetime.fromisoformat(v.replace('Z','+00:00')).tzinfo is not None)
+  elif k=='P3_END':require(datetime.date.fromisoformat(v).isoformat()==v)
+  elif k not in ('ACCEPT_5301','LOCAL_AGENT'):
+   require(re.fullmatch('[0-9]+',v)and 0<=int(v)<=2**64-1)
+ require(datetime.datetime.fromisoformat(r['START_UTC'].replace('Z','+00:00'))<=datetime.datetime.fromisoformat(r['END_UTC'].replace('Z','+00:00')))
+ spent=int(r['PROMOTIONS_END'])-int(r['PROMOTIONS_START']);require(2<=spent<=4 and spent<=int(r['BUDGET_HALF']))
+ require(1<=int(r['READ_ROUNDS'])<=3 and int(r['FAILOVERS'])>=1 and int(r['BASELINE_COUNT'])>=1 and int(r['TESTS'])>0 and int(r['STATE_BYTES'])>0)
+ require(r['QUARANTINE_GENERATION']==r['GEN_C_START']and r['EPOCH_START']==x['ENROLMENT_EPOCH'])
+ require(' housegate '+x['HG_TAG_P3']+' 'in r['LOCAL_AGENT']);require(re.fullmatch(r'track 0 published [0-9]+ -> [0-9]+',r['ACCEPT_5301']))
+ backup=Path(backup)
+ for name in ['user-6.1-baseline.sh','user-6.3-reads.sh','user-6.3-refusals.sh','user-6.5-read.sh']:
+  # The one explicitly confirmed733 retry can supply the successful baseline.
+  options=[name]+(['user-6.1-baseline-2.sh']if name=='user-6.1-baseline.sh'else[])
+  tools=backup.parent/'si-devnet2-stage3-p3-session'/'task48'
+  require(any((tools/n).is_file()and not(tools/n).is_symlink()and (backup/('task48-done-'+n)).is_file()and (backup/('task48-done-'+n)).read_text().strip()==digest(tools/n)and (tools/(n+'.sha256')).read_text().strip()==digest(tools/n)for n in options))
+ print('typed P3 record, budget and all four user success receipts verified')
+
+def main(a):
+ if a[0]=='env':
+  x=env(a[1]);print('\n'.join(k+'='+shlex.quote(x[k])for k in NAMES))if len(a)>2 and a[2]=='--shell'else print('18 exact typed ledger values verified')
+ elif a[0]=='freeze':freeze(*a[1:])
+ elif a[0]=='check':check(a[1])
+ elif a[0]=='check-record':check_record(a[1])
+ elif a[0]=='probe':probe(a[1])
+ elif a[0]=='preview':preview(*a[1:])
+ elif a[0]=='record':record(*a[1:])
+ else:require(False)
+if __name__=='__main__':
+ try:main(sys.argv[1:])
+ except Exception:raise SystemExit('Task48 guard: invalid data, source drift or missing evidence; stop')
+```
+
+`local_render.py` (complete task-local tool; preserve these exact bytes):
+
+```python
+#!/usr/bin/env python3
+"""Local direct-Helm rendering only; deployment context/order options are not used."""
+import argparse,hashlib,json,os,re,subprocess,tempfile
+from pathlib import Path
+import yaml
+class UniqueLoader(yaml.SafeLoader):
+    pass
+def unique_mapping(loader,node,deep=False):
+    result={}
+    for key_node,value_node in node.value:
+        key=loader.construct_object(key_node,deep=deep)
+        if key in result:raise ValueError('duplicate YAML key')
+        result[key]=loader.construct_object(value_node,deep=deep)
+    return result
+UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,unique_mapping)
+FORBIDDEN={'k8s-sea/clickhouse/clickhouse.yaml','k8s-sea/clickhouse/clickhouse-extra.yaml'}
+def require(ok):
+    if not ok: raise ValueError('unsupported or unsafe local render input; details withheld')
+def plain(x):
+    if isinstance(x,str):require('{{' not in x and '}}' not in x and '\x00' not in x)
+    elif isinstance(x,dict):
+        for k,v in x.items():plain(k);plain(v)
+    elif isinstance(x,list):
+        for v in x:plain(v)
+    else:require(x is None or isinstance(x,(int,float,bool)))
+def checked(root,parent,value,folder=False):
+    require(isinstance(value,str) and not Path(value).is_absolute());plain(value)
+    p=(parent/value).resolve(); require(p.is_relative_to(root));require(str(p.relative_to(root)) not in FORBIDDEN)
+    require(p.is_dir() if folder else p.is_file());return p
+def load(root,file,name):
+    root=Path(root).resolve();path=checked(root,root,file)
+    raw=path.read_text();plain(raw);doc=yaml.load(raw,Loader=UniqueLoader)
+    require(isinstance(doc,dict) and not set(doc)-{'helmDefaults','releases'})
+    defaults=doc.get('helmDefaults',{});require(isinstance(defaults,dict) and not set(defaults)-{'kubeContext','createNamespace'})
+    require(defaults.get('kubeContext','sentio-sea')=='sentio-sea' and defaults.get('createNamespace',False) is False)
+    require(isinstance(doc.get('releases'),list));rows=[r for r in doc['releases'] if isinstance(r,dict) and r.get('name')==name]
+    if not rows:return None
+    require(len(rows)==1);row=rows[0];require(not set(row)-{'name','namespace','chart','needs','set','values','wait','timeout'})
+    require(re.fullmatch('[a-z0-9][a-z0-9-]*',name) is not None);require(isinstance(row.get('namespace'),str));plain(row)
+    require(isinstance(row.get('needs',[]),list) and all(isinstance(s,str) for s in row.get('needs',[])))
+    require(isinstance(row.get('wait',False),bool));require(type(row.get('timeout',1)) is int)
+    chart=checked(root,path.parent,row['chart'],True)
+    require(str(chart.relative_to(root)) in {'charts/storage-integrity','charts/sentio-node'})
+    require(isinstance(row.get('values',[]),list) and isinstance(row.get('set',[]),list))
+    vals=[]
+    for v in row.get('values',[]):
+        if isinstance(v,str):vals.append(('file',checked(root,path.parent,v)))
+        else:
+            require(isinstance(v,dict) and set(v)=={'nodeSelector'} and isinstance(v['nodeSelector'],dict))
+            require(all(isinstance(k,str) and isinstance(s,str) for k,s in v['nodeSelector'].items())); vals.append(('inline',v))
+    sets=[]
+    for v in row.get('set',[]):
+        require(isinstance(v,dict) and set(v)=={'name','file'} and v['name']=='service.chainsConfig')
+        sets.append((v['name'],checked(root,path.parent,v['file'])))
+    require(len(sets)<=1)
+    return root,path,row,chart,vals,sets
+
+def render(tree,file,release,output):
+    data=load(tree,file,release)
+    if data is None:raise LookupError('selected release absent')
+    root,path,row,chart,vals,sets=data
+    out=Path(output);out.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='direct-helm-inline-') as td:
+        args=['helm','template',release,str(chart),'--namespace',row['namespace']]
+        for i,(kind,value) in enumerate(vals):
+            if kind=='inline':
+                value_path=Path(td)/f'inline-{i}.yaml';value_path.write_text(yaml.safe_dump(value));value_path.chmod(0o600)
+            else:value_path=value
+            args+=['-f',str(value_path)]
+        for name,p in sets:args+=['--set-file',name+'='+str(p)]
+        run=subprocess.run(args,cwd=path.parent,capture_output=True,timeout=120)
+        require(run.returncode==0 and bool(run.stdout.strip()))
+        objects=list(yaml.safe_load_all(run.stdout));require(objects and all(isinstance(x,dict) and x.get('apiVersion') and x.get('kind') and isinstance(x.get('metadata'),dict) and x['metadata'].get('name') for x in objects))
+        keys=[(x['apiVersion'],x['kind'],x['metadata'].get('namespace',''),x['metadata']['name']) for x in objects];require(len(keys)==len(set(keys)))
+        out.write_bytes(run.stdout);out.chmod(0o600)
+        meta={'release':release,'namespace':row['namespace'],'helmfile':file,'chart':str(chart.relative_to(root)),'ordered_values':[str(v.relative_to(root)) if k=='file' else {'inline_keys':sorted(v)} for k,v in vals], 'set_file_names':[k for k,v in sets], 'ignored_operational_fields':sorted(set(row)&{'needs','wait','timeout'}),'ignored_defaults':sorted(load_defaults(path)), 'sha256':hashlib.sha256(run.stdout).hexdigest(),'objects':len(keys),'object_keys_sha256':hashlib.sha256(json.dumps(sorted(keys)).encode()).hexdigest()}
+        out.with_suffix(out.suffix+'.meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+        return meta
+
+def load_defaults(path):return yaml.load(path.read_text(),Loader=UniqueLoader).get('helmDefaults',{})
+
+def compare(base_tree,head_tree,entries,new_releases,output_dir):
+    """Compare exact bytes and resource identities; permit only genuinely new named releases."""
+    names=[n for f,n in entries];require(len(names)==len(set(names)))
+    require(len(new_releases)==len(set(new_releases)) and set(new_releases)<=set(names))
+    results=[]
+    for file,name in entries:
+        require(load(head_tree,file,name)is not None)
+        head=render(head_tree,file,name,Path(output_dir)/('head-'+name+'.yaml'))
+        absent=load(base_tree,file,name)is None
+        if absent:
+            require(name in new_releases);results.append({'release':name,'status':'new','head':head});continue
+        require(name not in new_releases)
+        base=render(base_tree,file,name,Path(output_dir)/('base-'+name+'.yaml'))
+        require(base['sha256']==head['sha256'] and base['object_keys_sha256']==head['object_keys_sha256'])
+        results.append({'release':name,'status':'identical','base':base,'head':head})
+    return results
+
+ENTRIES=[
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","storage-integrity-si-v2"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-a"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-b"),
+ ("k8s-sea/sentio-network-devnet2/helmfile.yaml","sentio-node-devnet2-observer"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-a"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-b"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-observer"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-c"),
+]
+def export_base(tree,ref,destination):
+    import tarfile
+    tree=Path(tree).resolve()
+    # Ref and filename metadata are validated before archive reads any content.
+    require(isinstance(ref,str) and bool(ref) and not ref.startswith("-") and "\x00" not in ref)
+    sha=subprocess.check_output(["git","-C",str(tree),"rev-parse","--verify",ref+"^{commit}"],text=True).strip()
+    require(re.fullmatch("[0-9a-f]{40}",sha)is not None)
+    names=subprocess.check_output(["git","-C",str(tree),"ls-tree","-rz","--name-only",sha],text=True).split("\x00")
+    # The two credential-bearing files are excluded at the archive argument layer.
+    args=["git","-C",str(tree),"archive",sha,"--",".",*[(":(exclude)"+n) for n in sorted(FORBIDDEN)]]
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    try:
+        with tarfile.open(fileobj=process.stdout,mode="r|") as archive:
+            for member in archive:
+                require(member.name not in FORBIDDEN)
+                p=(Path(destination)/member.name).resolve();require(p.is_relative_to(Path(destination).resolve()))
+                # Deployment inputs must be regular files; never follow source symlinks.
+                if member.isdir() or member.isfile():archive.extract(member,destination)
+                else:require(member.issym())
+        require(process.wait(timeout=30)==0)
+    except Exception:
+        process.kill();process.wait();raise
+    require(all(not(Path(destination)/n).exists() for n in FORBIDDEN))
+    return sha
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument("action",choices=["compare","diff"])
+    parser.add_argument("--tree",required=True);parser.add_argument("--base-ref",required=True);parser.add_argument("--release")
+    args=parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="si-p3-direct-render-") as td:
+        base=Path(td)/"base";base.mkdir();export_base(args.tree,args.base_ref,base)
+        out=Path(td)/"renders"
+        if args.action=="compare":
+            require(args.release is None)
+            results=compare(base,args.tree,ENTRIES,[],out)
+            for result in results:print(result["release"]+" identical")
+        else:
+            entries=[(file,name)for file,name in ENTRIES if name==args.release];require(len(entries)==1)
+            file,name=entries[0];a=out/"base.yaml";b=out/"head.yaml"
+            render(base,file,name,a);render(args.tree,file,name,b)
+            def objects(p):
+                return {(x["kind"],x["metadata"]["name"]):x for x in yaml.safe_load_all(p.read_text())}
+            before,after=objects(a),objects(b)
+            for key in sorted(set(before)|set(after)):
+                if before.get(key)!=after.get(key):print("changed "+"/".join(key))
+if __name__=="__main__":
+    try:main()
+    except Exception:raise SystemExit("direct-render: unsupported grammar, missing input or local render failure; details withheld; stop")
+```
+
+`check-identities.py` (complete task-local tool; preserve these exact bytes):
+
+```python
+"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
 ```
 
 Then build the session helpers, from `$HOME/si-devnet2-stage3-p3-session/blocks/001-helpers.sh` (no preamble: it writes `helpers.sh`):
@@ -26913,24 +29908,36 @@ bash -n "$S/task48/task48.sh"
 python3 -I "$S/task48/p3-helpers.py" chain "$P/docs" storage-integrity-devnet2-stage3-p3-replica-reads.md > "$S/helpers.sh"
 {
   printf 'P=%q\n' "$P"
-  printf 'source %q\n' "$S/ledger.env"
+  python3 -I "$S/task48/p3-guard.py" env "$S/ledger.env" --shell || exit 1
 } >> "$S/helpers.sh"
-bash -n "$S/helpers.sh"
+bash -n "$S/helpers.sh" || exit 1
+python3 -I "$S/task48/p3-guard.py" freeze "$P" "$S/task48" "$S/frozen.json" || exit 1
 echo "runbook sections in helpers.sh: $(grep -c '^# --- §0 of docs/' "$S/helpers.sh")"
 bash -c 'set -eo pipefail; source "$HOME/si-devnet2-stage3-p3-session/helpers.sh"; source "$HOME/si-devnet2-stage3-p3-session/task48/task48.sh"; cd "$P"; type si_kubectl si_arbiter si_voter si_leader si_show si_images si_info si_status si_audit si_tracks si_track si_track_published si_refusal si_agent_start si_agent_stop si_agent_ch si_state_size si_vm_value si_vmalert_groups si_head_is si_ch_admin si_chi_state si_runtime_uids si_secret_keys si_render_diff si_member_pod si_member_metrics si_copies_check si_budget_capture si_budget si_member_serving si_replica_status si_replica_hosts si_replica_grant_probe si_wait_serving si_failovers si_p3_edit si_p3_message si_p3_commit si_p3_push si_render_diff_is si_local_agent_version si_acceptance_db si_c_id p3_block p3_user_script p3_preview p3_pushed_is p3_edit_check p3_render_check p3_view_check p3_member_window_check p3_host_window_check p3_owner_targets p3_serve_check p3_probe_ok p3_copies_equal p3_replica_status_check p3_replica_hosts_check p3_promotions >/dev/null && [ -n "$si_lockdown_dir" ] && [ "$si_backup" = "$HOME/si-devnet2-stage3-p3" ] && p3_runbook_shape && p3_user_scripts_ok && echo "helpers ok: si_backup=$si_backup si_lockdown_dir=$si_lockdown_dir P=$P INDEXER_C_ID=$INDEXER_C_ID"'
 ```
 
-Expected: on stderr `# --- end of runbook helpers: storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md storage-integrity-devnet2-multi-source-tracks.md storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md storage-integrity-devnet2-stage3-indexer-c.md storage-integrity-devnet2-stage3-p1-backups.md storage-integrity-devnet2-stage3-p2-members.md storage-integrity-devnet2-stage3-p3-replica-reads.md` (the chain the P3 runbook's §0 names, each runbook once, earliest first); `runbook sections in helpers.sh: 9`; `runbook blocks as this task names them: 24 sections, 13 commit blocks`; `user blocks §6.1/2, §6.3/1, §6.3/2, §6.5/2 start with the key_file placeholder`; `helpers ok: si_backup=/Users/uranuswch/si-devnet2-stage3-p3 si_lockdown_dir=/Users/uranuswch/si-devnet2-stage3-lockdown P=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c4-live INDEXER_C_ID=<INDEXER_C_ID>`. A missing helper means a runbook spreads its §0 over more than one bash block (D20 forbids it) or Task 47 named a helper differently from contract §32.4; a shape that differs means the merged runbook's blocks are not the ones this task's steps name: stop and report either. From here on every block runs with the three-line preamble above.
+Expected: on stderr `# --- end of runbook helpers: storage-integrity-devnet2-dynamic-table-set.md storage-integrity-devnet2-multi-source.md storage-integrity-devnet2-multi-source-tracks.md storage-integrity-devnet2-stage3-p0.md storage-integrity-devnet2-stage3-lockdown.md storage-integrity-devnet2-stage3-indexer-c.md storage-integrity-devnet2-stage3-p1-backups.md storage-integrity-devnet2-stage3-p2-members.md storage-integrity-devnet2-stage3-p3-replica-reads.md` (the chain the P3 runbook's §0 names, each runbook once, earliest first); `runbook sections in helpers.sh: 9`; `runbook blocks as this task names them: 24 sections, 13 commit blocks`; `user blocks §6.1/2, §6.3/1, §6.3/2, §6.5/2 start with terminal admission then the key_file placeholder`; `helpers ok: si_backup=/Users/uranuswch/si-devnet2-stage3-p3 si_lockdown_dir=/Users/uranuswch/si-devnet2-stage3-lockdown P=/Users/uranuswch/src/remotesrc/codex/production/multi-source-s3c4-live INDEXER_C_ID=<INDEXER_C_ID>`. A missing helper means a runbook spreads its §0 over more than one bash block (D20 forbids it) or Task 47 named a helper differently from contract §32.4; a shape that differs means the merged runbook's blocks are not the ones this task's steps name: stop and report either. From here on every agent block checks `python3 -I "$HOME/si-devnet2-stage3-p3-session/task48/p3-guard.py" check "$HOME/si-devnet2-stage3-p3-session/frozen.json" || exit 1` before sourcing either helper, then uses the setup preamble and `p3_sources_ok || exit 1`. The manifest is immutable. After Step22 deliberately appends the reviewed run record to §7, no live block may run under this original manifest; do not regenerate it to conceal drift. Record publication/ledger blocks after that append use this exact alternate preamble, preserving all19 frozen hashes while allowing only removal of the single new §7 record paragraph to reproduce the original runbook hash. This does not authorize another live block or reset the manifest:
+
+```bash
+set -eo pipefail
+S="$HOME/si-devnet2-stage3-p3-session"
+python3 -I "$S/task48/p3-guard.py" check-record "$S/frozen.json" || exit 1
+source "$S/helpers.sh"
+source "$S/task48/task48.sh"
+cd "$P" || exit 1
+```
+
+Use it for Step22's push/merge and all Step23 blocks; Step22's record-creation block still uses the original strict preamble. The checked record commit must remain signed and the exact docs-only diff must be reviewed before its publication.
 
 - [ ] **Step 2: Runbook §1 (Pins, Identities, Preconditions and baseline) and this task's preconditions (read-only)**
 
 Copy runbook §1.1's block with its one runtime placeholder line set to the two local clones:
 
 ```bash
-p3_block 1.1 1 read-only 'housegate_repo=/path/to/housegate; sentio_node_repo=/path/to/sentio-node' 'housegate_repo=/Users/uranuswch/Dev/projects/sentio-network/housegate; sentio_node_repo=/Users/uranuswch/Dev/projects/sentio-network/sentio-node'
+p3_block 1.1 1 confirmed 'housegate_repo=/path/to/housegate; sentio_node_repo=/path/to/sentio-node' 'housegate_repo=/Users/uranuswch/Dev/projects/sentio-network/housegate; sentio_node_repo=/Users/uranuswch/Dev/projects/sentio-network/sentio-node'
 ```
 
-Expected: `runbook §1.1 block 1 (read-only) -> /Users/uranuswch/si-devnet2-stage3-p3-session/blocks/<nnn>-runbook-1.1-1.sh` and the block, whose second line names the ledger's `HG_TAG_P3`, `HG_DIGEST_P3`, `CORE_TAG_P3`, `SN_COMMIT_P3` and `SN_DIGEST_P3` (filled in when Task 47 merged). Run that file (it fetches the two clones, reads the image digests with `docker buildx imagetools inspect`, creates `$si_backup` with mode 700 and writes `pins`). Expected: `test_render.py reviews the P3 host, member and agent images` and `pins resolve`. Then:
+Expected: `runbook §1.1 block 1 (confirmed) -> /Users/uranuswch/si-devnet2-stage3-p3-session/blocks/<nnn>-runbook-1.1-1.sh` and the block, whose second line names the ledger's `HG_TAG_P3`, `HG_DIGEST_P3`, `CORE_TAG_P3`, `SN_COMMIT_P3` and `SN_DIGEST_P3` (filled in when Task 47 merged). This file requires its own explicit chat confirmation before execution: "resolve the P3 and P2 release pins through read-only remote image and repository queries, create the private evidence directory and record the exact pins". After that yes, run that file (it fetches the two clones, reads the image digests with `docker buildx imagetools inspect`, creates `$si_backup` with mode 700 and writes `pins`). Expected: `test_render.py reviews the P3 host, member and agent images` and `pins resolve`. Then:
 
 ```bash
 p3_pins_match
@@ -26983,7 +29990,7 @@ c="$INDEXER_C_ID"
 p3_record GEN_C_START "$(si_tracks | jq -r --arg c "$c" '.indexers[] | select(.indexer_id == $c) | .quarantine_generation')"
 ```
 
-Expected: `P3 PR constants agree with the ledger: host and member image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>, agent sidecar ghcr.io/housegate/housegate:<HG_TAG_P3>@<HG_DIGEST_P3>, owner HouseGate {"0": "sentio-node-devnet2-indexer-a:32001", "1": "sentio-node-devnet2-indexer-b:33001", "<C>": "sentio-node-devnet2-indexer-c:34001"}` and `stage pr` (no commit of this task has run: every rollout constant is at its PR value); the render tests' count (recorded as `TESTS`); the epoch `ENROLMENT_EPOCH`, `tracks_enabled` `true`, `max_writers` `"3"`, `si_indexers` 0/`snode-1`, 1/`snode-2`, `<C>`/`snode-3`, verifiers `verifier-1..3`; no track quarantined, none with rejected blocks; six pods on `ARBITER_DIGEST`; each host on the image its source-image overlay pins with the sidecar `v0.15.0`, `indexer-<x>: status token references: none; no reference to storage-integrity-si-v2-member-<installation>`, `owner_audit_mode{mode="repair"} 1` and `unclean_tables 0`; each member on `sha-<SN_COMMIT_P2>@<SN_DIGEST_P2>`; `copies equal: <n> of <n>`; `active` for `s3e_e2e` on indexer-c; `firing … alerts: none`. Anything else stops before a change: a firing alert or an unequal copy is P2's to clear first; a host or member on another image means an earlier attempt or an unreviewed change, which must be explained first.
+Expected: `P3 PR constants agree with the ledger: host and member image ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>, agent sidecar ghcr.io/housegate/housegate:<HG_TAG_P3>@<HG_DIGEST_P3>, owner HouseGate {"0": "sentio-node-devnet2-indexer-a:32001", "1": "sentio-node-devnet2-indexer-b:33001", "<C>": "sentio-node-devnet2-indexer-c:34001"}` and `stage pr` (no commit of this task has run: every rollout constant is at its PR value); the render tests' count (recorded as `TESTS`); the epoch `ENROLMENT_EPOCH`, `tracks_enabled` `true`, `max_writers` `"3"`, `si_indexers` 0/`snode-1`, 1/`snode-2`, `<C>`/`snode-3`, verifiers `verifier-1..3`; no track quarantined, none with rejected blocks; six pods on `ARBITER_DIGEST`; each host on the image its source-image overlay pins with the sidecar `v0.15.0`, `indexer-<x>: status token references: none; no reference to storage-integrity-si-v2-member-<installation>`, `owner_audit_mode{mode="repair"} 1` and `unclean_tables 0`; each member on `sha-<SN_COMMIT_P2>@<SN_DIGEST_P2>`; `copies equal: 6 of 6`; `active` for `s3e_e2e` on indexer-c; `firing … alerts: none`. Anything else stops before a change: a firing alert or an unequal copy is P2's to clear first; a host or member on another image means an earlier attempt or an unreviewed change, which must be explained first.
 
 - [ ] **Step 3: Rehearsal of the runbook's thirteen commits (local only; about 15 minutes; run with `run_in_background: true`)**
 
@@ -26992,10 +29999,9 @@ On a throwaway clone of the live checkout, every commit in order made by the run
 ```bash
 R="$T48/rehearsal"
 [ ! -e "$R" ] || { echo "$R exists: an earlier rehearsal; ask before moving it aside; stop"; exit 1; }
-git clone -q --no-checkout "$P" "$R"
-git -C "$R" checkout -q --detach "$(git rev-parse HEAD)"
+p3_scratch_repo "$R" HEAD || exit 1
 cd "$R" || exit 1
-base="$(git rev-parse HEAD)"
+base="$(git rev-parse HEAD)" || exit 1
 for st in G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-b S-c S-a M; do
   files="$(p3_edit_check "$st")"
   echo "rehearsal $st: $(git log -1 --format=%s) ($files)"
@@ -27004,17 +30010,28 @@ done
 p3_tool state | tail -n 1
 prev=(pr G-b G-c G-n W-b-m W-b-h W-c-m W-c-h W-a-m W-a-h S-b S-c S-a)
 i=12
-for c in $(git rev-list "$base..HEAD"); do
-  git revert --no-edit "$c" > /dev/null
+si_checked_read_203="$(git rev-list "$base..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -n "$si_checked_read_203" ] || { echo "expected commit list is empty; stop" >&2; exit 1; }
+# shellcheck disable=SC2086 # checked Git commit list: one commit id per word
+for c in ${si_checked_read_203}; do
+  before="$(git rev-parse HEAD)" || exit 1
+  git revert --no-commit "$c" || exit 1
+  si_checked_read_204="$(git show -s --format=%s "$c")" || { echo "Git read failed; stop" >&2; exit 1; }
+  git commit -S -m "Revert ${si_checked_read_204}" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+  si_checked_read_205="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  [[ "$si_checked_read_205" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+  [ "${si_checked_read_205}" != "$before" ] && si_p3_signed HEAD || exit 1
+  p3_tests || exit 1
   [ "$(p3_tool state | tail -n 1)" = "stage ${prev[$i]}" ] || { echo "rehearsal: after reverting '$(git log -1 --format=%s "$c")' the checkout is not at stage ${prev[$i]}; stop"; exit 1; }
   i=$((i - 1))
 done
-[ -z "$(git diff "$base" HEAD)" ] || { echo "rehearsal: the reverts do not restore origin/main; stop"; exit 1; }
+si_checked_read_206="$(git diff "$base" HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ -z "${si_checked_read_206}" ] || { echo "rehearsal: the reverts do not restore origin/main; stop"; exit 1; }
 p3_tests
 echo "rehearsal ok: the runbook's 13 commits as contract §32.5 gives them, with their render diffs, and 13 reverts back to stage pr"
 ```
 
-Expected (as measured on a stand-in of this checkout when this task was drafted): for each stage `same content as contract §32.5's edit: <its files>`, `render tests: <TESTS> tests OK` and `rehearsal <label>: <the subject of the Files list> (<its files>)`; then `G-b: one line added to k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml`, the same for G-c; `render diff of storage-integrity-si-v2: changed ClickHouseInstallation/storage-integrity-si-v2`; for each member stage and each serving stage `render diff of sentio-node-devnet2-indexer-<x>: changed ConfigMap/sentio-node-devnet2-indexer-<x>-si-member-config changed StatefulSet/sentio-node-devnet2-indexer-<x>-si-member`; for each host stage `… changed ConfigMap/sentio-node-devnet2-indexer-<x>-node-config changed StatefulSet/sentio-node-devnet2-indexer-<x>`; `render diff of storage-integrity-si-v2: changed VMRule/storage-integrity-si-v2` (each render diff after two `Templating release=…` lines of helmfile); `stage M`; `render tests: <TESTS> tests OK`; `rehearsal ok: …`. Any `stop` means the merged runbook's editor or the P3 PR's constants or templates do not support a commit of contract §32.5 as merged (for example `si_p3_edit` writing a value contract §32.5 does not give, a reviewed image set without the P3 image, or a render that changes an unexpected object): report it; the fix is a reviewed PR of Task 47, never an edit here. The rehearsal clone stays until the task ends.
+Expected (as measured on a stand-in of this checkout when this task was drafted): for each stage `same content as contract §32.5's edit: <its files>`, `render tests: <TESTS> tests OK` and `rehearsal <label>: <the subject of the Files list> (<its files>)`; then `G-b: one line added to k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml`, the same for G-c; `render diff of storage-integrity-si-v2: changed ClickHouseInstallation/storage-integrity-si-v2`; for each member stage and each serving stage `render diff of sentio-node-devnet2-indexer-<x>: changed ConfigMap/sentio-node-devnet2-indexer-<x>-si-member-config changed StatefulSet/sentio-node-devnet2-indexer-<x>-si-member`; for each host stage `… changed ConfigMap/sentio-node-devnet2-indexer-<x>-node-config changed StatefulSet/sentio-node-devnet2-indexer-<x>`; `render diff of storage-integrity-si-v2: changed VMRule/storage-integrity-si-v2` (each render diff uses the complete audited direct Helm renderer; no Helmfile invocation); `stage M`; `render tests: <TESTS> tests OK`; `rehearsal ok: …`. Any `stop` means the merged runbook's editor or the P3 PR's constants or templates do not support a commit of contract §32.5 as merged (for example `si_p3_edit` writing a value contract §32.5 does not give, a reviewed image set without the P3 image, or a render that changes an unexpected object): report it; the fix is a reviewed PR of Task 47, never an edit here. The rehearsal clone stays until the task ends.
 
 - [ ] **Step 4: Runbook §2 entry checks and the budget (read-only, except runbook §2's parity block, which requires explicit user confirmation)**
 
@@ -27023,7 +30040,7 @@ p3_block 2 1 read-only
 p3_block 2 2 confirmed
 ```
 
-Run the first file (read-only). Expected: the runbook's §2 expectations: the P2 exit record naming `P2_END` (`p2-end-record.md`); one PASS line of `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement` in `rejected-rows-test.txt`; each `<release>-si-member-status-token` with `["status-token"]` and each `storage-integrity-si-v2-member-<installation>` without `status-token` (`token-secrets.txt`, key names only); `locked-network`, `locked-indexer-b`, `locked-indexer-c present`; every host on its pre-P3 image with the `v0.15.0` sidecar and every member on the P2 image; `copies equal: <n> of <n>`, `shadow_mismatches_total` 0, `foreign_tables` 0, `installs_paused` 0; three tracks, none quarantined, no rejected block (`entry-checks.txt`).
+Run the first file (read-only). Expected: the runbook's §2 expectations: the P2 exit record naming `P2_END` (`p2-end-record.md`); one PASS line of `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement` in `rejected-rows-test.txt`; each `<release>-si-member-status-token` with `["status-token"]` and each `storage-integrity-si-v2-member-<installation>` without `status-token` (`token-secrets.txt`, key names only); `locked-network`, `locked-indexer-b`, `locked-indexer-c present`; every host on its pre-P3 image with the `v0.15.0` sidecar and every member on the P2 image; `copies equal: 6 of 6`, `shadow_mismatches_total` 0, `foreign_tables` 0, `installs_paused` 0; three tracks, none quarantined, no rejected block (`entry-checks.txt`).
 
 The parity block runs the devnet2 rewriter image as a local container, which must be pulled first. Read-only:
 
@@ -27035,12 +30052,13 @@ if docker image inspect "$img" > /dev/null 2>&1; then echo "$img is pulled"; els
 If it is not pulled, ask the user to run runbook §2's fish block in their own terminal (their Artifact Registry login), from the root of the live checkout:
 
 ```fish
-cd /Users/uranuswch/src/remotesrc/claude/production/multi-source-s3c4-live
+set P (cat ~/si-devnet2-stage3-p3-session/live-path)
+cd "$P"; or exit 1
 set IMG (python3 -I -c 'import sys, yaml; i = yaml.safe_load(open(sys.argv[1]))["rewriter"]["image"]; print(i["repository"] + ":" + i["tag"])' k8s-sea/sentio-network-devnet2/sentio-node-indexer-a-storage-integrity-si-v2.yaml)
 docker pull $IMG
 ```
 
-The parity block (the second file) downloads and runs software locally, so it requires explicit user confirmation in chat. Gate: "run runbook §2's rewriter parity block: it archives housegate <HG_TAG_P3> from the local clone, fetches the rewriter-go native library that tag's go.mod pins (fetch-rewriter-lib, as housegate's CI does), runs the devnet2 housegate-rewriter image pinned in sentio-node-indexer-a-storage-integrity-si-v2.yaml as the local container si-p3-rewriter on 127.0.0.1:50551, runs the two env-gated engine parity tests with Bazel, and removes the container; nothing on the cluster changes". After a yes, run it. Expected: the runbook's §2 parity expectations, both tests `--- PASS` and `2`. Then:
+The parity block (the second file) downloads and runs software locally, so it requires explicit user confirmation in chat. Gate: "run runbook §2's rewriter parity block: it archives housegate <HG_TAG_P3> from the local clone, fetches the rewriter-go native library that tag's go.mod pins (fetch-rewriter-lib, as housegate's CI does), runs the devnet2 housegate-rewriter image pinned in sentio-node-indexer-a-storage-integrity-si-v2.yaml as a uniquely named local container carrying this session's exact ownership label on a dynamically allocated localhost port (refuse a foreign container or port), runs the two env-gated engine parity tests with Bazel, and removes only that owned container, proving stable absence across three samples over at least 30 seconds; readiness is bounded by 120 seconds and cleanup by 180 seconds; nothing on the cluster changes". After a yes, run it. Expected: the runbook's §2 parity expectations, both distinct engine tests `--- PASS`, no SKIP, and exact count `2`. Then:
 
 ```bash
 for f in pins identities.txt budget.txt budget-live-seq budget-live-seq-start budget-voter budget-snapshots.tgz entry-checks.txt p2-end-record.md arbiter-pin-record.txt rejected-rows-test.txt token-secrets.txt rewriter-parity.txt; do
@@ -27071,7 +30089,7 @@ for t in TestNativeEngineReplicaTableResolvesBeforeRemoteMapping TestGRPCEngineR
   grep -qF -- "--- PASS: $t" "$si_backup/rewriter-parity.txt" || { echo "rewriter-parity.txt shows no --- PASS of $t; stop"; exit 1; }
 done
 ! grep -qE -- '--- (FAIL|SKIP)' "$si_backup/rewriter-parity.txt" || { echo "rewriter-parity.txt reports a failed or skipped test; stop"; exit 1; }
-grep -qF "$P2_END" "$si_backup/p2-end-record.md" || { echo "p2-end-record.md does not name P2_END $P2_END; stop"; exit 1; }
+si_p2_release_record "$si_backup/p2-end-record.md" "$ARBITER_PIN_P2" "$P2_INTEGRATION_SOAK" || exit 1
 for x in a b c; do
   k="$(si_secret_keys "sentio-node-devnet2-indexer-$x-si-member-status-token")"
   [ "$k" = "status-token " ] || { echo "sentio-node-devnet2-indexer-$x-si-member-status-token has the keys '$k', not exactly status-token; stop"; exit 1; }
@@ -27250,7 +30268,7 @@ p3_pushed_is W-b-m
 p3_block 4.1 3 read-only
 ```
 
-Expected: `W-b-m pushed to main as <40 hex>: the previewed commit`. Run runbook §4.1 block 3 (read-only; its expectations: the host pod line unchanged, a new member pod and `member-b runs the P3 image`, `serve_databases{state="serving"} 0` and every not-serving reason `serving_disabled`, `copies equal: <n> of <n>`). Then:
+Expected: `W-b-m pushed to main as <40 hex>: the previewed commit`. Run runbook §4.1 block 3 (read-only; its expectations: the host pod line unchanged, a new member pod and `member-b runs the P3 image`, `serve_databases{state="serving"} 0` and every not-serving reason `serving_disabled`, `copies equal: 6 of 6`). Then:
 
 ```bash
 {
@@ -27262,7 +30280,7 @@ Expected: `W-b-m pushed to main as <40 hex>: the previewed commit`. Run runbook 
 } 2>&1 | tee "$si_backup/task48-window-b-member.txt"
 ```
 
-Expected: the member pod with a new uid, `si-member ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3> ready=true restarts=0`; `sentio_node_si_member_serve_databases{state="serving"} 0`, `{state="revoking"} 0`, `{state="not_serving"} <n>` with `sentio_node_si_member_serve_not_serving{reason="serving_disabled"} <n>` and every other reason 0; `member-b: P3 image, serving endpoint up, serving off; host pod unchanged`; `copies equal: <m> of <m>` (a copy behind right after the restart catches up within a minute: run the block again from a new file). Then the host commit, local and read-only:
+Expected: the member pod with a new uid, `si-member ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3> ready=true restarts=0`; `sentio_node_si_member_serve_databases{state="serving"} 0`, `{state="revoking"} 0`, `{state="not_serving"} <n>` with `sentio_node_si_member_serve_not_serving{reason="serving_disabled"} <n>` and every other reason 0; `member-b: P3 image, serving endpoint up, serving off; host pod unchanged`; `copies equal: 6 of 6` (a copy behind right after the restart catches up within a minute: run the block again from a new file). Then the host commit, local and read-only:
 
 ```bash
 p3_fresh_main
@@ -27331,7 +30349,7 @@ Expected: `W-c-m pushed to main as <40 hex>: the previewed commit`. Run runbook 
 } 2>&1 | tee "$si_backup/task48-window-c-member.txt"
 ```
 
-Expected: as in Step 8: `member-c: P3 image, serving endpoint up, serving off; host pod unchanged` and `copies equal: <m> of <m>`. Then the host commit, local and read-only:
+Expected: as in Step 8: `member-c: P3 image, serving endpoint up, serving off; host pod unchanged` and `copies equal: 6 of 6`. Then the host commit, local and read-only:
 
 ```bash
 p3_fresh_main
@@ -27401,7 +30419,7 @@ Expected: `W-a-m pushed to main as <40 hex>: the previewed commit`. Run runbook 
 } 2>&1 | tee "$si_backup/task48-window-a-member.txt"
 ```
 
-Expected: `member-a: P3 image, serving endpoint up, serving off; host pod unchanged` and `copies equal: <m> of <m>`. Then the host commit, local and read-only:
+Expected: `member-a: P3 image, serving endpoint up, serving off; host pod unchanged` and `copies equal: 6 of 6`. Then the host commit, local and read-only:
 
 ```bash
 p3_fresh_main
@@ -27453,8 +30471,8 @@ Expected: `agent window over: track 0 published <x> -> <y>`. The window is over:
 No member serves before every SI host and the user's local agent run `HG_TAG_P3` (K47). Ask the user in chat to upgrade, in their own fish terminal, the `housegate` on their `PATH` (the one `si_agent_start` runs), in the way they installed it (D40), with runbook §5's commands. From housegate's Homebrew tap:
 
 ```fish
-brew update
-brew upgrade housegate/housegate/housegate
+brew update; or exit 1
+brew upgrade housegate/housegate/housegate; or exit 1
 command -v housegate
 housegate -version
 ```
@@ -27463,11 +30481,16 @@ or from the release asset, checked against its `SHA256SUMS` (a single binary, `h
 
 ```fish
 set tag (sed -n 's/^HG_TAG_P3=//p' ~/si-devnet2-stage3-p3-session/ledger.env)
-set d (mktemp -d)
-curl -fsSL -o $d/housegate-$tag-darwin-arm64 https://github.com/housegate/housegate/releases/download/$tag/housegate-$tag-darwin-arm64
-curl -fsSL -o $d/SHA256SUMS https://github.com/housegate/housegate/releases/download/$tag/SHA256SUMS
-cd $d; and grep " housegate-$tag-darwin-arm64\$" SHA256SUMS | shasum -a 256 -c -
-chmod +x $d/housegate-$tag-darwin-arm64; and $d/housegate-$tag-darwin-arm64 -version
+set d (mktemp -d); or exit 1
+curl -fsSL -o $d/housegate-$tag-darwin-arm64 https://github.com/housegate/housegate/releases/download/$tag/housegate-$tag-darwin-arm64; or exit 1
+curl -fsSL -o $d/SHA256SUMS https://github.com/housegate/housegate/releases/download/$tag/SHA256SUMS; or exit 1
+cd "$d"; or exit 1
+set asset housegate-$tag-darwin-arm64
+set checks (awk -v name="$asset" '$2 == name { print }' SHA256SUMS)
+test (count $checks) -eq 1; or exit 1
+printf '%s\n' "$checks" | shasum -a 256 -c -; or exit 1
+chmod +x "$d/$asset"; or exit 1
+"$d/$asset" -version; or exit 1
 ```
 
 The agent never installs or replaces the user's `housegate`. The user reports in chat the two lines of `command -v housegate` and `housegate -version` from fish. Then:
@@ -27669,10 +30692,17 @@ c="$INDEXER_C_ID"
   [ $((spent + 1)) -le "$(p3_value BUDGET_HALF)" ] || { echo "the baseline write would exceed half the budget; stop"; exit 1; }
 } 2>&1 | tee "$si_backup/task48-drill-precheck.txt"
 p3_user_script 6.1 2 user-6.1-baseline.sh
+```
+
+Expected: track `<C>` not quarantined, no rejected block, `prefix` = `published`; `active`; member-a and member-b serving nothing, reason `owner_available`; the three hosts with `replica_databases []`; `copies equal: 6 of 6`; `promotions since Step 4: <k> of the half budget <B // 2>` (normally 1, Step 10's write); `user script /Users/uranuswch/si-devnet2-stage3-p3-session/task48/user-6.1-baseline.sh (runbook §6.1 block 2):` with the block, its first live line `si_p3_user_terminal || exit 1` before inspecting the key path; the producer payload retains that guard followed by `key_file="$1"`. The write runs in the user's terminal. This step requires explicit user confirmation in chat. Gate: "the user runs runbook §6.1 block 2 in their own terminal (user-6.1-baseline.sh): the devuser1 owner's local agent housegate <HG_TAG_P3> writes the baseline row (4, 'p3-6.1-4') into <acceptance-db>.s3e_e2e, one signed INSERT, so track <C> promotes once; the block then waits for the publication and for both members' copies". After a yes, the user runs, in fish:
+
+After that explicit yes, the agent runs this from a fresh D24 block file:
+
+```bash
 p3_clear user-6.1-baseline.sh
 ```
 
-Expected: track `<C>` not quarantined, no rejected block, `prefix` = `published`; `active`; member-a and member-b serving nothing, reason `owner_available`; the three hosts with `replica_databases []`; `copies equal: <n> of <n>`; `promotions since Step 4: <k> of the half budget <B // 2>` (normally 1, Step 10's write); `user script /Users/uranuswch/si-devnet2-stage3-p3-session/task48/user-6.1-baseline.sh (runbook §6.1 block 2):` with the block, its first line `key_file="$1"`; `cleared user-6.1-baseline.sh for the user`. The write runs in the user's terminal. This step requires explicit user confirmation in chat. Gate: "the user runs runbook §6.1 block 2 in their own terminal (user-6.1-baseline.sh): the devuser1 owner's local agent housegate <HG_TAG_P3> writes the baseline row (4, 'p3-6.1-4') into <acceptance-db>.s3e_e2e, one signed INSERT, so track <C> promotes once; the block then waits for the publication and for both members' copies". After a yes, the user runs, in fish:
+Then the user runs in fish:
 
 ```fish
 set key_file /path/to/devuser1-owner.key   # the user's key file of the devuser1 owner
@@ -27684,7 +30714,7 @@ Then, read-only:
 ```bash
 db="$(p3_db)"
 c="$INDEXER_C_ID"
-[ -e "$si_backup/task48-ran-user-6.1-baseline.sh" ] || { echo "user-6.1-baseline.sh has not run; stop"; exit 1; }
+[ -e "$si_backup/task48-done-user-6.1-baseline.sh" ] || [ -e "$si_backup/task48-done-user-6.1-baseline-2.sh" ] || { echo "user-6.1-baseline.sh has not run; stop"; exit 1; }
 cat "$si_backup/drill-baseline.txt"
 [ "$(grep -c "^housegate $HG_TAG_P3 " "$si_backup/drill-baseline.txt")" -ge 2 ] || { echo "drill-baseline.txt does not show the local agent housegate $HG_TAG_P3 twice; stop"; exit 1; }
 grep -qE "^track $c published [0-9]+ -> [0-9]+$" "$si_backup/drill-baseline.txt" || { echo "the baseline row was not published on track $c; stop"; exit 1; }
@@ -27711,7 +30741,7 @@ p3_record BASELINE_COUNT "$after"
 } 2>&1 | tee "$si_backup/task48-baseline.txt"
 ```
 
-Expected: `drill-baseline.txt` with `housegate <HG_TAG_P3> …` twice (the check and `si_agent_start`'s own line), `track <C> published <x> -> <y>`, `safe count: <n> before, <n+1> after` (`<n>` is 3 when only Plan S3-B's acceptance rows exist), `copies equal: <m> of <m>` and `failover lines before the quarantine: 0`; then `copies equal: <m> of <m>` and both members' entry of `<acceptance-db>` equal to track `<C>`'s published `{indexer_id, safe_block_seq, applied_promotion_seq}` (K49). A refused or uncertain write: never run the script again; read `si_tracks` and report. Only for a retryable 733 on the INSERT (runbook §6.1: an owner audit or activation after §4.2), after 35 s, write a second script with `p3_user_script 6.1 2 user-6.1-baseline-2.sh`, clear it with `p3_clear user-6.1-baseline-2.sh`, ask again with the same gate and check its `drill-baseline.txt` with this block from a new file; never a third time.
+Expected: `drill-baseline.txt` with `housegate <HG_TAG_P3> …` twice (the check and `si_agent_start`'s own line), `track <C> published <x> -> <y>`, `safe count: <n> before, <n+1> after` (`<n>` is 3 when only Plan S3-B's acceptance rows exist), `copies equal: 6 of 6` and `failover lines before the quarantine: 0`; then `copies equal: 6 of 6` and both members' entry of `<acceptance-db>` equal to track `<C>`'s published `{indexer_id, safe_block_seq, applied_promotion_seq}` (K49). A refused or uncertain write: never run the script again; read `si_tracks` and report. Only for a retryable 733 on the INSERT (runbook §6.1: an owner audit or activation after §4.2), after 35 s, write a second script with `p3_user_script 6.1 2 user-6.1-baseline-2.sh`, ask again with the same gate, then only after the new yes clear it with `p3_clear user-6.1-baseline-2.sh` and check its `drill-baseline.txt` with this block from a new file; never a third time.
 
 - [ ] **Step 17: Drill, quarantine of indexer-c (runbook §6.2; requires explicit user confirmation: a consensus write outside the consensus update)**
 
@@ -27728,7 +30758,7 @@ p3_block 6.2 1 confirmed
 p3_block 6.2 2 read-only
 ```
 
-Expected: `copies equal: <m> of <m>`; track `<C>` not quarantined, `prefix` = `published`; its `quarantine_generation` (`GEN_C_START` of Step 2 unless something else moved it, which must be explained first); the leader; the two block files. Runbook §6.2 block 1 requires explicit user confirmation in chat. Gate: "run runbook §6.2 block 1: submit the authority-signed quarantine of indexer <C> with expected generation <g> (arbiter-admin indexer quarantine on the leader, reason 'devnet2 stage-3 P3 runbook §6.2: replica read drill'): track <C> stops, indexer-c's tables are refused as quarantined, member-a and member-b serve <acceptance-db> after two polls and a lease, and hosts a and b answer s3e_e2e replica; the generation becomes <g+1> for good; the release follows in Step 19". After a yes, run it. Expected: `quarantine.out` holds the committed answer naming indexer `<C>` and the expected generation (stderr goes there too, so a refusal is kept). Then:
+Expected: `copies equal: 6 of 6`; track `<C>` not quarantined, `prefix` = `published`; its `quarantine_generation` (`GEN_C_START` of Step 2 unless something else moved it, which must be explained first); the leader; the two block files. Runbook §6.2 block 1 requires explicit user confirmation in chat. Gate: "run runbook §6.2 block 1: submit the authority-signed quarantine of indexer <C> with expected generation <g> (arbiter-admin indexer quarantine on the leader, reason 'devnet2 stage-3 P3 runbook §6.2: replica read drill'): track <C> stops, indexer-c's tables are refused as quarantined, member-a and member-b serve <acceptance-db> after two polls and a lease, and hosts a and b answer s3e_e2e replica; the generation becomes <g+1> for good; the release follows in Step 19". After a yes, run it. Expected: `quarantine.out` holds the committed answer naming indexer `<C>` and the expected generation (stderr goes there too, so a refusal is kept). Then:
 
 ```bash
 g="$(cat "$si_backup/quarantine-generation-before")"
@@ -27763,14 +30793,21 @@ g="$(p3_value QUARANTINE_GENERATION)"
 p3_record SERVED_UTC "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 p3_user_script 6.3 1 user-6.3-reads.sh
 p3_user_script 6.3 2 user-6.3-refusals.sh
-p3_clear user-6.3-reads.sh
 ```
 
-Expected: track `<C>` `quarantined` `true` at generation `<g+1>`; `si_info c` `"quarantined":true`; `member-a: <n> databases of owners [1, <C>]; served: ['<acceptance-db>'…] …` and the same for member-b (`[0, <C>]`), each served database with a held lease; member-c serving nothing (its owners are up); `indexer-a answers <acceptance-db>.s3e_e2e replica`, `indexer-a: replica of indexer <C>, served_from <snapshot id>, owner_entry {"applied_promotion_seq": …, "indexer_id": <C>, "safe_block_seq": …}, frozen_since <ms>`, and the same for indexer-b; hosts a and b with `replica_databases` the databases their members serve, indexer-c with `[]`; the two user scripts; `cleared user-6.3-reads.sh for the user`. `FailedPrecondition` with `expected_generation … differs from quarantine generation …` in `quarantine.out`: nothing was applied; read the generation again before a new confirmation (a new copy of block 1). `commit outcome may be unknown`: read `si_track <C>` before anything else, never submit again. A database not served within `si_wait_serving`'s 300 s: read its member's reason in `si_member_serving` and §9.1, then release indexer-c (Step 19) and report.
+Expected: track `<C>` `quarantined` `true` at generation `<g+1>`; `si_info c` `"quarantined":true`; `member-a: <n> databases of owners [1, <C>]; served: ['<acceptance-db>'…] …` and the same for member-b (`[0, <C>]`), each served database with a held lease; member-c serving nothing (its owners are up); `indexer-a answers <acceptance-db>.s3e_e2e replica`, `indexer-a: replica of indexer <C>, served_from <snapshot id>, owner_entry {"applied_promotion_seq": …, "indexer_id": <C>, "safe_block_seq": …}, frozen_since <ms>`, and the same for indexer-b; hosts a and b with `replica_databases` the databases their members serve, indexer-c with `[]`; the two user scripts. `FailedPrecondition` with `expected_generation … differs from quarantine generation …` in `quarantine.out`: nothing was applied; read the generation again before a new confirmation (a new copy of block 1). `commit outcome may be unknown`: read `si_track <C>` before anything else, never submit again. A database not served within `si_wait_serving`'s 300 s: read its member's reason in `si_member_serving` and §9.1, then release indexer-c (Step 19) and report.
 
 - [ ] **Step 18: Drill, reads from members, then the refusals (runbook §6.3; the user's two blocks, each requiring explicit user confirmation)**
 
 The reads run in the user's terminal, through their `HG_TAG_P3` agent. This block requires explicit user confirmation in chat. Gate: "the user runs runbook §6.3 block 1 in their own terminal (user-6.3-reads.sh): up to three rounds of twelve safe reads of <acceptance-db>.s3e_e2e through their local agent housegate <HG_TAG_P3>, each a new session that indexer-c refuses as quarantined and the agent fails over to a replica host; nothing is written". After a yes, the user runs, in fish (with `key_file` set as in Step 16):
+
+After that explicit yes, the agent runs this from a fresh D24 block file:
+
+```bash
+p3_clear user-6.3-reads.sh
+```
+
+Then the user runs in fish:
 
 ```fish
 bash ~/si-devnet2-stage3-p3-session/task48/user-6.3-reads.sh $key_file
@@ -27781,7 +30818,7 @@ Then, read-only:
 ```bash
 db="$(p3_db)"
 want="$(cat "$si_backup/drill-count")"
-[ -e "$si_backup/task48-ran-user-6.3-reads.sh" ] || { echo "user-6.3-reads.sh has not run; stop"; exit 1; }
+[ -e "$si_backup/task48-done-user-6.3-reads.sh" ] || { echo "user-6.3-reads.sh has not run; stop"; exit 1; }
 grep -E '^(housegate |round [0-9]+: )' "$si_backup/drill-reads.txt"
 last="$(tail -n 1 "$si_backup/drill-reads.txt")"
 echo "$last"
@@ -27792,12 +30829,19 @@ grep -F 'agent: replica failover' "$si_backup/drill-reads.txt" | tail -n 3
 for x in a b; do p3_replica_series "$x" | grep -E 'replica_(serving|reads_in_flight)' || true; done
 p3_record FAILOVERS "$n"
 p3_record READ_ROUNDS "$(grep -cE '^round [0-9]+: [0-9]+ of 12 sessions answered' "$si_backup/drill-reads.txt")"
+```
+
+Expected: `housegate <HG_TAG_P3> …` twice; `round 1: 12 of 12 sessions answered <count>` (or a later round), `<count>` the one in `drill-count` (the count published before the quarantine); the last line `failover reason owner_quarantined seen; 12 of 12 sessions answered <count>`; the last `agent: replica failover` lines with `database` `<acceptance-db>`, `owner` `<C>`, `reason` `owner_quarantined`, `from` indexer-c's HouseGate and `to` indexer-a's (`replica_hosts` in ascending id, so indexer 0 first); `replica_serving{database="<acceptance-db>"} 1` and `replica_reads_in_flight{database="<acceptance-db>"} 0` on indexer-a and indexer-b. This is the exit of spec §16 P3: a client of a quarantined owner's database reads safe from a member through the upgraded agent (contract §32.6).
+
+Then the refusals. This block requires explicit user confirmation in chat. Gate: "the user runs runbook §6.3 block 2 in their own terminal (user-6.3-refusals.sh): through their local agent, one INSERT of row (5, 'p3-6.3-refused') into <acceptance-db>.s3e_e2e that indexer-c must refuse with 392, so nothing is written, and one unsafe_latest read that the replica host must refuse with the safe-mode text". After a yes, the user runs, in fish:
+
+After that explicit yes, the agent runs this from a fresh D24 block file:
+
+```bash
 p3_clear user-6.3-refusals.sh
 ```
 
-Expected: `housegate <HG_TAG_P3> …` twice; `round 1: 12 of 12 sessions answered <count>` (or a later round), `<count>` the one in `drill-count` (the count published before the quarantine); the last line `failover reason owner_quarantined seen; 12 of 12 sessions answered <count>`; the last `agent: replica failover` lines with `database` `<acceptance-db>`, `owner` `<C>`, `reason` `owner_quarantined`, `from` indexer-c's HouseGate and `to` indexer-a's (`replica_hosts` in ascending id, so indexer 0 first); `replica_serving{database="<acceptance-db>"} 1` and `replica_reads_in_flight{database="<acceptance-db>"} 0` on indexer-a and indexer-b; `cleared user-6.3-refusals.sh for the user`. This is the exit of spec §16 P3: a client of a quarantined owner's database reads safe from a member through the upgraded agent (contract §32.6).
-
-Then the refusals. This block requires explicit user confirmation in chat. Gate: "the user runs runbook §6.3 block 2 in their own terminal (user-6.3-refusals.sh): through their local agent, one INSERT of row (5, 'p3-6.3-refused') into <acceptance-db>.s3e_e2e that indexer-c must refuse with 392, so nothing is written, and one unsafe_latest read that the replica host must refuse with the safe-mode text". After a yes, the user runs, in fish:
+Then the user runs in fish:
 
 ```fish
 bash ~/si-devnet2-stage3-p3-session/task48/user-6.3-refusals.sh $key_file
@@ -27808,7 +30852,7 @@ Then, read-only:
 ```bash
 db="$(p3_db)"
 c="$INDEXER_C_ID"
-[ -e "$si_backup/task48-ran-user-6.3-refusals.sh" ] || { echo "user-6.3-refusals.sh has not run; stop"; exit 1; }
+[ -e "$si_backup/task48-done-user-6.3-refusals.sh" ] || { echo "user-6.3-refusals.sh has not run; stop"; exit 1; }
 cat "$si_backup/drill-refusals.txt"
 ! grep -qE '; stop$' "$si_backup/drill-refusals.txt" || { echo "the refusals block stopped: release indexer-c (Step 19) and report"; exit 1; }
 grep -q 'Code: 392' "$si_backup/drill-refusals.txt" && grep -qE "was refused: indexer_quarantined: storage-integrity indexer $c is quarantined|is not active; the signed lane admits only active tables|is quarantined; writes to it are refused until the indexer is released \\(not retryable\\)" "$si_backup/drill-refusals.txt" || { echo "the write was not refused with 392 and the quarantine text; stop"; exit 1; }
@@ -27885,10 +30929,17 @@ db="$(p3_db)"
   [ "$f" = none ] || { echo "a replica-read alert still fires 5 minutes after the release; stop"; exit 1; }
 } 2>&1 | tee "$si_backup/task48-serving-ended.txt"
 p3_user_script 6.5 2 user-6.5-read.sh
+```
+
+Expected: for member-a and member-b the views with nothing served, reason `owner_available`; `indexer-a answers <acceptance-db>.s3e_e2e ordinary` and the same for indexer-b; `replica_lease_releases_total{outcome="released"}` at least 1 on both (the host released its lease after its snapshot dropped the database and its in-flight reads drained, K44; an `expired` count above 0 is reported in the record, not a stop); no `replica_serving` above 0; `indexer-c answers <acceptance-db>.s3e_e2e active` (at most one retryable 733 window while its merge guard re-asserts); the three hosts with `replica_databases []`; `firing replica-read alerts: none`; the user script. This block requires explicit user confirmation in chat. Gate: "the user runs runbook §6.5 block 2 in their own terminal (user-6.5-read.sh): one safe read of <acceptance-db>.s3e_e2e through their local agent, which now reaches indexer-c without a failover; nothing is written". After a yes, the user runs, in fish:
+
+After that explicit yes, the agent runs this from a fresh D24 block file:
+
+```bash
 p3_clear user-6.5-read.sh
 ```
 
-Expected: for member-a and member-b the views with nothing served, reason `owner_available`; `indexer-a answers <acceptance-db>.s3e_e2e ordinary` and the same for indexer-b; `replica_lease_releases_total{outcome="released"}` at least 1 on both (the host released its lease after its snapshot dropped the database and its in-flight reads drained, K44; an `expired` count above 0 is reported in the record, not a stop); no `replica_serving` above 0; `indexer-c answers <acceptance-db>.s3e_e2e active` (at most one retryable 733 window while its merge guard re-asserts); the three hosts with `replica_databases []`; `firing replica-read alerts: none`; the user script; `cleared user-6.5-read.sh for the user`. This block requires explicit user confirmation in chat. Gate: "the user runs runbook §6.5 block 2 in their own terminal (user-6.5-read.sh): one safe read of <acceptance-db>.s3e_e2e through their local agent, which now reaches indexer-c without a failover; nothing is written". After a yes, the user runs, in fish:
+Then the user runs in fish:
 
 ```fish
 bash ~/si-devnet2-stage3-p3-session/task48/user-6.5-read.sh $key_file
@@ -27897,7 +30948,7 @@ bash ~/si-devnet2-stage3-p3-session/task48/user-6.5-read.sh $key_file
 Then, read-only:
 
 ```bash
-[ -e "$si_backup/task48-ran-user-6.5-read.sh" ] || { echo "user-6.5-read.sh has not run; stop"; exit 1; }
+[ -e "$si_backup/task48-done-user-6.5-read.sh" ] || { echo "user-6.5-read.sh has not run; stop"; exit 1; }
 tail -n 2 "$si_backup/serving-ended.txt"
 [ "$(tail -n 2 "$si_backup/serving-ended.txt" | head -n 1)" = "$(cat "$si_backup/drill-count")" ] || { echo "the read after the release does not answer drill-count; stop"; exit 1; }
 counts="$(tail -n 1 "$si_backup/serving-ended.txt" | sed -n 's/^failover lines: \([0-9][0-9]*\) before, \([0-9][0-9]*\) after$/\1 \2/p')"
@@ -27960,7 +31011,8 @@ Local:
 ```bash
 [ -n "$(p3_value P3_END)" ] || { echo "Step 21 has not passed; stop"; exit 1; }
 p3_fresh_main
-git switch -c urwt/claude/multi-source-s3c4-record
+git switch -c urwt/codex/multi-source-s3c4-record
+python3 -I "$T48/p3-guard.py" record "$si_backup/task48-record.env" "$S/ledger.env" "$si_backup" || exit 1
 python3 -I - "$si_backup/task48-record.env" "$HOME/si-devnet2-stage3-p3-session/ledger.env" "$si_backup" "$(p3_db)" <<'PY'
 import sys
 from pathlib import Path
@@ -27985,7 +31037,11 @@ def commit(name):
     path = Path(backup) / name
     if not path.is_file():
         sys.exit(f"{path} is missing; nothing written; stop")
-    return path.read_text().strip()[:9]
+    value = path.read_text().strip()
+    import re
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        sys.exit("invalid recorded commit SHA; nothing written; stop")
+    return value[:9]
 
 
 g = int(r["QUARANTINE_GENERATION"])
@@ -28026,10 +31082,12 @@ paragraph = (
 open(runbook, "w").write(head.rstrip("\n") + "\n\n" + paragraph + "\n\n## 8. Rollback\n" + tail)
 print(f"record written: {runbook}")
 PY
-[ "$(git diff --name-only)" = docs/storage-integrity-devnet2-stage3-p3-replica-reads.md ] || { echo "unexpected files changed; stop"; exit 1; }
+si_checked_read_207="$(git diff --name-only)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_207}" = docs/storage-integrity-devnet2-stage3-p3-replica-reads.md ] || { echo "unexpected files changed; stop"; exit 1; }
 git diff | cat
 p3_tests
-git commit -q -F - -- docs/storage-integrity-devnet2-stage3-p3-replica-reads.md <<'MSG'
+before="$(git rev-parse HEAD)" || exit 1
+git commit -S -q -F - -- docs/storage-integrity-devnet2-stage3-p3-replica-reads.md <<'MSG'
 docs(storage-integrity): record the devnet2 stage-3 P3 run
 
 Section 7 of docs/storage-integrity-devnet2-stage3-p3-replica-reads.md
@@ -28039,6 +31097,9 @@ the upgraded agent, the release and the end of P3.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
+si_checked_read_208="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_208" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_208}" != "$before" ] && si_p3_signed HEAD || exit 1
 {
   echo "Records the first run of docs/storage-integrity-devnet2-stage3-p3-replica-reads.md (housegate Plan S3-C4, Task 48): while indexer-c was quarantined, a client of its database read safe from the members through the upgraded agent, and P3 ended on $(p3_value P3_END) (spec §16 P3)."
   echo
@@ -28051,21 +31112,34 @@ MSG
 git show --stat --oneline HEAD | cat
 ```
 
-Expected: `record written: docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`; the diff adds one paragraph at the end of §7; `render tests: <TESTS> tests OK`; one commit of the runbook only. A `stop` writes nothing. Then the push and the PR. This block requires explicit user confirmation in chat. Gate: "push branch urwt/claude/multi-source-s3c4-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P3 run' against production main (one paragraph at the end of runbook §7; nothing is synced)". After a yes:
+Expected: `record written: docs/storage-integrity-devnet2-stage3-p3-replica-reads.md`; the diff adds one paragraph at the end of §7; `render tests: <TESTS> tests OK`; one commit of the runbook only. A `stop` writes nothing. Then the push and the PR. This block requires explicit user confirmation in chat. Gate: "push branch urwt/codex/multi-source-s3c4-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P3 run' against production main (one paragraph at the end of runbook §7; nothing is synced)". After a yes:
 
 ```bash
-[ "$(git rev-parse --abbrev-ref HEAD)" = urwt/claude/multi-source-s3c4-record ] || { echo "not on the record branch; stop"; exit 1; }
-git push -u origin urwt/claude/multi-source-s3c4-record
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3c4-record --title "docs(storage-integrity): record the devnet2 stage-3 P3 run" --body-file "$T48/record-pr-body.md" | tee "$si_backup/task48-record-pr.txt"
+si_checked_read_209="$(git rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_209}" = urwt/codex/multi-source-s3c4-record ] || { echo "not on the record branch; stop"; exit 1; }
+si_p3_signed || exit 1
+git push -u origin urwt/codex/multi-source-s3c4-record || exit 1
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3c4-record --title "docs(storage-integrity): record the devnet2 stage-3 P3 run" --body-file "$T48/record-pr-body.md" | tee "$si_backup/task48-record-pr.txt"
 p3_record RECORD_PR "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/task48-record-pr.txt" | tail -n 1)"
 ```
 
 Expected: the PR URL. Then, only after the user has reviewed it, the merge. This block requires explicit user confirmation in chat. Gate: "squash-merge the record PR #<RECORD_PR> into production main (docs only)". After a yes:
 
 ```bash
-gh pr merge "$(p3_value RECORD_PR)" --repo sentioxyz/production --squash
-git fetch -q origin
-git switch -q --detach origin/main
+n="$(p3_value RECORD_PR)"
+head="$(gh pr view "$n" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+si_checked_read_210="$(git rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_210" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "$head" = "${si_checked_read_210}" ] || { echo "record PR head changed; review again; stop"; exit 1; }
+gh pr checks "$n" --repo sentioxyz/production --watch --fail-fast || exit 1
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$n/commits?per_page=100" > "$T48/record-pr-authors.json" || exit 1
+python3 -I "$T48/check-identities.py" "$head" < "$T48/record-pr-authors.json" || exit 1
+si_checked_read_211="$(gh pr view "$n" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_211" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_211}" = "$head" ] || exit 1
+gh pr merge "$n" --repo sentioxyz/production --squash --match-head-commit "$head" || exit 1
+git fetch -q origin || exit 1
+git switch -q --detach origin/main || exit 1
 echo "live checkout back at origin/main $(git rev-parse --short=9 HEAD) (detached)"
 ```
 
@@ -28074,6 +31148,7 @@ echo "live checkout back at origin/main $(git rev-parse --short=9 HEAD) (detache
 The record procedure of contract §32.7 (S3-B D23, R1–R4, through `s3-ledger.py`) writes `P3_END` and the run record `P3 run (Task 48)` into this plan's Appendix C on its ledger copy, from the URWT worktree `multi-source-s3c4-ledger-48`; the plans worktree is never read or written. First the run record and the value (local):
 
 ```bash
+python3 -I "$T48/p3-guard.py" record "$si_backup/task48-record.env" "$S/ledger.env" "$si_backup" || exit 1
 python3 -I - "$si_backup/task48-record.env" "$HOME/si-devnet2-stage3-p3-session/ledger.env" "$HOME/.cache/s3-ledger/record-s3c4-48.md" "$si_backup/task48-ledger.env" "$(p3_db)" <<'PY'
 import sys
 from pathlib import Path
@@ -28149,22 +31224,44 @@ Expected: the record (one paragraph, then the steady state's seven `- ` lines) a
 
 ```bash
 # shellcheck disable=SC1091
-source "$si_backup/task48-ledger.env"
+[ "$(wc -l < "$si_backup/task48-ledger.env" | tr -d ' ')" = 1 ] || exit 1
+P3_END="$(sed -n 's/^P3_END=//p' "$si_backup/task48-ledger.env")"
+python3 -I -c 'import datetime,sys; assert datetime.date.fromisoformat(sys.argv[1]).isoformat()==sys.argv[1]' "$P3_END" || exit 1
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger"
 n=48
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3c4-p3-member-reads.md
-git -C "$h" fetch -q origin
+git -C "$h" fetch -q origin || exit 1
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3c4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3c4-ledger-$n" "urwt/claude/multi-source-s3c4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3c4-ledger-$n" "urwt/codex/multi-source-s3c4-ledger-$n" "$ref")" || exit 1
+printf '%s\n' "$out" > "$L/record-s3c4-$n-urwt.json"
+d="$(printf '%s\n' "$out" | jq -er .path)" || exit 1
+case "$d" in /*) ;; *) echo "URWT returned no absolute ledger path; stop"; exit 1 ;; esac
+si_checked_read_212="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_212}" = "urwt/codex/multi-source-s3c4-ledger-$n" ] || exit 1
+si_checked_read_215="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_215" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_214="$(git -C "$h" rev-parse "$ref")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_214" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+si_checked_read_213="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${si_checked_read_215}" = "${si_checked_read_214}" ] && [ -z "${si_checked_read_213}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+si_checked_read_217="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_216="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_217}" = "${si_checked_read_216}" ] || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3c4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3c4-$n.md" P3_END="$P3_END" || exit 1
-git -C "$d" commit -q -m "docs(plan): record P3_END of Plan S3-C4 (Task 48)
+before="$(git -C "$d" rev-parse HEAD)" || exit 1
+git -C "$d" commit -S -q -m "docs(plan): record P3_END of Plan S3-C4 (Task 48)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || exit 1
+si_checked_read_218="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_218" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_218}" != "$before" ] && (cd "$d" && si_p3_signed HEAD) || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
@@ -28177,34 +31274,59 @@ L="$HOME/.cache/s3-ledger"
 n=48
 d="$(sed -n 1p "$L/record-s3c4-$n")"
 ref="$(sed -n 2p "$L/record-s3c4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+si_checked_read_220="$(git -C "$d" rev-list --count "$ref..HEAD")" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+si_checked_read_219="$(git -C "$d" status --porcelain)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[ "${si_checked_read_220}" = 1 ] && [ -z "${si_checked_read_219}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-C4 only, docs only (contract §32.7)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
+  (cd "$d" && si_p3_signed) || exit 1
+  git -C "$d" push -u origin HEAD || exit 1
+  si_record_subject="$(git -C "$d" log -1 --format=%s)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+  printf '%s\n\n%s\n' "${si_record_subject}: Appendix C of Plan S3-C4 only, docs only (contract §32.7)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3c4-$n-pr.md"
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${si_record_subject}" --body-file "$L/record-s3c4-$n-pr.md") | tee "$L/record-s3c4-$n-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  (cd "$d" && si_p3_signed) || exit 1
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit user confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 48's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge requires its own explicit user confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 48's ledger record"); after a yes, run the following from a new D24 block file (use the actual R2 PR number, never a guessed value):
+
+```bash
+n="$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$L/record-s3c4-48-pr-url")"
+[[ "$n" =~ ^[1-9][0-9]*$ ]] || exit 1
+head="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+si_checked_read_222="$(git -C "$d" rev-parse HEAD)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_222" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "$head" = "${si_checked_read_222}" ] || exit 1
+gh pr checks "$n" --repo housegate/housegate --watch --fail-fast || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$n/commits?per_page=100" > "$L/record-s3c4-48-authors.json" || exit 1
+python3 -I "$T48/check-identities.py" "$head" < "$L/record-s3c4-48-authors.json" || exit 1
+si_checked_read_223="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || { echo "Git/GitHub read failed; stop" >&2; exit 1; }
+[[ "$si_checked_read_223" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit head; stop" >&2; exit 1; }
+[ "${si_checked_read_223}" = "$head" ] || exit 1
+gh pr merge "$n" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+```
+
+Then R4 (read-only):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" get "$h" P3_END
+git -C "$h" fetch -q origin || exit 1
+value="$(python3 -I "$L/s3-ledger.py" get "$h" P3_END)" || exit 1
+[ "$value" = "P3_END=$(p3_value P3_END)" ] || { echo "R4 differs from the recorded value; stop"; exit 1; }
+printf '%s\n' "$value"
 ```
 
 Expected: `P3_END=<the value written>`. Anything else (for example the plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints `P3_END`; Plan S3-D's live tasks start from that record. Keep `$HOME/si-devnet2-stage3-p3` and the session directory until Plan S3-D ends; `wt remove` the live, record and ledger worktrees only when the user asks.
 
-**What rollback means here.** Nothing in this task is consensus-irreversible, and every change has a way back: runbook §8's blocks, each its own confirmed step with its own Gate sentence, copied with `p3_block` and run in reverse order of what ran, so that `p3-edit.py state` keeps reading a prefix of the sequence. Before a commit block ran, there is nothing to undo (a preview is a throwaway clone). During the drill (§8.3): release indexer-c first (a new copy of runbook §6.4 block 1, `p3_block 6.4 1 confirmed`), whatever else follows. After pushes, the runbook's `si_revert_p3 <commit record> <release or chi:<manifest>:<CHI>>` reverts the recorded commit on a fresh `origin/main`, runs the render tests, pushes and syncs or applies that one target (a revert that conflicts with a later commit is aborted and changes nothing); run `p3_fresh_main` from a block of this task before each:
+**What rollback means here.** Nothing in this task is consensus-irreversible, and every change has a way back: runbook §8's blocks, each its own confirmed step with its own Gate sentence, copied with `p3_block` and run in reverse order of what ran, so that `p3-edit.py state` keeps reading a prefix of the sequence. Before a commit block ran, there is nothing to undo (a preview is a throwaway clone). During the drill (§8.3): for a failed drill release indexer-c first with §6.4 blocks1 and2. If an `unsafe_latest` read or a write was accepted on a replica, revert every serving commit first, then release indexer-c and stop P3, exactly as §8.3 requires. A member still serving an available owner or beyond five minutes after release requires reverting its serving commit. Each action needs its own explicit confirmation. After pushes, the runbook's `si_revert_p3 <commit record> <release or chi:<manifest>:<CHI>>` reverts the recorded commit on a fresh `origin/main`, runs the render tests, pushes and syncs or applies that one target (a revert that conflicts with a later commit is aborted and changes nothing); run `p3_fresh_main` from a block of this task before each:
 - M: `p3_block 8.2 1 confirmed` (`si_revert_p3 monitoring-commit storage-integrity-si-v2`; the rule group goes, no pod changes).
 - S-a, then S-c, then S-b: `p3_block 8.2 2 confirmed`, `p3_block 8.2 3 confirmed`, `p3_block 8.2 4 confirmed` (each member restarts with serving off and restores its held lease, revoked, from its state directory; its host stops answering Replica at its next poll, at the latest at the lease's end, and the member installs only after the release or the expiry, K44). Never revert a host commit while any member serves.
-- W-a-h, W-a-m, then W-c-h, W-c-m, then W-b-h, W-b-m: `p3_block 8.2 5 confirmed` and `p3_block 8.2 6 confirmed` for indexer-a, and for x = c, then b, the same two with the line replaced, `p3_block 8.2 5 confirmed 'x=a' 'x=c'` and `p3_block 8.2 6 confirmed 'x=a' 'x=c'` (the host returns to its previous image and the `v0.15.0` sidecar in one restart and drops `replica_reads`; the member returns to `SN_DIGEST_P2`, whose decoder refuses the `serve` key the revert also removes). A host never runs the P3 sidecar without its own sync (stage-1 runbook §11 rule).
+- W-a-h, W-a-m, then W-c-h, W-c-m, then W-b-h, W-b-m: `p3_block 8.2 5 confirmed` and `p3_block 8.2 6 confirmed` for indexer-a, and for x = c, then b, the same two with the line replaced (use both `'x=a' 'x=c'` for c, then both `'x=a' 'x=b'` for b), `p3_block 8.2 5 confirmed 'x=a' 'x=c'` and `p3_block 8.2 6 confirmed 'x=a' 'x=c'` (the host returns to its previous image and the `v0.15.0` sidecar in one restart and drops `replica_reads`; the member returns to `SN_DIGEST_P2`, whose decoder refuses the `serve` key the revert also removes). A host never runs the P3 sidecar without its own sync (stage-1 runbook §11 rule).
 - G-n, then G-c, then G-b: `p3_block 8.1 1 confirmed`, `p3_block 8.1 2 confirmed`, `p3_block 8.1 3 confirmed` (a users reload removes each grant; the CHI manifests are applied by hand, never by helmfile, K22).
 
-If a revert's push is refused, `si_revert_p3` has recorded nothing (`<record>.reverted` is written only after the push): drop the local revert commit with `git switch -q --detach origin/main` after a fetch, and ask again with a new copy of the block. What stays whatever is reverted: indexer-c's `quarantine_generation` two higher, indexer-a's value `5301`, row 4 of `<acceptance-db>.s3e_e2e` and their promotions; the user's local agent on `HG_TAG_P3` (it reads every earlier answer); the hosts' `replica_hosts` field returns with their images. The member status token Secrets are Plan S3-C3's and are never deleted here.
+A failed or uncertain revert push retains `<record>.revert-intent`; preserve it and stop. Reconcile the exact intended SHA with the remote branch and live target before any retry; never discard a local commit or replay a block merely because `.reverted` is absent. What stays whatever is reverted: indexer-c's `quarantine_generation` two higher, indexer-a's value `5301`, row 4 of `<acceptance-db>.s3e_e2e` and their promotions; the user's local agent on `HG_TAG_P3` (it reads every earlier answer); the hosts' `replica_hosts` field returns with their images. The member status token Secrets are Plan S3-C3's and are never deleted here.
 
 ---
 
@@ -28235,7 +31357,7 @@ Names this plan consumes from earlier contracts are listed with their source in 
   - `func NewReplicaReadsWithClock(now func() time.Time) *ReplicaReads`.
   - `func (r *ReplicaReads) ServeUntil(database string, until time.Time)`: the zero time closes the fence, and every database is closed until first opened (review fix 246-5).
   - `func (r *ReplicaReads) Admit(databases []string) (end func(), closed string)`: `Begin` behind the fences, in one critical section; a refusal counts nothing and returns nil and the first closed database; a nil counter admits nothing (review fix 246-5).
-  - `func (r *ReplicaReads) Begin(databases []string) (end func())` counts one in-flight read per listed database. `end` is idempotent; a nil receiver returns a no-op `end`.
+  - `func (r *ReplicaReads) Begin(databases []string) (end func())` counts one in-flight read per distinct, non-empty database; duplicates count once and empty names do not count. `end` is idempotent; a nil receiver returns a no-op `end`.
   - `func (r *ReplicaReads) InFlight(database string) int` (0 on a nil receiver).
   - `func (r *ReplicaReads) Counts() map[string]int` (a copy, for metrics).
 
@@ -28266,8 +31388,8 @@ Other housegate parts of Task 42:
 - **Options:** `proxy.go` gains `StorageIntegrityReplicaReads *sitable.ReplicaReads` (comment: host-injected in-flight counter of replica-served reads; nil counts nothing), placed after `StorageIntegrityTableState`. `build.go` passes it to `&sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}` and, with a counter, sets the gate's `TableState` to the resolved state that rewrite reads (`siState`). Setting it without `StorageIntegrityTableState` is refused (verbatim): `Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState`.
 
 Named tests (Task 42):
-- `pkg/sitable`: `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`.
-- `pkg/plugins/sitablestate`: `TestDecide_ReplicaRows` (the full class × Replica matrix), `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused` (a rewriter blocked across the host's two polls), `TestReplicaReadAdmissionNeverOverlapsARelease` (the race, under `-race`).
+- `pkg/sitable`: `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`, `TestReplicaReadsAdmitsOnlyBeforeTheServingFence`.
+- `pkg/plugins/sitablestate`: `TestDecide_ReplicaRows` (the full class × Replica matrix), `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused` (a rewriter blocked across the host's two polls), `TestReplicaReadAdmissionNeverOverlapsARelease` (the race, under `-race`), `TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused`.
 - `pkg/registry`: `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`.
 - `pkg/network`: `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`.
 - `pkg/plugins/storageintegrity`: `TestSnapshotSchemaRefusesAReplicaTable`.
@@ -28285,6 +31407,7 @@ Named tests (Task 42):
 - **Wiring:** `build.go` sets `forwardPlug.TableState = siState` when `siOptions.Enabled`.
 
 `pkg/rewriter`:
+- `localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string)` removes only the served database mapping for a standalone USE, because both engines refuse USE of a remote-mapped database. Ordinary-table mappings and later statements stay intact. Named test: `TestUseOfAReplicaServedDatabaseIsRewrittenLocally`.
 - **`buildStorageIntegrityArgs`** (`storage_integrity.go`): for each `t` in `snap.Served()`, `copy := sitable.ReplicaDatabase + "." + t.CopyTable` and `out.Tables[t.ID] = &pb.StorageIntegrityArgs_Table{SafeTable: copy, UnsafeTable: copy}`, with no `ExcludedUnsafeParts` in any mode. A served table with an empty `CopyTable`, or whose ID is also in `snap.Active()`, is refused with `&RejectedError{Code: pb.RewriteCode_RewriteError, Message: fmt.Sprintf("storage-integrity table %s is listed both Active and Replica, or Replica without a copy table", id)}`. With `snap.Served()` empty, the args are byte-identical to today's.
 - **`unsafe_latest`:** `func requireNoReplicaUnderUnsafeLatest(snap sitable.Snapshot, ids []string) error` runs in `sentio.go` right after the first rewrite pass under `ReadModeUnsafeLatest` and before `requireActiveAccessedIDs`. The first pass never reaches ClickHouse. It refuses with `&RejectedError{Code: pb.RewriteCode_RewriteError, Message: fmt.Sprintf("storage_integrity read mode unsafe_latest is not available for %s: it is served read-only from a copy of indexer %d's published data; read it with SQL_x_read_mode='safe'", id, owner)}`.
 - **Scrubber:** `NewStorageIntegrityScrubber` maps `hg_replica.<CopyTable>` → `t.ID` for every served table. These qualified pairs come before the reserved-database redactions.
@@ -28314,26 +31437,28 @@ Named tests (Task 43):
 - `type StorageIntegrityReplicaDiscovery interface{ StorageIntegrityReplicaHosts(ctx context.Context, database string, owner uint64) ([]uint64, error) }`.
 
 `pkg/network`: `RpcNetworkState` implements `StorageIntegrityReplicaDiscovery`:
-- **Order:** it calls `sentio_getStorageIntegrityInfo` at the network-state source endpoint first, then at the storage endpoint of each indexer in `AllIndexers()` other than `owner`, in ascending id. The first decoded answer wins and gives `replica_hosts[database]`, possibly empty.
+- `GetContext(ctx context.Context, database string) (registry.Database, bool)` and `ProxyByIndexerIdContext(ctx context.Context, indexerId uint64) (registry.ProxyAddress, bool)` issue existing RPCs with ctx; legacy wrappers retain Background. Agent-private `replicaDatabase` and `replicaProxy` prefer these optional interfaces. Canceled RPCs return false (owner miss or skipped topology miss); Candidates checks ctx.Err before further topology reads and relay dialing remains bounded. Synchronous legacy in-memory ports remain compatible; blocking custom I/O must implement the optional methods to honor deadlines. The peer-list RPC also uses ctx. Tests: `TestRpcNetworkStateReplicaHostsHonorsTheLookupDeadline`, `TestReplicaFailoverCandidatesHonorsRPCDeadline` (owner/indexer).
+- **Order:** it calls `sentio_getStorageIntegrityInfo` at the network-state source endpoint first, then at the storage endpoint of each indexer from the context-bounded `sentio_getIndexerInfos` RPC other than `owner`, in ascending id. The first decoded answer wins and gives `replica_hosts[database]`, possibly empty.
 - **All failing:** when every call fails, it returns `rpc: replica hosts of %s: no indexer answered sentio_getStorageIntegrityInfo`.
 - **Cache:** per database, for `DefaultReplicaHostsTTL = 30 * time.Second`.
 
-`pkg/proxy`:
+`pkg/proxy` (the types originate in `pkg/plugin` and are aliased here, avoiding a plugin-to-proxy import):
+- Optional `plugin.FailoverReporter` / `proxy.FailoverReporter` exposes `FailedOver(ctx, database, reason, from, to string)`; the relay calls it only at the first usable answer, allowing the log to name the actual destination.
 - **Interface:** `type FailoverPhase uint8` with `FailoverAtHello FailoverPhase = 1` and `FailoverAtRead FailoverPhase = 2`; `type UpstreamFailover interface{ Candidates(ctx context.Context, database string) ([]string, error); Reason(phase FailoverPhase, cause error, exc *chproto.Exception) (reason string, ok bool) }`. `Candidates` returns `host:port` addresses in order.
 - **Wiring:** `Server` gains `UpstreamFailover UpstreamFailover`, passed to the relay. Nil means today's relay byte for byte.
 - **At hello:** phase 2 of the handshake fails (a dial error, EOF, a read error, or an Exception instead of a ServerHello) and `Reason(FailoverAtHello, err, exc)` is ok. The relay then tries each candidate in order: dial, then the handshake with the session's ClientHello, with `Database` set to `SessionState.LogicalDatabaseName()`.
 - **At an eligible read:** the query is eligible when `SessionState.ReplicaFailoverEligible` is true and the statement starts with `SELECT` or `WITH` (`sicore.LeadingKeywords`). The relay keeps its Query packet and the terminating empty Data block. If the first upstream packet is an Exception with `Reason(FailoverAtRead, nil, exc)` ok, or the connection breaks before any packet of the query was relayed to the client, the relay redials the candidates as at hello and resends both packets. The candidate's first answer is checked the same way: when it is itself such a failure, the relay moves the read to the next candidate; when no candidate is left, the client gets the owner's original Exception (or the session ends with the owner's read error) and the session stays on the last candidate. The failover is reported and counted served only at the first answer that is not such a failure (review round 1).
 - **Never fails over** once any packet of the query's answer reached the client, and never for any other statement.
-- **Eligibility:** `chsession.SessionState.ReplicaFailoverEligible bool` is true after hello and false from the first statement that is not `SELECT`, `WITH` or `USE`, or that carries client Data. That covers INSERT, including INSERT … SELECT, as well as `SET`, DDL and `ALTER`.
+- **Eligibility:** `chsession.SessionState.ReplicaFailoverEligible bool` is true after hello only when failover is wired and false from the first statement that is not `SELECT`, `WITH` or `USE`, or that carries client Data. That covers INSERT, including INSERT … SELECT, as well as `SET`, DDL and `ALTER`.
 - **Metrics** (`observer.go`): `clickhouse_proxy_agent_replica_failovers_total{reason}` counts a failover that reached a serving upstream. `clickhouse_proxy_agent_replica_failover_exhausted_total{reason}` counts every candidate failing; the client then gets the original error. Both reasons are pre-exported at 0.
 
 `pkg/plugins/agent` (new `replica_failover.go`):
 - **Type:** `type ReplicaFailover struct{ Discovery registry.StorageIntegrityReplicaDiscovery; Databases registry.Databases; Topology registry.Topology }` implements `proxy.UpstreamFailover` and logs through housegate `pkg/log` (`log.Infow`).
 - **Reasons:** `const FailoverReasonOwnerUnreachable = "owner_unreachable"` and `const FailoverReasonOwnerQuarantined = "owner_quarantined"`.
-- **`Candidates`:** the owner comes from `Databases.Get(database).IndexerId`. The ids come from `Discovery`, minus the owner and minus any id whose `Topology.ProxyByIndexerId` has `HousegatePort == 0`, in ascending order, as `Url:HousegatePort`. An empty database, a database `Databases.Get` does not know, or a discovery error gives no candidate, and the original failure reaches the client.
+- **`Candidates`:** the owner comes from `Databases.Get(database).IndexerId`. The ids come from `Discovery`, minus the owner and minus any id whose context-aware optional topology lookup (legacy `Topology.ProxyByIndexerId` fallback) has `HousegatePort == 0`, in ascending order, as `Url:HousegatePort`. An empty database, a database `Databases.Get` does not know, or a discovery error gives no candidate, and the original failure reaches the client.
 - **`Reason`:** at `FailoverAtRead`, an Exception that `chproto.IsIndexerQuarantinedReadMessage` matches gives `owner_quarantined`; every other Exception of a read is not ok and reaches the client unchanged. In either phase, a non-Exception failure (dial, EOF, reset, read error) gives `owner_unreachable`. At `FailoverAtHello`, any Exception also gives `owner_unreachable`, since the remote side's peer pivot failed.
 - **Log** (info, verbatim): `agent: replica failover`, with fields `database`, `owner`, `reason`, `from` and `to`.
-- **Wiring:** `build.go` sets `UpstreamFailover: &agent.ReplicaFailover{Discovery: discovery, Databases: reg, Topology: reg}` on the agent server only when the agent's network state implements `registry.StorageIntegrityReplicaDiscovery` (the RPC source). YAML and host-injected states keep nil.
+- **Wiring:** `build.go` sets `UpstreamFailover: &agent.ReplicaFailover{Discovery: discovery, Databases: reg, Topology: reg}` on the agent server only when the agent's network state implements `registry.StorageIntegrityReplicaDiscovery` (the RPC source) and there is no `agent.upstream` pin. Pinned host driver sidecars keep nil failover. YAML and host-injected states keep nil.
 
 Named tests (Task 44):
 - `pkg/chproto`: `TestIsIndexerQuarantinedReadMessage`, `TestTableRefusedMessageIsTheSitablestateText`.
@@ -28342,12 +31467,7 @@ Named tests (Task 44):
 - `pkg/proxy`: `TestAgentFailsOverAtHelloWhenTheOwnerIsUnreachable`, `TestAgentFailsOverAReadWhenTheOwnerIsQuarantined`, `TestAgentNeverFailsOverAWrite`, `TestAgentNeverFailsOverInsertSelect`, `TestAgentNeverFailsOverAfterData`, `TestAgentNeverFailsOverASessionAfterSet`, `TestAgentKeepsTheInjectedReadModeOnFailover`, `TestAgentSurfacesTheOriginalErrorWhenEveryCandidateFails`, `TestAgentReplicaFailoverMetricsCountByReasonIncludingZeros`, `TestRelayWithoutUpstreamFailoverIsUnchanged`, `TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead`.
 - New `pkg/integration/storage_integrity_agent_replica_failover_test.go`: `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`.
 
-**Release (Task 44, after Tasks 42–44 are merged; confirm each step):**
-- Release: `gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto`, then `bash -c 'gh run watch --repo housegate/housegate "$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'`.
-- `HG_TAG_P3` is the tag the run prints; never predict it.
-- `HG_DIGEST_P3` is `docker buildx imagetools inspect ghcr.io/housegate/housegate:$HG_TAG_P3 --format '{{json .Manifest}}' | jq -r .digest`.
-- Verify the digest with `docker run --rm --platform linux/amd64 ghcr.io/housegate/housegate:$HG_TAG_P3@$HG_DIGEST_P3 -version`, which prints `HG_TAG_P3`. Also check `git -C <housegate> rev-parse "$HG_TAG_P3^{commit}"` equals the merge commit.
-- PR title: `feat(storage-integrity): multi-source SI stage 3 P3 reads from members (Replica status, routing, agent read failover)`.
+**Release (Task44, after Tasks42–44 are merged; confirm each step).** Bind dispatch to the observed squash merge and require main still equals that SHA. Persist the prior run IDs and attempted dispatch; select exactly one new workflow_dispatch/main/merge-SHA run, watch that exact ID with exit status, recheck successful completion and extract exactly one observed Next-tag value. Require the tag resolves to the merge and descends from recorded HG_TAG_P1. Validate the immutable lowercase digest and layer roster before separately confirmed image download/version proof. Never select an arbitrary latest run or predict the tag/digest. Preserve Task44's complete content checks and R1–R4 equality; a failed/ambiguous attempt stops for reconciliation. PR title: `feat(storage-integrity): multi-source SI stage 3 P3 reads from members (Replica status, routing, agent read failover)`.
 
 ### 30. arbiter-core (Task 45)
 
@@ -28367,7 +31487,7 @@ Config and defaults:
   - `serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`, and, for a lease record it cannot read, `serve: lease file %s: %v`, `serve: lease file %s has version %d, want 1`, `serve: lease file %s has a lease record without an id, a database or a ttl` and `serve: lease file %s lists database %s or lease %s twice` (review round 1)
 
 Ports, implemented by `member.Role`:
-- `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial func(ctx context.Context, network, addr string) (net.Conn, error); Now func() time.Time; Metrics *Metrics; Logger *slog.Logger; StateDir string }` (`StateDir`, the member's state directory, added in review round 1; `member.Role` passes `Config.StateDir`).
+- `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial func(ctx context.Context, network, addr string) (net.Conn, error); Now func() time.Time; Metrics *Metrics; Logger *slog.Logger; StateDir string; NodeID string }` (`StateDir`, the persistent member state directory; `NodeID`, the view identity; Role passes Config.StateDir and Config.NodeID).
 - `type Published interface{ Latest(ctx context.Context) (replay.SafeSnapshotManifest, error) }` gives the latest published manifest, read from the arbiter in this call and validated by the S3-C2 feed rules.
 - `type Copies interface{ Databases() []OwnerDatabase; Database(owner uint64, database string) (DatabaseCopy, bool) }`.
 - `type OwnerDatabase struct{ Owner uint64; Database string }`.
@@ -28393,6 +31513,8 @@ Leases:
 - It expires `LeaseTTL` after its last grant or renew.
 - A database that stops serving is revoked: renew answers 409 from then on.
 - **Lease record (review round 1).** Before it answers a grant or a renew, the server replaces `LeaseFile` (`const LeaseFile = "serve-leases.json"`) in `Deps.StateDir` atomically with every lease it holds, as `{"version":1,"leases":[{"lease_id","database","owner","renewed_unix_nano","ttl_ms"}]}`. A grant or renew it cannot record is refused (500 `serve: record leases in %s: %v`) and changes nothing; a release rewrites the file without the lease. `New` restores every recorded lease that has not expired (`renewed_unix_nano` + `ttl_ms`, on the member's clock) as revoked, so after a restart renew answers 409 and `BeforeInstall` waits for the host's release or that expiry, exactly as before the restart.
+
+Lease-file parsing requires exact EOF after one JSON object and a positive representable millisecond TTL before duration conversion; trailing documents and overflow fail closed without changing valid encoding/version.
 
 Install gate:
 - `func (s *Server) BeforeInstall(ctx context.Context, owner uint64, database string) error` marks the database `installing` and revokes its lease. It returns once the lease is released or expired, at once when no lease exists, or with `ctx.Err()`.
@@ -28423,6 +31545,7 @@ The view types, with their JSON tags:
 - `type LeaseView struct{ LeaseID \`json:"lease_id"\`; State \`json:"state"\`; RemainingMs int64 \`json:"remaining_ms"\` }`, where state is `held` or `revoking`.
 
 **30.4 Client** (used by sentio-node's host):
+- Never follows endpoint redirects; it copies the caller's HTTP client before applying that policy. Peer/transport/malformed-ID errors redact the configured token while preserving errors.Is/context cancellation. Successful acquire/renew requires a canonical lowercase128-bit hex lease id and positive representable millisecond TTL; bounded responses use a max+1 read to reject oversize rather than silently truncate.
 - `func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error)` refuses an empty token or a URL that is not `http://host:port`.
 - Methods: `(*Client) Serving(ctx) (ServingView, error)`, `Acquire(ctx, database, snapshotID string) (Lease, error)`, `Renew(ctx, leaseID string) (Lease, error)` and `Release(ctx, leaseID string) error`.
 - `type Lease struct{ ID string; TTL time.Duration }`.
@@ -28443,16 +31566,13 @@ The view types, with their JSON tags:
 
 Named tests (Task 45, `member/serve` unless noted):
 - Serving conditions: `TestServingRequiresTheOwnerQuarantinedOrUnreachable`, `TestServeStartsAfterTheOwnerIsUnreachableForTUnreach`, `TestServingRequiresTheEntryUnchangedOverTwoPolls`, `TestServingStopsWhenTheOwnerEntryAdvances`, `TestServingNeverStartsWithACopyBehindTheEntry`, `TestServingRefusesAForeignDivergedExcludedOrMissingTable`, `TestServingRequiresACleanAudit`, `TestServingIsOffWhenDisabled`.
-- Leases: `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`.
-- Endpoint, client, config and metrics: `TestHandlerRefusesAMissingOrWrongToken`, `TestClientRoundTripsTheServingView`, `TestNewRefusesABadConfig`, `TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros`.
+- Leases: `TestAcquireRefusesAStaleSnapshot`, `TestRenewAfterRevokeIsRefused`, `TestReleaseIsIdempotent`, `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestBeforeInstallReturnsAtOnceWithoutALease`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`, `TestLeaseRestoreRejectsTrailingAndOverflowingRecords`.
+- Endpoint, client, config and metrics: `TestHandlerRefusesAMissingOrWrongToken`, `TestClientRoundTripsTheServingView`, `TestNewRefusesABadConfig`, `TestServeMetricsExportEveryStateReasonAndOutcomeIncludingZeros`, `TestClientNeverFollowsAnEndpointRedirect`, `TestClientErrorsRedactTheToken`, `TestClientRejectsMalformedLeaseAnswers`, `TestClientBoundsResponsesAndPreservesCancellation`, `TestConfigNeverPrintsItsToken`.
 - `member/install`: `TestInstallerWithoutAGateIsUnchanged`.
 - `member`: `TestRoleWiresServeIntoTheInstaller`.
 - ClickHouse-gated (`ARBITER_CH_INTEGRATION=1`): `TestServeHoldsInstallsOfAServedDatabase`.
 
-**30.7 Release `CORE_TAG_P3`:**
-- `gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main`, then the watch line of S3-A Task 6 Step 18, then `gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq '.[0].tagName'`. Never predict the tag.
-- Verify by content: `git -C <arbiter-core> show "$T":member/serve/serve.go | grep -cE 'DefaultLeaseTTL += 30 \* time.Second'` prints `1`, and `git -C <arbiter-core> show "$T":consensus.go | grep -c stage3_v1` prints `0`. `LocalNodeFeatures` is unchanged.
-- PR title: `feat(member): stage 3 P3 serving view, owner probe and serving leases`.
+**30.7 Release `CORE_TAG_P3`.** Follow Task45's exact merged-head/dispatch-time/run-id procedure. Watch the uniquely identified run with exit status and read the existing `member release tag: ...` stdout; do not select an unrelated latest release. Verify published stable annotated local/remote tag identity, merge ancestry, byte-equal protected source and unchanged upstream pins. Only successful content/release verification writes release-verified and the tag used by R1–R4. No source-only fixture tag is a release. PR title: `feat(member): stage 3 P3 serving view, owner probe and serving leases`.
 
 ### 31. sentio-node (Task 46)
 
@@ -28489,7 +31609,8 @@ Refusals (verbatim):
 - `storage_integrity.member.serve.owner_housegate[%d] must be host:port, got %q`.
 
 New file `simember/serve.go` (S3-C2's package `simember`, §24.3):
-- `func siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role *member.Role) (*http.Server, error)` mounts `role.ServeHandler()` on `Listen`.
+- `func siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role siMemberRole) (*http.Server, error)` mounts `role.ServeHandler()` on `Listen`.
+- The existing `siMemberRole` seam gains `ServeHandler() http.Handler` and `ServeMetrics() *serve.Metrics`, both implemented by the real *member.Role; no Role/API stand-in.
 - `simember.Run` starts it when the token env is set, and registers `role.ServeMetrics()` on the process's registry.
 
 **31.4 Table state** (`storageintegrityadapter/tablestate`):
@@ -28537,7 +31658,7 @@ Its loop:
 - **Renew:** at a third of the TTL.
 - **Fence:** every acquire and renew sets `ServeUntil(database, deadline − serve.HostDeadlineMargin)`; every drop sets the zero time, before that poll's `Refresh` (review fix 246-5).
 - **Revoked or failing:** on `ErrLeaseRevoked`, or on any failure past the local deadline, it drops the database from `Serving` and calls `Refresh`.
-- **Release:** `Release` runs only after the published snapshot no longer serves the database and `InFlight(database) == 0`, read after that snapshot was published: on the poll whose `Refresh` dropped the database or a later one, with no grace poll, because `sitablestate` refuses a read whose snapshot no longer matches the current one (§29.1's read admission). It counts `released`, or `expired` when the member answered 404.
+- **Release:** `Release` runs only after the published snapshot no longer serves the database and `InFlight(database) == 0`, read after that snapshot was published: on the poll whose `Refresh` dropped the database or a later one, with no grace poll, because `sitablestate` refuses a read whose snapshot no longer matches the current one (§29.1's read admission). It counts `released`, or `expired` when the serving view no longer lists the lease (or its deadline passed while the member was unreachable). Renew404 and409 both wrap ErrLeaseRevoked; unknown release answers200, so the client supplies no404-specific error.
 
 **31.6 RPCs** (`rpc/storage_integrity_info.go`, `standalone/storage_integrity_info.go`):
 - `rpc.StorageIntegrityInfo` gains `ReplicaDatabases []string` with tag `json:"replica_databases"` (always present, `[]` when none) and `ReplicaHosts map[string][]uint64` with tag `json:"replica_hosts"` (always present, `{}` when none).
@@ -28549,14 +31670,14 @@ Its loop:
 - `commands/storage_integrity.go` gains `sentio-node storage-integrity member-serving --config-path <file>` (`newMemberServingCommand`). It prints the member's `ServingView` JSON to stdout, read with the token from the environment, never printed. It refuses without `member_status_url` (`storage_integrity.replica_reads.member_status_url is not set: this host has no member to ask`).
 
 **31.8 Named tests (Task 46).**
-- `config`: `TestStorageIntegrityReplicaReadsValidation`, `TestDecodeConfigYAMLRefusesAMemberStatusTokenKey`, `TestDecodeConfigYAMLRefusesAMemberServeTokenKey`, `TestStorageIntegrityMemberServeValidation`.
-- `tablestate`: `TestBuildAnswersAPeerOwnersTableReplicaWhileTheMemberServesIt`, `TestBuildServesNothingOfADatabaseWhoseTablesDisagreeWithTheRegistry`, `TestBuildNeverAnswersReplicaInAGovernedDatabase`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`, `TestVersionMovesWhenServingStartsAndEnds`, `TestSnapshotServedMatchesTheReplicaEntries`, `TestStorageIntegrityTableStatusCarriesReplicaFields`, `TestReplicaHostsListEveryEnrolledIndexerButTheOwner`.
-- `replicalease`: `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused`.
+- `config`: `TestStorageIntegrityReplicaReadsValidation`, `TestDecodeConfigYAMLRefusesAMemberStatusTokenKey`, `TestDecodeConfigYAMLRefusesAMemberServeTokenKey`, `TestStorageIntegrityMemberServeValidation`, `TestMemberServeTokenRefusalVisitsSharedYAMLOnce`. Both new token preflights reuse Task35's actual bounded siMemberYAMLMappingValues walker, preserving strict-document/cycle/secret rules.
+- `tablestate`: `TestBuildAnswersAPeerOwnersTableReplicaWhileTheMemberServesIt`, `TestBuildServesNothingOfADatabaseWhoseTablesDisagreeWithTheRegistry`, `TestBuildNeverAnswersReplicaInAGovernedDatabase`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`, `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks`, `TestVersionMovesWhenServingStartsAndEnds`, `TestSnapshotServedMatchesTheReplicaEntries`, `TestStorageIntegrityTableStatusCarriesReplicaFields`, `TestReplicaHostsListEveryEnrolledIndexerButTheOwner`.
+- `replicalease`: `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline`, `TestNewRefusesAnIncompleteConfig`.
 - `rpc`: `TestStorageIntegrityInfoCarriesReplicaHostsAndDatabases`.
 - `standalone`: `TestRunWiresReplicaReadsIntoHouseGateAndTheTableState`, `TestRunWithoutReplicaReadsIsUnchanged`, `TestMemberServingCommandPrintsTheViewWithoutTheToken`, `TestStorageIntegrityReplicaCollectorReportsEverySeriesIncludingZeros`.
 - `simember`: `TestSIMemberServesTheServingEndpoint`.
 - `standalone`, ClickHouse-gated (`SENTIO_SI_CH_E2E=1`), no subtests: `TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost` and `TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost`. Both are new test files under `standalone/storage_integrity_replica_reads_ch_test.go`.
-- CI: the acceptance step's `--test_filter` gains these two, and its PASS count rises by two from the count the previous sentio-node release's CI printed.
+- CI: the acceptance step requires exactly eight complete PASS markers and no SKIP using Test(StorageIntegrity|SIMember); local CH additionally requires TestStorageIntegrityProtocolTableDriftFailsBootstrap (nine exact tests). The source-bound two-line local receipt records image and runtime/test/BUILD/module/CI/Keeper hash measured before and after the run/cleanup and rechecked before PR preparation. This future receipt is not evidence that current CH tests ran.
 
 **31.9 Release.**
 - `SN_COMMIT_P3` is the squash-merge commit on sentio-node `main`.
@@ -28607,7 +31728,7 @@ Grant probe `charts/storage-integrity/tests/clickhouse_replica_grant_probe.tsv` 
 - `si_gateway denied ALTER TABLE hg_replica.{copy} DELETE WHERE 1 = 0`;
 - `si_gateway denied CREATE TABLE hg_replica.si_probe_denied (x UInt8) ENGINE = MergeTree ORDER BY x`.
 
-Here `ok` means no 497 and `denied` means 497. That nothing else is granted on `hg_rstage` or `hg_member_unsafe` is proven two ways: by `test_si_gateway_reads_hg_replica_only_with_the_replica_grant` (render), and live by `si_gateway`'s `system.grants` (never `SHOW GRANTS`), which must equal its `SI_CLICKHOUSE_GRANTS` and engine grants plus `SI_GATEWAY_REPLICA_GRANT`.
+Here `ok` requires CLI exit0, `denied` requires497, and every other SQL/protocol/transport/login failure stops. The committed input has3 columns and four rows; output has6 columns, exactly `row`, `role`, `expect`, `got`, `code`, `statement`. This is distinct from C3 staging7-column logical/executed-template and member-live5-column protocols. That nothing else is granted on `hg_rstage` or `hg_member_unsafe` is proven two ways: by `test_si_gateway_reads_hg_replica_only_with_the_replica_grant` (render), and live by `si_gateway`'s `system.grants` (never `SHOW GRANTS`), which must equal its `SI_CLICKHOUSE_GRANTS` and engine grants plus `SI_GATEWAY_REPLICA_GRANT`.
 
 `test_render.py` constants:
 - grant and images: `SI_GATEWAY_REPLICA_GRANT = "GRANT SELECT ON hg_replica.*"`; `DEVNET2_P3_HOST_IMAGE` (`ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>`); `REPLICA_READ_HOST_IMAGES = frozenset({DEVNET2_P3_HOST_IMAGE})`; `DEVNET2_P3_AGENT_SIDECAR_IMAGE` (`ghcr.io/housegate/housegate:<HG_TAG_P3>@<HG_DIGEST_P3>`).
@@ -28635,7 +31756,7 @@ Here `ok` means no 497 and `denied` means 497. That nothing else is granted on `
 - §8 Rollback: §8.1 Before §4, §8.2 During or after §4, §8.3 During §6
 - §9 Operating rules: §9.1 Replica serving, §9.2 Member status endpoint, §9.3 Leases, §9.4 Agent failover
 
-Names: `si_backup="$HOME/si-devnet2-stage3-p3"`. The first bash block of §0 sources the §0 chain of the stage-1, tracks, P0, lockdown, indexer-c, P1 and P2 runbooks (D20), then defines these helpers:
+Names: `si_backup="$HOME/si-devnet2-stage3-p3"`. The first bash block of §0 sources the §0 chain of the dynamic-table-set, stage-1, tracks, P0, lockdown, indexer-c, P1 and P2 runbooks (D20), then defines these helpers:
 - `si_member_serving a|b|c` runs `kubectl exec <host pod> -c sentio-node -- /sentio-node storage-integrity member-serving --config-path /config/standalone.yaml`, giving JSON on stdout;
 - `si_replica_status <a|b|c> <db> <table>` reads that host's `sentio_getStorageIntegrityTableStatus`;
 - `si_replica_hosts <a|b|c>` reads that host's info `replica_hosts` and `replica_databases`;
@@ -28650,7 +31771,7 @@ Evidence files, all under `$si_backup`:
 - drill: `drill-baseline.txt` (it also records `housegate -version`, which must still start with `housegate <HG_TAG_P3> `), `quarantine.out`, `verify-quarantine.txt`, `serving-quarantined-<x>.json`, `status-replica-<x>.json`, `replica-hosts-<x>.json`, `agent.log`, `drill-reads.txt`, `drill-refusals.txt`, `release.out`, `verify-release.txt`, `serving-ended.txt`;
 - end: `p3-end.txt`.
 
-**32.5 Live commits (Task 48).** Each is single-service, on a checkout at a freshly fetched `origin/main` in `multi-source-s3c4-live`, pushed as `HEAD:main` and synced at once.
+**32.5 Live commits (Task48 confirms and checks; Task47's runbook makes the commits through its editor).** Each is single-service, on a checkout at a freshly fetched `origin/main` in `multi-source-s3c4-live`, pushed as `HEAD:main` and synced at once.
 
 Grants (§3), one per installation:
 - `G-b`: indexer-b CHI manifest; `kubectl apply`, server dry run first.
@@ -28687,12 +31808,12 @@ The drill's consensus writes are §6.2 and §6.4, the tracks runbook §8.1 and �
 
 **32.8 Repositories, worktrees, checks, commits.**
 - **Local repositories:** `/Users/uranuswch/Dev/projects/sentio-network/<repo>`.
-- **Worktrees:** URWT, created with `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> claude <name>`, whose JSON `path` is `$W`. housegate `multi-source-s3c4` (Tasks 42–44), arbiter-core `multi-source-s3c4` (Task 45), sentio-node `multi-source-s3c4` (Task 46), production `multi-source-s3c4` (Task 47). Each is on branch `urwt/claude/multi-source-s3c4` from `origin/main`. Task 48 runs in production `multi-source-s3c4-live`, held at a detached, freshly fetched `origin/main` and checked clean before every commit and revert.
+- **Worktrees:** executing runtime `codex`; new worktrees use URWT JSON action/path and actual persisted absolute path with symlink spelling, expected base/branch/common-repository/clean checks. Never reconstruct a template or overwrite attempt state. Tasks42–44 share Task42's persisted path;45/46/47 each own their repository's actual JSON path. Worktree-local identity is `poetry <chen@sentio.xyz>` and commit.gpgsign=true. Task48's live checkout is detached at freshly fetched origin/main and clean before each commit/revert. D34's fixed historical Claude ledger-copy ref and existing six user stack branches are unchanged.
 - **housegate checks:** `bazel build //... && bazel test //...`; after dependency changes `bazel mod tidy && bazel run //:gazelle`; by hand, `bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH=<lib> --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=<addr>`. The gRPC side runs against a local container of `us-west1-docker.pkg.dev/sentio-352722/sentio/housegate-rewriter` at the devnet2 pin, read from `sentio-node-indexer-a-storage-integrity-si-v2.yaml`.
 - **arbiter-core checks:** `bazel build //... && bazel test //...`, and the ClickHouse-gated tests as the repository's CI runs them (`ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000`, through `dataplane/chtest`).
 - **sentio-node checks:** S3-B §15's (`gofmt`, `bazel run //:gazelle`, `bazel build //...`, `bazel test //... --test_output=errors`, the ClickHouse-gated tests with `SENTIO_SI_CH_E2E=1 CH_ADDR=127.0.0.1:9000`).
-- **production checks:** S3-B §15's (`python3 -B charts/storage-integrity/tests/test_render.py`, the three `helm lint --strict` profiles, `bash scripts/storage-integrity/render-inertness.sh origin/main` printing `<release> identical` for every release). `.github/workflows/storage-integrity-chart.yml` paths gain the new TSV (this plan adds no script).
-- **Commits and PRs:** commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. The production PR title is `storage-integrity: multi-source SI stage 3 P3 (replica reads, agent window, runbook)`.
+- **production checks:** full current render suite, four strict lint profiles and the audited direct-Helm equivalent using the same chart/release/values/namespace, byte/resource-identity equality. No Helmfile wrapper ran in this controller review. Workflow path lists gain the runbook; charts/storage-integrity/** already covers the TSV. Fourteen product files remain exact.
+- **Commits and PRs:** every code/ledger/record commit explicitly uses -S, refuses failed staging/signing, requires changed HEAD, exact poetry/chen/G and verify-commit. Signing cancellation preserves work and stops for the user to unlock the actual repository key; never fall back unsigned. Preserve the canonical Claude trailer and generated PR attribution. Both merge paths run the complete paginated REST primary-author/message-trailer validator, read the same checked head before/after and pass that exact SHA to --match-head-commit; malformed/empty/ambiguous/drifted data stops. Release/CI/image receipts bind merge/run/tag/source/pins before R1–R4; never infer a release from a unit/source fixture.
 - **Confirmation:** remote and live actions need explicit user confirmation in chat, each for its own step. That covers pushes, PRs, merges, release workflows, `helmfile sync`, `kubectl apply`/`patch`/`exec` that writes, and the quarantine and release.
 - **User actions (D40):** the upgrade of the user's local agent to `HG_TAG_P3` (Homebrew tap `housegate/housegate`, the release's `housegate-<HG_TAG_P3>-darwin-arm64` asset checked against its `SHA256SUMS`, or an equivalent the user prefers), run in the user's own terminal with fish commands; the agent asks for it in chat before §5 and never installs or replaces the user's `housegate`. This plan creates no Secret: the token Secrets are S3-C3's (D29).
 
@@ -28708,15 +31829,29 @@ The drill's consensus writes are §6.2 and §6.4, the tracks runbook §8.1 and �
 | record procedure R1–R4 (D23), live block files (D24), `render-inertness.sh`, worktree rules | S3-B §15 |
 | `si_agent_start`, `si_agent_ch`, `si_agent_stop`, `si_track`, `si_tracks`, `si_leader`, `si_arbiter`, `si_voter`, `si_info`, `si_status`, `si_refusal`; `arbiter-admin indexer quarantine|release` | stage-2 tracks runbook §0, §8 (production `docs/storage-integrity-devnet2-multi-source-tracks.md:774-896`) |
 | `HG_TAG_P1`, `CORE_TAG_P1`, `P1_END`; `sitable.CopyTable(id, seq)`; `replay.OwnerEntry(m, indexerID)`; `$HOME/.cache/s3-ledger/s3-ledger.py` | S3-C1 §16–§19 |
-| `CORE_TAG_P2`, `SN_COMMIT_P2` / `SN_DIGEST_P2`, `ARBITER_PIN_P2`; `member.Role`, `member.Config`, `member/install` (journal, startup audit, Foreign, Diverged), `member/copyset.Reconciler`, `manifestfeed.Follower`, `Client.GetSafeWatermark`, `Client.GetManifest`, `wire.TableRegistrySnapshot.ManifestOwner`, `ddl.CopyIntent`; `sentio-node si-member --config-path`, `storage_integrity.member`; member ids `member-a`, `member-b`, `member-c` (K29); process layout and status Service with a bearer token (K30); metric prefix `sentio_node_si_member_`; `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement` | S3-C2 §20–§24 |
+| `CORE_TAG_P2`, `SN_COMMIT_P2` / `SN_DIGEST_P2`, `ARBITER_PIN_P2`, `P2_INTEGRATION_SOAK`; `member.Role`, `member.Config`, `member/install` (journal, startup audit, Foreign, Diverged), `member/copyset.Reconciler`, `manifestfeed.Follower`, the actual serving watermark `GetSafeWatermark(ctx)` and verified store `GetSafeSnapshot(ctx,id)` (publishedFeed in member/serving.go), `wire.TableRegistrySnapshot.ManifestOwner`, `ddl.CopyIntent`; `sentio-node si-member --config-path`, `storage_integrity.member`; member ids `member-a`, `member-b`, `member-c` (K29); process layout and status Service with a bearer token (K30); metric prefix `sentio_node_si_member_`; `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement` | S3-C2 §20–§24 |
 | `siMember` values block and member StatefulSet template, member Service `<fullname>-si-member`, member image pin, VMServiceScrape `si_component=member`, member alerts; the `si_member` password Secret `storage-integrity-si-v2-member-<installation>` (`siMember.secret`) and the member-status token Secret `<release>-si-member-status-token` (key `status-token`, D29), both from `make-p2-logins.sh`; the budget helpers `si_budget_capture`, `si_budget`; `MEMBER_IDS`, `ENGINE_CENSUS`, `P2_RESTART_END`, `UNSAFE_INC_ROOT`, `P2_PR`, `P2_END`; runbook `docs/storage-integrity-devnet2-stage3-p2-members.md` | S3-C3 §25–§28 |
 | Task 36 run record `arbiter pin and integration run` (the PASS line of `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement`, with the release-path soak of D38) | S3-C2 §20.3, §24.9, Appendix C |
 
 Consistency rule (applied by the cross-plan consistency pass): where S3-C2 or S3-C3 fix a name, theirs wins. Accordingly the member Service is S3-C3's `<fullname>-si-member` with its port `status` (`siMember.statusPort`, 9096); the K30 bearer token is the single key `status-token` of its own Secret `<release>-si-member-status-token`, which S3-C3's `make-p2-logins.sh` creates in the user's terminal, never a key of the `si_member` password Secret `storage-integrity-si-v2-member-<installation>` (D29), so this plan adds no token script; `member.Config` is S3-C2's; the install hooks are S3-C2's `install.Deps.BeforeInstall` plus this plan's `AfterInstall`; the member image pin is S3-C3's `siMember.image`; the si-member runner is S3-C2's package `simember`.
 
+
+
+**32.10 Reconciled source/procedure inventory (bounded candidate).** Task47's actual runbook has35 headings,63 Bash+3 fish blocks,34 confirmed mutating blocks and34 unique §0 helpers. Its eight ancestor §0 sections precede the P3 section. In addition to §32.4's six, the public helpers are:
+`si_p3_pin`, `si_p3_deps`, `si_p3_image`, `si_p3_sidecar`, `si_c_id`, `si_host_release`, `si_acceptance_db`, `si_container_image`, `si_pod_state`, `si_member_serving`, `si_serving_db`, `si_replica_status`, `si_replica_hosts`, `si_host_replica_metrics`, `si_wait_serving`, `si_wait_not_serving`, `si_failovers`, `si_p3_user_terminal`, `si_local_agent_version`, `si_p3_docker`, `si_p3_parity_cleanup`, `si_sync`, `si_render_diff_is`, `si_p3_message`, `si_p3_signed`, `si_p3_commit`, `si_p3_push`, `si_apply_chi`, `si_grant_snapshot`, `si_grant_check`, `si_replica_grant_probe`, `si_run_record`, `si_revert_p3`, `si_p3_edit`.
+
+`si_grant_check TSV CHI` requires the exact before/after CHI, complete source-host/verifier grant and pod census, canonical eight-field rows and exactly one appended SELECT grant with unchanged pod UID/restart/start facts. The nine Task47 ledger inputs include P2_INTEGRATION_SOAK>=500; `si_p2_release_record(record,ARBITER_PIN_P2,soak)` must verify the complete successful release record before extracting the rejected-row PASS line. The pins file has eleven lines. Replica-probe SQL/protocol/API failures cannot become an ok result.
+
+Task48 owns six local tools `p3-helpers.py`, `p3-edit.py`, `task48.sh`, `p3-guard.py`, `local_render.py`, `check-identities.py`; its19-input immutable manifest binds nine chained runbooks, six tools and four session inputs. Scripts verify frozen input before helpers/body, atomic attempted markers are distinct from digest-bound success receipts, and only the documented one-paragraph §7 first-run record exception passes check-record after publication. No live block is authorized by that exception. The caller-only push wrapper checks exact preview parent/subject/path census/blob hashes and trusted signed identity before delegating to unchanged producer push. Unknown/ambiguous push or revert retains intent and stops, never blindly replays/discards a commit.
+
+All four key-bearing scripts require user-terminal admission before key path/read and their tee; all three stdio TTYs plus a controlling terminal are checked without retaining FD9. The user's own session also needs the existing kubectl/track/copy-read helper access; the controller never executes that payload or reads the key. D40's agent install/upgrade stays the user's action. The separately confirmed baseline retry is allowed only after733. Copy census requires producer exit0 and exact six-of-six; failover verdict/release polls must succeed, not just print stop. Rollback provides the explicit c/b substitutions of the x=a pair, with serving-off first if a copy accepted an unsafe read/write. Fresh scratch exports exclude the two forbidden production paths before any content read/copy; fixture history cannot be published.
+
+Actual source-only proof is Task47's26 forward/inverse phases,196 tests each, final tracked-source restoration, eight direct-Helm comparisons and four strict lints; Task48's13 independent final-editor comparisons do not claim another26-suite or signing/live run. Parity still requires the private digest-pinned engine and exact Native+GRPC PASS/noSKIP. The bounded uniquely labelled parity container/dynamic port/owned late-create cleanup is a reviewed future procedure; no current actual parity/grant-runtime/isolated-GPG proof is claimed. Formal Task36 full500/C2/C3, releases and P3 live remain independent gates.
+
+The alert table in §32.2 specifies thresholds/severities/anchors; actual expressions additionally retain cluster/network in grouping and select si_component as in earlier monitoring contracts. The lease-stuck grouping is cluster/network/release/member/pod. The grants implementation is storage-integrity.clickhouseUsers in _helpers.tpl, included by clickhouse.yaml. Member owner map keys remain YAML integers and durations quoted, matching actual yaml.v3 KnownFields decoding.
 ## Appendix B: drafting decisions and cross-task facts
 
-Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
+Historical drafting facts follow, retained for traceability only. Their older bases, stand-ins, counts, shared container names and local release/tag simulations are not current proof and must not override the bounded 2026-10-17 candidate facts below or the actual owning task procedures. This is preparation for the controller's final consistency pass, not that formal pass. `<scratch>` denotes local verification directories, never published artifacts.
 
 ### Task 42
 
@@ -28861,8 +31996,90 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - K50's last resolution bullet and the Follow-ups' placement-era bullet now say that from placement on S3-E4 Task 79 lists the hosts of every current `DatabaseGroup` member, never filtered by `MemberReady` (S3-E4 contract §56, its review finding 2: the drafted "plus readiness", read as `MemberReady`, would have emptied every list from `PLACEMENT_EPOCH` until P6 step 6). F45.7 notes that after Plan S3-C2's review fix 245-1 a ready copy no audit covered since the start or the last ClickHouse restart is `Diverged` and keeps `AuditClean` false until `Apply` audits it. No code of this plan changes; Task 45's two hunk scripts were re-run on S3-C2's fixed Tasks 29–34 code and both apply.
 
 
+## Bounded adversarial candidates and reconciliation (2026-10-17)
 
-**Review fixes (PR246, 2026-10-18 14:45):** Task47's published P3 test-helper replacements now retain C3's reader metadata-grant exclusion in both dictionary and manifest normalizers, together with P3's replica exclusion. Both old-context snippets match the accepted C3 metadata rule. Isolated exact-function fixtures reproduce the former duplicate after repeated generation and verify corrected idempotence and four-stage rollback with quoted/unquoted text and replica grants. All other Task47 text and fences are unchanged. The already-correct accepted cleanup Task47 remains a byte-exact secondary for later consistency adoption. This bounded document follow-up adds no new source, render, runtime, live or formal acceptance.
+Formal Task36 full500/C2/C3/current-chain CH/gRPC/release/live gates remain pending. The following owner entries supersede historical procedural/count/base assertions above at their explicitly stated scope.
+
+### Current Task42 candidate
+
+- **Adversarial review, Task42 (2026-10-17):** Replayed all task Go/test blocks at actual housegate main `bc8780f` plus reviewed Task22, with frozen reviewed C1/C2 core source (360 input hashes checked; no stand-ins). Four test-first compile failures reproduced; all eight affected Go packages pass under race, final affected Bazel8/8 pass, full Go build passes,19 changed Go files are gofmt-clean, and all eight core member packages compile against the new HG surface. Five behavioral mutations are killed by their named tests.39 Go fences remain byte-identical; no new runtime defect established. Corrected stale base/full-verification/line-count assertions, actual Codex URWT path persistence, five signed fail-stop/newHEAD commits and test/format pipeline checks;13 JSON,80 commit and5 formatter fixtures pass, every final Bash block parses under3.2/5. Root vet's two Duration literal warnings reproduce on clean main. Full Bazel/gazelle and Task36's full500/C2/C3 exit gates remain pending; no Docker/live/ledger/remote action executed. Review-round1/2 current-copy and deadline-fence fixes are preserved.
+
+### Current Task43 candidate
+
+- **Adversarial review, Task43 (2026-10-17):** Replayed every Go/test/doc hunk over real reviewed Task42 source, verified925 HG/360 core input hashes, with no API/Role stand-ins. Routing compile RED, seven rewrite-test REDs, peer compile RED and warning behavior RED reproduce; final7-package race and affected Bazel7/7 pass, full Go build/integration binary compilation/affected vet pass, and8 real core member packages compile. Actual native FFI v0.17.0 parity/smoke passes under Go and Bazel; seven behavior mutations are killed. All56 Go fences and the entire old peer-test prefix are byte-identical;19 task-owned HG paths change. Fixed stale base/current-proof/count claims, actual Task42 path continuation, five signed fail-stop/newHEAD commits, hidden pipeline/test-first status, shared-container false success/cleanup and final formatting/absence checks.80 commit,37 procedural and6 original-RED/fixed-GREEN cases pass;16 fenced plus30 inline Bash parser checks, fish syntax,8 shellcheck blocks and mdcheck pass. Full Bazel/gazelle remain blocked by offline x/mod v0.25.0; gRPC/ClickHouse and C2/C3 release-path prerequisites remain pending. Root vet's two Duration literal diagnostics are pre-existing. No Docker/endpoint/real signing/URWT/remote/ledger/cluster/cloud action ran.
+
+### Current Task44 candidate
+
+- **Adversarial review, Task44 (2026-10-17):** Replayed every hunk over verified real Task42/43 source (HG927/core360 input), with no stand-ins, yielding frozen HG935/core360. Four staged compile REDs reproduce. Fixed caller-deadline loss in discovery peer-list/owner/indexer RPC paths with three measured REDs and race count3 GREEN; strengthened the cache-hit answer-alias regression. Final9-package Go race, full Go build, affected vet/integration binary compile and8 real core member compiles pass. Final affected Bazel8 pass plus one unchanged upstream proxy timeout; proxy-only retry passes, all9 targets observed passing final source. Six behavior mutations killed/restored;58 original Go fences exact, four modified and four additive accessor hunks. Fixed actual path/base custody, six signed/newHEAD commit gates, hidden RED/pipeline status, formatting, complete REST author/head merge checks, merge-bound release dispatch/run/tag, exact digest/layer/version consumers and complete ledger R1–R4.96 commit+73 procedural+9 layer/format cases,40 Bash parser checks,20 shellcheck blocks,11 Python compiles, fish syntax and mdcheck pass. Full offline Bazel is blocked on x/mod v0.25.0; Docker/ClickHouse/gRPC/full release and C2/C3 prerequisites remain pending. No remote, real signing/URWT/ledger/cluster/cloud action ran.
+
+### Current Task45 candidate
+
+### Task 45 — adversarial review candidate facts (2026-10-17)
+
+- Independently copied/hash-verified the real reviewed P2 core360/HG923 chain; current main core cfd4f42 and HG bc8780f (no pkg delta from ed24705). No draft-only grants/Role/source stub. All18 final Go Create blocks and exact install/role hunks reapply on an independent fresh base: four stages RED→GREEN and byte-equal final source.
+- Fixed fail-open lease-file trailing JSON and millisecond-duration overflow, HTTP same-host/different-port bearer forwarding, peer/transport token echoes, malformed canonical ids/TTL/oversize responses. Redirect refusal copies the caller's HTTP client; redacted errors preserve errors.Is/context cancellation. Valid lease encoding/version and every exported signature stay unchanged.
+- Added five top-level behavioral regression tests; eight deliberate behavior mutations fail their named assertions and restore source. Final serving race count10 PASS. Final whole Go race28 packages/682 top-level PASS/195 opt-in SKIP; offline Bazel build all PASS, plain28/28 and restored uncached race28/28 PASS; last affected race3/3 PASS; vet/gofmt/boundary/protected-byte checks PASS.
+- Reconciled actual retained Codex URWT JSON paths and pins, signed poetry/G new-HEAD checks at seven commits, canonical paginated REST identities/exact heads at both merges, exact workflow dispatch/head/time/run/tag verification and protected-source/pin gates before ledger recording.131 exact procedure fixtures,18 creator fixtures and8 real unsigned local fixture-tag cases pass.27 Bash fences parse on Bash3.2/5 and shellcheck; mdcheck passes.
+- Actual ClickHouse serving/installer hold proof remains pending: the single approved26.3 attempt failed in wrapper port inspection before test launch, with3-sample30.8185s exact cleanup PASS. A bounded null-safe/public-state wrapper correction has15 new pure readiness controls, run-path resource controls and7 cleanup controls PASS; the single corrected retry also stopped before tests on public exited133/OOMKilled=false state, with exact3-sample30.1491s cleanup; no further retry/25.8 is approved. No release/merge/tag or ledger value was executed/predicted. Formal acceptance still waits required upstream and actual CH gates.
+
+### Current Task46 candidate
+
+**Task46 adversarial review candidate (2026-10-17):** Replayed complete actual reviewed Task35 SN212 source (sn/sn-replay differ only by two scratch Go replaces), HG44/935 and core45/379 after full hash validation. Fixed shared-YAML-DAG expansion in both newly added token preflights by reusing35's bounded walker; actual40-layer/3s original RED and full config race GREEN. All supplied runtime behavior otherwise preserved;174 Go fences/171 unchanged, three bounded-preflight/regression edits. Eight behavior mutations killed/restored; final whole Go race17 tested packages/414 top-level+296 subtest PASS/15 opt-in SKIP and vet PASS. Offline Bazel full build/Gazelle/mod tidy PASS, plain18/18 and explicit-cgo race18/18 PASS. Independent final task replay44 source/doc paths byte-equal; frozen228-file SN manifest b3c1d952977601a3c5af9164617b68769847bf6ab26e4887cb43833effa9b940. Reconciled retained actual Codex paths, signed/newHEAD commits, exact Go/Bazel pin graph, complete REST/samecheckedhead merges, merge-bound CI/immutable image/pin proof and full ledger custody/R4 equality. Procedure controls:216 code+18 record commit,9 REST,28 merge,34 env,26 inert creator,24 ledger restore,32 metadata/roster,13 graph/MODULE cases; actual binary refusals and extracted CI gate fixtures pass.106 Bash syntax checks,34 shellcheck blocks,9 Python compiles and mdcheck PASS. Actual Docker/CH/registry/release/ledger gates remain unexecuted; formal C2/C3/C4 acceptance remains pending.
+
+### Current Task47 candidate
+
+**Task 47 adversarial review (2026-10-17; bounded candidate, formal upstream exits pending).** Rebased the executable production hunks on actual main efe5c77859e98d0465838cb5763c7f1fcbd89ee3 plus verified1773-file safe C3 chain through cf3a86887d4c29dbc4cdf8cdc1732aaab3c3b615. Repaired backupUser and metadata-preservation seams, the off-SI fixture, raw serve/map and port/uint64 guards, strict replica-probe verdicts, complete grant/pod census, nine-input/release-record validation, actual JSON worktree paths, poetry/G/newHEAD/REST identity gates, ambiguous push/revert intent, owned bounded parity cleanup, binding drill polling/verdict gates and D40 user-terminal guards. Baseline185 PASS; exact192-test RED; final14-file reconstruction196 PASS. Eight direct-Helm release comparisons/four strict lints/actual yaml.v3 decode pass. Four mirror mutations and eight bounded out-of-order source sequences are refused. Runbook35 headings,63 Bash+3fish,34 confirmations/34 helpers and shellcheck clean;89 complete shell fences parse. Full26-phase source replay passes all26 full196-test phases with exact frozen tracked-source restoration. No actual GPG/Docker/Helmfile/endpoint/cluster/ledger/remote action; isolated signing/parity/grant-runtime and formal C2/C3 release gates remain unexecuted.
+
+### Current Task48 candidate
+
+**Task48 adversarial review (bounded candidate).** Reconciled the final47 confirmed pins/eleven-line/TTY-first API, added strict18-name ledger/P2>=500 gate, immutable19-input D24 integrity, protected-path-excluded previews/rehearsal, exact pre-publication parent/path/blob checks, Codex actual-path receipts and signed poetry/newHEAD/REST/head-matched record workflows. Fixed pre-confirmation clears, attempted-versus-successful user receipts, incomplete copy census, weak probe/metric/view/host/status/endpoint validation, record typing and its narrowly checked §7 source exception, rollback uncertainty and fish checksum fallthrough. Original two producer API REDs were reproduced;85 bounded checks,13 final independent edit comparisons,94 fence parses/ShellChecks and10 embedded Python compiles pass. Reused final47's unchanged26-phase196-test/direct-Helm chart proof. No actual signing, local containers, Helmfile, URWT, remote, cluster/cloud, endpoint or ledger operation ran; formal C2/C3/release/live exits remain gates.
+
+### Reconciliation corrections and remaining gates
+
+- Task46's original image-only local CH receipt is superseded by a future source-bound image+runtime hash receipt, checked before/after the actual run/cleanup and again before PR preparation. No CH run was performed to create that receipt in this preparation. Sibling Task52's deterministic runtime/test/BUILD/module/CI/Keeper selection is reused only as a workflow pattern; neither52 nor46 source-only builds prove CH acceptance.
+- Task47's report phrase four-column TSV was reporting drift: actual input3 columns/four rows and output6 columns. Task48's exact API checker already enforces that actual shape. C3 staging7-column and live member5-column remain separate. Task47's196-test/26-phase/editor/chart source is unchanged; no heavy unchanged suite rerun was needed for these prose/receipt corrections.
+- Source CHI for indexer-c is sea-dg-3; host/SNode is sea-dg-6. Actual main monitoring is disabled. Future P2-end enabled-monitoring fixtures are explicitly future-only; no actual ledger value is inferred.
+- Current C3 candidate37–41 preserves valid RMT metadata at the exact TSV path with a different fixture replica and owned cleanup, authenticated Secret/stdin reader gateway-template binding, seven-field consumer checks and backup WRITE S3. It regenerates actual owning39→40→41 hashes. Historical230/33 proofs are reused only after exact literal/config equality; the gateway row is logical+authenticated template, not literal anonymous SQL. Fresh combined identity is si_reader/readonly0; the failed older view remains history. Limited count-only scans do not cover daemon console, partial/transformed secrets or later asynchronous logs. No P3 privilege/profile implication is inferred.
+- No runtime Go/test/chart/manifest source is changed by this reconciliation. Admission fence/count-current ordering, durable lease and no-redirect/redaction defenses, bounded YAML traversal, actual upstream policy-aware materializer/shadow and no-preP5-consensus boundaries remain owning source contracts.
+
+- Task45 later Linux-in-container actual attempt (2026-10-18): exact26.3 version/readiness passed, but loader --list exited127 before test registration or any selected test. Cause and footprint unknown; exact owned cleanup3absence spanned30.1061427919s, frozen core379/HG923/binaries unchanged. This third pre-test failure remains non-PASS; no additional run is implied.
+
+
+### Canonical REST v2 bounded follow-up (2026-10-18; formal holds retained)
+
+- The controller-approved reader has source SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`. All ordinary and execution-record PR gates use its exact bytes, the already checked head and success text `PR commit identities and pinned head verified`. Unique lowercase40-hex string commit identities, nonempty1–100 pages,<250 total and final-list-head binding close the real numeric-SHA coercion/malformed-list acceptance gaps. Existing head receipts, before/after remote checks, atomic --match-head-commit, signature and D24 protections remain unchanged.
+- Across the complete C3/C4 follow-up,9 actual inline readers pass738 dual-shell shared-shape/API-failure controls;3 actual local readers pass250 controls, and all15 ordinary/record sites pass388 extracted whole-head/check/receipt/REST/atomic-merge controls. No real GitHub operation, signing, ledger or task body runs. All354 Go fences, committed runtime/YAML/diff/ledger/helper/runbook payloads and all unrelated local tools remain byte-identical; only approved REST reader implementations and their invocation/output text change. Existing draft/full500/actualCH/release/live holds remain, with no formal count or execution outcome produced.
+- Tasks47/48's local `check-identities.py` readers change from prior47v1 to the exact finalv2 body. Task48's other5 tools and all9 committed runbooks/helper bodies remain exact. The actual unchanged freeze/check generator creates a fresh19-input source-only receipt: an old-reader receipt rejects the new reader, and the new receipt/check passes with exactly that one local-reader hash changed. This is local immutable input custody, not a live session, actual URWT, release pin or ledger record. Historical owner receipts remain untouched and retain their original scope. Task46's exact source-bound CH receipt and OCI-index parser remain byte-identical.
+
+## Final current-evidence document consistency V2 (2026-10-18; root adoption separate)
+
+Earlier entries retain their dated owner scope, test counts and historical pending statements. The following current qualification supersedes their current-status interpretation; it changes no runtime payload or historical receipt.
+
+**Current measured predecessor qualification (2026-10-18).** Root accepts current Task36 baseline f8924677 (63PASS/five exact SKIP/0FAIL) and affected race 74f918f1 (764PASS/16 exact SKIP/0FAIL), on source2b6c920f and corrected memo74875928; local source review75d77690 accepts that bounded chain. Old full500 f34c9ee7 retains its original source/observer scope and is not retagged to source2b6c920f.
+
+Root Task45 source-stage receipt56c90cee binds freshly composed corrected34 core381/HG923 (HG_TAG_P1 boundary), source manifest b8e8d7646e660089cf43dddec056d3c6d6a0f3433b2c7ff5318845e70e8237a7: 1304 files, 30 literal payload intents and1274 unchanged checkpoint rows. BUILD receipt30e0ba6f binds newly built binaries and selected SDK actions. TEST receipt0eff9e5b accepts exactly three targets, plain and one race: each62PASS/25 exact opt-in SKIP/0FAIL. Root actual receipt `6547fa229c43b6744441dd58f0fcca2ab804c2f7c8e39cf2f9c72a1cc52d8c56` accepts the original three CH tests, two invocations, noSKIP, measured26.3.37.3/image46a501c3, posthashes and actual cleanup (21 known host groups; three container absences spanning30.1588s, one180s cleanup budget). Initial ready exit210 is retained as a transient within the original60s readiness budget. No causal conclusion follows. That root receipt's independent_actual_observer_final_pending=true remains historical and immutable. Separate final root receipt4fc391b77e9a0fdb83ddc65bd2e50f6dbe797e7de88db152bd61ae96d1da4e0d closes the wait and accepts all three independent observer packages: BUILD3424ae98, TEST5044bd0b, ACTUAL76a0b66f/report535f1d08. Actual Docker/test/inspect raw diagnostics were intentionally memory-only: retained SHA/count/EOF and safe classifications plus source-bound control flow support the bounded verdict; unavailable nonempty raw bytes were not independently replayed. BUILD/TEST named SDK leaves and selected actions do not prove a universal SDK/cache closure.
+
+Task45 source approval is bounded local corrected34 core381/HG923 source review, not the later fullP3 HG42–44 composition, Task46, full-core500, release, real registry/CI, production or live execution. Old379-file source/binaries and pre-test/loader/port failures remain historical, with causes UNKNOWN. New success creates no retrospective cause, TDD/mutation/reliability proof or released pin. Current E1 Task62 already preserves the memo/post-C4 constructor/wrappers. Future separately approved fresh full-chain composition remains necessary.
+
+Task47 final procedure is the accepted complete secondary d0f8627f06239a1d6c221c9adcd58731fb629dbfcf4ee2a8e15fb1ad260c4946, paired with the retained full Task42 producer through43/44 and the release/ledger consumer chain. The published primary e4541ce4 is only the four-line CI repair against its earlier published branch; it is not substituted for this full procedure. Production EFE and cf3 fixtures remain historical; root remote86805572 plus its11-safe-blob overlay requires separately approved fresh composition. The old Task70 mutable-tool custody HOLD remains preserved as historical evidence and is not revoked. Separately, root536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d accepts the fixed-tool-qualified638-file source and bounded plain/one-race identity oracles (3990 identities and19 exact SKIP per mode;22 uncached Bazel targets per mode). Typed Task71 input receiptd4da39b62d90bb32e6559fbb502cecf27586574036f66a718b1dd006ef962381 permits source input only and explicitly grants no Task71 actual launch; owning-text receipt6892a3628e15d4cfe4fd4babf6990af396c2c2227d152a6325ae3ae3888dd85f accepts the qualification for final E2 consistency. The selected configured Go-action/ten-SDK-leaf proof is not universal action/input closure; old69 risk and historical31-mutant scope remain unchanged. No downstream actual grant, release, live, ledger or production approval follows. No execution, canonical adoption, formal count or ledger value is produced here.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+Execution record intentionally empty; release/live recording gates remain pending. Final document consistency supplies no execution values. No value or run outcome is predicted. Owners record actual values and their complete run record atomically through s3-ledger.py and R1–R4.
+
+| Name | Value | Recorded by |
+|---|---|---|
+| `HG_TAG_P3` |  | Task 44 |
+| `HG_DIGEST_P3` |  | Task 44 |
+| `CORE_TAG_P3` |  | Task 45 |
+| `SN_COMMIT_P3` |  | Task 46 |
+| `SN_DIGEST_P3` |  | Task 46 |
+| `P3_PR` |  | Task 47 |
+| `P3_END` |  | Task 48 |
+
+Run records:
+
+- housegate release (Task 44):
+- arbiter-core release (Task 45):
+- sentio-node release (Task 46):
+- P3 PR (Task 47):
+- P3 run (Task 48):
