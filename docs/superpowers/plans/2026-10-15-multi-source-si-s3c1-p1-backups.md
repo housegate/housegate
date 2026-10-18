@@ -21071,7 +21071,7 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after 
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `HG_TAG_P1` | | Task 22 |
+| `HG_TAG_P1` | `v0.21.0` | Task 22 |
 | `CORE_TAG_P1` | | Task 24 |
 | `P1_BACKUP_DELETE` | | Task 24 |
 | `SN_COMMIT_P1` | | Task 25 |
@@ -21082,7 +21082,10 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after 
 
 Run records (one item per recording task; each is filled in the same commit as all of that task's rows):
 
-- housegate release and the ledger tool (Task 22):
+- housegate release and the ledger tool (Task 22): housegate/housegate#261 (feat(replay): stage-3 P1 helpers (OwnerEntry, VerifyLedger, ScanAllParts, NewMaterializerIn, CopyTable)) squash-merged as c77fd4d2d9f8a78032c1350ef322183ffc1fb641 on 2026-10-18 UTC, with Release tooling, Build, Integration (ClickHouse), AgentConnect and Bugbot passed for the checked head 51fb4be571029cdd4d117426decc8be43c5db113 and no unresolved review threads. Release run 39136290234, dispatched with the user's approval against main, succeeded in both Cut, build, publish and Update Homebrew tap jobs and cut v0.21.0 at c77fd4d2d9f8a78032c1350ef322183ffc1fb641: GitHub Release with linux/amd64 and darwin/arm64 binaries plus SHA256SUMS, ghcr.io/housegate/housegate:v0.21.0 and latest, and the Homebrew formula. No later commits were included. Content checks printed 1 2 1 3 1 1; v0.21.0 contains HG_TAG v0.20.0 and the merge commit; dependency files, replay wire types and roots have an empty merge diff. The ledger tool $HOME/.cache/s3-ledger/s3-ledger.py (sha256 a43d398c1f86e198fcc32c3b139b20929fe24d2768c0e27038dae09c8f3da629) was extracted verbatim from contract section 19 and byte-compared with origin/main; plans listed s3a, s3b, s3c1, s3c2, s3c3, s3c4, s3d, s3e1, s3e2, s3e3, s3e4 and s3f, with s3c1 on origin/main.
+  - Local Bazel 9.1.0 build succeeded and 67/67 ordinary test targets passed; the filtered Docker suite ran 12/12 top-level tests with zero skips, including the explicit member-disk policy test on ClickHouse 26.3.37.3; existing replay tests used ClickHouse 25.8. Affected-package race tests and targeted vet passed. Independent code review and the documentation-only follow-up review were approved.
+  - The published GHCR version and latest manifests both resolved to sha256:709d013409f064ff56ad272f70a3e19cf03975e3b14ce36e17038020bc823404. Published SHA256SUMS matched both Homebrew formula entries: darwin/arm64 ed63bda8efcee25ec4eb4b25329c4e7aee808506eb7ed72f87b031e2b77d89e8; linux/amd64 490dcb453e7e86fb945ec996740f1fcc53503f2070edd0e1b905ab32d215fd17.
+  - The squash commit has primary author poetry <chen@sentio.xyz> and a valid GitHub-verified signature; all six implementation commits passed local signature, new-HEAD and identity checks. No production operation, policy decision or later task is authorized by this release record.
 - arbiter-core release and the S3 mechanics (Task 24):
 - sentio-node release (Task 25):
 - P1 PR (Task 27):
