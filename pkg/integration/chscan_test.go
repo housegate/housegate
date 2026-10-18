@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -120,4 +122,133 @@ func activePartNames(t *testing.T, ctx context.Context, conn clickhouse.Conn, da
 		t.Fatalf("active part rows: %v", err)
 	}
 	return names
+}
+
+// TestChexecScanAllParts_MatchesScanPartsOverEveryActivePart pins the full
+// partition scan of spec 2026-10-14 §8.5 step 4 (a restore scratch is scanned
+// without knowing its part names): ScanAllParts equals ScanParts over the
+// names of every active part, sorted by part name, and after a merge it reads
+// only the merged part, whose rows still sum to the same accumulator.
+func TestChexecScanAllParts_MatchesScanPartsOverEveryActivePart(t *testing.T) {
+	ctx := context.Background()
+	conn := openDirectCH(t)
+	db := "hg_scan_all_test"
+	table := uniqueTable(t)
+	qualified := db + "." + table
+
+	mustExec(t, conn, "CREATE DATABASE IF NOT EXISTS "+db)
+	t.Cleanup(func() {
+		_ = conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db)
+	})
+	mustExec(t, conn, fmt.Sprintf(`
+		CREATE TABLE %s (
+			_hg_row_id FixedString(32),
+			p String,
+			v UInt64
+		) ENGINE = MergeTree
+		PARTITION BY p
+		ORDER BY tuple()`, qualified))
+	mustExec(t, conn, "SYSTEM STOP MERGES "+qualified)
+
+	sch := payloadexec.TableSchema{
+		TableID:     "db.scan_all_t",
+		PartitionBy: "p",
+		Columns:     []lthash.Column{{Name: "p", Type: "String"}, {Name: "v", Type: "UInt64"}},
+	}
+	rid := func(ordinal uint64) []byte { return payloadexec.RowID("net-1", "db.scan_all_t", "acct/1/n", ordinal) }
+	insertScanRows(t, conn, qualified, scanRow{rid: rid(0), p: "p0", v: 1}, scanRow{rid: rid(1), p: "p0", v: 2})
+	insertScanRows(t, conn, qualified, scanRow{rid: rid(2), p: "p0", v: 3})
+	insertScanRows(t, conn, qualified, scanRow{rid: rid(3), p: "p1", v: 4})
+
+	scanAll := func(wantParts int) []chexec.PartScanResult {
+		t.Helper()
+		names := activePartNames(t, ctx, conn, db, table)
+		if len(names) != wantParts {
+			t.Fatalf("active parts = %v, want %d", names, wantParts)
+		}
+		all, err := chexec.ScanAllParts(ctx, conn, qualified, sch)
+		if err != nil {
+			t.Fatalf("ScanAllParts: %v", err)
+		}
+		named, err := chexec.ScanParts(ctx, conn, qualified, sch, names)
+		if err != nil {
+			t.Fatalf("ScanParts(%v): %v", names, err)
+		}
+		if !reflect.DeepEqual(all, named) {
+			t.Fatalf("ScanAllParts = %+v, ScanParts over every active part = %+v", all, named)
+		}
+		got := make([]string, len(all))
+		var rows uint64
+		for i, part := range all {
+			got[i] = part.PartName
+			rows += part.RowCount
+		}
+		if !slices.Equal(got, names) || !slices.IsSorted(got) || rows != 4 {
+			t.Fatalf("ScanAllParts parts = %v (%d rows), want the active parts %v sorted by name with 4 rows", got, rows, names)
+		}
+		return all
+	}
+	sum := func(parts []chexec.PartScanResult) string {
+		t.Helper()
+		hashes := make([]string, len(parts))
+		for i, part := range parts {
+			hashes[i] = part.RowLtHash
+		}
+		total, err := payloadexec.SumPartRowLtHashes(hashes)
+		if err != nil {
+			t.Fatalf("SumPartRowLtHashes: %v", err)
+		}
+		return total
+	}
+
+	before := sum(scanAll(3))
+
+	// A merge retires both parts of p0; only the merged part stays active.
+	mustExec(t, conn, "SYSTEM START MERGES "+qualified)
+	mustExec(t, conn, "OPTIMIZE TABLE "+qualified+" PARTITION 'p0' FINAL")
+	mustExec(t, conn, "SYSTEM STOP MERGES "+qualified)
+	if after := sum(scanAll(2)); after != before {
+		t.Fatalf("the rows' accumulator changed across a merge: %.20s… != %.20s…", after, before)
+	}
+}
+
+// TestChexecScanAllParts_EmptyTableIsEmpty: a table without rows, never
+// written or emptied, scans to an empty slice and no error, which is how a
+// caller sees a rename race (spec 2026-10-14 §8.5 step 4).
+func TestChexecScanAllParts_EmptyTableIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	conn := openDirectCH(t)
+	db := "hg_scan_all_test"
+	table := uniqueTable(t)
+	qualified := db + "." + table
+
+	mustExec(t, conn, "CREATE DATABASE IF NOT EXISTS "+db)
+	t.Cleanup(func() {
+		_ = conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db)
+	})
+	mustExec(t, conn, "CREATE TABLE "+qualified+" (_hg_row_id FixedString(32), v UInt64) ENGINE = MergeTree ORDER BY tuple()")
+	sch := payloadexec.TableSchema{TableID: "db.scan_all_empty", Columns: []lthash.Column{{Name: "v", Type: "UInt64"}}}
+
+	got, err := chexec.ScanAllParts(ctx, conn, qualified, sch)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("ScanAllParts(new table) = %+v, %v; want no part and no error", got, err)
+	}
+	rid := payloadexec.RowID("net-1", "db.scan_all_empty", "acct/1/n", 0)
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+qualified)
+	if err != nil {
+		t.Fatalf("PrepareBatch: %v", err)
+	}
+	if err := batch.Append(rid, uint64(1)); err != nil {
+		t.Fatalf("batch.Append: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("batch.Send: %v", err)
+	}
+	if got, err := chexec.ScanAllParts(ctx, conn, qualified, sch); err != nil || len(got) != 1 || got[0].RowCount != 1 {
+		t.Fatalf("ScanAllParts(one row) = %+v, %v; want one part of one row", got, err)
+	}
+	mustExec(t, conn, "TRUNCATE TABLE "+qualified)
+	if got, err := chexec.ScanAllParts(ctx, conn, qualified, sch); err != nil || len(got) != 0 {
+		t.Fatalf("ScanAllParts(truncated table) = %+v, %v; want no part and no error", got, err)
+	}
 }
