@@ -24,6 +24,7 @@ go_test(
     srcs = [
         "column_profile_authority_test.go",
         "materializer_format_test.go",
+        "materializer_in_test.go",
         "materializer_time_test.go",
         "scan_all_test.go",
         "snapshot_test.go",
