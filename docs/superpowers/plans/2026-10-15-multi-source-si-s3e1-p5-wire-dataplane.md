@@ -7603,9 +7603,9 @@ type BlockGroupRef struct {
 }
 
 // BlockReselection mirrors pb.BlockReselection: one applied ReselectVerifiers
-// with the replaced ids and their replacements (both sorted), the ring
-// position after it, the registry cursor block it recorded and its authority
-// proof.
+// with the replaced ids (sorted) and corresponding replacements (in stored-ring
+// walk order), the ring position after it, the registry cursor block it recorded
+// and its authority proof.
 type BlockReselection struct {
 	Replaced, Replacements []string
 	RingPosition           uint32
@@ -25375,9 +25375,9 @@ message BlockGroupRef {
   uint64 group_generation = 2;
 }
 
-// BlockReselection is one applied ReselectVerifiers: the replaced ids and
-// their replacements (both sorted), the ring position after it, the registry
-// cursor block it recorded, and its authority proof.
+// BlockReselection is one applied ReselectVerifiers: the replaced ids (sorted)
+// and corresponding replacements (in stored-ring walk order), the ring position
+// after it, the registry cursor block it recorded, and its authority proof.
 message BlockReselection {
   repeated string replaced = 1;
   repeated string replacements = 2;
@@ -26017,6 +26017,10 @@ Root adopted E1 Tasks57–63 and plan consistency under `e1-v6-root-review-consi
 ### BlockReselection ordering comment correction (documentary only)
 
 Task57 now describes sorted replaced IDs and their corresponding replacements in stored-ring walk order, matching current Task74/AppA §52.2. Only the three-line BlockReselection protobuf comment changes; all fields, tags, code, tests and assertions remain exact. Root accepted this scoped correction in `task57-reselection-order-comment-root-review.json`; existing E1 formal acceptance is unaffected. This documentary publication adds no formal increment, runtime result, source acceptance, release/live approval or ledger value.
+
+### Review fixes (AgentConnect PR248, 2026-10-19): mirrored reselection-order comments
+
+Synchronized Appendix A §39's BlockReselection protobuf comment and Task60's mirrored Go comment with the already-published Task57: replaced IDs are sorted, while corresponding replacements retain stored-ring walk order. Task60's existing identity converters preserve the supplied repeated-field sequence; no sorting or mapping algorithm changes. Only comments change; every field, tag, source token, test and assertion remains exact. Complete comment-only forward/inverse diffs and all-E1 sibling inventory were checked statically. No product/runtime tests, source acceptance, formal increment, release/live action or ledger value is added.
 ## Appendix C: execution record
 
 | Name | Value | Recorded by |
