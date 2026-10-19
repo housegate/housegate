@@ -21072,8 +21072,8 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after 
 | Name | Value | Recorded by |
 |---|---|---|
 | `HG_TAG_P1` | `v0.21.0` | Task 22 |
-| `CORE_TAG_P1` | | Task 24 |
-| `P1_BACKUP_DELETE` | | Task 24 |
+| `CORE_TAG_P1` | `v0.16.0` | Task 24 |
+| `P1_BACKUP_DELETE` | `lock` | Task 24 |
 | `SN_COMMIT_P1` | | Task 25 |
 | `SN_DIGEST_P1` | | Task 25 |
 | `P1_PR` | | Task 27 |
@@ -21086,7 +21086,9 @@ Run records (one item per recording task; each is filled in the same commit as a
   - Local Bazel 9.1.0 build succeeded and 67/67 ordinary test targets passed; the filtered Docker suite ran 12/12 top-level tests with zero skips, including the explicit member-disk policy test on ClickHouse 26.3.37.3; existing replay tests used ClickHouse 25.8. Affected-package race tests and targeted vet passed. Independent code review and the documentation-only follow-up review were approved.
   - The published GHCR version and latest manifests both resolved to sha256:709d013409f064ff56ad272f70a3e19cf03975e3b14ce36e17038020bc823404. Published SHA256SUMS matched both Homebrew formula entries: darwin/arm64 ed63bda8efcee25ec4eb4b25329c4e7aee808506eb7ed72f87b031e2b77d89e8; linux/amd64 490dcb453e7e86fb945ec996740f1fcc53503f2070edd0e1b905ab32d215fd17.
   - The squash commit has primary author poetry <chen@sentio.xyz> and a valid GitHub-verified signature; all six implementation commits passed local signature, new-HEAD and identity checks. No production operation, policy decision or later task is authorized by this release record.
-- arbiter-core release and the S3 mechanics (Task 24):
+- arbiter-core release and the S3 mechanics (Task 24): sentioxyz/arbiter-core#51 (Tasks 23-24) squash-merged on 2026-10-19 at 07:19:39 UTC as f5d41b487e2a3ec4c09f0113f930c2a8c2e24671; Cut Release run 39233769869 cut v0.16.0 at that commit, with go.mod requiring housegate v0.21.0 and arbiter-proto v0.12.0. Its mechanics step passed 16/16 mechanics, the SNode restart test and 7/7 objstore S3 tests, measured backup delete right lock, and found no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3. The user-terminal repeat on the same merged commit on 2026-10-19 (08:27:50-08:32:01 UTC), using deployed 26.3-lts-decimal512-release-2026-09-16 (ClickHouse 26.3.12.1), passed the same mechanics, restart, S3 and masking checks with no skipped tests and the same lock right. This records measured release facts and does not approve the K24 own-lock policy amendment or live operations.
+  - release run: mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3; mechanics: S3 backup delete right: lock; objstore: 7 S3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3; mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3
+  - deployed image: mechanics: 16 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16; mechanics: S3 backup delete right: lock; objstore: 7 S3 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16; mechanics: no S3 secret in the server logs on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16
 - sentio-node release (Task 25):
 - P1 PR (Task 27):
 - P1 run (Task 28):
