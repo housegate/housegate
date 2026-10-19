@@ -10884,7 +10884,50 @@ git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | pyt
 t="$(mktemp -d)" || exit 1
 git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py > "$t/test_render.py" || exit 1
 git -C "$p" show origin/main:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml > "$t/network.yaml" || exit 1
-python3 -I -c 'import ast, sys, yaml; from pathlib import Path; source=Path(sys.argv[1]); nodes=ast.parse(source.read_text()).body; values=lambda name: [ast.literal_eval(n.value) for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]; flags=values("DEVNET2_MONITORING_ENABLED"); assert len(flags)==1 and flags[0] is False, "C1 requires exactly one literal False monitoring flag"; lists=values("DEVNET2_MONITORED_BACKUPS"); assert lists in ([], [()]), "C1 monitored backups must be empty"; mon=yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {}); assert mon.get("enabled") is False, "C1 overlay monitoring must be boolean false"; assert (mon.get("backups") or {}).get("cronJobs", []) == [], "C1 overlay monitored backups must be empty"; assert sys.argv[3] == "user-approved-c1-monitoring-off-2026-10-19", "missing C1 monitoring waiver"; print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")' "$t/test_render.py" "$t/network.yaml" user-approved-c1-monitoring-off-2026-10-19 || exit 1
+python3 -I - "$t/test_render.py" "$t/network.yaml" user-approved-c1-monitoring-off-2026-10-19 pre-P1 <<'PY_POLICY' || exit 1
+import ast, sys, yaml
+from pathlib import Path
+
+def policy_literal(source, name, required=True):
+    """Allow one top-level literal binding and reject every additional static binding."""
+    tree = ast.parse(source)
+    assignments = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and n.targets[0].id == name]
+    bindings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            bindings.append(node)
+        elif isinstance(node, ast.arg) and node.arg == name:
+            bindings.append(node)
+        elif isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name:
+            bindings.append(node)
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ in ("MatchAs", "MatchStar") and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ == "MatchMapping" and node.rest == name:
+            bindings.append(node)
+    if not assignments and not bindings and not required:
+        return ()  # Before P1 creates the key, only genuine absence has the empty default.
+    if len(assignments) != 1 or len(bindings) != 1 or bindings[0] is not assignments[0].targets[0]:
+        raise ValueError(f"{name} requires one top-level simple literal assignment and no other binding")
+    return ast.literal_eval(assignments[0].value)
+
+source = Path(sys.argv[1]).read_text()
+if policy_literal(source, "DEVNET2_MONITORING_ENABLED") is not False:
+    raise ValueError("C1 requires exactly one literal False monitoring flag")
+pre_p1 = sys.argv[4] == "pre-P1"
+backups = policy_literal(source, "DEVNET2_MONITORED_BACKUPS", required=not pre_p1)
+if backups != ():
+    raise ValueError("C1 monitored backups must be an empty tuple")
+mon = yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {})
+if mon.get("enabled") is not False or (mon.get("backups") or {}).get("cronJobs", [] if pre_p1 else None) != []:
+    raise ValueError("C1 overlay requires boolean false and an empty monitored-backup list")
+if sys.argv[3] != "user-approved-c1-monitoring-off-2026-10-19":
+    raise ValueError("missing C1 monitoring waiver")
+print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")
+PY_POLICY
 rm -r "$t"
 mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
 [ ! -e "$HOME/.cache/s3-worktrees/s3c1-production.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
@@ -10904,7 +10947,7 @@ actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
 [ "$actual_branch" = urwt/codex/multi-source-s3c1 ] || { echo "restored code branch differs from its producing task; stop"; exit 1; }
 ```
 
-Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and `sentio-node-devnet2-indexer-c storage-integrity-si-v2-indexer-c`, the last entries of `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` (Task 21's monitoring commit, whose edit tool writes each tuple one item per line, so the constants are read as Python, never with a one-line grep; `sentio-node-devnet2-indexer-b storage-integrity-si-v2-indexer-b` means E is not finished: stop), `S3-B monitoring enabled`, then one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-production.json` (the template is descriptive only): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
+Expected: `E_PR is on origin/main`, `origin/main:charts/storage-integrity/tests/test_render.py:1` (Plan S3-B Task 19's indexer-c login) and `sentio-node-devnet2-indexer-c storage-integrity-si-v2-indexer-c`, the last entries of `DEVNET2_MONITORED_HOSTS` and `DEVNET2_MONITORED_CLICKHOUSES` (Task 21's monitoring commit, whose edit tool writes each tuple one item per line, so the constants are read as Python, never with a one-line grep; `sentio-node-devnet2-indexer-b storage-integrity-si-v2-indexer-b` means E is not finished: stop), `C1 monitoring OFF; dated user waiver; delivery and alert health not measured`, then one JSON object with `"action": "created"` whose absolute `path` is retained exactly in `$HOME/.cache/s3-worktrees/s3c1-production.json` (the template is descriptive only): `W` below is that path. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`.
 
 Set the worktree's own commit identity before anything is committed (local only, never committed):
 
@@ -15289,19 +15332,40 @@ def hashes(path, users):
     return got
 
 
+def policy_literal(source, name, required=True):
+    """Allow one top-level literal binding and reject every additional static binding."""
+    tree = ast.parse(source)
+    assignments = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and n.targets[0].id == name]
+    bindings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            bindings.append(node)
+        elif isinstance(node, ast.arg) and node.arg == name:
+            bindings.append(node)
+        elif isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name:
+            bindings.append(node)
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ in ("MatchAs", "MatchStar") and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ == "MatchMapping" and node.rest == name:
+            bindings.append(node)
+    if not assignments and not bindings and not required:
+        return ()  # Before P1 creates the key, only genuine absence has the empty default.
+    if len(assignments) != 1 or len(bindings) != 1 or bindings[0] is not assignments[0].targets[0]:
+        raise ValueError(f"{name} requires one top-level simple literal assignment and no other binding")
+    return ast.literal_eval(assignments[0].value)
+
+
 def cmd_monitoring_off(waiver_path):
     expected = {'decision': 'user-approved-c1-monitoring-off-2026-10-19', 'date': '2026-10-19', 'scope': 'S3-C1 Tasks26-28'}
     waiver = json.loads(Path(waiver_path).read_text())
     if not isinstance(waiver, dict) or waiver != expected:
         fail("missing or mismatched dated C1 user waiver")
     source = Path("charts/storage-integrity/tests/test_render.py")
-    nodes = ast.parse(source.read_text()).body
-    def value(name):
-        hits = [n for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]
-        if len(hits) != 1:
-            fail(f"expected exactly one literal {name}")
-        return ast.literal_eval(hits[0].value)
-    if value("DEVNET2_MONITORING_ENABLED") is not False or value("DEVNET2_MONITORED_BACKUPS") != ():
+    if policy_literal(source.read_text(), "DEVNET2_MONITORING_ENABLED") is not False or policy_literal(source.read_text(), "DEVNET2_MONITORED_BACKUPS") != ():
         fail("C1 requires literal False and an empty monitored-backup tuple")
     monitoring = load_yaml("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml").get("monitoring", {})
     if monitoring.get("enabled") is not False or (monitoring.get("backups") or {}).get("cronJobs") != []:
@@ -15316,6 +15380,8 @@ def cmd_pr_state(pins_path):
     p = pins(pins_path)
     t = test_render()
     cmd_monitoring_off(str(Path(pins_path).with_name("monitoring-waiver.json")))
+    if getattr(t, "DEVNET2_MONITORING_ENABLED", None) is not False or getattr(t, "DEVNET2_MONITORED_BACKUPS", None) != ():
+        fail("imported module monitoring policy differs from False/empty")
     owners = {"sentio-node-devnet2-indexer-a": 0, "sentio-node-devnet2-indexer-b": 1, "sentio-node-devnet2-indexer-c": int(p["INDEXER_C_ID"])}
     image = f"ghcr.io/sentioxyz/sentio-node:sha-{p['SN_COMMIT_P1']}@{p['SN_DIGEST_P1']}"
     checks = {
@@ -16585,16 +16651,19 @@ P1's exit (spec §16 P1): every owner has a full and an incremental backup whose
   si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > "$si_backup/monitoring-off-current.json" || exit 1
   cmp "$si_backup/monitoring-off.json" "$si_backup/monitoring-off-current.json" || exit 1
   echo "monitoring waived 2026-10-19: not deployed; delivery and alert health not measured"
+  commits_seen=" "
   for f in si-backup-user-indexer-b-commit si-backup-user-indexer-c-commit si-backup-user-network-commit si-backup-b-commit si-backup-c-commit si-backup-a-commit; do
     c="$(cat "$si_backup/$f")" || exit 1
     [[ "$c" =~ ^[0-9a-f]{40}$ ]] || { echo "missing or invalid commit evidence $f; stop"; exit 1; }
+    case "$commits_seen" in *" $c "*) echo "duplicate commit evidence $f: six distinct actual user/job commits required; stop"; exit 1 ;; esac
+    commits_seen="$commits_seen$c "
     echo "$f $c"
   done
   echo "P1_END=$(date -u +%Y-%m-%d)"
 } 2>&1 | tee "$si_backup/p1-end.txt"
 ```
 
-Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; `network CHI unchanged`, `indexer-b CHI unchanged`, `indexer-c CHI unchanged` and `arbiter and verifier images unchanged`; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; the explicit dated monitoring waiver with deployment/delivery/alert-health limitations; the six actual user/job commits; and the last line `P1_END=<YYYY-MM-DD>`. A changed pod, CHI or image, a quarantined track or missing/mismatched OFF waiver evidence stops the block before that line, so no `P1_END` is written for an end that is not clean; promotions above four are reported here and stop Task 28's record (K28). Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
+Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; `network CHI unchanged`, `indexer-b CHI unchanged`, `indexer-c CHI unchanged` and `arbiter and verifier images unchanged`; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; the explicit dated monitoring waiver with deployment/delivery/alert-health limitations; the six distinct valid actual user/job commits; and the last line `P1_END=<YYYY-MM-DD>`. A changed pod, CHI or image, a quarantined track, missing/mismatched OFF waiver evidence or missing/invalid/duplicate commit evidence stops the block before that line, so no `P1_END` is written for an end that is not clean; promotions above four are reported here and stop Task 28's record (K28). Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
 
 ## 13. Staging cleanup
 
@@ -16860,7 +16929,7 @@ git config commit.gpgsign false
 cp charts/storage-integrity/tests/test_render.py "$t/monitoring-before.py"
 cp k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml "$t/monitoring-before.yaml"
 si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > "$t/monitoring-off-positive.json"
-for bad in true missing nonboolean duplicate overlay-true overlay-missing overlay-nonboolean tuple-nonempty overlay-nonempty missing-waiver fake-M; do
+for bad in true missing nonboolean duplicate annotated-true annotated-tuple overlay-true overlay-missing overlay-nonboolean tuple-nonempty overlay-nonempty missing-waiver fake-M; do
   cp "$t/monitoring-before.py" charts/storage-integrity/tests/test_render.py
   cp "$t/monitoring-before.yaml" k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
   printf '%s\n' '{"decision":"user-approved-c1-monitoring-off-2026-10-19","date":"2026-10-19","scope":"S3-C1 Tasks26-28"}' > "$si_backup/monitoring-waiver.json"
@@ -16879,6 +16948,10 @@ if bad in changes:
     assert n == 1
 if bad == "duplicate":
     text += "\nDEVNET2_MONITORING_ENABLED = False\n"
+if bad == "annotated-true":
+    text += "\nDEVNET2_MONITORING_ENABLED: bool = True\n"
+if bad == "annotated-tuple":
+    text += '\nDEVNET2_MONITORED_BACKUPS: tuple = ("fixture",)\n'
 if bad == "tuple-nonempty":
     text, n = re.subn(r"(?m)^DEVNET2_MONITORED_BACKUPS = \(\)$", 'DEVNET2_MONITORED_BACKUPS = ("fixture",)', text)
     assert n == 1
@@ -17321,11 +17394,11 @@ Expected: `P1_PR=<the value written>`. Anything else (for example the stage-3 pl
 
 ---
 
-## Task 28: devnet2 — stage-3 P1 (live): replica bucket and keys, P1 staging, GCS mechanics, `si_backup` on every installation, drill table, backup jobs and chains, one restore drill per owner, backup alerts, record (S3-C1)
+## Task 28: devnet2 — stage-3 P1 (live): replica bucket and keys, P1 staging, GCS mechanics, `si_backup` on every installation, drill table, backup jobs and chains, one restore drill per owner, monitoring-OFF evidence, record (S3-C1)
 
 **Current C1 execution policy (2026-10-19).** The user approved monitoring OFF, K24 own-backup-lock deletion only and K25's existing managed-folder layout. Historical monitoring-True/commit-M test observations below describe earlier text; their prospective enablement/delivery requirement is superseded by the explicit OFF/empty/dated-waiver path. No production/live action follows from these decisions; downstream monitoring gates remain independent.
 
-Spec §16 row P1 and its exit criterion, as clarified by K23–K28 and bound by contract §16–§19: every SI owner of devnet2-si-v2 gets a full and an incremental backup of its `hg_safe` in the versioned replica bucket, written with a key that is confined to its own prefix and cannot delete, and one restore drill per owner verifies its latest backup against the manifest that backup's index names; nothing changes consensus and nothing restarts an SI ClickHouse, a host pod, a verifier or a voter. The task executes `docs/storage-integrity-devnet2-stage3-p1-backups.md` (Task 27, merged in `P1_PR`) section by section in contract §19's binding order: §1 → §2 (the user's Terraform) → §3 (the user's eight HMAC keys) → §4 staging → §5 GCS mechanics → §6 `si_backup` on indexer-b, indexer-c, then the network installation → §7 drill table (the user's writes) → §8 backup jobs b, c, a with a first, full backup each → §9 incremental backups → §10 restore drills b, c, a → §11 backup alerts → §12 end → §13 staging cleanup. The runbook is the source of truth for every check, acceptance name and value (Plan S3-B decision D19) and holds every mutating block; this task adds the Gates, the exact content of the seven single-service commits, the user's actions, its own read-only verdicts that decide each stop, the P1 record PR and the ledger record of `P1_MECHANICS` and `P1_END` (contract §19).
+Spec §16 row P1 and its exit criterion, as clarified by K23–K28 and bound by contract §16–§19: every SI owner of devnet2-si-v2 gets a full and an incremental backup of its `hg_safe` in the versioned replica bucket, written with a key that is confined to its own prefix and cannot delete, and one restore drill per owner verifies its latest backup against the manifest that backup's index names; nothing changes consensus and nothing restarts an SI ClickHouse, a host pod, a verifier or a voter. The task executes `docs/storage-integrity-devnet2-stage3-p1-backups.md` (Task 27, merged in `P1_PR`) section by section in contract §19's binding order: §1 → §2 (the user's Terraform) → §3 (the user's eight HMAC keys) → §4 staging → §5 GCS mechanics → §6 `si_backup` on indexer-b, indexer-c, then the network installation → §7 drill table (the user's writes) → §8 backup jobs b, c, a with a first, full backup each → §9 incremental backups → §10 restore drills b, c, a → §11 dated monitoring-OFF waiver and actual OFF evidence (no M) → §12 end → §13 staging cleanup. The runbook is the source of truth for every check, acceptance name and value (Plan S3-B decision D19) and holds every mutating block; this task adds the Gates, the exact content of the six user/job single-service commits, the user's actions, its own read-only verdicts that decide each stop, the P1 record PR and the ledger record of `P1_MECHANICS` and `P1_END` (contract §19).
 
 No step changes consensus state; the only promotions are the drill table's (at most four, K28). Irreversible: the replica bucket (`prevent_destroy`, versioned) and every object written to it, because no key of this plan deletes (K24) — the mechanics objects under `mechanics/` (Step 6) and the backups under `owner-<id>/` (Steps 11–14); and the drill table `devuser1.s3_p1` with its two INSERTs (Step 10: a registry incarnation and its promotions stay in consensus state). Every commit can be reverted (runbook §14), the HMAC keys and Secrets can be revoked (runbook §15.3), and the staging installation is throwaway (runbook §13).
 
@@ -17374,7 +17447,7 @@ Notes:
 - **Stop rules.** Stop on any unexpected output and report it; never improvise a fix on the cluster. Above all: a `CHANGED:` line of `p1_same` (a pod, StatefulSet or CHI changed), a fallen ClickHouse uptime, a user or grant that is not the contract's, a render diff beyond the one named, a backup index or a drill verdict that `p1_edit` refuses, missing/mismatched dated OFF waiver evidence or any monitoring policy drift, or any `stop` printed by a tool. A commit block that stops before its `git commit` leaves its edits in the live checkout: discard them with `git -C "$P" checkout -- .` (local) and report. A local commit whose push the user declined stays on the detached HEAD and makes `p1_fresh_main` stop: report it, and only on the user's word drop it with `git -C "$P" switch -q --detach origin/main` (local; it was never pushed).
 - **Irreversible points.** Step 3's apply (a bucket with `prevent_destroy`); every write to the bucket (Steps 6, 11–14); Step 10's writes. Each Gate says so.
 - **Commit identity (user rule).** GitHub must never show `uranuswch@gmail.com` (the global git identity) as author, committer or co-author. Step 1 sets the live worktree's own identity (`git config --worktree user.name poetry`, `user.email chen@sentio.xyz`, after `extensions.worktreeConfig true`) before anything is committed, and Step 20 the ledger worktree's; `p1_commit` refuses to commit unless the checkout's identity is `poetry <chen@sentio.xyz>` and checks the commit's author and committer after it; Step 19 checks the record commit before its push and every commit of the record PR before its squash merge, and Step 20 the ledger commit before its push and the ledger PR before its merge. Commit messages carry only the Claude `Co-Authored-By` line.
-- **User decisions (stop and ask).** K24 and K25 are the user's (status §3): Step 3 asks the user to confirm both before the Terraform apply (K25: the managed-folder layout that confines each writer's list; K24, only with `P1_BACKUP_DELETE` = `lock`: that their amendment of spec §16 P1 to "… but not delete, except the backup's own `.lock`" stands), and Step 6 stops and asks on any differing list or read row (K25) or a measured delete right other than `P1_BACKUP_DELETE` (K24). The agent never decides either.
+- **Adopted user decisions (read back; no policy re-ask).** K24 and K25 were approved on 2026-10-19: Step 3 reads back the own-backup `.lock`-only exception in the adopted spec (with `P1_BACKUP_DELETE=lock`) and K25's existing one-bucket managed-folder layout (`owner-0/`, `owner-1/`, `owner-2/`, `mechanics/`; verify the recorded `INDEXER_C_ID`). Do not request these policy decisions again. Missing/different adopted text stops for reconciliation; neither approval authorizes Terraform apply or another live action. Step 3 retains its separate apply confirmation, and Step 6 still stops and asks on any differing list/read row (K25) or measured delete right other than `P1_BACKUP_DELETE` (K24). The agent never substitutes a new policy.
 
 **Signed workflow / actual URWT path (procedural reconciliation).** This task records its actual live URWT JSON at `$HOME/.cache/s3-worktrees/s3c1-production-live.json`; read `path` and `action` from that retained JSON on every fresh call, preserving the returned absolute symlink spelling. The creation branch is `urwt/codex/multi-source-s3c1-live`; it is then detached as the existing live procedure requires. The docs-record branch reuses this same actual path and identity. Never reconstruct it from the documented template, overwrite a prior JSON, silently reuse an `existing` result, or create a replacement worktree for a reuse task. On an interrupted run, first reconcile that saved path/branch and this task's retained commits with the user. Every real worktree (code, live and ledger) sets worktree `commit.gpgsign=true` before its first commit. Each successful commit must create a new HEAD and pass `poetry <chen@sentio.xyz> G` plus `git verify-commit HEAD`; commit/signature failure stops before any later check or publish. Preserve staged work, ask the user to unlock this repository's actual signing key in their own fish terminal, and retry only after that action; never disable signing or publish an unsigned fallback. Ordinary messages retain only the canonical Claude coauthor. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the six existing stack branches are unchanged. Existing REST author/head/trailer validators below are unchanged.
 
@@ -18837,7 +18910,50 @@ Expected: `selectors: 29 markers, each exactly one block of its kind in the live
 Run §1's read-only blocks in order (`p1_list '## 1. Preparation'`, then `p1_run '## 1. Preparation' --index <k> --read-only` for each). §1.1's first block creates `$si_backup` fresh, mode 700, and writes `pins`; §1.3 runs Plan S3-B's §13.4 budget procedure into `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq` and `budget.txt`. §1 holds no confirmed block: if `p1_list` shows one, stop and report. Expected: §1's expected paragraphs (`pins` with the lines `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1`, `SN_DIGEST_P1`, `P1_BACKUP_DELETE`, `INDEXER_C_ID`, each equal to the ledger's; the three owners, the bucket and the Secrets; the budget line, at least 16). Then this task's checks:
 
 ```bash
-python3 -I -c 'import ast, sys, yaml; from pathlib import Path; source=Path(sys.argv[1]); nodes=ast.parse(source.read_text()).body; values=lambda name: [ast.literal_eval(n.value) for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]; flags=values("DEVNET2_MONITORING_ENABLED"); assert len(flags)==1 and flags[0] is False, "C1 requires exactly one literal False monitoring flag"; lists=values("DEVNET2_MONITORED_BACKUPS"); assert lists in ([], [()]), "C1 monitored backups must be empty"; mon=yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {}); assert mon.get("enabled") is False, "C1 overlay monitoring must be boolean false"; assert (mon.get("backups") or {}).get("cronJobs", []) == [], "C1 overlay monitored backups must be empty"; assert sys.argv[3] == "user-approved-c1-monitoring-off-2026-10-19", "missing C1 monitoring waiver"; print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")' "$P/charts/storage-integrity/tests/test_render.py" "$P/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml" user-approved-c1-monitoring-off-2026-10-19 || exit 1
+python3 -I - "$P/charts/storage-integrity/tests/test_render.py" "$P/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml" user-approved-c1-monitoring-off-2026-10-19 post-P1 <<'PY_POLICY' || exit 1
+import ast, sys, yaml
+from pathlib import Path
+
+def policy_literal(source, name, required=True):
+    """Allow one top-level literal binding and reject every additional static binding."""
+    tree = ast.parse(source)
+    assignments = [n for n in tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and n.targets[0].id == name]
+    bindings = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bindings.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            bindings.append(node)
+        elif isinstance(node, ast.arg) and node.arg == name:
+            bindings.append(node)
+        elif isinstance(node, ast.alias) and (node.asname or node.name.split(".")[0]) == name:
+            bindings.append(node)
+        elif isinstance(node, ast.ExceptHandler) and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ in ("MatchAs", "MatchStar") and node.name == name:
+            bindings.append(node)
+        elif type(node).__name__ == "MatchMapping" and node.rest == name:
+            bindings.append(node)
+    if not assignments and not bindings and not required:
+        return ()  # Before P1 creates the key, only genuine absence has the empty default.
+    if len(assignments) != 1 or len(bindings) != 1 or bindings[0] is not assignments[0].targets[0]:
+        raise ValueError(f"{name} requires one top-level simple literal assignment and no other binding")
+    return ast.literal_eval(assignments[0].value)
+
+source = Path(sys.argv[1]).read_text()
+if policy_literal(source, "DEVNET2_MONITORING_ENABLED") is not False:
+    raise ValueError("C1 requires exactly one literal False monitoring flag")
+pre_p1 = sys.argv[4] == "pre-P1"
+backups = policy_literal(source, "DEVNET2_MONITORED_BACKUPS", required=not pre_p1)
+if backups != ():
+    raise ValueError("C1 monitored backups must be an empty tuple")
+mon = yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {})
+if mon.get("enabled") is not False or (mon.get("backups") or {}).get("cronJobs", [] if pre_p1 else None) != []:
+    raise ValueError("C1 overlay requires boolean false and an empty monitored-backup list")
+if sys.argv[3] != "user-approved-c1-monitoring-off-2026-10-19":
+    raise ValueError("missing C1 monitoring waiver")
+print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")
+PY_POLICY
 si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > /dev/null || exit 1
 [ -d "$si_backup" ] && [ "$(stat -f %Lp "$si_backup")" = 700 ] || { echo "$si_backup is missing or not mode 700: run runbook §1.1 first; stop"; exit 1; }
 merge="$(gh pr view "$P1_PR" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')" || exit 1
@@ -18896,7 +19012,7 @@ Expected: no output from the heading loop; `P1 PR state: every si_backup user, b
 
 - [ ] **Step 3: Replica bucket and service accounts (user action in the user's own terminal; irreversible: the bucket has `prevent_destroy`)** — runbook §2.
 
-First the user decisions this step depends on, stop and ask (status §3; the agent never takes them): K25, the user confirms the list-confinement layout this apply creates (one managed folder per writer prefix, each backup service account holding the writer role on its own folder only and nothing on the bucket, and §5 accepting no residual); and, only with `P1_BACKUP_DELETE` = `lock`, K24, the user confirms that their amendment of spec §16 P1 ("backup keys may list, read and create on their own prefix but not delete, except the backup's own `.lock`", the decision Task 24's release step stopped for) stands. Without that answer (both, with `lock`), stop: nothing of this step runs.
+First read back the already adopted 2026-10-19 user decisions, without asking again: K25 keeps the one-bucket managed-folder layout (`owner-0/`, `owner-1/`, `owner-2/`, `mechanics/`, with the actual recorded `INDEXER_C_ID` verified), each backup service account holding the writer role on its own folder only and no writer role on the bucket, and §5 accepting no residual. With `P1_BACKUP_DELETE=lock`, verify K24's adopted spec §16 P1 phrase "but not delete, except the backup's own `.lock`" and its own-prefix plus `/.lock` suffix scope. Missing/different adopted decisions stop for reconciliation, never for an automatic broader grant. These policy approvals are not Terraform apply authorization or live proof; the separate confirmation gate below remains mandatory.
 
 Requires explicit user confirmation in chat. Gate: "the user applies, from the live checkout, only the replica resources of terraform/storage_integrity_devnet2_si_v2_replica.tf to the Terraform Cloud workspace prod: bucket sentio-352722-si-devnet2-si-v2-replica (versioned, uniform access, public access prevention enforced, prevent_destroy, incomplete multipart uploads aborted after 7 days), the custom role siDevnet2SiV2BackupWriter without any delete, the backup service accounts si-devnet2-si-v2-backup-0, -1, -<INDEXER_C_ID> and -mech, the managed folders owner-0/, owner-1/, owner-<INDEXER_C_ID>/ and mechanics/ of the bucket, each backup service account bound to the writer role on its own managed folder only, and the restore service accounts si-devnet2-si-v2-restore-a, -b, -c and -drill with roles/storage.objectViewer; the bucket can never be destroyed by Terraform" (with `P1_BACKUP_DELETE` = `lock` it adds: "and the custom role siDevnet2SiV2BackupLockRemover with storage.objects.delete, bound per backup service account to its own prefix's /.lock objects only"). After a yes, ask the user to run in their own fish terminal the variant for the recorded `P1_BACKUP_DELETE` (`terraform init` only reads the backend and the providers; runbook §2's two fish blocks, the plan with `init` and then the apply, are the same commands with the same targets). For `none`:
 
