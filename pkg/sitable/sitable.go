@@ -7,6 +7,7 @@ package sitable
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/housegate/housegate/pkg/lthash"
@@ -176,6 +177,16 @@ func ReservedDatabases() []string {
 // (the same rule as storageintegrity.PhysicalTableName).
 func PhysicalTable(id string) string {
 	return strings.ReplaceAll(id, ".", "__")
+}
+
+// CopyTable is the name, in ReplicaDatabase (hg_replica), of a stage-3
+// member's verified copy of incarnation incarnationSeq of table id (spec
+// 2026-10-14 §8.3, §20): PhysicalTable(id) + "__i" + the decimal seq. Copies
+// are incarnation-scoped, so a dropped and recreated name never adopts an old
+// copy, and the digits after the last "__i" give the seq back. HouseGate
+// creates no copy; it only names it.
+func CopyTable(id string, incarnationSeq uint64) string {
+	return PhysicalTable(id) + "__i" + strconv.FormatUint(incarnationSeq, 10)
 }
 
 // TableID joins a logical database and table into the snapshot id.

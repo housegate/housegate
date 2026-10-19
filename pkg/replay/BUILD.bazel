@@ -4,6 +4,7 @@ go_library(
     name = "replay",
     srcs = [
         "hash.go",
+        "owner_entry.go",
         "roots.go",
         "snapshot_query_build_identity.go",
         "snapshot_query_decode.go",
@@ -23,6 +24,7 @@ go_test(
     name = "replay_test",
     srcs = [
         "hash_test.go",
+        "owner_entry_test.go",
         "snapshot_query_build_identity_test.go",
         "snapshot_query_execution_test.go",
         "snapshot_query_hash_test.go",
