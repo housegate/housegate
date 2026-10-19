@@ -2,12 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-16): draft.** Tasks 71, 72, 73, 74, 75 are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet, and the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
+**Reviewed local source and document selection.** Tasks71–75 have separate root-accepted bounded local SOURCE_CUSTODY decisions; the final Task75 receipt is `task75-v4-root-source-acceptance.json` SHA256 `7ad693697faeea3df61e205b43d43c45059910e34cd239d4f1e1f1e6ec9fdc28`. Appendix B records their exact outcomes and limits. The embedded task PREP/WAIT banners, draft examples and previous pending/failed-attempt descriptions are retained historical owning-text cuts, not current source dispositions or evidence that formal Git/signing/HEAD/release/live workflow ran. The selected plan preserves all five tasks' code and the corrected publication contract; root adoption, global cross-plan review, publication and formal accounting remain separate. No downstream grant follows from this document.
 
 **Goal:** Give the arbiter FSM the stage-3 group layer, all of it inert until its switch. Apply places a `DatabaseGroup` per (owner, database) by integer weighted rendezvous hashing when a database gains its first physical incarnation, and the `placement` switch-on backfills every existing database (genesis-origin ones included) and seals the open block at a recorded cutover. Groups change only through the authority-signed `RebalanceGroup` (Raft tag 38). That command checks a generation, seals first with the C10 discipline and records Leaving members with their frozen E. Blocks seal on (owner, `GroupKey`), headers sealed after the cutover carry `group_key`, transition blocks carry one key's changes, and the leader's grouping window keys on the same pair. Three more commands complete the layer. Members declare readiness with an ed25519-signed `MemberReady` (tag 40) and then enter eligible rings. The leader replaces dead, ineligible or timed-out verifiers of an unlatched block with an authority-signed `ReselectVerifiers` (tag 39), timed by the committed L2 registry cursor so it fires on a quiet track too. Replicate members sign `MemberCheckpoint`s (tag 41) with their `replica_signer`, under a durable `checkpoint_seq` per (member, owner), which drive per-(member, group) classes with bounded lag accounting and the authority-signed `MarkMemberLagging` (tag 42). Every rule replays on restore and every signature is re-verified under its own epoch. With every switch off, each Apply, snapshot and chain hash is byte for byte what Plan S3-E2's branch produces.
 
 **Architecture:** Every task is arbiter code on the shared P5 branch `urwt/claude/multi-source-s3e`, on top of Plan S3-E2's Tasks 64–70; no task cuts a release. Task 71 adds the group records:
-- `fsm/stage3_groups.go`: `DatabaseGroup`, `GroupMember`, `LeavingMember`, the durable `GroupGenerations`, and the E set `copyFloorSetLocked` that Plan S3-E4's floor reads.
+- `fsm/stage3_groups.go`: `DatabaseGroup`, `GroupMember` (including the three readiness declarations; Task 73 populates them), `LeavingMember`, the durable `GroupGenerations`, and the E set `copyFloorSetLocked` that Plan S3-E4's floor reads.
 - `fsm/placement.go`: the exported pure placement function `PlaceGroup` and its frozen digest vectors.
 - Placement on `AddTable`, the backfill on the `placement` switch-on, group removal at the last purge, and `purge_members` accumulation.
 - `fsm/rebalance_group.go`: `RebalanceGroup` with its Leaving records; the per-group verifier floor.
@@ -19,7 +19,7 @@ Task 72 adds the seal key:
 - Headers carry `L3BlockTrack.group_key` after the recorded cutover; transition blocks are planned per (owner, key).
 - `server/grouper.go` orders by `SealKey`; the node-local counter `arbiter_block_seal_reason`; the header and `GetBlockVerification` serve the new fields; the new frozen `fsm/l3_group_key_golden_test.go`.
 
-Task 73 adds `MemberReady`, `VerifierGateway.SubmitMemberReady`, and the group half of Plan S3-E2's eligible ring and of the `VERIFIERS_UNAVAILABLE` admission count. Task 74 adds `ReselectVerifiers`:
+Task 73 populates Task 71's `ReadyGeneration`, `ReadySignature` and `ReadyEpoch` declarations through `MemberReady`, and adds `VerifierGateway.SubmitMemberReady` and the group half of Plan S3-E2's eligible ring and of the `VERIFIERS_UNAVAILABLE` admission count. Task 74 adds `ReselectVerifiers`:
 - The latched-refusal amendment with the latch count, deletion of the replaced verifiers' evidence, structural restore checks and per-epoch proof re-verification.
 - The WorkSet row and the orchestrator's signed proposal.
 
@@ -52,7 +52,7 @@ Plan S3-E4 (`2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md`) th
 
 Every name this plan consumes is listed with its source in contract §49. The umbrella spec `2026-10-10-multi-source-si-network-design.md` and Plans S1-A, S1-B, S2-A and S2-B stay in force wherever this plan does not replace them.
 
-**Base revisions.** Line anchors refer to origin/main: arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169`, production `75514e3de`. Production's SI paths are byte-identical to S3-B's base `9d3d0326b`: `git diff --stat 9d3d0326b origin/main -- charts/storage-integrity charts/sentio-node k8s-sea/sentio-network-devnet2 k8s-sea/clickhouse terraform docs scripts/storage-integrity` prints nothing, and this plan changes no production file. The code this plan actually edits is the branch `urwt/claude/multi-source-s3e` after Plan S3-E2 Task 70. That branch starts from arbiter `main` at or after `ARBITER_TAG_P4` (Plan S3-D Task 51), which carries Plan S3-A Tasks 7–11, the `ARBITER_PIN_P2` commit (Plan S3-C2 Task 36) and Plan S3-D Task 51. The hunk rule below re-anchors every hunk there.
+**Base revisions and source lineage.** Root fetched-main metadata `e3-fetched-main-ref-metadata-20261019T1258.json` (SHA256 `a97ca24957feec78a1c3ad7f7f6c0b80e83e75f3d9ec98b3e905acba5a7b30dd`) records arbiter `526a721657983920f19539801b91fcbd222e6f06`, arbiter-core `f5d41b487e2a3ec4c09f0113f930c2a8c2e24671`, arbiter-proto `7a73f256865c333332f0ac28b17806b1e2bfcbd1` and housegate `4aa5a429577ed5ea2a9e26699137f6d6e6c25b1e`. These are fresh ref observations only; they do not prove that the reviewed future-task dependency replay equals those mains. E3 edits arbiter only. The accepted local chain is root-approved post-E2 source followed by Tasks71–74 and the separately selected Task75; each actual source decision binds its predecessor custody and literal replay. Historical task anchors (including `fb42260` and earlier line numbers) are re-anchored by those bounded source reviews, not asserted to be current-main line coordinates. No fresh sentio-node/production ref or production-path diff is claimed by this pass. Formal shared-branch/HEAD/signing/release workflow remains separate from HEAD-null SOURCE_CUSTODY.
 
 **devnet2 when this plan starts.** No task reads or changes devnet2. Whatever the earlier exit records say holds when the branch is first deployed (Plan S3-E4 Task 82). At the start of P5 that is:
 - the consensus epoch Plan S3-B Task 21 recorded as `ENROLMENT_EPOCH`, because P1–P4 make no consensus update (K51);
@@ -169,6 +169,8 @@ This plan produces no ledger value. Task 71 Step 1 reads the four names above on
 
 ## Review Focus
 
+**Reviewed source obligations and continuing operational gates:** Preserve Task71's full accepted-predecessor anchors (encoding, eviction-voiding, selection validation), its bounded doc checksum-context qualification, and every existing source/commit/user gate. Readiness ownership is71 declares ReadyGeneration/ReadySignature/ReadyEpoch →72 consumes →73 populates/validates →75 alone adds checkpoint pointers. Task75 must use its corrected memberCheckpointGateway test helper, the real TableRegistryView Version with separate boolean validity checks, TestCheckpointPublicationAndTableTransitionShareOneRegistryBump and TestHandleWorkSetDispatchesMemberLagging. A combined publication must prove exactly one registry bump per Apply; a second bump is a stop, not a harmless/PASS classification. Current bounded source outcomes are attributed only to the root receipts in Appendix B; historical drafting is not runtime proof, and formal/user gates remain operative.
+
 1. **A group key that two voters compute differently, or a `group_key` on the wrong block.** The key enters the chain hash, which is anchored on L2, so any disagreement forks the network.
    - *Expected:*
      - `GroupKey` hashes only the sorted ready verify members (committed group records filtered by the `verifiers` listing) and the group's fill flag, never node status.
@@ -248,31 +250,36 @@ Plan S3-E2 complete on `urwt/claude/multi-source-s3e` (Tasks 64–70 committed, 
 
 ## File Structure
 
-Line anchors in the tasks refer to the base revisions above and are re-anchored on the shared branch (hunk rule).
+**Selected complete task texts:** Task71 `288ade1bef4abd29a654343f486d958b6004b5323c660d6e77812d2cb3d1a3a2`, Task72 `e8bb8428a0d2d252ae3b847c6e40dd833f8cb226bd3541f36199ed663e5fd78d`, Task73 `28d0a06f363332193b6b8e09096eb84b66da0b4dd1eda14b350432b34dbe9b47`, Task74 `325e0c4d0214c50998b28d0a981f32b104dc389353bc5cf2b6b693dc0cdabe67`, Task75 `60c6c8aa7185b8e017ee73b7b4964ace508eb7b6b653a0a212d141d0a228b42c`. These complete owning documents, not adapter-only manifests, are the selected task bodies. Tasks73/74 are format-only document successors: each joins its Step2 checkbox and heading onto one line; all fenced code/order/languages remain exact. Accepted source/profile evidence retains the original complete Task73 `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` and Task74 `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca` identities. V1 root adoption remains valid historical evidence; this V2 formatting delta awaits separate root approval and creates no formal increment. Their embedded PREP/WAIT statements and draft verification are historical text; current bounded acceptance is separately attributed in Appendix B. All five tasks have root-accepted bounded local source dispositions; Appendix B distinguishes them from historical task-internal PREP/WAIT cuts.
 
-**arbiter** (Tasks 71–75; worktree `$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`):
+Task line anchors retain their historical drafting coordinates. The actual predecessor/literal source reviews re-anchor them on the accepted local chain; the fresh ref metadata above is not a new line-anchor verification.
+
+**arbiter** (Tasks71–75; actual retained Task64 worktree JSON path and complete env.sh, branch `urwt/claude/multi-source-s3e`; the earlier literal home path is a historical template, not a current source path):
 - **New FSM files:** `fsm/stage3_groups.go` (71, 73, 75), `fsm/placement.go` (71), `fsm/rebalance_group.go` (71), `fsm/group_key.go` (72), `fsm/member_ready.go` (73), `fsm/reselect_verifiers.go` (74), `fsm/member_checkpoint.go`, `fsm/mark_member_lagging.go` (75).
 - **Edited FSM files:**
-  - `fsm/state.go` (72: `OpenL3Block`, `L3BlockTrack`, `BlockVerification`; 74: `BlockVerification`, `ThreeWayVerdict`); `fsm/fsm.go` (dispatch arms 71, 73, 74, 75; the `sealReasons` field 72);
-  - `fsm/admission.go` (72, 73); `fsm/apply.go` (72: seals; 73: `applyMarkReplaying`; 75: `applyPublishSafeSnapshot`); `fsm/apply_table_registry.go` (71); `fsm/consensus_updates.go` (71, 72, 75); `fsm/signed_claims.go` (71); `fsm/threeway.go` (74); `fsm/select.go` or S3-E2's ring file (73); `fsm/table_set_transition.go` (72); `fsm/snapshot_query_block.go` (72);
+  - `fsm/stage3.go` (71, 72, 75); `fsm/state.go` (72: `OpenL3Block`, `L3BlockTrack`, `BlockVerification`; 74: `BlockVerification`, `ThreeWayVerdict`); `fsm/fsm.go` (dispatch arms 71, 73, 74, 75; the `sealReasons` field 72);
+  - `fsm/admission.go` (72, 73); `fsm/apply.go` (72: seals; 73: `applyMarkReplaying`; 75: `applyPublishSafeSnapshot`); `fsm/apply_table_registry.go` (71); `fsm/consensus_updates.go` (71, 72, 75); `fsm/signed_claims.go` (71); `fsm/threeway.go` (74); `fsm/select.go` (73); `fsm/table_set_transition.go` (72); `fsm/snapshot_query_block.go` (72);
   - reads: `fsm/table_registry.go` (71, 72, 75), `fsm/reads_tracks.go` (72), `fsm/reads_work.go`, `fsm/reads_work_types.go` (73, 74, 75), S3-A's `fsm/reads_verification.go` (72, 74);
-  - restore and snapshot: `fsm/stage3_restore.go` (71–75), `fsm/consensus_history.go` (73, 74, 75), `fsm/snapshot.go` (72, 74: `stage3FieldsPresent`).
+  - restore and snapshot: `fsm/stage3_restore.go` (71–75), `fsm/consensus_history.go` (73, 74, 75), `fsm/snapshot.go` (72, 74: `stage3FieldsPresent`); `fsm/selection_stage3_test.go` (73).
 - **FSM tests:**
   - new frozen fixtures: `fsm/placement_golden_test.go` (71), `fsm/l3_group_key_golden_test.go` (72);
   - new: `fsm/placement_test.go`, `fsm/stage3_groups_test.go`, `fsm/rebalance_group_test.go`, `fsm/determinism_stage3_test.go` (71); `fsm/group_key_test.go`, `fsm/seal_key_test.go`, `fsm/table_set_transition_key_test.go` (72); `fsm/member_ready_test.go`, `fsm/eligible_ring_groups_test.go` (73); `fsm/reselect_verifiers_test.go` (74); `fsm/member_checkpoint_test.go`, `fsm/member_classes_test.go`, `fsm/mark_member_lagging_test.go` (75).
 - **server:**
   - new: `server/groups_admin.go` (71, 75), `server/member_gateway.go` (73, 75);
   - edited: `server/table_registry.go` (71, 72, 73, 75), `server/grouper.go` (72), `server/safestate.go` (72), S3-A's `server/safestate_stage3.go` (72, 74);
-  - tests: `server/groups_admin_test.go`, `server/table_registry_groups_test.go`, `server/grouper_seal_key_test.go`, `server/member_gateway_test.go` (new); `server/safestate_l3block_test.go` (unchanged, must pass).
+  - tests: `server/groups_admin_test.go`, `server/table_registry_groups_test.go`, `server/grouper_seal_key_test.go`, `server/member_gateway_test.go`, `server/group_seal_serving_test.go` (new); `server/safestate_stage3_test.go` (72, 74); `server/safestate_l3block_test.go` (unchanged, must pass).
+  - selected Task75 additionally owns `server/member_checkpoint_test.go` with `memberCheckpointGateway` (Task73 keeps `memberGateway`), `TestCheckpointPublicationAndTableTransitionShareOneRegistryBump`, and `orchestrator/member_lagging_test.go` with `TestHandleWorkSetDispatchesMemberLagging`; preserve the complete selected test files and commands.
 - **orchestrator:** `orchestrator/reselect.go` (74), `orchestrator/member_lagging.go` (75) (new); `orchestrator/loop.go` (74, 75), `orchestrator/deps.go` (75); tests `orchestrator/reselect_test.go`, `orchestrator/member_lagging_test.go` (new).
 - **config:** `config/config.go`, `config/raw.go` (75); `cmd/arbiter/services.go` (75); `config/config_test.go`.
 - **CLI:** `cmd/arbiter-admin/groups.go` (new; 71, 75), `cmd/arbiter-admin/main.go` (71: `run`, `usage`; 75: `usage`); `cmd/arbiter-admin/groups_test.go` (new).
-- **metrics:** `metrics/metrics.go` (71, 72, 74); tests `metrics/groups_test.go`, `metrics/seal_reason_test.go` (new).
+- **metrics:** `metrics/metrics.go` (71, 72, 74); tests `metrics/groups_test.go`, `metrics/seal_reason_test.go`, `metrics/reselections_test.go` (new).
 - **Bazel:** the `BUILD.bazel` files of `fsm`, `server`, `orchestrator`, `metrics`, `config` and `cmd/arbiter-admin`, as gazelle writes them.
 
 **arbiter-proto, arbiter-core, housegate, sentio-node, production:** no change. The proto numbers, canonical types, authority purposes and wire commands this plan consumes ship in Plan S3-E1's releases. No ledger record goes to housegate.
 
 ## Spec coverage map
+
+**Coverage and evidence scope.** The named scope below is implemented by the selected owning literals. Tasks71–75 have separate root-accepted bounded local SOURCE_CUSTODY reviews, summarized in Appendix B. These accepted scopes retain inherited skips, derived-oracle/focused-race boundaries, transient beforeimage and fixed-tool/SDK limits. Old drafting, stand-in replay and synthetic tool/protocol claims remain historical. This local documentary consistency candidate creates no formal credit or adoption authority.
 
 | Spec item | Tasks |
 |---|---|
@@ -289,7 +296,7 @@ Line anchors in the tasks refer to the base revisions above and are re-anchored 
 | §7.4 `ReselectVerifiers` (replacement rules, cursor timeout, ring walk, limit, latched refusal and latch count, stored proof, restore checks) | 74 (K75) |
 | §9.1 `MemberCheckpoint` acceptance, per-group replacement, durable `checkpoint_seq`, restart on `replica_signer` rotation, per-epoch restore re-verification, the published-manifest binding of every stored checkpoint and advance on restore | 75 (K76); signer side: Plan S3-E1 Task 63 |
 | §9.2 classes, same-entry re-checkpoint, lag in published advances, quarantine accrues no lag, hysteresis, `MarkMemberLagging`; the served `lag_advances`, saturating at `max_lag_publications + 1` (D31) | 75 (K76, K77) |
-| §9.3 E (listed, non-evicted, counting replicate members in `caught_up`/`behind`, domain other than O's, counted by domain) | 71 (`copyFloorSetLocked`); floor, strict mode, k raise: Plan S3-E4 Task 76 |
+| §9.3 E (listed, non-evicted, counting replicate members in `caught_up`/`behind`, also `lagging` when strict; domain other than O's, counted by domain; non-strict Leaving release uses frozen E) | 71 (`copyFloorSetLocked`); floor, strict mode, k raise: Plan S3-E4 Task 76 |
 | §10.4 switches 5 (`placement`), 7 (`reselection`), 8 (`checkpoints`, FSM commands and classes) and step 6 (`MemberReady`) | 71–75; floor clauses of switch 8: Plan S3-E4 Task 76; turned on by Plan S3-F |
 | §11 `replica_hosts` from placement on: the registry's `DatabaseGroup` with each current member's served `host_indexer_id` (D27); the host lists every current member, never filtered by `ready_generation` (`MemberReady`, Plan S3-E4 contract §56) | 71, 73 (served); host side: Plan S3-E4 Task 79 |
 | §14 eviction voiding for `MemberReady` and checkpoints | 73, 75 (placement implies `eviction_voiding`; Plan S3-E2 Task 68) |
@@ -314,7 +321,9 @@ Line anchors in the tasks refer to the base revisions above and are re-anchored 
 
 Spec §6.2–§6.4 give every (owner, database) with a physical incarnation exactly one `DatabaseGroup` from the `placement` switch (§10.4 step 5) on: chosen by integer weighted rendezvous hashing over the listed member entries of other SI indexers, with no two members on one host or in one failure domain and none on the owner's host or in its domain, re-derivable by any auditor from committed state, and changed afterwards only by an authority-signed `RebalanceGroup` (Raft tag 38) bound to the group's durable generation. Today nothing records a group: `applyAddTable` (`fsm/apply_table_registry.go:220-275`) appends incarnations, `completePurgesLocked` (`:496-521`) purges them, and Plan S3-E2 left `TableIncarnation.PurgeMembers`, the `placement` switch bit and the `stage3MembershipRefusalLocked` and `onStage3SwitchOnLocked` seams empty. This task adds the whole record layer of contract §50, all of it inert until the switch: the group records with their durable generations and Leaving records (K74); the exported pure `PlaceGroup` with its frozen digest vectors; placement at `AddTable`, the switch-on backfill (genesis-origin databases included) and group removal at the last purge; `purge_members` accumulation; `RebalanceGroup` with its 18 refusals, the C10 seal-first hook, Leaving records with frozen E and the `completePurgesLocked` rerun; the per-group verifier floor (K73); E (`copyFloorSetLocked`); the registry view's `groups` with each member's served `host_indexer_id` (D27) and the registry-version rule for served values; `ConsensusAdmin.RebalanceGroup`; `arbiter-admin consensus groups`, `group preview` and `group rebalance`; the group gauges; and the restore rules. With the switch off every Apply, snapshot and chain hash is byte for byte Plan S3-E2's.
 
-Worktree: Plan S3-E2's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, contract §49), with `HEAD` at Plan S3-E2 Task 70's last commit; every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own Bash call. Line anchors are arbiter `origin/main` at `526a721` (v0.13.0: the plan header's `fb42260` plus Plan S3-A's arbiter tasks, #133); `fsm/stage3.go`, `fsm/stage3_restore.go`, `fsm/stage3_fixture_test.go`, Task 65's `TableRegistryView.Stage3`, Task 69's `ScopedKeeperPath` block and the `purge` case of `onStage3SwitchOnLocked` are Plan S3-E2's and are named by function or by their contract text. Apply every hunk on top of Plans S3-A, S3-C2, S3-D and S3-E2 under the hunk rule (Global Constraints): where a later plan already changed the anchored lines, keep its change and apply this task's intent on top. Two steps act remotely, each only after explicit user confirmation in chat: Step 1's housegate fetch (a read) and Step 45's push of the shared branch. The task ends with exactly one local commit (contract §49).
+Worktree: Task 64's actual Codex worktree, loaded through its complete retained `env.sh` and `worktree.json`; never reconstruct its path. Every Bash call reloads that environment. Entry requires Task 70's exclusive `final-head.txt`, exact final subject, clean worktree, poetry identity and valid signature. Task 71 exclusively retains the observed base in `task71-base-sha`; existing receipts are a stop for investigation, never permission to overwrite. Exactly one signed local commit belongs here. Step 1's housegate fetch and Step 45's optional push each require explicit confirmation in chat.
+
+**STATIC PREP / WAIT70:** drafting anchors refer to arbiter `526a721`; reconcile every runtime hunk with root-approved actual post-70 sources and frozen upstream manifests before execution. All 67 Go fences and all original non-Bash fences are preserved verbatim. No post-70 runtime application, Go/Bazel pass, TDD, golden recomputation, signing or publication is claimed by this preparation. Historical drafting results are not current proof. Go/Bazel commands disable dependency downloads; missing offline dependencies stop execution. If GPG signing is cancelled, stop and request the existing-key unlock; never disable signing.
 
 **Files:**
 - Create: `fsm/placement.go`, `fsm/stage3_groups.go`, `fsm/rebalance_group.go`, `server/groups_admin.go`, `cmd/arbiter-admin/groups.go`
@@ -339,7 +348,7 @@ Worktree: Plan S3-E2's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`,
   - Plan S3-E2 (contract §44–§47): `fsm.Params.Stage3`, `State.Stage3 *Stage3State` with `Switches []Stage3SwitchCutover`, `Stage3SwitchPlacement`, `Stage3SwitchReselection`, `Stage3SwitchCheckpoints`, `func stage3SwitchValue(p *arbiter.Stage3Params, name string) bool`, `func (f *FSM) stage3SwitchOnLocked(name string) bool`, `func (f *FSM) Stage3SwitchOn(name string) bool`, the seams `func (f *FSM) stage3MembershipRefusalLocked(next Params) string` (Apply-only) and `func (f *FSM) onStage3SwitchOnLocked(name string)` (after the new parameters are in place, before the cutover record), `func validateStage3State(st *State) error`, `TableIncarnation.PurgeMembers []string` with Task 69's `validateStage3Incarnations` (its form rule and its `purge_members before the placement switch` rule stay), Task 65's `TableRegistryView.Stage3` and its one registry bump for a changed `stage3`, `stage3PendingProtoFields`; Task 64's helpers `func stage3FailureDomain(p *arbiter.Stage3Params, id uint64) string` and `func findVerifierEntry(entries []arbiter.VerifierEntry, nodeID string) (arbiter.VerifierEntry, bool)`; Task 64's fixture (`fsm/stage3_fixture_test.go`) `stage3FSM`, `stage3Update`, `turnOnStage3Switch`, `turnOnStage3SwitchesThrough`, `stage3TestMember`, `stage3MemberKey`, `stage3ReplicaSigner`, `memberConsent`, `withVerifier`, `stage3WithSwitch`, `hostSigner`, `rejectStage3Unchanged` (fixture: indexers 0 and 1 in `node:n0` and `node:n1`, `group_size` 3, `network_fill_default` true, pool verifiers `v1..v3`).
   - Base (`526a721`): `prepareStatementSealLocked(spentIDsRoot string) (*preparedSeal, string)` and `commitSealLocked(p *preparedSeal) SealResult` (`fsm/apply.go:331`, `:381`; Plan S3-E3 Task 72 adds the seal reason), `spentIDsRootLocked`, `publishedTrackFrontierLocked`, `incarnationOwnerLocked`, `indexerQuarantinedLocked` (`fsm/tracks.go:215`, `:98`, `:344`), `genesisSnapshotIDLocked`, `siIndexerLocked`, `findSIIndexer`, `listsVerifier`, `authorityAddressSet`, `registryChangedLocked`, `purgedCount`, `TableIncarnation.hasPhysicalTables`, `TableRegistryState.Live`; `trackCommandLocked` as the authority-command precedent (`fsm/quarantine.go:114`); `QuarantineIndexer`, `quarantineAuthority` and `applyRefusalAsFailedPrecondition` (`server/signed_messages.go:103`, `:173`, `:190`); `runIndexer`, `indexerRPCError`, `dialAdmin`, `rpcError`, `leaderHint`, `jsonOptions`, `authorityPrivateKeyEnv` (`cmd/arbiter-admin/main.go`); test helpers `mustApply`, `applyExpectReject` (`fsm/fsm_test.go`), `ev`, `retireCmd` (`fsm/apply_table_registry_test.go`), `ownedAddCmd` (`fsm/table_registry_owners_test.go`), `snodePurged`, `verifierPurged`, `authorityContextFor`, `messageContextFor` (`fsm/signed_messages_fixture_test.go`), `indexerSigner1`, `indexerSigner2`, `siEntry` (`fsm/signed_claims_params_test.go`), `trackSNode`, `trackEnvelope`, `admitTrack` (`fsm/tracks_fixture_test.go`), `trackHistory` (`fsm/determinism_tracks_test.go`), `fixedClient` (`fsm/admission_source_test.go`), `quarantineQ` (`fsm/quarantine_fixture_test.go`), `signedConsensusUpdate`, `mustGenesisID`, `snapshotBytes`, `restoreInto`, `restoreErr`; server `applyServerUpdate`, `serverMessageContext`, `serverAuthorityContext`, `newRecordingNode`, `evictionAdmin`, `lastProposalIs` (`server/signed_messages_test.go`), `activateServerTracks` (`server/tracks_fixture_test.go`), `isNotLeader`, `serverTestAuthority`; arbiter-admin `gateTestKey` (`cmd/arbiter-admin/client_lanes_test.go`); metrics `laneSnapshot` (`metrics/client_lanes_test.go`).
 - Produces (contract §49–§50 names verbatim; the names marked "added" are this task's and go into Appendix B):
-  - `fsm` state (`fsm/stage3_groups.go`, `fsm/stage3.go`): `Stage3State.Groups []*DatabaseGroup` (`groups,omitempty`) and `GroupGenerations []GroupGeneration` (`group_generations,omitempty`), both sorted by (owner, database); `type MemberClass string` with `MemberBootstrapping`, `MemberCaughtUp`, `MemberBehind`, `MemberLagging`, `MemberLeaving` and `var MemberClasses`; `DatabaseGroup{Owner, DatabaseID, Generation, Salt, NetworkFill, Members, Leaving, PastMembers}`; `GroupMember{NodeID, JoinedGeneration, Class}` (Tasks 73 and 75 append `ReadyGeneration`, `ReadySignature`, `ReadyEpoch`, `Checkpoint`, `ObservedEntry`); `LeavingMember{Member, RemovedGeneration, Entry, FrozenE, FrozenEDomains, Released}`; `GroupGeneration{Owner, DatabaseID, Generation}`; `GroupOwnerStats{Owner, Groups, Members}`.
+  - `fsm` state (`fsm/stage3_groups.go`, `fsm/stage3.go`): `Stage3State.Groups []*DatabaseGroup` (`groups,omitempty`) and `GroupGenerations []GroupGeneration` (`group_generations,omitempty`), both sorted by (owner, database); `type MemberClass string` with `MemberBootstrapping`, `MemberCaughtUp`, `MemberBehind`, `MemberLagging`, `MemberLeaving` and `var MemberClasses`; `DatabaseGroup{Owner, DatabaseID, Generation, Salt, NetworkFill, Members, Leaving, PastMembers}`; `GroupMember{NodeID, JoinedGeneration, Class, ReadyGeneration uint64, ReadySignature string, ReadyEpoch uint64}` (this task declares the three readiness fields with contract §50's `omitempty` tags; Task 73 populates them; Task 75 appends `Checkpoint` and `ObservedEntry`); `LeavingMember{Member, RemovedGeneration, Entry, FrozenE, FrozenEDomains, Released}`; `GroupGeneration{Owner, DatabaseID, Generation}`; `GroupOwnerStats{Owner, Groups, Members}`.
   - `fsm` placement (`fsm/placement.go`): `GroupPlacementDomain = "arbiter-group-placement-v1"`, `maxPlacementWeight = 64`, `PlacementCandidate`, `PlacementInput`, `PlacementScore`, `Placement`, `placementPreimage`, `func PlacementDraw(networkID string, owner uint64, database, salt, nodeID string, i uint32) (string, error)`, `func PlacementScoreOf(networkID string, owner uint64, database, salt, nodeID string, weight uint32) (string, error)`, `func PlaceGroup(in PlacementInput) (Placement, error)`, `func orderPlacementScores(scores []PlacementScore)`; added: `type PlacementTarget struct{ Owner uint64; Database string }`, `func PlacementTargetsFrom(incarnations []*TableIncarnation, foundingIndexer uint64) []PlacementTarget`, `func PlacementCandidatesFrom(verifiers []arbiter.VerifierEntry, siIndexers []arbiter.SIIndexerEntry, owner uint64, excludeQuarantinedHosts bool, evicted func(nodeID string) bool, quarantined func(indexerID uint64) bool) []PlacementCandidate`, `func PlacementSaltFrom(incarnations []*TableIncarnation, foundingIndexer, owner uint64, database, genesisSnapshotID string, created *arbiter.L2EventRef) (string, error)`, `func comparePlacementTargets(a, b PlacementTarget) int` (the pure halves that Apply and `group preview` share, so the preview cannot drift).
   - `fsm` group rules (`fsm/stage3_groups.go`): `placementOnLocked`, `reselectionOnLocked`, `checkpointsOnLocked`, `PlacementOn`, `ReselectionOn`, `CheckpointsOn`, `indexerFailureDomain`, `placementCandidatesLocked`, `placementSaltLocked`, `placeGroupLocked`, `backfillGroupsLocked`, `installGroupLocked`, `dropUnplacedGroupsLocked`, `prunePastMembersLocked`, `addPurgeMembersLocked`, `groupLocked`, `groupOfIncarnationLocked`, `copyFloorSetLocked`, `groupVerifierFloorLocked`, `groupsChangedLocked`, `authorityCommandRefusalLocked`, `prepareGroupSealLocked`, `openBlockDatabasesLocked`, `func (f *FSM) GroupStats() []GroupOwnerStats`, `func validateStage3Groups(st *State) error`, all with contract §50's signatures; added: `compareGroupKey`, `groupGenerationLocked`, `setGroupGenerationLocked`, `evictedUnderLocked`, `physicalDatabasesLocked`, `placementBackfillLocked`, `installPlacementBackfillLocked`, `groupMemberIDs`, `groupMemberIndex`, `pastMemberDoneLocked`, `groupFloorRefusalLocked`, `memberEntriesChangedLocked`, `groupRecordCountLocked`, `completePurgesReportLocked`, `cloneDatabaseGroup`, `leavingMemberMalformed`, and the node-local FSM field `placementBackfill []*DatabaseGroup`.
   - `fsm` `RebalanceGroup` (`fsm/rebalance_group.go`): `func (f *FSM) applyRebalanceGroup(c *wire.RebalanceGroup) any` with contract §50's 18 refusals and 7 effects, dispatched for Raft tag 38 after `cmd.ReleaseIndexer`; added: `rebalanceBeforePlacementReason`, `strictlySortedIDs`, `rebalanceMembershipRefusalLocked`, `insertLeavingMember`.
@@ -357,7 +366,7 @@ Notes (each recorded in Appendix B):
 - **The backfill plan crosses into the turn-on hook.** Contract §50 computes the backfill "after the S3-E2 gates and before any mutation" and installs it "after `f.st.Params = next` and after §51's cutover seal", and Plan S3-E2 §44 puts the turn-on work in `onStage3SwitchOnLocked`. The plan therefore travels in the node-local FSM field `placementBackfill`, set right before `f.st.Params = next`, consumed and cleared by the `placement` case of the hook in the same Apply, and never snapshotted (it is nil between Applies). Task 72 commits its cutover seal in that case before the install.
 - **One registry bump per Apply.** A placing `AddTable` ends with `groupsChangedLocked` instead of its usual `registryChangedLocked` (one bump either way). The switch-on is already bumped once by Plan S3-E2 Task 65's rule for a changed `stage3`, and installing the plan completes no purge and drops no group, so the install calls neither `groupsChangedLocked` nor `registryChangedLocked` (`TestPlacementSwitchOnBackfillsEveryDatabaseInOwnerDatabaseOrder` pins one bump); Plan S3-E4 Task 76's release evaluation has no Leaving record to look at there. `applyEvictNode` and the rule-6 evictions report through `completePurgesReportLocked`, which counts groups and past members as well as Purged incarnations, so an eviction that only prunes a past member or drops a group still reaches registry followers (`TestPastMembersLeaveOnlyByReportingOrEviction`).
 - **Refusal order of `RebalanceGroup` (contract issue, recorded in Appendix B).** Contract §50 lists refusal 16 (`the result has %d verifiers, below the per-group floor of 3`) before 17 (`network_fill off needs at least 3 listed verify members, the result has %d`). With fill off the per-group floor counts exactly the listed, non-evicted verify members, which is at most what refusal 17 counts, so in that order refusal 17 could never fire and `TestRebalanceGroupRefusals` could not cover all 18. `rebalanceMembershipRefusalLocked` checks 17 first, then 16; both texts are verbatim, and every other refusal keeps the contract's order. The consistency pass should swap the two lines in contract §50.
-- **`GroupView.Key` and `GroupMemberView.LagAdvances`.** Contract §50 gives the view types verbatim and maps `GroupView.Key` to `group_key` and `LagAdvances` to `lag_advances`, so this task declares both fields and maps them; they stay empty until Task 72 fills `Key` and Task 75 fills `LagAdvances` (`TestTableRegistryToPBCarriesGroups` pins the mapping). `GroupMember`'s Task 73 and Task 75 fields (`ReadyGeneration`, `ReadySignature`, `ReadyEpoch`, `Checkpoint *MemberCheckpointRecord`, `ObservedEntry`) are added by those tasks, because `MemberCheckpointRecord` is §52's type; Task 75 must extend `cloneDatabaseGroup` to deep-copy its two pointers.
+- **`GroupView.Key` and `GroupMemberView.LagAdvances`.** Contract §50 gives the view types verbatim and maps `GroupView.Key` to `group_key` and `LagAdvances` to `lag_advances`, so this task declares both fields and maps them; they stay empty until Task 72 fills `Key` and Task 75 fills `LagAdvances` (`TestTableRegistryToPBCarriesGroups` pins the mapping). This task declares `GroupMember.ReadyGeneration uint64`, `ReadySignature string` and `ReadyEpoch uint64` with §50's exact `omitempty` tags so Task 72 can read readiness and Task 73 can populate the record. They stay zero in this task's Apply paths; the `Task 73` field comments identify population ownership. Task 73 retains signature/epoch validation and D33 proof filtering. Task 75 alone adds `Checkpoint *MemberCheckpointRecord` and `ObservedEntry *replay.TrackFrontier`, because `MemberCheckpointRecord` is §52's type, and extends `cloneDatabaseGroup` to deep-copy those two pointers.
 - **`purge_members` restore rule (contract issue, recorded in Appendix B).** Plan S3-E2 §44 says Task 71 "adds the restore rule that [purge_members] is a subset of the group's members and past members", and Task 69 says Task 71 replaces its `purge_members before the placement switch` rule with it. Contract §50, which binds this task, lists the group restore rules without that subset rule, and the subset rule would refuse honest state: a past member leaves `past_members` once it has reported every incarnation that lists it or is evicted (§6.2), while those incarnations keep listing it, and a removed group's incarnations keep their `purge_members` with no group left. Task 71 therefore keeps both of Task 69's rules (the before-placement rule stays true, because the switch is one-way and only placement writes the field) and adds §50's rule that every current member is in `purge_members` of every physical incarnation of its database.
 - **`stage3FieldsPresent` needs no new arm.** `Stage3State.Groups` and `GroupGenerations` live inside `doc.Stage3`, which Plan S3-E2 Task 66's `stage3FieldsPresent` already refuses in a pre-v21 container, and `purge_members` is Task 69's arm.
 - **The pending proto map.** `TestTableRegistryMirrorsProto` walks only `TableIncarnation` and the cursor, so Plan S3-E2 Task 64 adds `TableRegistrySnapshot.groups` to `stage3PendingProtoFields` only if some other test failed on it; Step 25 deletes the entry when it exists and otherwise changes nothing.
@@ -369,31 +378,70 @@ Notes (each recorded in Appendix B):
 
 - [ ] **Step 1: Check the worktree, its base and the pins**
 
-The worktree must hold Plan S3-E2's finished branch (contract §49): it stops Task 71 when `$W` is absent or `HEAD` is not a Task 70 commit. Plan S3-E2 §48 writes its subjects as `feat(stage3): <what> (Task N)`, so the check matches that form (Notes). The pin check reads the four consumed ledger names once (D34) and compares them with `go.mod`.
+The worktree must hold Plan S3-E2's finished branch (contract §49): it stops Task 71 when `$W` is absent or `HEAD` is not a Task 70 commit. Plan S3-E2 §48 writes its subjects as `feat(stage3): <what> (Task N)`, the entry gate instead requires its exact final subject and retained observed receipt. The pin check reads the four consumed ledger names once (D34), validates their types and exact retained Task 64 values, and compares the module pins with `go.mod`.
 
 Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+head="$(git rev-parse HEAD)" || exit 1
+python3 -I - "$HOME/.cache/s3e2-task70/final-head.txt" "$head" <<'PY71'
+import pathlib,re,sys
+v=pathlib.Path(sys.argv[1]).read_text()
+assert re.fullmatch(r'[0-9a-f]{40}\n',v) and v[:-1]==sys.argv[2]
+PY71
+git_read_71_79="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_71_79}" = 'feat(stage3): serve the eligible ring in GetBlockVerification (Task 70)' ] || exit 1
+git_read_71_80="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_71_80}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger/s3-ledger.py"
-test -d "$W" && git -C "$W" rev-parse --abbrev-ref HEAD && git -C "$W" status --porcelain && git -C "$W" log -1 --format=%s | grep -E '^feat\(stage3\): .* \(Task 70\)$'
-git -C "$h" fetch -q origin
-python3 -I "$L" get "$h" PROTO_TAG_P5 HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P4
-v() { python3 -I "$L" get "$h" "$1" | cut -d= -f2-; }
-grep -cE "^[[:space:]]*(github\.com/sentioxyz/arbiter-proto $(v PROTO_TAG_P5)|github\.com/sentioxyz/arbiter-core $(v CORE_TAG_P5)|github\.com/housegate/housegate $(v HG_TAG_P5))\$" "$W/go.mod"
-git -C "$W" merge-base --is-ancestor "$(v ARBITER_TAG_P4)^{commit}" HEAD && echo branch-carries-p4
+git -C "$h" fetch -q origin || exit 1
+ledger="$(python3 -I "$L" get "$h" PROTO_TAG_P5 HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P4)" || exit 1
+python3 -I - "$W/go.mod" "$PROTO_TAG_P5" "$HG_TAG_P5" "$CORE_TAG_P5" "$ARBITER_TAG_P4" "$ledger" <<'PY71'
+import pathlib,re,sys
+names=['PROTO_TAG_P5','HG_TAG_P5','CORE_TAG_P5','ARBITER_TAG_P4']
+rows=[x.split('=',1) for x in sys.argv[6].splitlines()]
+assert len(rows)==4 and all(len(x)==2 for x in rows)
+d=dict(rows); assert len(d)==4 and set(d)==set(names)
+for n,v in zip(names,sys.argv[2:6]):
+    assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?',d[n]) and d[n]==v
+text=pathlib.Path(sys.argv[1]).read_text()
+for mod,v in zip(['github.com/sentioxyz/arbiter-proto','github.com/housegate/housegate','github.com/sentioxyz/arbiter-core'],sys.argv[2:5]):
+    assert re.findall(r'^\s*'+re.escape(mod)+r'\s+(\S+)\s*(?://.*)?$',text,re.M)==[v]
+PY71
+git merge-base --is-ancestor "$ARBITER_TAG_P4^{commit}" "$head" || exit 1
+python3 -I - "$T64/task71-base-sha" "$head" <<'PY71'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f: f.write(sys.argv[2]+'\n')
+PY71
+echo task71-entry-verified
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; an empty status; the subject of Plan S3-E2 Task 70's last commit (it ends with `(Task 70)`); then `PROTO_TAG_P5=v…`, `HG_TAG_P5=v…`, `CORE_TAG_P5=v…` and `ARBITER_TAG_P4=v…`, each read from its owner's Appendix C on its ledger copy (the plans-cf branch until the stage-3 plans PR merges, then `origin/main`); `3` (the three `require` lines name exactly those tags, as Plan S3-E2 Task 64 pinned them); `branch-carries-p4`. Stop and ask if the worktree is missing, the status is not empty, the subject line is missing (Plan S3-E2 is not done), the ledger prints a `stop`, the count is not `3` or `branch-carries-p4` is missing; never predict a ledger value.
+Expected: `task71-entry-verified`. Every missing receipt, unexpected subject, dirty tree, invalid signature, malformed or changed ledger row, incorrect module pin or missing P4 ancestry stops before the exclusive base receipt is written. Never predict a ledger value.
 
 - [ ] **Step 2: Check the names this task consumes**
 
 Every Plan S3-E2 name below is consumed verbatim (contract §44–§47 and Task 64's helpers and fixture); the `go doc` lines confirm the Plan S3-E1 names the pins brought in.
 
+**Actual post-70 doc context (source-custody review):** The literal go doc argv below remain unchanged, but execute each doc invocation inside the reviewed checksum context, not as an unguarded whole-worktree command. GOFLAGS=-mod=mod may append checksums even offline. Pin the accepted preimage go.sum bytes/mode (current SHA256 519096a17a7e098e274ad85d59d987703a3acb01f6b890a7cee32444dd1fee22), retain complete stdout/stderr and pre/post/delta receipts, and permit only an additive subset of the exact154 /go.mod checksum lines retained from the failed first-doc observation; preserve every existing line, all other files/go.mod, directories and modes. On success or any error, restore and verify the original checksum bytes/mode and independently check complete source custody; any unknown change or restoration uncertainty stops. No checksum addition is a Task71 source edit or commit input. This bounded context is implemented by the separately reviewed and freshly root-granted source-review adapter; it does not authorize running this Bash block, Git/signing or publication steps.
+
+Doc transcript qualification: exit0 and all expected first func lines/HostIndexerId *uint64 count remain required. Complete raw stderr is retained. Besides already pinned warnings, only the exact line go: module lookup disabled by GOPROXY=off is allowed for doc commands; the prior first-doc observation had53 copies, not a required or generally waived count. Unknown diagnostics, incomplete API output, a nonzero exit or missing offline dependencies needed to supply the API stop. No global Go warning/source guard is relaxed.
+
+This exception is confined to the current root-approved actual post-70 owned scratch source-custody review. Standalone execution of the original task and any real release retain the real dependency-availability, worktree, Git identity/signature/cleanliness and user-confirmation gates; this qualification supplies no HEAD, R4, signing, publication or live authority.
+
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-cd "$W" && for p in \
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+ for p in \
   'func (f *FSM) stage3SwitchOnLocked(name string) bool' \
   'func (f *FSM) Stage3SwitchOn(name string) bool' \
   'func stage3SwitchValue(p *arbiter.Stage3Params, name string) bool' \
@@ -415,21 +463,24 @@ cd "$W" && for p in \
   'func stage3WithSwitch(p *arbiter.Stage3Params, name string) *arbiter.Stage3Params' \
   'func hostSigner(t *testing.T, f *FSM, host uint64) *authority.Signer' \
   'func rejectStage3Unchanged(t *testing.T, f *FSM, cmd wire.Command, reason string)'; do
-  git grep -qF "$p" -- fsm || echo "missing in fsm: $p"
+  git grep -qF "$p" -- fsm || { echo "stop: missing in fsm: $p" >&2; exit 1; }
 done
 git grep -nE '^[[:space:]]+Switches[[:space:]]+\[\]Stage3SwitchCutover[[:space:]]+`json:"switches,omitempty"`$' -- fsm
 git grep -nE '^[[:space:]]+PurgeMembers[[:space:]]+\[\]string[[:space:]]+`json:"purge_members,omitempty"`$' -- fsm
 git grep -nE '^[[:space:]]+Stage3[[:space:]]+\*arbiter\.Stage3Params$' -- fsm/table_registry.go
-git grep -n 'stage3PendingProtoFields = map' -- server
+if git grep -n 'stage3PendingProtoFields = map' -- server; then :; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
 for s in wire.RebalanceGroupFromRequest wire.RebalanceGroupToRequest wire.TrackFrontierToPB authority.Signer.SignRebalanceGroupWithContext authority.Signer.SignRebalanceGroupWithContextAt authority.Validator.VerifyRebalanceGroup authority.Validator.AuthorizeRebalanceGroup; do
   GOWORK=off go doc "github.com/sentioxyz/arbiter-core/$s" | grep -m1 '^func'
 done
 GOWORK=off go doc github.com/sentioxyz/arbiter-core.Stage3Params.FailureDomain | grep -m1 '^func'
-GOWORK=off go doc github.com/sentioxyz/arbiter-proto/gen/pb.GroupMember | grep -c 'HostIndexerId *\*uint64'
+doc="$(go doc github.com/sentioxyz/arbiter-proto/gen/pb.GroupMember)" || exit 1
+count="$(printf '%s\n' "$doc" | grep -c 'HostIndexerId *\*uint64')" || exit 1
+[ "$count" = 1 ] || exit 1
+printf '%s\n' "$count"
 GOWORK=off go test ./fsm/ ./server/ ./cmd/arbiter-admin/ ./metrics/ -count=1
 ```
 
-Expected: no `missing in fsm:` line; one `fsm/stage3.go:…` line with Task 64's `Switches` field, one `fsm/table_registry.go:…` line with Task 69's `PurgeMembers` field and one `fsm/table_registry.go:…` line with Task 65's view field `Stage3 *arbiter.Stage3Params`; one `server/…_test.go:…:var stage3PendingProtoFields = map[string]string{` line; then exactly
+Expected: no `missing in fsm:` line; one `fsm/stage3.go:…` line with Task 64's `Switches` field, one `fsm/table_registry.go:…` line with Task 69's `PurgeMembers` field and one `fsm/table_registry.go:…` line with Task 65's view field `Stage3 *arbiter.Stage3Params`; at most one `server/…_test.go:…:var stage3PendingProtoFields = map[string]string{` line (genuine absence is allowed); then exactly
 
 ```
 func RebalanceGroupFromRequest(m *pb.RebalanceGroupCmd) RebalanceGroup
@@ -720,7 +771,7 @@ func TestPlacementRefusesAZeroOrOversizedWeight(t *testing.T) {
 
 - [ ] **Step 5: Run the placement tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight)$' -count=1`
 Expected: the fsm package fails to build, `FAIL github.com/sentioxyz/arbiter/fsm [build failed]`, with errors such as `fsm/placement_golden_test.go:33:29: undefined: PlacementInput`, `undefined: PlacementCandidate`, `undefined: placementPreimage`, `undefined: PlacementDraw`, `undefined: PlaceGroup` and `fsm/placement_test.go:32:15: undefined: PlacementScoreOf`. On a Go newer than 1.26 a dependency may first print `WARNING: sonic/ast only supports …`; it is harmless, here and below.
 
 - [ ] **Step 6: Recompute the vectors independently**
@@ -843,7 +894,7 @@ if __name__ == "__main__":
     main(sys.argv[1])
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; python3 -I "$HOME/.cache/s3e3/goldens.py" "$W"`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; python3 -I "$HOME/.cache/s3e3/goldens.py" "$W"`
 Expected, exactly:
 
 ```
@@ -1147,7 +1198,7 @@ func PlacementSaltFrom(incarnations []*TableIncarnation, foundingIndexer, owner 
 
 - [ ] **Step 8: Run the placement tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight)$' -count=1`
 Expected: `ok  	github.com/sentioxyz/arbiter/fsm`.
 
 - [ ] **Step 9: Write the group FSM tests**
@@ -2213,7 +2264,7 @@ func TestPlacementIsReDerivableFromTheRegistryView(t *testing.T) {
 
 - [ ] **Step 13: Run the FSM tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestPlacementIsReDerivableFromTheRegistryView|TestAddTablePlacesAGroupForTheFirstPhysicalIncarnation|TestAddTableOfARefusedIncarnationPlacesNoGroup|TestAddTableBeforePlacementPlacesNoGroup|TestPlacementSwitchOnBackfillsEveryDatabaseInOwnerDatabaseOrder|TestPlacementSwitchOnRefusesAGroupBelowTheFloorWithStateUnchanged|TestPlacementSaltIsTheFirstPhysicalIncarnationsCreatedBlockHash|TestPlacementSaltOfAGenesisOriginDatabaseIsTheGenesisSnapshotID|TestExcludeQuarantinedHostsDropsCandidates|TestGroupIsRemovedWhenItsLastPhysicalIncarnationIsPurged|TestGroupGenerationSurvivesRemovalAndReplacement|TestPurgeMembersAccumulateAtRecordPlacementAndAdd|TestPastMembersLeaveOnlyByReportingOrEviction|TestRebalanceGroupRefusals|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared|TestRebalanceGroupRecordsLeavingWithTheFrozenEntryAndE|TestRebalanceGroupReaddingALeavingMemberReplacesItsRecord|TestRebalanceGroupRerunsCompletePurges|TestRaisingGroupSizeReplacesNoGroup|TestDelistingAMemberKeepsItsMembersEntry|TestPerGroupVerifierFloorRefusesAParamsUpdate|TestPerGroupVerifierFloorNeverRefusesEvictNode|TestRegistryViewServesMemberHostsFromTheListing|TestParamsUpdateChangingAMembersEntryBumpsTheRegistryVersion|TestCopyFloorSetCountsDomainsNotMembers|TestRestoreRefusesAMissingOrExtraGroup|TestRestoreRefusesAGenerationBelowTheDurableCounter|TestRestoreRefusesAMemberMissingFromPurgeMembers|TestRestoreRefusesMalformedGroupRecords|TestDeterminism_PlacementAndRebalance)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./fsm/ -run '^(TestPlacementIsReDerivableFromTheRegistryView|TestAddTablePlacesAGroupForTheFirstPhysicalIncarnation|TestAddTableOfARefusedIncarnationPlacesNoGroup|TestAddTableBeforePlacementPlacesNoGroup|TestPlacementSwitchOnBackfillsEveryDatabaseInOwnerDatabaseOrder|TestPlacementSwitchOnRefusesAGroupBelowTheFloorWithStateUnchanged|TestPlacementSaltIsTheFirstPhysicalIncarnationsCreatedBlockHash|TestPlacementSaltOfAGenesisOriginDatabaseIsTheGenesisSnapshotID|TestExcludeQuarantinedHostsDropsCandidates|TestGroupIsRemovedWhenItsLastPhysicalIncarnationIsPurged|TestGroupGenerationSurvivesRemovalAndReplacement|TestPurgeMembersAccumulateAtRecordPlacementAndAdd|TestPastMembersLeaveOnlyByReportingOrEviction|TestRebalanceGroupRefusals|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared|TestRebalanceGroupRecordsLeavingWithTheFrozenEntryAndE|TestRebalanceGroupReaddingALeavingMemberReplacesItsRecord|TestRebalanceGroupRerunsCompletePurges|TestRaisingGroupSizeReplacesNoGroup|TestDelistingAMemberKeepsItsMembersEntry|TestPerGroupVerifierFloorRefusesAParamsUpdate|TestPerGroupVerifierFloorNeverRefusesEvictNode|TestRegistryViewServesMemberHostsFromTheListing|TestParamsUpdateChangingAMembersEntryBumpsTheRegistryVersion|TestCopyFloorSetCountsDomainsNotMembers|TestRestoreRefusesAMissingOrExtraGroup|TestRestoreRefusesAGenerationBelowTheDurableCounter|TestRestoreRefusesAMemberMissingFromPurgeMembers|TestRestoreRefusesMalformedGroupRecords|TestDeterminism_PlacementAndRebalance)$' -count=1`
 Expected: the fsm package fails to build, with errors such as `fsm/stage3_groups_test.go:110:70: undefined: DatabaseGroup`, `undefined: MemberClass`, `fsm/determinism_stage3_test.go:42:7: f.groupLocked undefined (type *FSM has no field or method groupLocked)`, `f.GroupStats undefined (type *FSM has no field or method GroupStats)` and `fsm/placement_test.go:168:21: view.Groups undefined (type TableRegistryView has no field or method Groups)`.
 
 - [ ] **Step 14: Add the group records and their rules**
@@ -2274,12 +2325,15 @@ type DatabaseGroup struct {
 	PastMembers []string        `json:"past_members,omitempty"` // sorted, unique, disjoint from Members
 }
 
-// GroupMember is one current member. Plan S3-E3 Tasks 73 and 75 append the
-// readiness and checkpoint fields (contract §50).
+// GroupMember is one current member. Task 71 declares the readiness fields;
+// Task 73 populates them, and Task 75 appends checkpoint fields (contract §50).
 type GroupMember struct {
 	NodeID           string      `json:"node_id"`
 	JoinedGeneration uint64      `json:"joined_generation"`
 	Class            MemberClass `json:"class"`
+	ReadyGeneration  uint64      `json:"ready_generation,omitempty"` // Task 73; 0 = not ready
+	ReadySignature   string      `json:"ready_signature,omitempty"`  // Task 73
+	ReadyEpoch       uint64      `json:"ready_epoch,omitempty"`      // Task 73
 }
 
 // LeavingMember is a member a RebalanceGroup removed (spec §6.4, K74): its
@@ -3202,10 +3256,14 @@ func insertLeavingMember(list []LeavingMember, l LeavingMember) []LeavingMember 
 
 - [ ] **Step 16: Add the FSM field and the dispatch arm**
 
-In `fsm/fsm.go`, at the end of the `FSM` struct (`fsm/fsm.go:52-53`; `stateSize`, Plan S3-A's field, is its last field), replace:
+In `fsm/fsm.go`, at the end of the `FSM` struct after Task 67's `encoding` field, retaining `stateSize`, `encoding` and every other predecessor field, replace:
 
 ```go
 	stateSize atomic.Pointer[StateSizeSample]
+	// encoding is the node-local raft.snapshot_body setting and the snapshot
+	// encoding statistics (snapshot.go): never snapshotted and never read by
+	// Apply.
+	encoding snapshotEncodingState
 }
 ```
 
@@ -3213,6 +3271,10 @@ with:
 
 ```go
 	stateSize atomic.Pointer[StateSizeSample]
+	// encoding is the node-local raft.snapshot_body setting and the snapshot
+	// encoding statistics (snapshot.go): never snapshotted and never read by
+	// Apply.
+	encoding snapshotEncodingState
 	// placementBackfill carries, within the one Apply of the update that
 	// turns the placement switch on, the groups that update planned before
 	// its first mutation to onStage3SwitchOnLocked, which installs them and
@@ -3286,13 +3348,17 @@ with:
 ```
 
 
-In `fsm/stage3.go`, at the `switch name {` of Task 64's `onStage3SwitchOnLocked`: the new `case Stage3SwitchPlacement:` goes after the `purge` case (Task 69) and the `eviction_voiding` case (Task 68), in spec §10.4 order, and before `default:` where the switch has one. The hunk shows the drafting export, which has no Task 68 case. Replace:
+In `fsm/stage3.go`, at the `switch name {` of Task 64's `onStage3SwitchOnLocked`: the new `case Stage3SwitchPlacement:` goes after the `purge` case (Task 69) and the `eviction_voiding` case (Task 68), in spec §10.4 order, and before `default:` where the switch has one. The bound INPUT hunk below retains Task 68's eviction-voiding case and adds only the placement case. Replace:
 
 ```go
 			if purgedCount(reg) != before {
 				f.registryChangedLocked(reg)
 			}
 		}
+	case Stage3SwitchEvictionVoiding:
+		// Spec 2026-10-14 §14: the evidence of every node evicted before the
+		// switch leaves the unlatched verdicts that judged it.
+		f.reevaluateVoidedBlocksLocked()
 	default:
 ```
 
@@ -3303,6 +3369,10 @@ with:
 				f.registryChangedLocked(reg)
 			}
 		}
+	case Stage3SwitchEvictionVoiding:
+		// Spec 2026-10-14 §14: the evidence of every node evicted before the
+		// switch leaves the unlatched verdicts that judged it.
+		f.reevaluateVoidedBlocksLocked()
 	case Stage3SwitchPlacement:
 		// The groups the update planned before its first mutation
 		// (placementBackfillLocked; housegate spec 2026-10-14 §6.3, §10.4
@@ -3570,12 +3640,16 @@ with:
 
 - [ ] **Step 22: Call the group restore rule**
 
-In `fsm/stage3_restore.go`, at Task 66's `validateStage3State`: the new check goes last, right before the final `return nil`, after Task 69's `validateStage3Incarnations` and Task 70's `validateStage3Selection` checks. The hunk shows the drafting export, which has no Task 70 check. Replace:
+In `fsm/stage3_restore.go`, at Task 66's `validateStage3State`: the new check goes last, right before the final `return nil`, after Task 69's `validateStage3Incarnations` and Task 70's `validateStage3Selection` checks. The bound INPUT hunk below retains Task 70's selection check and appends group validation last. Replace:
 
 ```go
 	if err := validateStage3Incarnations(st); err != nil {
 		return err
 	}
+	if err := validateStage3Selection(st); err != nil {
+		return err
+	}
+
 	return nil
 }
 ```
@@ -3586,6 +3660,10 @@ with:
 	if err := validateStage3Incarnations(st); err != nil {
 		return err
 	}
+	if err := validateStage3Selection(st); err != nil {
+		return err
+	}
+
 	if err := validateStage3Groups(st); err != nil {
 		return err
 	}
@@ -3595,7 +3673,7 @@ with:
 
 - [ ] **Step 23: Run the FSM tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight|TestPlacementIsReDerivableFromTheRegistryView|TestAddTablePlacesAGroupForTheFirstPhysicalIncarnation|TestAddTableOfARefusedIncarnationPlacesNoGroup|TestAddTableBeforePlacementPlacesNoGroup|TestPlacementSwitchOnBackfillsEveryDatabaseInOwnerDatabaseOrder|TestPlacementSwitchOnRefusesAGroupBelowTheFloorWithStateUnchanged|TestPlacementSaltIsTheFirstPhysicalIncarnationsCreatedBlockHash|TestPlacementSaltOfAGenesisOriginDatabaseIsTheGenesisSnapshotID|TestExcludeQuarantinedHostsDropsCandidates|TestGroupIsRemovedWhenItsLastPhysicalIncarnationIsPurged|TestGroupGenerationSurvivesRemovalAndReplacement|TestPurgeMembersAccumulateAtRecordPlacementAndAdd|TestPastMembersLeaveOnlyByReportingOrEviction|TestRebalanceGroupRefusals|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared|TestRebalanceGroupRecordsLeavingWithTheFrozenEntryAndE|TestRebalanceGroupReaddingALeavingMemberReplacesItsRecord|TestRebalanceGroupRerunsCompletePurges|TestRaisingGroupSizeReplacesNoGroup|TestDelistingAMemberKeepsItsMembersEntry|TestPerGroupVerifierFloorRefusesAParamsUpdate|TestPerGroupVerifierFloorNeverRefusesEvictNode|TestRegistryViewServesMemberHostsFromTheListing|TestParamsUpdateChangingAMembersEntryBumpsTheRegistryVersion|TestCopyFloorSetCountsDomainsNotMembers|TestRestoreRefusesAMissingOrExtraGroup|TestRestoreRefusesAGenerationBelowTheDurableCounter|TestRestoreRefusesAMemberMissingFromPurgeMembers|TestRestoreRefusesMalformedGroupRecords|TestDeterminism_PlacementAndRebalance)$' -race -count=1 && GOWORK=off go test ./fsm/ -count=1 && GOWORK=off go vet ./fsm/`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./fsm/ -run '^(TestPlacementGoldenVectorsAreFrozen|TestPlacementScoreIsTheMaxOverWeightDraws|TestPlacementSkipsUsedHostsAndFailureDomains|TestPlacementOrdersEqualScoresByNodeID|TestPlacementForcesFillBelowThreeVerifyMembers|TestPlacementRefusesAZeroOrOversizedWeight|TestPlacementIsReDerivableFromTheRegistryView|TestAddTablePlacesAGroupForTheFirstPhysicalIncarnation|TestAddTableOfARefusedIncarnationPlacesNoGroup|TestAddTableBeforePlacementPlacesNoGroup|TestPlacementSwitchOnBackfillsEveryDatabaseInOwnerDatabaseOrder|TestPlacementSwitchOnRefusesAGroupBelowTheFloorWithStateUnchanged|TestPlacementSaltIsTheFirstPhysicalIncarnationsCreatedBlockHash|TestPlacementSaltOfAGenesisOriginDatabaseIsTheGenesisSnapshotID|TestExcludeQuarantinedHostsDropsCandidates|TestGroupIsRemovedWhenItsLastPhysicalIncarnationIsPurged|TestGroupGenerationSurvivesRemovalAndReplacement|TestPurgeMembersAccumulateAtRecordPlacementAndAdd|TestPastMembersLeaveOnlyByReportingOrEviction|TestRebalanceGroupRefusals|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared|TestRebalanceGroupRecordsLeavingWithTheFrozenEntryAndE|TestRebalanceGroupReaddingALeavingMemberReplacesItsRecord|TestRebalanceGroupRerunsCompletePurges|TestRaisingGroupSizeReplacesNoGroup|TestDelistingAMemberKeepsItsMembersEntry|TestPerGroupVerifierFloorRefusesAParamsUpdate|TestPerGroupVerifierFloorNeverRefusesEvictNode|TestRegistryViewServesMemberHostsFromTheListing|TestParamsUpdateChangingAMembersEntryBumpsTheRegistryVersion|TestCopyFloorSetCountsDomainsNotMembers|TestRestoreRefusesAMissingOrExtraGroup|TestRestoreRefusesAGenerationBelowTheDurableCounter|TestRestoreRefusesAMemberMissingFromPurgeMembers|TestRestoreRefusesMalformedGroupRecords|TestDeterminism_PlacementAndRebalance)$' -race -count=1 && GOWORK=off go test ./fsm/ -count=1 && GOWORK=off go vet ./fsm/`
 Expected: `ok  	github.com/sentioxyz/arbiter/fsm` for the 37 tests of this task under `-race` (the six placement tests, the re-derivation test, `fsm/stage3_groups_test.go`, `fsm/rebalance_group_test.go` and the determinism test), then `ok` for the whole package (the frozen goldens, Plan S3-E2's stage-3, purge and activation tests included); `go vet` prints nothing. If a Plan S3-E2 test fails here, the hunk rule was misapplied: compare the edited function with Plan S3-E2's version before going on.
 
 - [ ] **Step 24: Write the registry mapping test**
@@ -3664,12 +3742,38 @@ func TestTableRegistryToPBCarriesGroups(t *testing.T) {
 
 Plan S3-E2 Task 64 names a field in `stage3PendingProtoFields` only when a test fails on it, and `TestTableRegistryMirrorsProto` walks only `TableIncarnation` and the cursor; this task maps `TableRegistrySnapshot.groups`, so an entry for it, if one exists, goes now (contract §44).
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && f=$(git grep -l 'stage3PendingProtoFields = map' -- server) && echo "$f" && if git grep -q '"TableRegistrySnapshot\.groups"' -- "$f"; then sed -i '' -e '/"TableRegistrySnapshot\.groups": *"[^"]*",/d' "$f" && gofmt -w "$f" && echo pending-entry-removed; else echo no-pending-entry; fi; ! git grep -n '"TableRegistrySnapshot\.groups"' -- server`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+if f="$(git grep -l 'stage3PendingProtoFields = map' -- server)"; then
+ [ "$(printf '%s\n' "$f" | wc -l | tr -d ' ')" = 1 ] || exit 1
+ python3 -I - "$f" <<'PY71'
+import pathlib,re,sys
+p=pathlib.Path(sys.argv[1]); t=p.read_text(); count=t.count('"TableRegistrySnapshot.groups"'); assert count in (0,1)
+u,n=re.subn(r'^\s*"TableRegistrySnapshot\.groups":\s*"[^"\n]*",\s*\n','',t,flags=re.M)
+assert n==count
+if n: p.write_text(u)
+PY71
+ gofmt -w "$f" || exit 1
+else
+ rc=$?; [ "$rc" -eq 1 ] || exit "$rc"
+fi
+if git grep -n '"TableRegistrySnapshot\.groups"' -- server; then
+ echo 'stop: pending groups entry remains' >&2; exit 1
+else
+ rc=$?; [ "$rc" -eq 1 ] || exit "$rc"
+fi
+echo pending-groups-entry-absent
+```
 Expected: the file's path (`server/safestate_stage3_test.go` on Plan S3-E2's branch), then `no-pending-entry` (or `pending-entry-removed` where Task 64 had added the entry); the final `git grep` prints nothing. Every other entry of the map stays.
 
 - [ ] **Step 26: Run it and see it fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestTableRegistryMirrorsProto)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestTableRegistryMirrorsProto)$' -count=1`
 Expected: FAIL, `TestTableRegistryToPBCarriesGroups` with `table_registry_groups_test.go:47: groups []` and, below it, `want   [owner_indexer_id:1 database_id:"db" members:{node_id:"member-0" …`; `TestTableRegistryMirrorsProto` passes.
 
 - [ ] **Step 27: Map the groups to the transport form**
@@ -3752,7 +3856,7 @@ with:
 
 - [ ] **Step 28: Run it and see it pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestTableRegistryMirrorsProto)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestTableRegistryMirrorsProto)$' -count=1`
 Expected: `ok  	github.com/sentioxyz/arbiter/server`.
 
 - [ ] **Step 29: Write the RPC tests**
@@ -3945,7 +4049,7 @@ func TestRebalanceGroupRPCMapsApplyRefusalsToFailedPrecondition(t *testing.T) {
 
 - [ ] **Step 30: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestRebalanceGroupRPCRefusesBeforePlacement|TestRebalanceGroupRPCAuthorizesAndProposes|TestRebalanceGroupRPCMapsApplyRefusalsToFailedPrecondition)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestRebalanceGroupRPCRefusesBeforePlacement|TestRebalanceGroupRPCAuthorizesAndProposes|TestRebalanceGroupRPCMapsApplyRefusalsToFailedPrecondition)$' -count=1`
 Expected: the server package fails to build, `FAIL github.com/sentioxyz/arbiter/server [build failed]`, with `server/groups_admin_test.go:105:86: undefined: groupRebalancingRefusedMessage` (the embedded `pb.UnimplementedConsensusAdminServer` still answers `RebalanceGroup`).
 
 - [ ] **Step 31: Serve ConsensusAdmin.RebalanceGroup**
@@ -4029,7 +4133,7 @@ func sortedUniqueNodeIDs(ids []string) bool {
 
 - [ ] **Step 32: Run the server tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestRebalanceGroupRPCRefusesBeforePlacement|TestRebalanceGroupRPCAuthorizesAndProposes|TestRebalanceGroupRPCMapsApplyRefusalsToFailedPrecondition|TestTableRegistryMirrorsProto|TestTableRegistryToPBCarriesScopedKeeperPathAndPurgeMembers|TestTheFiveUpdateGatedMutationsRefuseWithOneDisabledText)$' -race -count=1 && GOWORK=off go test ./server/ -count=1 && GOWORK=off go vet ./server/`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./server/ -run '^(TestTableRegistryToPBCarriesGroups|TestRebalanceGroupRPCRefusesBeforePlacement|TestRebalanceGroupRPCAuthorizesAndProposes|TestRebalanceGroupRPCMapsApplyRefusalsToFailedPrecondition|TestTableRegistryMirrorsProto|TestTableRegistryToPBCarriesScopedKeeperPathAndPurgeMembers|TestTheFiveUpdateGatedMutationsRefuseWithOneDisabledText)$' -race -count=1 && GOWORK=off go test ./server/ -count=1 && GOWORK=off go vet ./server/`
 Expected: `ok  	github.com/sentioxyz/arbiter/server` under `-race` for the four RPC and mapping tests, the mirror and purge-field mapping tests and the update-gate text test, then `ok` for the whole package; `go vet` prints nothing.
 
 - [ ] **Step 33: Write the arbiter-admin tests**
@@ -4403,7 +4507,7 @@ func TestConsensusGroupsPrintsTheRegistryGroups(t *testing.T) {
 
 - [ ] **Step 34: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestGroupRebalanceSignsTheCanonicalCommand|TestGroupRebalanceFlagRefusals|TestGroupPreviewMatchesTheFSMPlacement|TestGroupPreviewRefusesAnUnregisteredMemberEntry|TestConsensusGroupsPrintsTheRegistryGroups)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestGroupRebalanceSignsTheCanonicalCommand|TestGroupRebalanceFlagRefusals|TestGroupPreviewMatchesTheFSMPlacement|TestGroupPreviewRefusesAnUnregisteredMemberEntry|TestConsensusGroupsPrintsTheRegistryGroups)$' -count=1`
 Expected: FAIL; all five tests fail on the usage text that `run` returns for a command it does not know yet, for example `--- FAIL: TestGroupPreviewMatchesTheFSMPlacement` with `groups_test.go:166: usage:` and `--- FAIL: TestGroupRebalanceFlagRefusals` with `groups_test.go:298: [group rebalance --owner 1 --database db --expected-generation 1 --network-fill true] = usage:`.
 
 - [ ] **Step 35: Add the group commands**
@@ -4848,7 +4952,7 @@ In `cmd/arbiter-admin/main.go`, at the signing-key paragraph of `usage` (`:180-1
 
 ```go
 Signing key for update, activate-query-profile, node evict and indexer
-quarantine/release: environment ARBITER_AUTHORITY_PRIVATE_KEY_HEX only.
+quarantine/release/settle: environment ARBITER_AUTHORITY_PRIVATE_KEY_HEX only.
 ```
 
 with:
@@ -4866,7 +4970,7 @@ is the group's current generation, which consensus groups prints, --add and
 command. After an unknown outcome read the generation again with consensus
 groups instead of retrying.
 Signing key for update, activate-query-profile, node evict, indexer
-quarantine/release and group rebalance: environment
+quarantine/release/settle and group rebalance: environment
 ARBITER_AUTHORITY_PRIVATE_KEY_HEX only.
 ```
 
@@ -4895,7 +4999,7 @@ with:
 
 - [ ] **Step 37: Run the arbiter-admin tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestGroupRebalanceSignsTheCanonicalCommand|TestGroupRebalanceFlagRefusals|TestGroupPreviewMatchesTheFSMPlacement|TestGroupPreviewRefusesAnUnregisteredMemberEntry|TestConsensusGroupsPrintsTheRegistryGroups)$' -race -count=1 && GOWORK=off go test ./cmd/arbiter-admin/ -count=1 && GOWORK=off go vet ./cmd/arbiter-admin/`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestGroupRebalanceSignsTheCanonicalCommand|TestGroupRebalanceFlagRefusals|TestGroupPreviewMatchesTheFSMPlacement|TestGroupPreviewRefusesAnUnregisteredMemberEntry|TestConsensusGroupsPrintsTheRegistryGroups)$' -race -count=1 && GOWORK=off go test ./cmd/arbiter-admin/ -count=1 && GOWORK=off go vet ./cmd/arbiter-admin/`
 Expected: `ok  	github.com/sentioxyz/arbiter/cmd/arbiter-admin` twice (the five tests under `-race`, then the package); `go vet` prints nothing.
 
 - [ ] **Step 38: Write the metrics tests**
@@ -4971,7 +5075,7 @@ func TestGroupMetricsAreAbsentBeforeStage3(t *testing.T) {
 
 - [ ] **Step 39: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./metrics/ -run '^(TestGroupMetricsExportEveryClassIncludingZeros|TestGroupMetricsAreAbsentBeforeStage3)$' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./metrics/ -run '^(TestGroupMetricsExportEveryClassIncludingZeros|TestGroupMetricsAreAbsentBeforeStage3)$' -count=1`
 Expected: FAIL, `TestGroupMetricsExportEveryClassIncludingZeros` with a diff whose `+` lines are the expected `# HELP arbiter_database_groups …`, `arbiter_database_groups{owner="0"} 2` and `arbiter_group_members{class="behind",owner="0"} 0` series and the rest (none is collected yet); `TestGroupMetricsAreAbsentBeforeStage3` passes.
 
 - [ ] **Step 40: Export the group gauges**
@@ -5093,12 +5197,31 @@ with:
 
 - [ ] **Step 41: Run the metrics tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./metrics/ -count=1 && GOWORK=off go vet ./metrics/`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; set -eo pipefail; GOWORK=off go test ./metrics/ -count=1 && GOWORK=off go vet ./metrics/`
 Expected: `ok  	github.com/sentioxyz/arbiter/metrics`; `go vet` prints nothing.
 
 - [ ] **Step 42: Run gazelle, check the format and the file list**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go') $(git ls-files --others --exclude-standard '*.go'))" && bazel run //:gazelle && git status --porcelain && git diff -- '*.bazel'`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+list="$(mktemp "$T64/task71-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY71'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY71
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git status --porcelain || exit 1
+git diff -- "*.bazel" || exit 1
+```
 Expected: `gofmt` is silent; the status lists exactly ` M cmd/arbiter-admin/BUILD.bazel`, ` M cmd/arbiter-admin/main.go`, ` M fsm/BUILD.bazel`, ` M fsm/apply.go`, ` M fsm/apply_table_registry.go`, ` M fsm/consensus_updates.go`, ` M fsm/fsm.go`, ` M fsm/signed_claims.go`, ` M fsm/stage3.go`, ` M fsm/stage3_restore.go`, ` M fsm/table_registry.go`, ` M metrics/BUILD.bazel`, ` M metrics/metrics.go`, ` M server/BUILD.bazel`, ` M server/table_registry.go` (plus the server test file of Step 25 if it removed an entry) and the fourteen new files `?? cmd/arbiter-admin/groups.go`, `?? cmd/arbiter-admin/groups_test.go`, `?? fsm/determinism_stage3_test.go`, `?? fsm/placement.go`, `?? fsm/placement_golden_test.go`, `?? fsm/placement_test.go`, `?? fsm/rebalance_group.go`, `?? fsm/rebalance_group_test.go`, `?? fsm/stage3_groups.go`, `?? fsm/stage3_groups_test.go`, `?? metrics/groups_test.go`, `?? server/groups_admin.go`, `?? server/groups_admin_test.go`, `?? server/table_registry_groups_test.go`; the `BUILD.bazel` diff adds only these entries, each at its sorted place (gazelle chooses the lines; this is what it wrote on the drafting export):
 
 ```diff
@@ -5229,13 +5352,31 @@ diff --git a/server/BUILD.bazel b/server/BUILD.bazel
          "tracks_fixture_test.go",
 ```
 
-No golden or vector file is in the list. Then stage everything:
+Only the new `fsm/placement_golden_test.go` is permitted; existing goldens and vectors remain immutable. The doc context must already have restored the original go.sum; a changed go.sum is outside this task's file list and is never staged, committed or accepted as a normalization. All existing unstaged-diff and clean-status gates remain mandatory. Then stage the owned files:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-f=$(git -C "$W" grep -l 'stage3PendingProtoFields = map' -- server)
-git -C "$W" add fsm/placement.go fsm/placement_golden_test.go fsm/placement_test.go fsm/stage3_groups.go fsm/stage3_groups_test.go fsm/rebalance_group.go fsm/rebalance_group_test.go fsm/determinism_stage3_test.go fsm/fsm.go fsm/stage3.go fsm/consensus_updates.go fsm/apply_table_registry.go fsm/apply.go fsm/signed_claims.go fsm/table_registry.go fsm/stage3_restore.go fsm/BUILD.bazel server/table_registry.go server/table_registry_groups_test.go server/groups_admin.go server/groups_admin_test.go server/BUILD.bazel "$f" cmd/arbiter-admin/groups.go cmd/arbiter-admin/groups_test.go cmd/arbiter-admin/main.go cmd/arbiter-admin/BUILD.bazel metrics/metrics.go metrics/groups_test.go metrics/BUILD.bazel
-git -C "$W" status --porcelain | grep -v '^[AM] ' || echo all-staged
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task71-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_71_5010="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_71_5010" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_71_5010}" = "$base" ] || exit 1
+if f="$(git grep -l 'stage3PendingProtoFields = map' -- server)"; then
+ [ "$(printf '%s\n' "$f" | wc -l | tr -d ' ')" = 1 ] || exit 1
+ git add -- "$f" || exit 1
+else
+ rc=$?; [ "$rc" -eq 1 ] || exit "$rc"
+fi
+git -C "$W" add fsm/placement.go fsm/placement_golden_test.go fsm/placement_test.go fsm/stage3_groups.go fsm/stage3_groups_test.go fsm/rebalance_group.go fsm/rebalance_group_test.go fsm/determinism_stage3_test.go fsm/fsm.go fsm/stage3.go fsm/consensus_updates.go fsm/apply_table_registry.go fsm/apply.go fsm/signed_claims.go fsm/table_registry.go fsm/stage3_restore.go fsm/BUILD.bazel server/table_registry.go server/table_registry_groups_test.go server/groups_admin.go server/groups_admin_test.go server/BUILD.bazel cmd/arbiter-admin/groups.go cmd/arbiter-admin/groups_test.go cmd/arbiter-admin/main.go cmd/arbiter-admin/BUILD.bazel metrics/metrics.go metrics/groups_test.go metrics/BUILD.bazel || exit 1
+staged="$(git diff --cached --name-only)" || exit 1
+[ -n "$staged" ] || exit 1
+git diff --exit-code || exit 1
+untracked="$(git ls-files --others --exclude-standard)" || exit 1
+[ -z "$untracked" ] || exit 1
+echo all-staged
 ```
 
 Expected: `all-staged`.
@@ -5244,14 +5385,63 @@ Expected: `all-staged`.
 
 Contract §49's checks, CI's race build of the four packages this task touches, and the fsm red lines.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git diff --exit-code -- '*.bazel' && bazel build //... && bazel test //... --test_output=errors && bazel test --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //server:server_test //cmd/arbiter-admin:arbiter-admin_test //metrics:metrics_test --test_output=errors && GOWORK=off go vet ./... && git diff --cached --name-only | grep -E '(testdata/|_golden_test\.go$)'; grep -rn 'time\.Now' fsm/; bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto`
-Expected: `gofmt` is silent and gazelle changes nothing (the `git diff --exit-code` passes because Step 42 staged the `BUILD.bazel` files); `bazel build //...` succeeds; every test target PASSes, the four race targets too (the frozen goldens, the L3 preimage tests, Plan S3-E2's v21 container vectors and Plan S3-A's every-field tests among them); `go vet` prints nothing; the golden grep prints exactly `fsm/placement_golden_test.go` (the one new frozen fixture; no existing golden or vector changed); the `time.Now` grep and the `bazel query … | grep` print nothing (the fsm red lines). If a target fails, fix it in this task before committing; never edit a golden or vector file.
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task71-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+list="$(mktemp "$T64/task71-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY71'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY71
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //server:server_test //cmd/arbiter-admin:arbiter-admin_test //metrics:metrics_test --test_output=errors || exit 1
+go vet ./... || exit 1
+changes="$(mktemp "$T64/task71-goldens.XXXXXX")" || exit 1
+git diff --cached --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY71'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0'); assert rows.pop()==b'' and len(rows)%2==0
+protected=[(st,p) for st,p in zip(rows[::2],rows[1::2]) if b'testdata/' in p or p.endswith(b'_golden_test.go')]
+assert protected==[(b'A',b'fsm/placement_golden_test.go')],protected
+PY71
+if git grep -n 'time\.Now' -- fsm; then
+ echo 'stop: FSM wall clock reference' >&2; exit 1
+else
+ rc=$?; [ "$rc" -eq 1 ] || exit "$rc"
+fi
+deps="$(bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)')" || exit 1
+[ -n "$deps" ] || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) exit 1;; esac
+echo task71-full-checks-passed
+```
+Expected: `gofmt` is silent and gazelle changes nothing (the `git diff --exit-code` passes because Step 42 staged the `BUILD.bazel` files); `bazel build //...` succeeds; every test target PASSes, the four race targets too (the frozen goldens, the L3 preimage tests, Plan S3-E2's v21 container vectors and Plan S3-A's every-field tests among them); `go vet` prints nothing; the NUL-delimited staged diff permits only the added `fsm/placement_golden_test.go` among protected paths; the FSM wall-clock scan must return genuine no-match, and the successful non-empty Bazel dependency query must contain no direct arbiter-proto dependency. The final success marker is `task71-full-checks-passed`. If a target fails, fix it in this task before committing; never edit a golden or vector file.
 
 - [ ] **Step 44: Commit**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" commit -m "fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task71-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_71_5085="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_71_5085" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_71_5085}" = "$base" ] || exit 1
+git -C "$W" commit -S -m "fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)
 
 From the stage3 placement switch (housegate spec 2026-10-14 §6.2-§6.4,
 §10.4 step 5) every (owner, database) with a physical incarnation has one
@@ -5273,8 +5463,27 @@ change; ConsensusAdmin.RebalanceGroup, arbiter-admin consensus groups,
 group preview and group rebalance, and the group gauges come with it.
 Restore checks every group record. With the switch off nothing changes.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log --oneline -1 && git -C "$W" status --porcelain
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+git_read_71_5111="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_71_5111}" = 1 ] || exit 1
+git_read_71_5112="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_71_5112}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+message="$(git log -1 --format=%B)" || exit 1
+python3 -I - "$message" <<'PY71'
+import re,sys
+rows=re.findall(r'^co-authored-by:[^\n]*$',sys.argv[1],re.I|re.M)
+assert rows==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'],rows
+PY71
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+python3 -I - "$T64/task71-final-head" "$head" <<'PY71'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f: f.write(sys.argv[2]+'\n')
+PY71
+echo task71-signed-commit-verified
 ```
 
 Expected: one line ending `fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)`, and an empty status.
@@ -5283,14 +5492,52 @@ Expected: one line ending `fsm: database groups, placement and RebalanceGroup (S
 
 The branch is shared by Plans S3-E2 to S3-E4 and released once by Plan S3-E4 Task 78; the push only backs it up. No PR, merge, tag, release workflow or image belongs to this task (contract §49).
 
-Remote write (push of `urwt/claude/multi-source-s3e`): needs explicit user confirmation in chat before running.
+Remote write (push of `urwt/codex/multi-source-s3e`): needs explicit user confirmation in chat before running.
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" push origin HEAD:urwt/claude/multi-source-s3e
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task71-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+git_read_71_5146="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_71_5146}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+head="$(cat "$T64/task71-final-head")" || exit 1
+git_read_71_5149="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_71_5149" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "${git_read_71_5149}" ] || exit 1
+git_read_71_5150="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_71_5150}" = 1 ] || exit 1
+git_read_71_5151="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_71_5151}" = 'fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)' ] || exit 1
+
+branch=urwt/codex/multi-source-s3e
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+remote_head="$(python3 -I - "$remote" "$branch" <<'PY71'
+import re,sys
+m=re.fullmatch(r'([0-9a-f]{40})\trefs/heads/'+re.escape(sys.argv[2]),sys.argv[1]); assert m
+print(m[1])
+PY71
+)" || exit 1
+git merge-base --is-ancestor "$remote_head" "$base" || exit 1
+# Only after explicit user confirmation in chat:
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git_read_71_5166="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_71_5166" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_71_5166}" = "$head" ] || exit 1
+echo task71-push-verified
 ```
 
-Expected: one `HEAD -> urwt/claude/multi-source-s3e` line. A rejected push means the remote branch moved: stop and ask; never force it.
+Expected: `task71-push-verified`, with the remote equal to the exact checked SHA. A rejected push means the remote branch moved: stop and ask; never force it.
+
+Static preparation note: Step 1 success is `task71-entry-verified`; the historical printed pin/count examples are explanatory only. Step 2 permits genuine absence (grep status 1) of the pending-proto map; other git failures stop. Step 43 success is exclusively `task71-full-checks-passed`, after every explicit gate; Step 44 success is `task71-signed-commit-verified`. No PR, tag, image or ledger value is produced here.
+
 
 ---
 
@@ -5298,13 +5545,14 @@ Expected: one `HEAD -> urwt/claude/multi-source-s3e` line. A rejected push means
 
 Spec §7.1 (the `GroupKey` over a group's ready verify members and fill flag, blocks sealed on (owner, `GroupKey`) with the C10 discipline, the commands that change a key sealing first, `group_key` in the track of every block sealed after the recorded `placement` cutover and of none before it, transition blocks per key with one unpublished transition per track, the restore rules and the golden chain-hash vectors), §7.2 (the grouping window on (owner, `GroupKey`) and `arbiter_block_seal_reason{reason="group_switch"}`), §10.4 step 5 (the `placement` switch-on seals the open block and records the cutover block), §17 (the FSM tests of the seal key: databases with identical keys sharing blocks, parameter updates that change a key, the grouping window) and §20's change to umbrella D9 and §7.1, as fixed by contract §51, clarification K73 (the key reads committed group records and the `verifiers` listing, never node status) and S3-E1 K62 (the block's recorded group database list). With the `placement` switch off every path is byte for byte Plan S3-E2's branch and Task 71's commit: no open block, header or `BlockVerification` carries a group field, admission seals only on an owner switch, the transition planner and the grouping window order by owner, and the only new effect is the node-local seal counter (`TestOwnerSwitchSealIsUnchangedBeforePlacement`, `TestTransitionPlanIsUnchangedBeforePlacement`, `TestOrderBySealKeyGroupsByOwnerAndKey`). Its only remote action is the confirmed push of the shared branch in Step 27.
 
-Worktree: Plan S3-E2 Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, contract §49), with `HEAD` at Task 71's commit; the Bash tool keeps no variables between calls, so every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own call. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this was drafted: Plan S3-A merged as arbiter#133); for `fsm/state.go`, `fsm/admission.go`, `fsm/apply.go`, `fsm/snapshot_query_block.go`, `fsm/consensus_updates.go`, `fsm/table_set_transition.go`, `fsm/reads_tracks.go`, `fsm/table_registry.go`, `server/grouper.go` and `server/safestate.go` they are also the header's `fb42260` lines, since Plan S3-A changed none of those files. Plan S3-E2 Tasks 64–70 and Task 71 changed several anchored regions first (`fsm/stage3.go`, `fsm/rebalance_group.go`, `fsm/stage3_restore.go`, `stage3FieldsPresent` in `fsm/snapshot.go`, and Task 70's lines in `fsm/reads_verification.go`, `server/safestate_stage3.go` and `server/safestate_stage3_test.go` are theirs and are named by function or field, not by line): every hunk below quotes the exact text it replaces and is applied on top of what is there (the hunk rule of the Global Constraints); the contract and the named tests are binding, the anchors are guidance.
+Worktree: Task 64's retained actual Codex JSON path, loaded through its complete `env.sh` on every Bash call. Entry requires Task 71's exact final subject, clean poetry/G HEAD with verify-commit, and its exclusive observed `task71-final-head` equal to current HEAD. Task 72 exclusively retains its own observed base; stale receipts stop execution. Do not reconstruct paths, predict commit IDs or weaken the inherited identity checks.
+
+**STATIC PREP / TASK72 EXECUTION PENDING:** bounded Task71 V8 source custody is root-accepted by `task71-v8-root-source-acceptance.json` (SHA256 `b88c075440783354b2d6b29a47ddcab36a0d8661062e822122e59fd31a0dce25`). Task72 source application and runtime verification, its separately reviewed source-bound runtime profile, fresh root execution grant and formal signed-head/worktree entry all remain pending; this accepted bounded71 input does not authorize Task72 execution or formal adoption. Drafting line anchors are historical `526a721`; reconcile every quoted runtime hunk with that approved source. Outside the M32/M33 owning addendum in Steps 5/15/16/17, every original fence, including independent Python goldens and operator Markdown, is byte-preserved. This addendum is STATIC drafting only; the frozen V4 runtime adapter is unchanged and must still refuse the addendum-required boundary dispositions until a separate reviewed source-bound adaptation and fresh root grant exist. No current TDD/runtime/golden/signing/publication result is claimed. Existing upstream PREP reports establish interfaces only. An offline dependency miss stops the check; every Go/Bazel call disables dependency downloads. GPG cancellation stops for the user's actual-key unlock; no unsigned fallback is permitted.
 
 **Files:**
 - Create: `fsm/group_key.go` (`GroupKeyDomain`, `GroupKey`, `GroupRef`, `GroupSeal`, `SealKey`, `SealReason`, `SealReasons`, the seal counter, the seal-key helpers)
 - Modify: `fsm/state.go` (`OpenL3Block` `:195-202`: three fields after `Owner` `:201`; `L3BlockTrack` `:240-242`: `GroupKey` after `IndexerID`; `BlockVerification` `:269-279`: four fields after Plan S3-E2 Task 70's `MarkedCursorBlock`)
 - Modify: `fsm/stage3.go` (Plan S3-E2 Task 64's `Stage3State`: `PlacementCutoverBlock` after Task 71's `GroupGenerations`)
-- Modify: `fsm/stage3_groups.go` (Task 71's `GroupMember`: `ReadyGeneration`, the one readiness field the key reads)
 - Modify: `fsm/fsm.go` (`FSM` struct `:39-53`: `sealReasons` as its last field, after Plan S3-A's `stateSize` and Plan S3-E2 Task 67's `encoding`)
 - Modify: `fsm/apply.go` (`preparedSeal` `:320-324`, `prepareStatementSealLocked` `:326-375`, `commitSealLocked` `:377-407`, `applySealL3Block` `:422`)
 - Modify: `fsm/snapshot_query_block.go` (`sealSnapshotQueryBlockLocked` `:74-75`)
@@ -5330,14 +5578,15 @@ Worktree: Plan S3-E2 Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-sour
 
 **Interfaces:**
 - Consumes:
-  - Task 71 (contract §50): `type DatabaseGroup struct{ Owner uint64; DatabaseID string; Generation uint64; Salt string; NetworkFill bool; Members []GroupMember; Leaving []LeavingMember; PastMembers []string }`, `type GroupMember struct{ NodeID string; JoinedGeneration uint64; Class MemberClass }` (Task 71 defers the readiness and checkpoint fields to Tasks 73 and 75), `GroupGeneration{Owner, DatabaseID, Generation}`, `Stage3State.Groups []*DatabaseGroup` (`json:"groups,omitempty"`) and `Stage3State.GroupGenerations []GroupGeneration` (`json:"group_generations,omitempty"`); `func (f *FSM) placementOnLocked() bool`, `func (f *FSM) PlacementOn() bool`, `func (f *FSM) groupLocked(owner uint64, database string) *DatabaseGroup`, `func (f *FSM) openBlockDatabasesLocked() []string`, `func (f *FSM) prepareGroupSealLocked(owner uint64, databases []string) (*preparedSeal, string)`, `func (f *FSM) applyRebalanceGroup(c *wire.RebalanceGroup) any` (its effect 1 commits the prepared seal before the generation is raised), the `placement` switch-on backfill (`placementBackfillLocked` before `wasEnabled :=`, the node-local `FSM.placementBackfill` set before `f.st.Params = next`, and `installPlacementBackfillLocked` in the `placement` case of `onStage3SwitchOnLocked`), `memberEntriesChangedLocked` and its registry-version bump, the `AddTable` placement; `type GroupView struct{ Group DatabaseGroup; Key string; MemberViews []GroupMemberView }`, `TableRegistryView.Groups []GroupView` and `func groupsToPB(v []fsm.GroupView) []*pb.DatabaseGroup` (mapping `GroupView.Key` to `group_key`); `TestPlacementIsReDerivableFromTheRegistryView`, `TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst`, `TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared`.
+  - Task 71 (contract §50): `type DatabaseGroup struct{ Owner uint64; DatabaseID string; Generation uint64; Salt string; NetworkFill bool; Members []GroupMember; Leaving []LeavingMember; PastMembers []string }`, `type GroupMember struct{ NodeID string; JoinedGeneration uint64; Class MemberClass; ReadyGeneration uint64; ReadySignature string; ReadyEpoch uint64 }` (Task 71 declares readiness with contract §50's `omitempty` tags; Task 73 populates it; Task 75 appends checkpoint fields), `GroupGeneration{Owner, DatabaseID, Generation}`, `Stage3State.Groups []*DatabaseGroup` (`json:"groups,omitempty"`) and `Stage3State.GroupGenerations []GroupGeneration` (`json:"group_generations,omitempty"`); `func (f *FSM) placementOnLocked() bool`, `func (f *FSM) PlacementOn() bool`, `func (f *FSM) groupLocked(owner uint64, database string) *DatabaseGroup`, `func (f *FSM) openBlockDatabasesLocked() []string`, `func (f *FSM) prepareGroupSealLocked(owner uint64, databases []string) (*preparedSeal, string)`, `func (f *FSM) applyRebalanceGroup(c *wire.RebalanceGroup) any` (its effect 1 commits the prepared seal before the generation is raised), the `placement` switch-on backfill (`placementBackfillLocked` before `wasEnabled :=`, the node-local `FSM.placementBackfill` set before `f.st.Params = next`, and `installPlacementBackfillLocked` in the `placement` case of `onStage3SwitchOnLocked`), `memberEntriesChangedLocked` and its registry-version bump, the `AddTable` placement; `type GroupView struct{ Group DatabaseGroup; Key string; MemberViews []GroupMemberView }`, `TableRegistryView.Groups []GroupView` and `func groupsToPB(v []fsm.GroupView) []*pb.DatabaseGroup` (mapping `GroupView.Key` to `group_key`); `TestPlacementIsReDerivableFromTheRegistryView`, `TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst`, `TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared`.
   - Plan S3-E2 (contract §44–§47): Task 64's `Stage3SwitchPlacement`, `func stage3SwitchValue(p *arbiter.Stage3Params, name string) bool`, `type Stage3State struct{…}` (`fsm/stage3.go`), the every-field `cloneVerifiers`, `func (f *FSM) verifierEntryLocked(nodeID string) (arbiter.VerifierEntry, bool)`; Task 64's fixture `activateStage3(t, f, a)`, `turnOnStage3Switch(t, f, a, name string)`, `turnOnStage3SwitchesThrough(t, f, a, last string)`, `stage3Update(t, f) arbiter.ConsensusParamsUpdate`, `withVerifier(u arbiter.ConsensusParamsUpdate, entry arbiter.VerifierEntry) arbiter.ConsensusParamsUpdate`, `memberEntry(t, f, host uint64, node, domain string) arbiter.VerifierEntry`, `stage3TestMember(host uint64) string` (`member-<host>`), `stage3MemberKey(node string) ed25519.PrivateKey`, `stage3WithSwitch(p *arbiter.Stage3Params, name string) *arbiter.Stage3Params`, `rejectStage3Unchanged(t, f, cmd wire.Command, reason string)`; Task 64's server test map `stage3PendingProtoFields map[string]string` and `requireEveryFieldExcept(t *testing.T, m proto.Message)`; Task 66's `func stage3FieldsPresent(doc *snapshotDoc) bool` (`fsm/snapshot.go`, refusal `stage3 state is present in a pre-v21 container`), `func validateStage3State(st *State) error` (`fsm/stage3_restore.go`, wrapped `snapshot: %w` by the reader), `snapshotVersionV20`, `snapshotVersionV21`, the envelope-aware `rewriteSnapshotDocument(t *testing.T, data []byte, version byte, mutate func(map[string]any)) []byte`, `plainSnapshotBytes(t *testing.T, f *FSM) []byte`, `v21Stage3(doc map[string]any) map[string]any`; Task 67's interned body (a generic JSON codec, so it carries the new fields untouched) and its encoding-collector registration in `New`, which this task's registration follows; Task 70's `BlockVerification.EligibleRing`, `RingPosition`, `MarkedCursorBlock`, the same three `BlockVerificationView` fields and `blockVerificationToPB` lines, and the `stage3BlockVerificationView` and `TestBlockVerificationToPBCarriesEveryField` lines that set them.
   - Plan S3-E1 (contract §49, through `PROTO_TAG_P5` and `CORE_TAG_P5`, pinned by Plan S3-E2 Task 64): `pb.L3BlockTrack.GroupKey string` (field 2), `pb.BlockVerification.GroupKey string`, `.GroupMembers []string`, `.GroupFill bool`, `.GroupDatabases []*pb.BlockGroupRef` (fields 17–20), `pb.BlockGroupRef{DatabaseId string; GroupGeneration uint64}`, `pb.DatabaseGroup.GroupKey string` (field 8); `arbiter.VerifierEntry.Verify bool`, `arbiter.MemberReadyBody{NodeID string; OwnerIndexerID uint64; DatabaseID string; Generation uint64}`, `func authority.SignMemberReady(priv ed25519.PrivateKey, ctx authority.MessageContext, body arbiter.MemberReadyBody) (string, error)` (tests only, to record a readiness that Task 73's `MemberReady` will write).
   - Plan S3-A (contract §4): `fsm.BlockVerificationView`, `func (f *FSM) BlockVerificationView(blockSeq uint64) (BlockVerificationView, error)`, `func blockVerificationToPB(v fsm.BlockVerificationView) *pb.BlockVerification`, `stage3BlockVerificationView()`, `requireEveryField`, `TestBlockVerificationToPBCarriesEveryField`; the `stateSizeReader` pattern of `metrics/metrics.go`.
   - Existing arbiter: `preparedSeal`, `prepareStatementSealLocked`, `commitSealLocked`, `applySealL3Block`, `sealSnapshotQueryBlockLocked`, `sealTableSetTransitionLocked`, `plannedTrackTransitionLocked`, `pendingTableSetChangesLocked`, `unpublishedTrackTransitionLocked`, `tableSetTransitionPlan`, `TableOwner`, `liveReadOnly`, `incarnationOwnerLocked`, `tracksActiveLocked`, `spentIDsRootLocked`, `splitTableKey` (`fsm/table_registry.go:233`), `cloneStrings`, `registryWake` (the node-local precedent), `l3HeaderToPB`, `orderByOwner`, `replay.CanonicalDigest`; fsm test helpers `claimsFSM`, `activateClaims`, `siEntry`, `indexerSigner2` (`fsm/signed_claims_params_test.go:85`, `:99`, `:45`, `:28`), `registerActive`, `mustApply`, `applyExpectReject`, `newTestFSM` (`fsm/fsm_test.go:108`, `:83`, `:92`, `:27`), `advanceTo`, `seedIndexerCmd`, `ownedAddCmd` (`fsm/table_registry_owners_test.go:38`, `:32`, `:24`), `ev` (`fsm/apply_table_registry_test.go:14`), `mustSeal` (`fsm/table_set_transition_seal_test.go:54`), `verifyTransition`, `anchorFinal` (`fsm/table_set_transition_pipeline_test.go:47`, `:57`), `publishManifestInputs` (`fsm/table_set_transition_manifest_test.go:98`), `tracksFSM`, `activateTracks`, `admitTrack`, `setPublishedTrackFrontiers` (`fsm/tracks_fixture_test.go:81`, `:71`, `:106`, `:193`), `signedConsensusUpdate` (`fsm/consensus_updates_test.go:26`), `messageContextFor`, `authorityContextFor` (`fsm/signed_messages_fixture_test.go:28`, `:39`), `restoreConfigured` (`fsm/table_set_transition_restore_test.go:31`), `restoreRefusedBothWays` (`fsm/snapshot_tracks_forgery_test.go:22`), `validEnvelope`, `signStatementV2`, `submit` (`fsm/admission_test.go:80`, `:37`, `:106`), `fixedClient` (`fsm/admission_source_test.go:18`), `snapshotBytes` (`fsm/snapshot_test.go:30`), `refusedOwnerSwitch` (`fsm/owner_switch_test.go:22`), `seedQueryStatement`, `testQueryEnvelope`, `testQueryStatementID` (`fsm/snapshot_query_block_test.go:59`, `:23`, `:16`), `assertMarshalsTo` (`fsm/l3_commitment_golden_test.go:129`), `goldenTrackHeader`, `goldenTrack1HeaderChainHash`, `goldenTrack1TransitionHeaderChainHash` (`fsm/l3_track_golden_test.go:29`, `:20`, `:21`), `goldenTransitionHeader` (`fsm/l3_transition_golden_test.go:23`); server test helpers `heldSubmission`, `laneHeld`, `heldNames` (`server/grouper_test.go:396`, `:448`), `l3HeaderWithTrackFromPB` (`server/tracks_read_api_test.go:18`); the metrics fake `laneSnapshot` (`metrics/client_lanes_test.go:12`).
+  - Owning boundary addendum test seams, read-only bound to root-accepted Task71 V8 source custody (b88c0754): `forgedGroupsSnapshot(t, f, mutate func(*State)) []byte`, `rebalanceCmd(t, f, signer, owner, database, generation, add, remove, fill) wire.Command` and `groupGenerationLocked` (`fsm/stage3_groups_test.go`); `purgeTestRetire` and `purgeTestReport` (`fsm/purge_stage3_test.go`); existing `verifyTransition` / `anchorFinal` and `publishManifestInputs` drive real Apply/publication. These seams do not authorize source consumption or execution without a separately reviewed runtime profile and fresh grant.
 - Produces (contract §51, verbatim):
   - `fsm/group_key.go`: `const GroupKeyDomain = "arbiter-group-key-v1"`; `` type groupKeyPreimage struct{ Members []string `json:"members"`; NetworkFill bool `json:"network_fill"` } ``; `func GroupKey(members []string, networkFill bool) (string, error)` (refusal `group key: members must be sorted, unique, non-empty node ids, got %q`); `` type GroupRef struct{ DatabaseID string `json:"database_id"`; Generation uint64 `json:"generation"` } ``; `type GroupSeal struct{ Key string; Members []string; Fill bool; Databases []GroupRef }`; `type SealKey struct{ Owner uint64; GroupKey string }`; `type SealReason string` with `SealReasonRequested`, `SealReasonTransition`, `SealReasonSnapshotQuery`, `SealReasonOwnerSwitch`, `SealReasonGroupSwitch`, `SealReasonKeyChange`, `SealReasonPlacementCutover` and `var SealReasons`; `func (f *FSM) readyVerifyMembersLocked(g *DatabaseGroup, verifiers []arbiter.VerifierEntry) []string`; `func (f *FSM) groupSealLocked(g *DatabaseGroup, verifiers []arbiter.VerifierEntry) (GroupSeal, error)`; `func (f *FSM) currentGroupSealLocked(owner uint64, database string) (*GroupSeal, error)`; `func (bv *BlockVerification) groupSeal() *GroupSeal`; `func (ob *OpenL3Block) groupSeal() *GroupSeal`; `func (f *FSM) TableSealKey(tableID string) (SealKey, bool)` (`fsm/reads_tracks.go`); `func (f *FSM) BlockSealReasons() map[SealReason]uint64`; the FSM field `sealReasons sealReasonCounter`.
-  - State: `GroupMember.ReadyGeneration uint64` (`json:"ready_generation,omitempty"`, contract §50's field and tag, added here because the key reads it; Task 73 sets it and adds `ReadySignature` and `ReadyEpoch`); `OpenL3Block.GroupKey string` (`json:"group_key,omitempty"`), `GroupMembers []string` (`json:"group_members,omitempty"`), `GroupFill bool` (`json:"group_fill,omitempty"`); `L3BlockTrack.GroupKey string` (`json:"group_key,omitempty"`, in the chain-hash preimage); `BlockVerification.GroupKey`, `GroupMembers`, `GroupFill`, `GroupDatabases []GroupRef` (tags `group_key`, `group_members`, `group_fill`, `group_databases`, all `omitempty`); `Stage3State.PlacementCutoverBlock *uint64` (`json:"placement_cutover_block,omitempty"`).
+  - State: `OpenL3Block.GroupKey string` (`json:"group_key,omitempty"`), `GroupMembers []string` (`json:"group_members,omitempty"`), `GroupFill bool` (`json:"group_fill,omitempty"`); `L3BlockTrack.GroupKey string` (`json:"group_key,omitempty"`, in the chain-hash preimage); `BlockVerification.GroupKey`, `GroupMembers`, `GroupFill`, `GroupDatabases []GroupRef` (tags `group_key`, `group_members`, `group_fill`, `group_databases`, all `omitempty`); `Stage3State.PlacementCutoverBlock *uint64` (`json:"placement_cutover_block,omitempty"`).
   - `func (f *FSM) commitSealLocked(p *preparedSeal, reason SealReason) SealResult`; `func (f *FSM) pendingTableSetChangesBySealKeyLocked() ([]SealKey, map[SealKey]*tableSetChanges)`; `tableSetChanges.seal *GroupSeal`; `tableSetTransitionPlan.seal *GroupSeal`; `func validateStage3SealKeys(st *State) error`; `BlockVerificationView.GroupKey string`, `.GroupMembers []string`, `.GroupFill bool`, `.GroupDatabases []GroupRef`; `GroupView.Key` filled.
   - Refusals: admission `Rejected{Reason: fmt.Sprintf("database %q of indexer %d has no group while placement is on", …)}`, `group switch seal: %s` (the owner-switch text `owner switch seal: %s` unchanged); `open block has no group key` (`prepareStatementSealLocked`); `consensus update: placement cutover seal: %s`, `consensus update: group key change seal: %s`; `table-set transition of indexer %d: database %q has no group`; the fifteen restore texts of contract §51, each prefixed `snapshot stage3 seal keys: ` and wrapped `snapshot: %w` by the reader.
   - `server/grouper.go`: `func orderBySealKey(batch []*heldSubmission, key func(tableID string) (fsm.SealKey, bool)) []*heldSubmission`, `orderByOwner` kept as its wrapper; `submit` orders with `g.s.d.FSM.TableSealKey`. `l3HeaderToPB` sets `pb.L3BlockTrack.GroupKey`; `blockVerificationToPB` sets fields 17–20.
@@ -5352,7 +5601,7 @@ Notes:
 - **Key changes by update and by command.** From the switch on, an update under whose `next.Verifiers` the key of any database of the open block's statements differs from `OpenBlock.GroupKey` (a member's `verify` flipped, a ready member delisted or listed again) seals first with `key_change`; an update that leaves the open block's key alone seals nothing (`TestParamsUpdateFlippingVerifySealsFirst`). The seal is prepared after every refusal of the update, Task 71's backfill and floor refusals included, and before its first mutation; a seal that cannot be prepared refuses the update with state unchanged (`TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared`, which, like `TestRefusedOwnerSwitchSealsNothing`, synthesizes the only failing case, a corrupted open block). `EvictNode` reads no key, so it never seals (K73, `TestGroupKeyIgnoresEvictionAndNodeStatus`). `RebalanceGroup` keeps Task 71's `prepareGroupSealLocked` and commits with `key_change` before it raises the generation, so the sealed block records the group as it was; Task 73's `MemberReady` will do the same.
 - **What a sealed block records.** `commitSealLocked` copies the open block's key, members and fill into the `BlockVerification` and sets `GroupDatabases` to the block's distinct statement databases (the `<database>` of each target id; `AddTable` refuses a dotted id, so it is the incarnation's `DatabaseID`) with each group's generation at the commit (S3-E1 K62); a transition block records the databases of its changes. Restore checks the header key against the record, the key against the recorded members and fill, the list's order, and that every retained statement and every changed table belongs to a recorded database; it does not compare the recorded generations with the durable counter, which later rebalances legitimately raise.
 - **Transitions per key.** `pendingTableSetChangesBySealKeyLocked` partitions the committed changes by (owner, the current key of the change's database's group) and accumulates each key's `GroupSeal`; `plannedTrackTransitionLocked` walks the keys in (owner, key) order with today's rules, so a track still holds at most one unpublished transition block whatever its key, and a second key of the same owner waits for the first one's publication with today's reason (`TestOneUnpublishedTransitionPerTrackAcrossKeys`). A change whose database has no group while placement is on (unreachable after Task 71's restore rule) makes its key unsealable with `table-set transition of indexer %d: database %q has no group`, through the new `tableSetChanges.refusal`.
-- **Readiness before Task 73.** Contract §51's key hashes the members with `ReadyGeneration != 0`, but Task 71 left `GroupMember` with only `NodeID`, `JoinedGeneration` and `Class` (it defers the readiness fields to Task 73). This task therefore adds `ReadyGeneration` with contract §50's tag, and nothing else; Task 73's `MemberReady` sets it and adds `ReadySignature` and `ReadyEpoch` (recorded for the consistency pass: Task 73 must not add `ReadyGeneration` again). No member is ready until `MemberReady`, so every key in this task's Apply paths is `GroupKey([], fill)`. The tests reach a ready member with `readyGK`: it restores the FSM from its own plain v21 container with that member's `ready_generation`, `ready_signature` and `ready_epoch` set as Task 73's `MemberReady` writes them, the signature made with the member's listed ed25519 key (`stage3MemberKey`) over the `MemberReadyBody` in the FSM's message context. The snapshot decoder ignores the two keys this task does not declare, and once Task 73 declares them its restore re-verification accepts the same fixtures. `generationGK` raises one group and its durable counter to generation 2 the same way, as a `RebalanceGroup` that changed nothing else would.
+- **Readiness before Task 73.** Task 71 declares `ReadyGeneration`, `ReadySignature` and `ReadyEpoch` with contract §50's exact types and `omitempty` tags. Contract §51's key reads the existing `ReadyGeneration != 0`; this task adds no readiness field. Task 73's `MemberReady` populates all three and adds their structural and signature restore validation. No member is ready in this task's ordinary Apply paths until `MemberReady`, so those paths use `GroupKey([], fill)`. The `readyGK` fixture restores its own plain v21 container with all three declared fields populated as Task 73's `MemberReady` will write them, signed with the member's listed ed25519 key (`stage3MemberKey`) over the `MemberReadyBody` in the FSM's message context. These fields are retained by the decoder; their Task 73 proof re-verification is not implemented or claimed here. `generationGK` raises one group and its durable counter to generation 2 the same way, as a `RebalanceGroup` that changed nothing else would.
 - **The grouping window.** `TableSealKey` runs under the read lock, never builds the live index (it reads `liveReadOnly`, like `TableOwner`), answers `ok=false` exactly when `TableOwner` does, and computes the key from the committed group and listing. `orderBySealKey` is `orderByOwner`'s algorithm on the whole key, lane rule unchanged.
 - **The registry view.** `TableRegistryView` fills `GroupView.Key` when it is read, under the same lock as Task 71's group views; the view carries no ready verify members (D33), while `GetBlockVerification` serves the block's recorded `group_members` (field 18), which contract §51 names. A served key changes only with a member's `verifiers` entry (Task 71's registry-version rule bumps that update once) or with a group change (Task 71's `groupsChangedLocked`, Task 73's readiness); `TestRegistryViewServesEachGroupsCurrentKey` pins the first.
 - **The seal counter is node-local.** `sealReasons` sits beside `registryWake` and Plan S3-A's `stateSize`: Apply increments it on every replica, nothing in Apply reads it, it is never snapshotted and a restore does not reset it, so it cannot change a digest. It is the one metric updated in Raft apply, which `docs/specs/issue-31-metrics.md` otherwise rules out; Step 24 records the exception there and in the README. The collector is registered only for a source that implements `BlockSealReasons` (`*fsm.FSM`), like Plan S3-E2 Task 67's encoding collector, so the metrics fakes export no new series.
@@ -5362,29 +5611,57 @@ Notes:
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git rev-parse --abbrev-ref HEAD
-git status --porcelain
-git log -1 --format=%s
-CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)"
-PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)"
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: dirty worktree' >&2; exit 1; }
+git_read_72_77="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_72_77}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+git_read_72_79="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_72_79}" = 'fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)' ] || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+python3 -I - "$T64/task71-final-head" "$head" <<'PY72'
+import pathlib,re,sys
+value=pathlib.Path(sys.argv[1]).read_text()
+assert re.fullmatch(r'[0-9a-f]{40}\n',value) and value[:-1]==sys.argv[2]
+PY72
+CORE="$(go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)" || exit 1
+PROTO="$(go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)" || exit 1
 for p in 'func (f *FSM) placementOnLocked(' 'func (f *FSM) groupLocked(' 'func (f *FSM) installPlacementBackfillLocked(' 'type GroupMember struct' 'func (f *FSM) openBlockDatabasesLocked(' 'func (f *FSM) prepareGroupSealLocked(' 'func (f *FSM) applyRebalanceGroup(' 'type GroupView struct' 'func stage3FieldsPresent(' 'func validateStage3State(' 'func stage3SwitchValue(' 'func stage3MemberKey(' 'func withVerifier(' 'func memberEntry(' 'func stage3WithSwitch(' 'func plainSnapshotBytes(' 'func v21Stage3(' 'func rejectStage3Unchanged(' 'func turnOnStage3SwitchesThrough(' 'func (f *FSM) BlockVerificationView('; do
-  grep -rqF -- "$p" fsm || echo "missing in fsm: $p"
+  grep -rqF -- "$p" fsm || { echo "stop: missing in fsm: $p" >&2; exit 1; }
 done
-grep -qE 'MarkedCursorBlock uint64 +`json:"marked_cursor_block,omitempty"`' fsm/state.go || echo "missing in fsm: BlockVerification.MarkedCursorBlock"
+# Task71 owns the readiness declarations; Task73 owns their population.
+grep -qE '^[[:space:]]+ReadyGeneration[[:space:]]+uint64[[:space:]]+`json:"ready_generation,omitempty"`' fsm/stage3_groups.go || { echo 'stop: missing Task71 ReadyGeneration declaration' >&2; exit 1; }
+grep -qE '^[[:space:]]+ReadySignature[[:space:]]+string[[:space:]]+`json:"ready_signature,omitempty"`' fsm/stage3_groups.go || { echo 'stop: missing Task71 ReadySignature declaration' >&2; exit 1; }
+grep -qE '^[[:space:]]+ReadyEpoch[[:space:]]+uint64[[:space:]]+`json:"ready_epoch,omitempty"`' fsm/stage3_groups.go || { echo 'stop: missing Task71 ReadyEpoch declaration' >&2; exit 1; }
+grep -qE 'MarkedCursorBlock uint64 +`json:"marked_cursor_block,omitempty"`' fsm/state.go || { echo "stop: missing in fsm: BlockVerification.MarkedCursorBlock" >&2; exit 1; }
 for p in 'func groupsToPB(' 'stage3PendingProtoFields = map' 'func requireEveryFieldExcept(' 'func blockVerificationToPB(' 'func stage3BlockVerificationView('; do
-  grep -rqF -- "$p" server || echo "missing in server: $p"
+  grep -rqF -- "$p" server || { echo "stop: missing in server: $p" >&2; exit 1; }
 done
-grep -qF 'func (x *L3BlockTrack) GetGroupKey() string' "$PROTO/gen/pb/arbiter.pb.go" || echo "missing in arbiter-proto: L3BlockTrack.group_key"
-grep -qF 'func (x *BlockGroupRef) GetGroupGeneration() uint64' "$PROTO/gen/pb/arbiter.pb.go" || echo "missing in arbiter-proto: BlockGroupRef"
-grep -rqF 'func (x *DatabaseGroup) GetGroupKey() string' "$PROTO/gen/pb" || echo "missing in arbiter-proto: DatabaseGroup.group_key"
-grep -rqF 'func SignMemberReady(' "$CORE/authority" || echo "missing in arbiter-core: authority.SignMemberReady"
-grep -rhn '"Plan S3-E3 Task 72"' server
-grep -rn 'GroupKeyDomain\|func (f \*FSM) TableSealKey\|func orderBySealKey\|PlacementCutoverBlock\|sealReasons\|arbiter_block_seal_reason\|ReadyGeneration' fsm server metrics
-for f in fsm/group_key.go fsm/l3_group_key_golden_test.go server/grouper_seal_key_test.go metrics/seal_reason_test.go; do test -e "$f" && echo "exists: $f"; done
+grep -qF 'func (x *L3BlockTrack) GetGroupKey() string' "$PROTO/gen/pb/arbiter.pb.go" || { echo "stop: missing in arbiter-proto: L3BlockTrack.group_key" >&2; exit 1; }
+grep -qF 'func (x *BlockGroupRef) GetGroupGeneration() uint64' "$PROTO/gen/pb/arbiter.pb.go" || { echo "stop: missing in arbiter-proto: BlockGroupRef" >&2; exit 1; }
+grep -rqF 'func (x *DatabaseGroup) GetGroupKey() string' "$PROTO/gen/pb" || { echo "stop: missing in arbiter-proto: DatabaseGroup.group_key" >&2; exit 1; }
+grep -rqF 'func SignMemberReady(' "$CORE/authority" || { echo "stop: missing in arbiter-core: authority.SignMemberReady" >&2; exit 1; }
+# A grep tool failure is not evidence that future names are absent.
+if grep -rn 'GroupKeyDomain\|func (f \*FSM) TableSealKey\|func orderBySealKey\|PlacementCutoverBlock\|sealReasons\|arbiter_block_seal_reason' fsm server metrics; then
+ echo 'stop: Task72 name already present' >&2; exit 1
+else
+ rc=$?; [ "$rc" -eq 1 ] || exit "$rc"
+fi
+for f in fsm/group_key.go fsm/l3_group_key_golden_test.go server/grouper_seal_key_test.go metrics/seal_reason_test.go; do
+ if [ -e "$f" ] || [ -L "$f" ]; then echo 'stop: Task72 file already exists' >&2; exit 1; fi
+done
+python3 -I - "$T64/task72-base-sha" "$head" <<'PY72'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f: f.write(sys.argv[2]+'\n')
+PY72
+echo task72-entry-verified
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; an empty status; `fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)`; no `missing` line; four lines of `stage3PendingProtoFields` with the value `"Plan S3-E3 Task 72"` (`BlockVerification.group_key`, `.group_members`, `.group_fill`, `.group_databases`), plus `L3BlockTrack.group_key` or `DatabaseGroup.group_key` if an earlier task added either under Plan S3-E2 Task 64's rule; the last two commands print nothing (none of this task's names or files exists yet; `ReadyGeneration` included, which Task 71 leaves to the readiness tasks). If the branch, the status or the head differ, a seam is missing or one of this task's names exists, stop: Task 71 lands on this branch before this task (contract §49), and a missing seam is an earlier task's step to finish, not this task's to invent.
+Expected: `urwt/codex/multi-source-s3e`; an empty status; `fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)`; no `missing` line; four lines of `stage3PendingProtoFields` with the value `"Plan S3-E3 Task 72"` (`BlockVerification.group_key`, `.group_members`, `.group_fill`, `.group_databases`), plus `L3BlockTrack.group_key` or `DatabaseGroup.group_key` if an earlier task added either under Plan S3-E2 Task 64's rule; the last two commands print nothing (none of this task's new names or files exists yet; Task 71's three readiness declarations must already exist with their exact types and tags). If the branch, the status or the head differ, a seam is missing or one of this task's names exists, stop: Task 71 lands on this branch before this task (contract §49), and a missing seam is an earlier task's step to finish, not this task's to invent.
 
 - [ ] **Step 2: Recompute the frozen group-key digests outside Go**
 
@@ -5486,9 +5763,9 @@ check("goldenGroupKeyTransitionHeaderChainHash", digest("arbiter-l3-header-v1", 
 sys.exit(1 if failed else 0)
 ```
 
-Then run: `mkdir -p "$HOME/.cache/s3e3" && python3 -I "$HOME/.cache/s3e3/goldens.py"; echo "exit=$?"` (the directory exists once the file is written; the `mkdir` only guards a fresh home).
+Then run: `python3 -I "$HOME/.cache/s3e3/goldens.py" || exit 1; echo golden-recomputation-passed` (the directory exists once the file is written; the `mkdir` only guards a fresh home).
 
-Expected: 21 lines that begin with `ok`, in this order: `goldenTrack1HeaderChainHash 0x38e0adb5720d30ed7346a9f78b6b4393034df7576e8a18b470c59de8ff9aff9b`, `goldenTrack1TransitionHeaderChainHash 0x87847b9633f73ea4795d9f69d67e7a8aa12f0a1d46b9ac45eee591f388129841`, the eleven placement lines (`goldenPlacementPreimageJSON` through `goldenPlacementMembers member-a,member-b,member-c`), then `goldenGroupKeyNoMembersFill 0x8fb5ec39…`, `goldenGroupKeyNoMembersNoFill 0x3a68f211…`, `goldenGroupKeyBCFill 0x7cafb3ca…`, `goldenGroupKeyBCNoFill 0x0814ff32…`, `goldenGroupKeyACFill 0x8d67f751…`, `goldenGroupKeyHeaderJSON {"l3_block_seq":7,…}`, `goldenGroupKeyHeaderChainHash 0x38e143f7c938f259f10f202dbfa782a20ba9cdd98e2306dd0832b2f2b71eb820`, `goldenGroupKeyTransitionHeaderChainHash 0xa39e76507084fa79b0d93a12c81243c5e638519ff5e26f24b560859c7d9e8ea2`, and `exit=0`. A `MISMATCH` line means a frozen value of contract §51 is wrong: stop and report it; never edit a value to make the line pass.
+Expected: 21 lines that begin with `ok`, in this order: `goldenTrack1HeaderChainHash 0x38e0adb5720d30ed7346a9f78b6b4393034df7576e8a18b470c59de8ff9aff9b`, `goldenTrack1TransitionHeaderChainHash 0x87847b9633f73ea4795d9f69d67e7a8aa12f0a1d46b9ac45eee591f388129841`, the eleven placement lines (`goldenPlacementPreimageJSON` through `goldenPlacementMembers member-a,member-b,member-c`), then `goldenGroupKeyNoMembersFill 0x8fb5ec39…`, `goldenGroupKeyNoMembersNoFill 0x3a68f211…`, `goldenGroupKeyBCFill 0x7cafb3ca…`, `goldenGroupKeyBCNoFill 0x0814ff32…`, `goldenGroupKeyACFill 0x8d67f751…`, `goldenGroupKeyHeaderJSON {"l3_block_seq":7,…}`, `goldenGroupKeyHeaderChainHash 0x38e143f7c938f259f10f202dbfa782a20ba9cdd98e2306dd0832b2f2b71eb820`, `goldenGroupKeyTransitionHeaderChainHash 0xa39e76507084fa79b0d93a12c81243c5e638519ff5e26f24b560859c7d9e8ea2`, and `golden-recomputation-passed`. A `MISMATCH` line means a frozen value of contract §51 is wrong: stop and report it; never edit a value to make the line pass.
 
 - [ ] **Step 3: Write the frozen group-key golden file**
 
@@ -5701,9 +5978,9 @@ func groupKeyFSMGK(t *testing.T) (*FSM, *authority.Signer) {
 // that MemberReady body in f's message context, and the current epoch, the
 // record Plan S3-E3 Task 73's MemberReady writes. Until that command exists a
 // restore is the only way to a ready member; the open block must be empty,
-// since readiness changes the group's key. The decoder ignores
-// ready_signature and ready_epoch until Task 73 adds those fields, whose
-// restore re-verification then accepts the signature made here.
+// since readiness changes the group's key. Task 71 declares all three
+// fields; Task 73 adds readiness restore validation and re-verifies the
+// signature made here. This fixture does not implement MemberReady.
 func readyGK(t *testing.T, f *FSM, owner uint64, database, node string) *FSM {
 	t.Helper()
 	if len(f.st.OpenBlock.StatementSeqs) != 0 {
@@ -6088,6 +6365,9 @@ func TestDatabasesWithEqualKeysShareABlock(t *testing.T) {
 	key, account := fixedClient(t)
 	blocks := len(f.st.Blocks)
 	first := admitGK(t, f, key, account, 1, "db0.x")
+	if ob := f.st.OpenBlock; ob.GroupKey != goldenGroupKeyNoMembersFill || ob.GroupMembers != nil || !ob.GroupFill {
+		t.Fatalf("first statement must remember its group seal: key=%q members=%q fill=%v; want key=%s nil members fill=true", ob.GroupKey, ob.GroupMembers, ob.GroupFill, goldenGroupKeyNoMembersFill)
+	}
 	second := admitGK(t, f, key, account, 2, "db1.y")
 	ob := f.st.OpenBlock
 	if len(f.st.Blocks) != blocks || !slices.Equal(ob.StatementSeqs, []uint64{first, second}) || ob.GroupKey != goldenGroupKeyNoMembersFill || ob.GroupMembers != nil || !ob.GroupFill {
@@ -6654,7 +6934,14 @@ func TestSnapshotBelowV21RefusesGroupSealFields(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			restoreRefusedBothWays(t, f, rewriteSnapshotDocument(t, data, snapshotVersionV20, mutate), "stage3 state is present in a pre-v21 container")
+			const want = "stage3 state is present in a pre-v21 container"
+			forged := rewriteSnapshotDocument(t, data, snapshotVersionV20, mutate)
+			if err := restoreErr(t, forged); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("pre-v21 group seal fields must fail at the version gate: bare restore = %v, want %q", err, want)
+			}
+			if _, err := restoreConfigured(t, f, forged); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("pre-v21 group seal fields must fail at the version gate: configured restore = %v, want %q", err, want)
+			}
 		})
 	}
 }
@@ -6675,6 +6962,121 @@ func TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups(t *testing.T) {
 	})
 	restoreRefusedBothWays(t, f, data, fmt.Sprintf("snapshot stage3 seal keys: transition block %d changes %q outside its recorded groups", seq, table))
 }
+// TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord
+// changes only the generic placement BlockSeq. Its new value is still in
+// the generic chronology/range; the specialized pointer and keyed history
+// are unchanged. Both actual restore entry points must name the equality.
+func TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord(t *testing.T) {
+	f, a := groupKeyReadyFSMGK(t)
+	key, account := fixedClient(t)
+	admitGK(t, f, key, account, 1, "db0.x")
+	turnOnStage3Switch(t, f, a, Stage3SwitchPlacement)
+	cutover := *f.st.Stage3.PlacementCutoverBlock
+	admitGK(t, f, key, account, 2, "db0.x")
+	tip := mustSeal(t, f).BlockSeq
+	if tip != cutover+1 || f.st.Stage3.Switches[len(f.st.Stage3.Switches)-1].Switch != Stage3SwitchPlacement {
+		t.Fatal("fixture needs one later sealed block and no later switch")
+	}
+	restoresGK(t, f)
+	changed := 0
+	data := forgedGroupsSnapshot(t, f, func(st *State) {
+		for i := range st.Stage3.Switches {
+			c := &st.Stage3.Switches[i]
+			if c.Switch == Stage3SwitchPlacement {
+				if c.BlockSeq != cutover {
+					t.Fatalf("honest placement record = %d, want %d", c.BlockSeq, cutover)
+				}
+				c.BlockSeq = tip // the only forged state field
+				changed++
+			}
+		}
+		if changed != 1 || st.Stage3.PlacementCutoverBlock == nil || *st.Stage3.PlacementCutoverBlock != cutover {
+			t.Fatal("forgery must change exactly one generic record, not the specialized pointer")
+		}
+		if err := validateStage3Activation(st); err != nil {
+			t.Fatalf("one-field forgery triggered an unrelated generic guard: %v", err)
+		}
+	})
+	restoreRefusedBothWays(t, f, data, fmt.Sprintf("snapshot stage3 seal keys: placement cutover %d differs from placement switch cutover %d", cutover, tip))
+}
+
+// TestRestoreRefusesZeroHistoricalGroupGeneration changes one historical
+// ref's generation only: database, key, members, fill and header are honest.
+// The existing recorded-groups structural diagnostic remains compatible.
+func TestRestoreRefusesZeroHistoricalGroupGeneration(t *testing.T) {
+	f, _ := groupKeyFSMGK(t)
+	key, account := fixedClient(t)
+	admitGK(t, f, key, account, 1, "db0.x")
+	seq := mustSeal(t, f).BlockSeq
+	requireKeyedGK(t, f, seq, goldenGroupKeyNoMembersFill, nil, []GroupRef{{"db0", 1}})
+	restoresGK(t, f)
+	data := forgedGK(t, f, func(doc map[string]any) {
+		refs := docVerificationGK(doc, seq)["group_databases"].([]any)
+		if len(refs) != 1 {
+			t.Fatal("fixture needs exactly one historical group ref")
+		}
+		ref := refs[0].(map[string]any)
+		if ref["database_id"] != "db0" || ref["generation"].(float64) != 1 {
+			t.Fatal("fixture historical ref is not the honest generation-one db0 seal")
+		}
+		ref["generation"] = uint64(0) // the only forged document field
+	})
+	restoreRefusedBothWays(t, f, data, fmt.Sprintf("snapshot stage3 seal keys: block %d recorded groups are empty, unsorted or repeated", seq))
+}
+
+// TestRestoreKeepsHistoricalGroupGenerationAfterRebalance uses the actual
+// authority-signed command: it seals before raising the current generation.
+// Historical generation one must survive while the current group is at two.
+func TestRestoreKeepsHistoricalGroupGenerationAfterRebalance(t *testing.T) {
+	f, a := groupKeyFSMGK(t)
+	key, account := fixedClient(t)
+	admitGK(t, f, key, account, 1, "db0.x")
+	blocks := len(f.st.Blocks)
+	mustApply(t, f, rebalanceCmd(t, f, a, 0, "db0", 1, nil, []string{stage3TestMember(1)}, true))
+	if len(f.st.Blocks) != blocks+1 || len(f.st.OpenBlock.StatementSeqs) != 0 {
+		t.Fatal("signed rebalance must seal the old group before its generation changes")
+	}
+	seq := uint64(len(f.st.Blocks))
+	if g := f.groupLocked(0, "db0"); g == nil || g.Generation != 2 {
+		t.Fatalf("current group = %+v, want generation two", g)
+	}
+	requireKeyedGK(t, f, seq, goldenGroupKeyNoMembersFill, nil, []GroupRef{{"db0", 1}})
+	restoresGK(t, f)
+}
+
+// TestRestoreKeepsHistoricalGroupGenerationAfterPurge follows the real add,
+// transition verification/finality/publication, retirement and signed purge
+// reports. Removing the current group must not invalidate historical refs.
+func TestRestoreKeepsHistoricalGroupGenerationAfterPurge(t *testing.T) {
+	f, _ := groupKeyFSMGK(t)
+	incSeq := addGroupTable(t, f, 1, "dbq", "a", 200)
+	added := mustSeal(t, f).BlockSeq
+	verifyTransition(t, f, added)
+	anchorFinal(t, f, added)
+	publishManifestInputs(t, f)
+	inc := f.st.TableRegistry.incarnation(incSeq)
+	if inc.Status != TableStatusActive {
+		t.Fatalf("add transition did not become Active: %s", inc.Status)
+	}
+	requireKeyedGK(t, f, added, goldenGroupKeyNoMembersFill, nil, []GroupRef{{"dbq", 1}})
+	restoresGK(t, f)
+	purgeTestRetire(t, f, "dbq", "a", 202)
+	retired := mustSeal(t, f).BlockSeq
+	verifyTransition(t, f, retired)
+	anchorFinal(t, f, retired)
+	publishManifestInputs(t, f)
+	if inc.Status != TableStatusPurging {
+		t.Fatalf("retire transition did not become Purging: %s", inc.Status)
+	}
+	purgeTestReport(t, f, inc, "s1", "v1", "v2", "v3")
+	if inc.Status != TableStatusPurged || f.groupLocked(1, "dbq") != nil || f.groupGenerationLocked(1, "dbq") != 1 {
+		t.Fatal("real purge must remove the current group and retain its durable generation")
+	}
+	requireKeyedGK(t, f, added, goldenGroupKeyNoMembersFill, nil, []GroupRef{{"dbq", 1}})
+	requireKeyedGK(t, f, retired, goldenGroupKeyNoMembersFill, nil, []GroupRef{{"dbq", 1}})
+	restoresGK(t, f)
+}
+
 ```
 
 - [ ] **Step 6: Write the transition tests**
@@ -6795,7 +7197,39 @@ func TestTransitionPlanIsUnchangedBeforePlacement(t *testing.T) {
 
 - [ ] **Step 7: Run the fsm tests and see them fail to build**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -count=1 2>&1 | head -14`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+```
 
 Expected: `# github.com/sentioxyz/arbiter/fsm [github.com/sentioxyz/arbiter/fsm.test]`, then ten compiler errors from the new test files such as `undefined: GroupRef`, `undefined: GroupKey`, `undefined: SealKey`, `f.currentGroupSealLocked undefined (type *FSM has no field or method currentGroupSealLocked)`, `f.readyVerifyMembersLocked undefined`, `f.TableSealKey undefined` and `f.st.OpenBlock.GroupKey undefined (type *OpenL3Block has no field or method GroupKey)`, ending with `too many errors`, then `FAIL	github.com/sentioxyz/arbiter/fsm [build failed]`.
 
@@ -7229,34 +7663,7 @@ with:
 }
 ```
 
-In `fsm/stage3_groups.go`, replace Task 71's `GroupMember`:
-
-```go
-// GroupMember is one current member. Plan S3-E3 Tasks 73 and 75 append the
-// readiness and checkpoint fields (contract §50).
-type GroupMember struct {
-	NodeID           string      `json:"node_id"`
-	JoinedGeneration uint64      `json:"joined_generation"`
-	Class            MemberClass `json:"class"`
-}
-```
-
-with:
-
-```go
-// GroupMember is one current member. Plan S3-E3 Tasks 73 and 75 append the
-// readiness and checkpoint fields (contract §50).
-type GroupMember struct {
-	NodeID           string      `json:"node_id"`
-	JoinedGeneration uint64      `json:"joined_generation"`
-	Class            MemberClass `json:"class"`
-	// ReadyGeneration is the group generation the member declared readiness
-	// at (spec §6.4), 0 while it is not ready. The group key hashes only
-	// ready members (Task 72, contract §51); Task 73's MemberReady sets it
-	// and adds its signature and epoch fields.
-	ReadyGeneration uint64 `json:"ready_generation,omitempty"`
-}
-```
+`GroupMember` already has Task 71's three readiness declarations. Do not replace the struct or add a duplicate field here; Task 72 only consumes `ReadyGeneration`.
 
 In `fsm/fsm.go`, insert as the last field of `type FSM struct`, immediately before the closing brace that precedes `var _ raft.FSM = (*FSM)(nil)` (after Plan S3-A's `stateSize` and Plan S3-E2 Task 67's `encoding`):
 
@@ -8041,15 +8448,108 @@ with:
 - [ ] **Step 15: Run the seal tests, and see the restore tests fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l fsm)" && echo gofmt-clean
-GOWORK=off go vet ./fsm/ && echo vet-clean
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm)" || exit 1
+[ -z "$formatted" ] || exit 1
+echo gofmt-clean
+GOWORK=off go vet ./fsm/ && echo vet-clean || exit 1
 grep -rn 'commitSealLocked(' fsm --include='*.go' | grep -vc '_test.go'
-GOWORK=off go test ./fsm/ -count=1 -v -run '^(TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestGroupKeyRefusesUnsortedOrRepeatedMembers|TestGroupKeyIgnoresEvictionAndNodeStatus|TestRegistryViewServesEachGroupsCurrentKey|TestDatabasesWithEqualKeysShareABlock|TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst|TestOwnerSwitchSealIsUnchangedBeforePlacement|TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover|TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot|TestParamsUpdateFlippingVerifySealsFirst|TestParamsUpdateDelistingAMemberSealsFirst|TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared|TestCommitSealRecordsTheGroupSealInTheVerification|TestTransitionBlocksCarryOneKeysChanges|TestOneUnpublishedTransitionPerTrackAcrossKeys|TestTransitionPlanIsUnchangedBeforePlacement|TestBlockSealReasonsCountEveryReason|TestTableSealKeyMatchesTableOwnerBeforePlacement)$' 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./fsm/ -count=1 -run '^(TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt|TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups|TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups|TestSnapshotBelowV21RefusesGroupSealFields)$' 2>&1 | grep -E '^(--- |FAIL|ok)|bare restore' | head -12
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestGroupKeyRefusesUnsortedOrRepeatedMembers|TestGroupKeyIgnoresEvictionAndNodeStatus|TestRegistryViewServesEachGroupsCurrentKey|TestDatabasesWithEqualKeysShareABlock|TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst|TestOwnerSwitchSealIsUnchangedBeforePlacement|TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover|TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot|TestParamsUpdateFlippingVerifySealsFirst|TestParamsUpdateDelistingAMemberSealsFirst|TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared|TestCommitSealRecordsTheGroupSealInTheVerification|TestTransitionBlocksCarryOneKeysChanges|TestOneUnpublishedTransitionPerTrackAcrossKeys|TestTransitionPlanIsUnchangedBeforePlacement|TestBlockSealReasonsCountEveryReason|TestTableSealKeyMatchesTableOwnerBeforePlacement)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestGroupKeyGoldenVectorsAreFrozen' 'TestL3GroupKeyHeaderPreimagesAreFrozen' 'TestGroupKeyRefusesUnsortedOrRepeatedMembers' 'TestGroupKeyIgnoresEvictionAndNodeStatus' 'TestRegistryViewServesEachGroupsCurrentKey' 'TestDatabasesWithEqualKeysShareABlock' 'TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst' 'TestOwnerSwitchSealIsUnchangedBeforePlacement' 'TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover' 'TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot' 'TestParamsUpdateFlippingVerifySealsFirst' 'TestParamsUpdateDelistingAMemberSealsFirst' 'TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared' 'TestCommitSealRecordsTheGroupSealInTheVerification' 'TestTransitionBlocksCarryOneKeysChanges' 'TestOneUnpublishedTransitionPerTrackAcrossKeys' 'TestTransitionPlanIsUnchangedBeforePlacement' 'TestBlockSealReasonsCountEveryReason' 'TestTableSealKeyMatchesTableOwnerBeforePlacement' <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt|TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups|TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups|TestSnapshotBelowV21RefusesGroupSealFields)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red 'TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt' 'TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups' 'TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups' 'TestSnapshotBelowV21RefusesGroupSealFields' <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
 ```
 
 Expected: `gofmt-clean`; `vet-clean`; `5` (the definition in `fsm/apply.go` and its four callers: `applySealL3Block`, admission, the consensus update and Task 71's `RebalanceGroup`; any other caller is an earlier task's call site: give it the reason its seal stands for, `SealReasonKeyChange` for a command that changes a key and `SealReasonRequested` otherwise, and name it in the commit message); nineteen `--- PASS:` lines (the tests of the first `-run`) and `ok  	github.com/sentioxyz/arbiter/fsm`; then `--- FAIL: TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt` with lines such as `seal_key_test.go:…: bare restore = <nil>, want "snapshot stage3 seal keys: placement cutover is recorded while the placement switch is off"`, followed by `--- FAIL:` for the three other restore tests (`TestSnapshotBelowV21RefusesGroupSealFields` wanting `stage3 state is present in a pre-v21 container`) and `FAIL	github.com/sentioxyz/arbiter/fsm`: every forged container still restores.
+
+
+**Owning boundary addendum, failing-before check.** The four appended Step5 tests use only the existing helpers named above. Run the two one-field restore witnesses after the existing Step15 checks, before Step16 adds either owning invariant. The honest baseline must restore first; the M32 forgery must pass the unchanged generic activation validator. Expected RED is specifically each named test accepting the forged container (`bare restore = <nil>`) while demanding its seal-key diagnostic, never a build error, invalid baseline, unrelated chronology refusal, skipped test or command failure. These are required future observations, not results of this STATIC draft.
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task72-boundaries.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord|TestRestoreRefusesZeroHistoricalGroupGeneration)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red 'TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord' 'TestRestoreRefusesZeroHistoricalGroupGeneration' <<'PY72BOUNDARY'
+import json,pathlib,sys
+raw=pathlib.Path(sys.argv[1]).read_bytes(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+rows=[json.loads(line) for line in raw.decode('utf8','strict').splitlines()]
+assert rows and all(isinstance(r,dict) for r in rows)
+pkg='github.com/sentioxyz/arbiter/fsm'
+assert all(r.get('Package')==pkg for r in rows), 'unexpected package'
+for name in names:
+    assert [r['Action'] for r in rows if r.get('Test')==name and r.get('Action')=='run']==['run'],name
+    terminal=[r['Action'] for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+    assert terminal==['fail' if mode=='red' else 'pass'],(name,terminal)
+assert not any(r.get('Action')=='skip' for r in rows)
+assert {r['Test'] for r in rows if 'Test' in r} <= set(names), 'unexpected test/subtest'
+package_ends=[r['Action'] for r in rows if 'Test' not in r and r.get('Action') in ('pass','fail','skip')]
+assert package_ends==['fail' if mode=='red' else 'pass'],package_ends
+assert (rc!=0)==(mode=='red'),rc
+if mode=='red':
+    assert {r['Test'] for r in rows if r.get('Action')=='fail' and 'Test' in r}==set(names)
+    for name in names:
+        output=''.join(r.get('Output','') for r in rows if r.get('Test')==name)
+        want='placement cutover ' if 'Disagreeing' in name else 'recorded groups are empty, unsorted or repeated'
+        assert 'bare restore = <nil>' in output and want in output,(name,output)
+else:
+    assert not any(r.get('Action')=='fail' for r in rows)
+print('owning72-boundary-'+mode+'-verified')
+PY72BOUNDARY
+```
+
+Expected: both named tests FAIL for the specified accepted-forgery assertion; `owning72-boundary-red-verified`. A different failure stops TDD.
 
 - [ ] **Step 16: Add the restore rules**
 
@@ -8093,6 +8593,15 @@ func validateStage3SealKeys(st *State) error {
 	var cutover uint64
 	if recorded != nil {
 		cutover = *recorded
+	}
+	if on {
+		i := slices.IndexFunc(st.Stage3.Switches, func(c Stage3SwitchCutover) bool { return c.Switch == Stage3SwitchPlacement })
+		if i < 0 {
+			return refuse("placement switch is on without a generic cutover record")
+		}
+		if cutover != st.Stage3.Switches[i].BlockSeq {
+			return refuse("placement cutover %d differs from placement switch cutover %d", cutover, st.Stage3.Switches[i].BlockSeq)
+		}
 	}
 	for seq := uint64(1); seq <= uint64(len(st.Blocks)); seq++ {
 		h := &st.Blocks[seq-1]
@@ -8193,6 +8702,21 @@ func validateStage3SealKeys(st *State) error {
 }
 ```
 
+
+In `fsm/group_key.go`, inside `groupRefsSortedAndUnique` created in Step8, replace this exact condition:
+
+```go
+		if r.DatabaseID == "" || (i > 0 && refs[i-1].DatabaseID >= r.DatabaseID) {
+```
+
+with:
+
+```go
+		if r.DatabaseID == "" || r.Generation == 0 || (i > 0 && refs[i-1].DatabaseID >= r.DatabaseID) {
+```
+
+This is the minimum structural historical-generation check. Keep the existing recorded-groups error text for compatibility; it now covers a zero generation too. Do not compare a historical ref with a current group, require current group existence, or describe positivity as full authenticity of arbitrary positive historical generations. The signed rebalance and real purge positives in Step5 preserve those legitimate histories. M32 preserves pointer presence independently of numeric zero, switch-off behavior, and the earlier generic activation/epoch/chronology/range validation; a legitimately recorded generic/specialized zero pair agrees. The full restore chain still diagnoses a missing generic record through `validateStage3Activation` first; the local missing-record guard also fails closed when called directly.
+
 In `fsm/snapshot.go`, insert immediately before the final `return false` of `func stage3FieldsPresent(` (after the checks Plan S3-E2 Tasks 69 and 70 added there):
 
 ```go
@@ -8216,17 +8740,139 @@ In `fsm/snapshot.go`, insert immediately before the final `return false` of `fun
 - [ ] **Step 17: Run every fsm test, the frozen goldens and the fsm red lines**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l fsm)" && echo gofmt-clean
-GOWORK=off go vet ./fsm/ && echo vet-clean
-GOWORK=off go test ./fsm/ -count=1 -v -run '^(TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestGroupKeyRefusesUnsortedOrRepeatedMembers|TestGroupKeyIgnoresEvictionAndNodeStatus|TestRegistryViewServesEachGroupsCurrentKey|TestDatabasesWithEqualKeysShareABlock|TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst|TestOwnerSwitchSealIsUnchangedBeforePlacement|TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover|TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot|TestParamsUpdateFlippingVerifySealsFirst|TestParamsUpdateDelistingAMemberSealsFirst|TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared|TestCommitSealRecordsTheGroupSealInTheVerification|TestTransitionBlocksCarryOneKeysChanges|TestOneUnpublishedTransitionPerTrackAcrossKeys|TestTransitionPlanIsUnchangedBeforePlacement|TestBlockSealReasonsCountEveryReason|TestTableSealKeyMatchesTableOwnerBeforePlacement|TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt|TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups|TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups|TestSnapshotBelowV21RefusesGroupSealFields)$' 2>&1 | grep -cE '^--- PASS'
-GOWORK=off go test ./fsm/ -count=1 -v -run '^(TestL3CommitmentPreimagesAreFrozen|TestStatementsRootGoldenDigest|TestL3BlockHeaderChainHashGoldenDigest|TestSealStampsTheGoldenPreimage|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestPlacementGoldenVectorsAreFrozen|TestPlacementIsReDerivableFromTheRegistryView|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared)$' 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./fsm/ -race -count=1
-grep -rn 'time\.Now' fsm/ --include='*.go' | grep -v '_test.go'
-git status --porcelain fsm/testdata
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm)" || exit 1
+[ -z "$formatted" ] || exit 1
+echo gofmt-clean
+GOWORK=off go vet ./fsm/ && echo vet-clean || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestGroupKeyRefusesUnsortedOrRepeatedMembers|TestGroupKeyIgnoresEvictionAndNodeStatus|TestRegistryViewServesEachGroupsCurrentKey|TestDatabasesWithEqualKeysShareABlock|TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst|TestOwnerSwitchSealIsUnchangedBeforePlacement|TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover|TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot|TestParamsUpdateFlippingVerifySealsFirst|TestParamsUpdateDelistingAMemberSealsFirst|TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared|TestCommitSealRecordsTheGroupSealInTheVerification|TestTransitionBlocksCarryOneKeysChanges|TestOneUnpublishedTransitionPerTrackAcrossKeys|TestTransitionPlanIsUnchangedBeforePlacement|TestBlockSealReasonsCountEveryReason|TestTableSealKeyMatchesTableOwnerBeforePlacement|TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt|TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups|TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups|TestSnapshotBelowV21RefusesGroupSealFields)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestGroupKeyGoldenVectorsAreFrozen' 'TestL3GroupKeyHeaderPreimagesAreFrozen' 'TestGroupKeyRefusesUnsortedOrRepeatedMembers' 'TestGroupKeyIgnoresEvictionAndNodeStatus' 'TestRegistryViewServesEachGroupsCurrentKey' 'TestDatabasesWithEqualKeysShareABlock' 'TestAStatementWithAnotherGroupKeySealsTheOpenBlockFirst' 'TestOwnerSwitchSealIsUnchangedBeforePlacement' 'TestPlacementSwitchOnSealsTheOpenBlockAndRecordsTheCutover' 'TestBlocksSealedAfterTheCutoverCarryGroupKeyAndEarlierOnesDoNot' 'TestParamsUpdateFlippingVerifySealsFirst' 'TestParamsUpdateDelistingAMemberSealsFirst' 'TestKeyChangeSealRefusesWithStateUnchangedWhenItCannotBePrepared' 'TestCommitSealRecordsTheGroupSealInTheVerification' 'TestTransitionBlocksCarryOneKeysChanges' 'TestOneUnpublishedTransitionPerTrackAcrossKeys' 'TestTransitionPlanIsUnchangedBeforePlacement' 'TestBlockSealReasonsCountEveryReason' 'TestTableSealKeyMatchesTableOwnerBeforePlacement' 'TestRestoreRefusesAGroupKeyBeforeTheCutoverOrMissingAfterIt' 'TestRestoreRefusesAnOpenBlockKeyThatDiffersFromItsGroups' 'TestRestoreRefusesATransitionChangeOutsideItsRecordedGroups' 'TestSnapshotBelowV21RefusesGroupSealFields' <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestL3CommitmentPreimagesAreFrozen|TestStatementsRootGoldenDigest|TestL3BlockHeaderChainHashGoldenDigest|TestSealStampsTheGoldenPreimage|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestPlacementGoldenVectorsAreFrozen|TestPlacementIsReDerivableFromTheRegistryView|TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst|TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestL3CommitmentPreimagesAreFrozen' 'TestStatementsRootGoldenDigest' 'TestL3BlockHeaderChainHashGoldenDigest' 'TestSealStampsTheGoldenPreimage' 'TestL3TrackHeaderPreimagesAreFrozen' 'TestL3TransitionHeaderPreimageIsFrozen' 'TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease' 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims' 'TestPreActivationHistoryIsByteIdenticalAcrossTracks' 'TestStage3V21PlainContainerGolden' 'TestStage3V21InternedContainerGolden' 'TestStage3ActivationWithEverySwitchOffChangesNoBehaviour' 'TestPlacementGoldenVectorsAreFrozen' 'TestPlacementIsReDerivableFromTheRegistryView' 'TestRebalanceGroupSealsAnOpenBlockHoldingTheDatabaseFirst' 'TestRebalanceGroupRefusesWithStateUnchangedWhenTheSealCannotBePrepared' <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -race -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+if matches="$(grep -rn 'time\.Now' fsm/ --include='*.go')"; then
+ if printf '%s\n' "$matches" | grep -v '_test.go'; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+protected="$(git status --porcelain fsm/testdata)" || exit 1
+[ -z "$protected" ] || exit 1
 ```
 
-Expected: `gofmt-clean`; `vet-clean`; `23` (the twenty-three fsm tests of this task); sixteen `--- PASS:` lines, one for each frozen or earlier test named in the second `-run` (the first nine are `origin/main`'s goldens, the last seven Plan S3-E2's and Task 71's), and `ok`; `ok  	github.com/sentioxyz/arbiter/fsm` under `-race`, every earlier task's tests included (the note **Earlier tests** names the one kind of failure this task may cause); the `time.Now` grep prints nothing; `git status --porcelain fsm/testdata` prints nothing: no golden was rewritten.
+Expected: `gofmt-clean`; `vet-clean`; `23` (the twenty-three original fsm tests selected by this first focused command); sixteen `--- PASS:` lines, one for each frozen or earlier test named in the second `-run` (the first nine are `origin/main`'s goldens, the last seven Plan S3-E2's and Task 71's), and `ok`; `ok  	github.com/sentioxyz/arbiter/fsm` under `-race`, every earlier task's tests included (the note **Earlier tests** names the one kind of failure this task may cause); the `time.Now` grep prints nothing; `git status --porcelain fsm/testdata` prints nothing: no golden was rewritten.
+
+
+**Owning boundary addendum, passing-after check.** After Step16, run all four exact new names. Require the honest baseline and exact causal refusal of each one-field forged container, plus successful configured restoration of the actual signed-rebalance and real purge histories. The purge test must actually reach Active, then Purging, then Purged through its signed Apply/verification/finality/publication path; fixture failure is a HOLD, never waived or replaced by direct status/frontier edits. Keep the original switch-off and cutover tests in Step17's existing focused run. Four new top-level declarations are appended to the original29 total (original23 fsm plus5 server plus1 metrics), measured from the literal:33 total,27 fsm,5 server,1 metrics. The first focused command above still selects the original23 fsm names; the four extra names are checked here and are also in the unchanged whole-fsm/whole-repository runs. Dynamic inherited registration/oracles are measured again by the later source-bound profile; no guessed inherited total is substituted.
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task72-boundaries.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord|TestRestoreRefusesZeroHistoricalGroupGeneration|TestRestoreKeepsHistoricalGroupGenerationAfterRebalance|TestRestoreKeepsHistoricalGroupGenerationAfterPurge)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestRestoreRefusesPlacementCutoverDisagreeingWithGenericSwitchRecord' 'TestRestoreRefusesZeroHistoricalGroupGeneration' 'TestRestoreKeepsHistoricalGroupGenerationAfterRebalance' 'TestRestoreKeepsHistoricalGroupGenerationAfterPurge' <<'PY72BOUNDARY'
+import json,pathlib,sys
+raw=pathlib.Path(sys.argv[1]).read_bytes(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+rows=[json.loads(line) for line in raw.decode('utf8','strict').splitlines()]
+assert rows and all(isinstance(r,dict) for r in rows)
+pkg='github.com/sentioxyz/arbiter/fsm'
+assert all(r.get('Package')==pkg for r in rows), 'unexpected package'
+for name in names:
+    assert [r['Action'] for r in rows if r.get('Test')==name and r.get('Action')=='run']==['run'],name
+    terminal=[r['Action'] for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+    assert terminal==['fail' if mode=='red' else 'pass'],(name,terminal)
+assert not any(r.get('Action')=='skip' for r in rows)
+assert {r['Test'] for r in rows if 'Test' in r} <= set(names), 'unexpected test/subtest'
+package_ends=[r['Action'] for r in rows if 'Test' not in r and r.get('Action') in ('pass','fail','skip')]
+assert package_ends==['fail' if mode=='red' else 'pass'],package_ends
+assert (rc!=0)==(mode=='red'),rc
+if mode=='red':
+    assert {r['Test'] for r in rows if r.get('Action')=='fail' and 'Test' in r}==set(names)
+    for name in names:
+        output=''.join(r.get('Output','') for r in rows if r.get('Test')==name)
+        want='placement cutover ' if 'Disagreeing' in name else 'recorded groups are empty, unsorted or repeated'
+        assert 'bare restore = <nil>' in output and want in output,(name,output)
+else:
+    assert not any(r.get('Action')=='fail' for r in rows)
+print('owning72-boundary-'+mode+'-verified')
+PY72BOUNDARY
+```
+
+Expected: exactly four named PASS terminals, no SKIP/FAIL, package PASS and exit0; `owning72-boundary-green-verified`.
+
+**Causal mutant obligations (future runtime only).** M32 deletes only `cutover != st.Stage3.Switches[i].BlockSeq`'s mismatch-refusal branch, retaining the generic-record presence, old chronology, pointer/range and keyed-block rules; the named mismatch witness must then fail because the forgery restores. M33 deletes only `r.Generation == 0 ||` from the new helper condition, retaining database/order/uniqueness checks; the named zero-generation restore test must fail for the same accepted-forgery assertion. For each, first observe the named test PASS on correct code, apply the exact single predicate mutation, require that test's exact assertion failure (not a compiler error or unrelated refusal), then independently restore source/custody in finally and re-observe PASS. `boundary-mutant-descriptors.json` binds these two unexecuted obligations; it grants no execution and does not modify the frozen V4 runner/descriptors. An addendum-required disposition cannot be relabelled as upstream-validator proof.
 
 - [ ] **Step 18: Write the failing server tests**
 
@@ -8446,7 +9092,10 @@ func TestTableRegistryToPBCarriesGroupKeys(t *testing.T) {
 In the server test file that holds Plan S3-E2 Task 64's `stage3PendingProtoFields`, delete every entry this task owns:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
 F="$(grep -l 'stage3PendingProtoFields = map' server/*_test.go)"; echo "$F"
 grep -n '"Plan S3-E3 Task 72"' "$F"
 sed -i '' -E '/^[[:space:]]*"[A-Za-z]+\.[a-z_]+": +"Plan S3-E3 Task 72",$/d' "$F" && gofmt -w "$F"
@@ -8496,7 +9145,39 @@ with:
 
 - [ ] **Step 19: Run the server tests and see them fail to build**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -count=1 2>&1 | head -6`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+```
 
 Expected: `# github.com/sentioxyz/arbiter/server [github.com/sentioxyz/arbiter/server.test]`, three lines `server/grouper_seal_key_test.go:…: undefined: orderBySealKey`, and `FAIL	github.com/sentioxyz/arbiter/server [build failed]`.
 
@@ -8766,11 +9447,80 @@ with:
 	}
 ```
 
-`server/table_registry.go` needs no change: run `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -n 'GroupKey' server/table_registry.go`. Expected: one line inside Task 71's `groupsToPB` that sets the `pb.DatabaseGroup` field `GroupKey` from the view's `Key` (contract §50). If it prints nothing, add `GroupKey: g.Key,` (with `g` the `fsm.GroupView` that `groupsToPB` ranges over) to the `pb.DatabaseGroup` literal there and name the change in the commit message.
+`server/table_registry.go` needs no change. Verify the Task 71 mapping in a complete Bash call; if it is absent, stop and reconcile the upstream task instead of inventing a replacement on an unverified source:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+cd "$W" || exit 1
+grep -n 'GroupKey' server/table_registry.go || exit 1
+```
+
+Expected: Task 71's `groupsToPB` mapping from `GroupView.Key` to `DatabaseGroup.group_key`. Its semantic correctness still requires the actual upstream source review.
 
 - [ ] **Step 21: Run the server tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server)" && GOWORK=off go vet ./server/ && GOWORK=off go test ./server/ -count=1 -v -run '^(TestOrderBySealKeyGroupsByOwnerAndKey|TestOrderBySealKeyKeepsLaneOrderAcrossKeys|TestL3BlockHeaderMirrorsProto|TestL3HeaderWireFormCarriesTheGroupKey|TestGetBlockVerificationServesTheGroupSeal|TestTableRegistryToPBCarriesGroupKeys|TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesTheSealedBlock|TestTableRegistryMirrorsProto|TestOrderByOwner|TestOrderByOwnerKeepsEachClientLaneInArrivalOrder|TestOrderByOwnerOnRandomWindows)$' 2>&1 | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test ./server/ -race -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+GOWORK=off go vet ./server/ || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -run '^(TestOrderBySealKeyGroupsByOwnerAndKey|TestOrderBySealKeyKeepsLaneOrderAcrossKeys|TestL3BlockHeaderMirrorsProto|TestL3HeaderWireFormCarriesTheGroupKey|TestGetBlockVerificationServesTheGroupSeal|TestTableRegistryToPBCarriesGroupKeys|TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesTheSealedBlock|TestTableRegistryMirrorsProto|TestOrderByOwner|TestOrderByOwnerKeepsEachClientLaneInArrivalOrder|TestOrderByOwnerOnRandomWindows)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestOrderBySealKeyGroupsByOwnerAndKey' 'TestOrderBySealKeyKeepsLaneOrderAcrossKeys' 'TestL3BlockHeaderMirrorsProto' 'TestL3HeaderWireFormCarriesTheGroupKey' 'TestGetBlockVerificationServesTheGroupSeal' 'TestTableRegistryToPBCarriesGroupKeys' 'TestBlockVerificationToPBCarriesEveryField' 'TestGetBlockVerificationServesTheSealedBlock' 'TestTableRegistryMirrorsProto' 'TestOrderByOwner' 'TestOrderByOwnerKeepsEachClientLaneInArrivalOrder' 'TestOrderByOwnerOnRandomWindows' <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./server/ -race -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+```
 
 Expected: `--- PASS:` for `TestOrderBySealKeyGroupsByOwnerAndKey`, `TestOrderBySealKeyKeepsLaneOrderAcrossKeys`, `TestL3BlockHeaderMirrorsProto`, `TestL3HeaderWireFormCarriesTheGroupKey`, `TestGetBlockVerificationServesTheGroupSeal`, `TestTableRegistryToPBCarriesGroupKeys`, `TestBlockVerificationToPBCarriesEveryField`, `TestGetBlockVerificationServesTheSealedBlock`, `TestTableRegistryMirrorsProto`, `TestOrderByOwner`, `TestOrderByOwnerKeepsEachClientLaneInArrivalOrder` and `TestOrderByOwnerOnRandomWindows` (unchanged: `orderByOwner` is now `orderBySealKey`'s wrapper), then `ok  	github.com/sentioxyz/arbiter/server` twice (the named tests, then the whole package under `-race`). `TestTableRegistryToPBCarriesGroupKeys` passes on Task 71's mapping; it pins it.
 
@@ -8821,7 +9571,7 @@ arbiter_block_seal_reason{reason="snapshot_query"} 0
 arbiter_block_seal_reason{reason="transition"} 0
 `
 	if err := testutil.GatherAndCompare(m.registry, strings.NewReader(want), name); err != nil {
-		t.Fatal(err)
+		t.Fatalf("seal reason series and values differ: %v", err)
 	}
 	if n, err := testutil.GatherAndCount(m.registry, name); err != nil || n != len(fsm.SealReasons) {
 		t.Fatalf("%d series (%v), want one per reason of %v", n, err, fsm.SealReasons)
@@ -8832,7 +9582,39 @@ arbiter_block_seal_reason{reason="transition"} 0
 }
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./metrics/ -count=1 2>&1 | head -4`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+```
 
 Expected: `# github.com/sentioxyz/arbiter/metrics [github.com/sentioxyz/arbiter/metrics.test]`, `metrics/seal_reason_test.go:…: undefined: sealReasonReader`, `FAIL	github.com/sentioxyz/arbiter/metrics [build failed]`.
 
@@ -8884,7 +9666,42 @@ func (c *sealReasonCollector) Collect(ch chan<- prometheus.Metric) {
 }
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l metrics)" && GOWORK=off go vet ./metrics/ && GOWORK=off go test ./metrics/ -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l metrics)" || exit 1
+[ -z "$formatted" ] || exit 1
+GOWORK=off go vet ./metrics/ || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 -v > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+```
 
 Expected: `--- PASS: TestBlockSealReasonMetricExportsEveryReason` among the existing metrics tests (`TestStateSizeMetricsAppearOnlyAfterASample`, `TestExpositionUsesCurrentStateAndBoundedLabels`, Task 71's `TestGroupMetricsExportEveryClassIncludingZeros` and the others, unchanged: their fakes implement no `BlockSealReasons`), no `--- FAIL`, then `ok  	github.com/sentioxyz/arbiter/metrics`.
 
@@ -8911,14 +9728,63 @@ This counter is the one metric updated in Raft apply: each seal increments it on
 - [ ] **Step 25: Run the repository's checks**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l)" && echo gofmt-clean
-GOWORK=off go vet ./... && echo vet-clean
-GOWORK=off go test ./... -count=1 2>&1 | grep -v '^ok\|no test files'
-bazel run //:gazelle
-git diff --stat -- '*.bazel'
-git diff -U0 -- '*.bazel' | grep '^[-+] '
-bazel build //... && bazel test //... --test_output=errors
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task72-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+list="$(mktemp "$T64/task72-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY72'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY72
+go vet ./... || exit 1
+out="$(mktemp "$T64/task72-test.XXXXXX")" || exit 1
+if go test -json ./... -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY72'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY72
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff --stat -- '*.bazel' || exit 1
+git diff --check || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors || exit 1
+changes="$(mktemp "$T64/task72-goldens.XXXXXX")" || exit 1
+git diff --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY72'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0'); assert rows.pop()==b'' and len(rows)%2==0
+protected=[(st,p) for st,p in zip(rows[::2],rows[1::2]) if b'testdata/' in p or p.endswith(b'_golden_test.go')]
+# New untracked fixture is checked explicitly; every tracked protected file is immutable.
+assert protected==[],protected
+PY72
+[ -f fsm/l3_group_key_golden_test.go ] || exit 1
+echo task72-repository-checks-passed
 ```
 
 Expected: `gofmt-clean`; `vet-clean`; the `go test` filter prints nothing (every package `ok`); gazelle exits 0 and changes exactly three files, `fsm/BUILD.bazel` (five lines: `+        "group_key.go",` in `go_library(name = "fsm")`'s `srcs` and `+        "group_key_test.go",`, `+        "l3_group_key_golden_test.go",`, `+        "seal_key_test.go",`, `+        "table_set_transition_key_test.go",` in `go_test(name = "fsm_test")`'s `srcs`), `server/BUILD.bazel` (`+        "group_seal_serving_test.go",` and `+        "grouper_seal_key_test.go",` in `go_test`'s `srcs`) and `metrics/BUILD.bazel` (`+        "seal_reason_test.go",`), eight added lines in all and no removed line (no `deps` change: every import is already a dependency of its target); `bazel build` and `bazel test` end with every target building and every test target passing. These Bazel commands download nothing new, since this task adds no dependency; if Bazel starts fetching a module, stop and ask the user, because a remote read needs explicit confirmation in chat.
@@ -8926,10 +9792,18 @@ Expected: `gofmt-clean`; `vet-clean`; the `go test` filter prints nothing (every
 - [ ] **Step 26: Commit**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git add fsm server metrics README.md docs/specs/issue-31-metrics.md
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task72-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_72_4048="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_72_4048" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_72_4048}" = "$base" ] || exit 1
+git add fsm server metrics README.md docs/specs/issue-31-metrics.md || exit 1
 git status --porcelain
-git commit -m "fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)
+git commit -S -m "fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)
 
 Spec 2026-10-14 §7.1-§7.2 and §10.4 step 5, plan S3-E3 contract §51. From
 the placement switch on, blocks seal on (owner, GroupKey), the hash of a
@@ -8952,25 +9826,86 @@ seal by reason in a node-local counter. New frozen fixture:
 fsm/l3_group_key_golden_test.go. With the placement switch off every
 Apply, snapshot and chain hash is unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git log -1 --format=%s
-bazel run //:gazelle && git diff --exit-code -- '*.bazel' && echo gazelle-clean
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+git_read_72_4077="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_72_4077}" = 1 ] || exit 1
+git_read_72_4078="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_72_4078}" = 'fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)' ] || exit 1
+git_read_72_4079="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_72_4079}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+message="$(git log -1 --format=%B)" || exit 1
+python3 -I - "$message" <<'PY72'
+import re,sys
+rows=re.findall(r'^co-authored-by:[^\n]*$',sys.argv[1],re.I|re.M)
+assert rows==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'],rows
+PY72
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: dirty worktree' >&2; exit 1; }
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff --exit-code || exit 1
+
+python3 -I - "$T64/task72-final-head" "$head" <<'PY72'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f: f.write(sys.argv[2]+'\n')
+PY72
+echo task72-signed-commit-verified
 ```
 
-Expected: `git status --porcelain` lists `M  README.md`, `M  docs/specs/issue-31-metrics.md`, `A  fsm/group_key.go`, `A  fsm/group_key_test.go`, `A  fsm/l3_group_key_golden_test.go`, `A  fsm/seal_key_test.go`, `A  fsm/table_set_transition_key_test.go`, `M  fsm/BUILD.bazel`, `M` for `fsm/admission.go`, `fsm/apply.go`, `fsm/consensus_updates.go`, `fsm/fsm.go`, `fsm/reads_tracks.go`, `fsm/reads_verification.go`, `fsm/rebalance_group.go`, `fsm/snapshot.go`, `fsm/snapshot_query_block.go`, `fsm/stage3.go`, `fsm/stage3_groups.go`, `fsm/stage3_restore.go`, `fsm/state.go`, `fsm/table_registry.go`, `fsm/table_set_transition.go`, `A  metrics/seal_reason_test.go`, `M  metrics/BUILD.bazel`, `M  metrics/metrics.go`, `A  server/group_seal_serving_test.go`, `A  server/grouper_seal_key_test.go`, `M  server/BUILD.bazel`, `M` for `server/grouper.go`, `server/safestate.go`, `server/safestate_stage3.go`, `server/safestate_stage3_test.go`, and nothing else (a Task 71 test changed under the note **Earlier tests**, or an earlier call site of Step 10, is also listed and named in the message); the subject `fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)`; `gazelle-clean`.
+Expected: `git status --porcelain` lists `M  README.md`, `M  docs/specs/issue-31-metrics.md`, `A  fsm/group_key.go`, `A  fsm/group_key_test.go`, `A  fsm/l3_group_key_golden_test.go`, `A  fsm/seal_key_test.go`, `A  fsm/table_set_transition_key_test.go`, `M  fsm/BUILD.bazel`, `M` for `fsm/admission.go`, `fsm/apply.go`, `fsm/consensus_updates.go`, `fsm/fsm.go`, `fsm/reads_tracks.go`, `fsm/reads_verification.go`, `fsm/rebalance_group.go`, `fsm/snapshot.go`, `fsm/snapshot_query_block.go`, `fsm/stage3.go`, `fsm/stage3_restore.go`, `fsm/state.go`, `fsm/table_registry.go`, `fsm/table_set_transition.go`, `A  metrics/seal_reason_test.go`, `M  metrics/BUILD.bazel`, `M  metrics/metrics.go`, `A  server/group_seal_serving_test.go`, `A  server/grouper_seal_key_test.go`, `M  server/BUILD.bazel`, `M` for `server/grouper.go`, `server/safestate.go`, `server/safestate_stage3.go`, `server/safestate_stage3_test.go`, and nothing else (a Task 71 test changed under the note **Earlier tests**, or an earlier call site of Step 10, is also listed and named in the message); the subject `fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)`; `gazelle-clean`.
 
 - [ ] **Step 27: Push the shared branch**
 
 The branch is shared by Plans S3-E2 to S3-E4 and released once by Plan S3-E4 Task 78; the push only backs up this task's commit, as Task 71's last step did. No PR, merge, tag, release workflow or image belongs to this task (contract §49).
 
-Remote write (push of `urwt/claude/multi-source-s3e`): needs explicit user confirmation in chat before running.
+Remote write (push of `urwt/codex/multi-source-s3e`): needs explicit user confirmation in chat before running.
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" push origin HEAD:urwt/claude/multi-source-s3e
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task72-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+git_read_72_4116="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_72_4116}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+head="$(cat "$T64/task72-final-head")" || exit 1
+git_read_72_4119="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_72_4119" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "${git_read_72_4119}" ] || exit 1
+git_read_72_4120="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_72_4120}" = 1 ] || exit 1
+git_read_72_4121="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_72_4121}" = 'fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)' ] || exit 1
+
+branch=urwt/codex/multi-source-s3e
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+remote_head="$(python3 -I - "$remote" "$branch" <<'PY71'
+import re,sys
+m=re.fullmatch(r'([0-9a-f]{40})\trefs/heads/'+re.escape(sys.argv[2]),sys.argv[1]); assert m
+print(m[1])
+PY71
+)" || exit 1
+git merge-base --is-ancestor "$remote_head" "$base" || exit 1
+# Only after explicit user confirmation in chat:
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git_read_72_4136="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_72_4136" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_72_4136}" = "$head" ] || exit 1
+echo task72-push-verified
 ```
 
 Expected: one line `   <old>..<new>  HEAD -> urwt/claude/multi-source-s3e`, `<old>` being Task 71's pushed commit. A rejected push means the remote branch moved: stop and ask; never force it.
+
+Static workflow note: success markers in Steps 1/25/26/27 are respectively `task72-entry-verified`, `task72-repository-checks-passed`, `task72-signed-commit-verified` and `task72-push-verified`. Historical drafting output examples are explanatory, not substitutes for these gates. Selected test commands parse exact go test JSON terminal results and refuse missing, skipped or extra terminal outcomes for the required names; a failed or empty test command cannot pass because a display filter succeeded. Formal runtime review must reconcile the illustrated Gazelle additions and exact source file list before committing.
+
 
 ---
 
@@ -8978,7 +9913,9 @@ Expected: one line `   <old>..<new>  HEAD -> urwt/claude/multi-source-s3e`, `<ol
 
 Spec §6.4 (a placed member declares readiness once it holds active, synced replicas of every physical table of its group's database, and enters rings only then), §7.1 (a ready verify member is part of the group key, so a readiness that changes the key seals an open block of the group first), §7.3 (the eligible ring's group half: ready, Active, listed verify members of every group the block is sealed under, not hosted by the block's owner, plus the pool while fill is on or fewer than three qualify; `VERIFIERS_UNAVAILABLE` and `MarkReplaying` share that filter), §10.4 step 6 and §14 (eviction voiding for `MemberReady`), §17 (FSM: `MemberReady`), as fixed by contract §52.1 and clarifications K73 and K74. With the `placement` switch on, Apply records a member's readiness from an ed25519-signed `MemberReady` (Raft tag 40) after the ten checks of contract §52.1, seals an open block holding a statement of the group's database first when the readiness changes the group's key (seal reason `key_change`), and bumps the registry version once through `groupsChangedLocked`. `VerifierGateway.SubmitMemberReady` proposes it (the `SubmitTablePurged` pattern). Plan S3-E2's `eligibleRingLocked` gains the group seal as a third argument: `MarkReplaying` and the WorkSet's unmarkable rule pass the block's recorded seal (`bv.groupSeal()`, through Task 70's `blockRingLocked`), admission's `VERIFIERS_UNAVAILABLE` count passes the current seal of the live incarnation's database, and a `nil` seal is S3-E2's pool-only ring byte for byte. Restore checks every readiness record's generation bounds (`validateStage3Readiness`) and re-verifies every readiness signature under the `ed25519_pubkey` its own epoch listed (`validateMemberReadyProofs`). The registry view and `TableRegistrySnapshot` serve `ready_generation` only (D33). Before the `placement` switch every path is Plan S3-E2's: tag 40 is refused first with state unchanged, no group exists, so no seal reaches the ring, and the view serves no group.
 
-Worktree: Plan S3-E2 Task 64's URWT worktree (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, contract §49), with `HEAD` at Task 72's commit; every command below starts with `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e";` in its own Bash call. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this was drafted: Plan S3-A merged as arbiter#133) for the two lines this task changes in files no earlier P5 task rewrote (`fsm/consensus_history.go:168`, the closing `return` of `validateConsensusHistory`, which Plan S3-E2 Task 64 moves down by its `stage3` bootstrap check; `fsm/fsm.go:147-148`, the `ReleaseIndexer` arm, after which Task 71 adds its `RebalanceGroup` arm). Every other hunk quotes text that an earlier task of the branch wrote (Plan S3-E2 Task 70's `fsm/select.go`, `fsm/admission.go` and `fsm/selection_stage3_test.go`; Task 71's `fsm/fsm.go` arm, `fsm/table_registry.go` group loop, `server/table_registry.go` `groupsToPB` and `server/table_registry_groups_test.go`; Plan S3-E2 Task 66's `validateStage3State`, extended by Tasks 69–72) and is found by that quoted text under the hunk rule of the Global Constraints, not by line. This task makes no live action and reads no remote: Tasks 64–72 filled the Go module cache and the Bazel caches, so no `go` or `bazel` command below should download anything; if one reports a download, stop, because that is a remote read and needs explicit user confirmation in chat before it runs. Its only remote action is the optional push of Step 20, which needs explicit user confirmation in chat.
+Worktree: Task 64's actual retained Codex JSON path and complete `env.sh`, reloaded in every Bash call. Entry requires clean poetry/G HEAD with verify-commit, Task 72's exact final subject, and its exclusive observed `task72-final-head` equal to actual HEAD; Task 73 exclusively records its own observed base. Existing receipts stop for investigation, never overwrite. Do not reconstruct a worktree path or predict a commit SHA.
+
+**STATIC PREP / WAIT72:** actual root-approved 66→72 source and runtime application remain pending. Drafting anchors are historical `526a721`; reconcile every quoted runtime hunk on that actual source. All original non-Bash fences remain byte-identical. No runtime/TDD, Go/Bazel, golden, signing, release or ledger result is claimed here. Offline dependency misses stop; every Go/Bazel call disables downloads. GPG cancellation stops for the user's existing-key unlock, never unsigned fallback. The optional Step 20 push still requires explicit confirmation.
 
 **Files:**
 - Create: `fsm/member_ready.go` (`applyMemberReady`, `MemberReadyRecorded`, `eligibleMemberLocked`, `validateStage3Readiness`, `validateMemberReadyProofs` and their helpers)
@@ -8995,7 +9932,7 @@ Worktree: Plan S3-E2 Task 64's URWT worktree (`W=$HOME/src/remotesrc/claude/arbi
 - Modify: `server/table_registry.go` (Task 71's `groupsToPB`: the member literal)
 - Modify: `server/table_registry_groups_test.go` (Task 71's file: three imports and one appended test)
 - Modify (gazelle): `fsm/BUILD.bazel` (`member_ready.go` in `fsm`; `eligible_ring_groups_test.go` and `member_ready_test.go` in `fsm_test`), `server/BUILD.bazel` (`member_gateway.go` in `server`; `member_gateway_test.go` in `server_test`)
-- Remote: `git push origin HEAD:urwt/claude/multi-source-s3e` (Step 20, optional, explicit confirmation)
+- Remote: `git push origin <checked-head>:refs/heads/urwt/codex/multi-source-s3e` (Step 20, optional, explicit confirmation)
 
 **Interfaces:**
 - Consumes:
@@ -9034,29 +9971,51 @@ Notes:
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-git rev-parse --abbrev-ref HEAD
-git status --porcelain
-git log -1 --format=%s
-CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)"
-PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)"
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: dirty worktree' >&2; exit 1; }
+git_read_73_69="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_73_69}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+git_read_73_71="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_73_71}" = 'fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)' ] || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+python3 -I - "$T64/task72-final-head" "$head" <<'PY73'
+import pathlib,re,sys
+v=pathlib.Path(sys.argv[1]).read_text()
+assert re.fullmatch(r'[0-9a-f]{40}\n',v) and v[:-1]==sys.argv[2]
+PY73
+CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)" || exit 1
+PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)" || exit 1
 for p in 'func (f *FSM) placementOnLocked(' 'func (f *FSM) PlacementOn(' 'func (f *FSM) groupLocked(' 'func (f *FSM) groupsChangedLocked(' 'func (f *FSM) prepareGroupSealLocked(' 'func (f *FSM) currentGroupSealLocked(' 'func (bv *BlockVerification) groupSeal(' 'func (f *FSM) commitSealLocked(p *preparedSeal, reason SealReason)' 'func (f *FSM) readyVerifyMembersLocked(' 'func (f *FSM) BlockSealReasons(' 'func GroupKey(' 'func (f *FSM) eligibleRingLocked(owner uint64, sources []string) []string' 'func (f *FSM) blockRingLocked(' 'func (f *FSM) verifiersUnavailableLocked(owner uint64, source string) string' 'func (f *FSM) poolRingLocked(' 'func (f *FSM) verifierEntryLocked(' 'func findVerifierEntry(' 'func validateStage3State(' 'func cloneDatabaseGroup(' 'func groupsFSM(' 'func groupsReadyFSM(' 'func mustGroup(' 'func rebalanceCmd(' 'func updateStage3(' 'func groupMemberEntry(' 'func registryVersion(' 'func stage3MemberKey(' 'func withVerifier(' 'func evictVerifierOA(' 'func claimedBlockOA(' 'func markReplayingOA(' 'func verifiersUnavailableOA(' 'func restoresBothWaysOA(' 'case cmd.RebalanceGroup != nil:'; do
-  grep -rqF -- "$p" fsm || echo "missing in fsm: $p"
+  grep -rqF -- "$p" fsm || { echo "stop: missing in fsm: $p" >&2; exit 1; }
 done
-grep -qE '^\s+ReadyGeneration +uint64' fsm/stage3_groups.go || echo "missing in fsm: GroupMember.ReadyGeneration"
-grep -qE '^\s+ReadySignature +string' fsm/stage3_groups.go || echo "missing in fsm: GroupMember.ReadySignature"
-grep -qE '^\s+ReadyEpoch +uint64' fsm/stage3_groups.go || echo "missing in fsm: GroupMember.ReadyEpoch"
+grep -qE '^[[:space:]]+ReadyGeneration +uint64' fsm/stage3_groups.go || { echo "stop: missing in fsm: GroupMember.ReadyGeneration" >&2; exit 1; }
+grep -qE '^[[:space:]]+ReadySignature +string' fsm/stage3_groups.go || { echo "stop: missing in fsm: GroupMember.ReadySignature" >&2; exit 1; }
+grep -qE '^[[:space:]]+ReadyEpoch +uint64' fsm/stage3_groups.go || { echo "stop: missing in fsm: GroupMember.ReadyEpoch" >&2; exit 1; }
 for p in 'func groupsToPB(' 'func TestTableRegistryToPBCarriesGroups(' 'func activateServerTracks(' 'func lastProposalIs(' 'func isNotLeader('; do
-  grep -rqF -- "$p" server || echo "missing in server: $p"
+  grep -rqF -- "$p" server || { echo "stop: missing in server: $p" >&2; exit 1; }
 done
-grep -rqF 'func VerifyMemberReady(' "$CORE/authority" || echo "missing in arbiter-core: authority.VerifyMemberReady"
-grep -rqF 'func (c MemberReady) Body()' "$CORE/wire" || echo "missing in arbiter-core: wire.MemberReady.Body"
-grep -qF 'VerifierGateway_SubmitMemberReady_FullMethodName' "$PROTO/gen/pb/arbiter_grpc.pb.go" || echo "missing in arbiter-proto: VerifierGateway.SubmitMemberReady"
-grep -n 'Task 73' server/safestate_stage3_test.go
-grep -rn 'func (f \*FSM) applyMemberReady\|func (f \*FSM) eligibleMemberLocked\|func validateStage3Readiness\|func validateMemberReadyProofs\|SubmitMemberReady(ctx' fsm server
+grep -rqF 'func VerifyMemberReady(' "$CORE/authority" || { echo "stop: missing in arbiter-core: authority.VerifyMemberReady" >&2; exit 1; }
+grep -rqF 'func (c MemberReady) Body()' "$CORE/wire" || { echo "stop: missing in arbiter-core: wire.MemberReady.Body" >&2; exit 1; }
+grep -qF 'VerifierGateway_SubmitMemberReady_FullMethodName' "$PROTO/gen/pb/arbiter_grpc.pb.go" || { echo "stop: missing in arbiter-proto: VerifierGateway.SubmitMemberReady" >&2; exit 1; }
+if grep -n 'Task 73' server/safestate_stage3_test.go; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+for pattern in 'func (f \*FSM) applyMemberReady\|func (f \*FSM) eligibleMemberLocked\|func validateStage3Readiness\|func validateMemberReadyProofs\|SubmitMemberReady(ctx'; do
+ if grep -rn "$pattern" fsm server; then
+  echo 'stop: Task73 implementation already present or pending field unresolved' >&2; exit 1
+ else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+done
+python3 -I - "$T64/task73-base-sha" "$head" <<'PY73'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY73
+echo task73-entry-verified
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; `git status --porcelain` prints nothing; the subject `fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)`; no `missing` line; and the last two `grep`s print nothing (no pending proto field names this task, and none of this task's names exists yet; the block therefore ends with exit status 1, which is expected). If the branch, the tree or `HEAD` differs, a seam is missing or one of this task's names already exists, stop: Tasks 64–72 land in order on this branch before this task (contract §49), and a missing seam is the earlier task's step to finish, not this task's to invent.
+Expected: `task73-entry-verified` only after the exact predecessor, identity, clean-tree and every prerequisite check pass. Missing fields, mismatched signatures, pre-existing implementation names and tool errors stop; absence scans must succeed as checks rather than ending the call with an expected error. The reconciled static Task 71 declares all three readiness fields, Task 72 consumes them, and this task populates and validates them without adding declarations. These static parts do not establish actual post-72 source readiness: formal runtime review must check the real predecessor and apply/test this task before execution. Missing fields remain a predecessor refusal; no API is invented to bypass it.
 
 - [ ] **Step 2: Write the failing readiness tests**
 
@@ -9194,7 +10153,12 @@ func rejectMemberReadyMR(t *testing.T, f *FSM, cmd wire.Command, want string) {
 	if f.st.TableRegistry != nil {
 		version = f.st.TableRegistry.Version
 	}
-	if got := applyExpectReject(t, f, cmd).Reason; got != want {
+	res := f.Apply(mkLog(t, cmd))
+	rejection, ok := res.(Rejected)
+	if !ok {
+		t.Fatalf("member ready refusal %s: expected Rejected, got %T %+v, want %q", t.Name(), res, res, want)
+	}
+	if got := rejection.Reason; got != want {
 		t.Fatalf("refusal %q, want %q", got, want)
 	}
 	if !bytes.Equal(before, snapshotBytes(t, f)) || (f.st.TableRegistry != nil && f.st.TableRegistry.Version != version) || !maps.Equal(seals, f.BlockSealReasons()) {
@@ -9886,7 +10850,44 @@ func TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges(t *testing.
 
 - [ ] **Step 4: Run the FSM tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && go test ./fsm/ -run 'TestMemberReady|TestRegistryViewCarriesTheReadyGenerationWithoutItsProof|TestRestoreReverifiesMemberReadySignaturesUnderTheirEpoch|TestRestoreRefusesAReadyGenerationOutsideTheMembership|TestUnreadyMembersEnterNoRingAndFillSuppliesThePool|TestEligibleRing|TestExcludeQuarantinedHostsDropsQuarantinedHostsMembers|TestAdmissionRefusesVerifiersUnavailableWithTheMarkReplayingFilter|TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges' -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red  <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+python3 -I - "$out" <<'PY73'
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+for token in ['too many arguments', 'eligibleRingLocked', 'build failed']:assert token in text,token
+PY73
+```
 
 Expected: the package fails to build. The errors begin `fsm/eligible_ring_groups_test.go:…: too many arguments in call to f.eligibleRingLocked` with `have (number, []string, *GroupSeal)` and `want (uint64, []string)`, and continue with `undefined: groupMemberRecord` and `f.MemberReadyRecorded undefined (type *FSM has no field or method MemberReadyRecorded)`, then `too many errors` and `FAIL	github.com/sentioxyz/arbiter/fsm [build failed]`. Any other error means a seam of Step 1 differs from its contract: stop and reconcile it first.
 
@@ -10412,7 +11413,67 @@ with:
 
 - [ ] **Step 11: Run the FSM tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && test -z "$(gofmt -l fsm)" && go vet ./fsm/ && go test ./fsm/ -run 'TestMemberReady|TestRegistryViewCarriesTheReadyGenerationWithoutItsProof|TestRestoreReverifiesMemberReadySignaturesUnderTheirEpoch|TestRestoreRefusesAReadyGenerationOutsideTheMembership|TestUnreadyMembersEnterNoRingAndFillSuppliesThePool|TestEligibleRing|TestExcludeQuarantinedHostsDropsQuarantinedHostsMembers|TestAdmissionRefusesVerifiersUnavailableWithTheMarkReplayingFilter|TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges|TestOwnerAwareSelection' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && go test ./fsm/ -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm)" || exit 1
+[ -z "$formatted" ] || exit 1
+go vet ./fsm/ || exit 1
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race -run '^(TestMemberReadyRefusals|TestMemberReadyIsIdempotentAtTheSameGeneration|TestMemberReadyAtALaterGenerationKeepsTheMemberReady|TestMemberReadyChangesTheKeyAndSealsAnOpenBlockOfTheGroupFirst|TestRegistryViewCarriesTheReadyGenerationWithoutItsProof|TestRestoreReverifiesMemberReadySignaturesUnderTheirEpoch|TestRestoreRefusesAReadyGenerationOutsideTheMembership|TestUnreadyMembersEnterNoRingAndFillSuppliesThePool|TestEligibleRingDropsRemovedDelistedEvictedOrOwnerHostedMembers|TestEligibleRingAddsThePoolWhileFillIsOnOrMembersAreFewerThanThree|TestExcludeQuarantinedHostsDropsQuarantinedHostsMembers|TestEligibleRingWithoutASealIsThePoolOnlyRing|TestAdmissionRefusesVerifiersUnavailableWithTheMarkReplayingFilter|TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges|TestOwnerAwareSelectionOffSelectsByteIdentically|TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet|TestOwnerAwareSelectionDrawsFromTheActivePoolOnly|TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestMemberReadyRefusals' 'TestMemberReadyIsIdempotentAtTheSameGeneration' 'TestMemberReadyAtALaterGenerationKeepsTheMemberReady' 'TestMemberReadyChangesTheKeyAndSealsAnOpenBlockOfTheGroupFirst' 'TestRegistryViewCarriesTheReadyGenerationWithoutItsProof' 'TestRestoreReverifiesMemberReadySignaturesUnderTheirEpoch' 'TestRestoreRefusesAReadyGenerationOutsideTheMembership' 'TestUnreadyMembersEnterNoRingAndFillSuppliesThePool' 'TestEligibleRingDropsRemovedDelistedEvictedOrOwnerHostedMembers' 'TestEligibleRingAddsThePoolWhileFillIsOnOrMembersAreFewerThanThree' 'TestExcludeQuarantinedHostsDropsQuarantinedHostsMembers' 'TestEligibleRingWithoutASealIsThePoolOnlyRing' 'TestAdmissionRefusesVerifiersUnavailableWithTheMarkReplayingFilter' 'TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges' 'TestOwnerAwareSelectionOffSelectsByteIdentically' 'TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet' 'TestOwnerAwareSelectionDrawsFromTheActivePoolOnly' 'TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor' <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+```
 
 Expected: `gofmt` and `go vet` print nothing; `--- PASS:` for `TestMemberReadyRefusals`, `TestMemberReadyIsIdempotentAtTheSameGeneration`, `TestMemberReadyAtALaterGenerationKeepsTheMemberReady`, `TestMemberReadyChangesTheKeyAndSealsAnOpenBlockOfTheGroupFirst`, `TestRegistryViewCarriesTheReadyGenerationWithoutItsProof`, `TestRestoreReverifiesMemberReadySignaturesUnderTheirEpoch`, `TestRestoreRefusesAReadyGenerationOutsideTheMembership`, `TestUnreadyMembersEnterNoRingAndFillSuppliesThePool`, `TestEligibleRingDropsRemovedDelistedEvictedOrOwnerHostedMembers`, `TestEligibleRingAddsThePoolWhileFillIsOnOrMembersAreFewerThanThree`, `TestExcludeQuarantinedHostsDropsQuarantinedHostsMembers`, `TestEligibleRingWithoutASealIsThePoolOnlyRing`, `TestAdmissionRefusesVerifiersUnavailableWithTheMarkReplayingFilter`, `TestUnmarkableBlockLeavesTheWorkSetUntilTheEligibleCountChanges` and Task 70's four `TestOwnerAwareSelection…` tests, no `--- FAIL`, `ok  	github.com/sentioxyz/arbiter/fsm`, and `ok` again for the whole package (Plan S3-E2's and Tasks 71–72's tests and goldens included).
 
@@ -10736,7 +11797,44 @@ func TestTableRegistryToPBServesTheReadyGenerationOnly(t *testing.T) {
 
 - [ ] **Step 13: Run the server tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && go test ./server/ -run 'TestSubmitMemberReady|TestTableRegistryToPBServesTheReadyGenerationOnly' -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" red  <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+python3 -I - "$out" <<'PY73'
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+for token in ['undefined: memberReadyBeforePlacementMessage', 'build failed']:assert token in text,token
+PY73
+```
 
 Expected: the package fails to build with `server/member_gateway_test.go:…: undefined: memberReadyBeforePlacementMessage`, then `FAIL	github.com/sentioxyz/arbiter/server [build failed]` (the FSM half of Steps 5–10 is in, so every other name resolves; `SubmitMemberReady` resolves to `pb.UnimplementedVerifierGatewayServer`'s method until Step 14).
 
@@ -10832,18 +11930,107 @@ with:
 
 - [ ] **Step 16: Run the server tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && test -z "$(gofmt -l server)" && go vet ./server/ && go test ./server/ -run 'TestSubmitMemberReady|TestTableRegistryToPBServesTheReadyGenerationOnly|TestTableRegistryToPBCarriesGroups' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && go test ./server/ -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+go vet ./server/ || exit 1
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -race -run '^(TestSubmitMemberReadyAnswersFailedPreconditionBeforePlacement|TestSubmitMemberReadyIsIdempotent|TestSubmitMemberReadyMapsApplyRefusals|TestTableRegistryToPBServesTheReadyGenerationOnly|TestTableRegistryToPBCarriesGroups)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green 'TestSubmitMemberReadyAnswersFailedPreconditionBeforePlacement' 'TestSubmitMemberReadyIsIdempotent' 'TestSubmitMemberReadyMapsApplyRefusals' 'TestTableRegistryToPBServesTheReadyGenerationOnly' 'TestTableRegistryToPBCarriesGroups' <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+out="$(mktemp "$T64/task73-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" green  <<'PY73'
+import json,pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text(); rc=int(sys.argv[2]); mode=sys.argv[3]; names=sys.argv[4:]
+assert (rc!=0)==(mode=='red'),(mode,rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+    try: row=json.loads(line)
+    except json.JSONDecodeError:
+        assert mode=='red',line
+        continue
+    assert isinstance(row,dict); rows.append(row)
+if names:
+    action='fail' if mode=='red' else 'pass'
+    for name in names:
+        outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+        assert outcomes==[action],(name,outcomes)
+if mode=='green':
+    assert rows and any(r.get('Action')=='pass' and 'Test' not in r for r in rows)
+    assert not any(r.get('Action')=='fail' for r in rows)
+else:
+    assert any(r.get('Action')=='fail' for r in rows) or ('undefined:' in text and 'build failed' in text)
+print('expected-'+mode+'-test-results-verified')
+PY73
+```
 
 Expected: `gofmt` and `go vet` print nothing; `--- PASS:` for `TestSubmitMemberReadyAnswersFailedPreconditionBeforePlacement`, `TestSubmitMemberReadyIsIdempotent`, `TestSubmitMemberReadyMapsApplyRefusals`, `TestTableRegistryToPBServesTheReadyGenerationOnly` and Task 71's `TestTableRegistryToPBCarriesGroups`, no `--- FAIL`, `ok  	github.com/sentioxyz/arbiter/server`, and `ok` again for the whole package.
 
 - [ ] **Step 17: Run gazelle and stage the task's files**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-bazel run //:gazelle
-git diff -- fsm/BUILD.bazel server/BUILD.bazel
-git add fsm/member_ready.go fsm/member_ready_test.go fsm/eligible_ring_groups_test.go fsm/select.go fsm/selection_stage3_test.go fsm/admission.go fsm/fsm.go fsm/stage3_restore.go fsm/consensus_history.go fsm/table_registry.go fsm/BUILD.bazel server/member_gateway.go server/member_gateway_test.go server/table_registry.go server/table_registry_groups_test.go server/BUILD.bazel
-git status --porcelain
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task73-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_73_2089="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_73_2089" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_73_2089}" = "$base" ] || exit 1
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+diff="$(git diff --unified=0 -- fsm/BUILD.bazel server/BUILD.bazel)" || exit 1
+python3 -I - "$diff" <<'PY73'
+import sys
+added=[]
+for line in sys.argv[1].splitlines():
+    if line.startswith(('+++','---')):continue
+    assert not line.startswith('-'),line
+    if line.startswith('+'):added.append(line[1:].strip())
+assert sorted(added)==sorted(['"member_ready.go",','"eligible_ring_groups_test.go",','"member_ready_test.go",','"member_gateway.go",','"member_gateway_test.go",']),added
+PY73
+git add -- fsm/member_ready.go fsm/member_ready_test.go fsm/eligible_ring_groups_test.go fsm/select.go fsm/selection_stage3_test.go fsm/admission.go fsm/fsm.go fsm/stage3_restore.go fsm/consensus_history.go fsm/table_registry.go fsm/BUILD.bazel server/member_gateway.go server/member_gateway_test.go server/table_registry.go server/table_registry_groups_test.go server/BUILD.bazel || exit 1
+statusfile="$(mktemp "$T64/task73-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY73'
+import pathlib,sys
+expected=['fsm/member_ready.go', 'fsm/member_ready_test.go', 'fsm/eligible_ring_groups_test.go', 'fsm/select.go', 'fsm/selection_stage3_test.go', 'fsm/admission.go', 'fsm/fsm.go', 'fsm/stage3_restore.go', 'fsm/consensus_history.go', 'fsm/table_registry.go', 'fsm/BUILD.bazel', 'server/member_gateway.go', 'server/member_gateway_test.go', 'server/table_registry.go', 'server/table_registry_groups_test.go', 'server/BUILD.bazel']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0'); assert rows.pop()==b''
+seen=[]
+for row in rows:
+    assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+    seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY73
+echo task73-owned-files-staged
 ```
 
 Expected: gazelle adds five `srcs` entries and nothing else, so the diff has five `+` lines and no `-` line: in `fsm/BUILD.bazel`, `"member_ready.go",` in `go_library(name = "fsm")` (after `"manifest_validation.go",`), and `"eligible_ring_groups_test.go",` (after `"determinism_tracks_test.go",`) and `"member_ready_test.go",` (after `"manifest_validation_test.go",`) in `go_test(name = "fsm_test")`; in `server/BUILD.bazel`, `"member_gateway.go",` in `go_library(name = "server")` (after `"ingress.go",`) and `"member_gateway_test.go",` in `go_test(name = "server_test")` (after `"ingress_test.go",`). No `deps` line changes: every import of this task is already a dependency of its target. Then `git status --porcelain` lists exactly `M  fsm/BUILD.bazel`, `M  fsm/admission.go`, `M  fsm/consensus_history.go`, `A  fsm/eligible_ring_groups_test.go`, `M  fsm/fsm.go`, `A  fsm/member_ready.go`, `A  fsm/member_ready_test.go`, `M  fsm/select.go`, `M  fsm/selection_stage3_test.go`, `M  fsm/stage3_restore.go`, `M  fsm/table_registry.go`, `M  server/BUILD.bazel`, `A  server/member_gateway.go`, `A  server/member_gateway_test.go`, `M  server/table_registry.go` and `M  server/table_registry_groups_test.go`. Any other path, or a `deps` change, stops the task: report it rather than committing it.
@@ -10851,11 +12038,51 @@ Expected: gazelle adds five `srcs` entries and nothing else, so the diff has fiv
 - [ ] **Step 18: Run the full checks**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && bazel run //:gazelle && git diff --exit-code -- '*.bazel' && bazel build //... && bazel test //... --test_output=errors
-bazel test --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //server:server_test --test_output=errors
-bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/
-git diff --cached --name-status -- fsm/testdata fsm/l3_track_golden_test.go fsm/l3_group_key_golden_test.go fsm/placement_golden_test.go accumulator/testdata
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task73-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+list="$(mktemp "$T64/task73-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY73'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY73
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //server:server_test --test_output=errors || exit 1
+deps="$(bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)')" || exit 1
+[ -n "$deps" ] || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) exit 1;; esac
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+changes="$(mktemp "$T64/task73-protected.XXXXXX")" || exit 1
+git diff --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY73'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b'' and len(rows)%2==0
+for st,p in zip(rows[::2],rows[1::2]):
+    assert b'testdata/' not in p and not p.endswith(b'_golden_test.go'),p
+PY73
+statusfile="$(mktemp "$T64/task73-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY73'
+import pathlib,sys
+expected=['fsm/member_ready.go', 'fsm/member_ready_test.go', 'fsm/eligible_ring_groups_test.go', 'fsm/select.go', 'fsm/selection_stage3_test.go', 'fsm/admission.go', 'fsm/fsm.go', 'fsm/stage3_restore.go', 'fsm/consensus_history.go', 'fsm/table_registry.go', 'fsm/BUILD.bazel', 'server/member_gateway.go', 'server/member_gateway_test.go', 'server/table_registry.go', 'server/table_registry_groups_test.go', 'server/BUILD.bazel']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0'); assert rows.pop()==b''
+seen=[]
+for row in rows:
+    assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+    seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY73
+echo task73-full-checks-passed
 ```
 
 Expected: the contract §49 chain succeeds (its gofmt check, with the file list passed through `xargs -0` so no name is word-split, is silent; gazelle leaves the staged `BUILD.bazel` files unchanged, every target builds, every test target passes, `//fsm:fsm_test` and `//server:server_test` included); both race targets pass; the two red-line commands print nothing (`fsm` reaches arbiter-proto only through `wire` and reads no wall clock); the last command prints nothing (no golden or fixture is touched). Any failure stops the commit.
@@ -10863,8 +12090,28 @@ Expected: the contract §49 chain succeeds (its gofmt check, with the file list 
 - [ ] **Step 19: Commit**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-git commit -m "fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task73-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_73_2180="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_73_2180" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_73_2180}" = "$base" ] || exit 1
+statusfile="$(mktemp "$T64/task73-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY73'
+import pathlib,sys
+expected=['fsm/member_ready.go', 'fsm/member_ready_test.go', 'fsm/eligible_ring_groups_test.go', 'fsm/select.go', 'fsm/selection_stage3_test.go', 'fsm/admission.go', 'fsm/fsm.go', 'fsm/stage3_restore.go', 'fsm/consensus_history.go', 'fsm/table_registry.go', 'fsm/BUILD.bazel', 'server/member_gateway.go', 'server/member_gateway_test.go', 'server/table_registry.go', 'server/table_registry_groups_test.go', 'server/BUILD.bazel']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0'); assert rows.pop()==b''
+seen=[]
+for row in rows:
+    assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+    seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY73
+git commit -S -m "fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)
 
 MemberReady (Raft tag 40) records a placed member's readiness once the
 placement switch is on, after contract §52.1's checks: the group and the
@@ -10886,25 +12133,83 @@ each readiness signature under the key its own epoch listed.
 VerifierGateway.SubmitMemberReady proposes the command, and the
 registry view serves ready_generation only (D33).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git status --porcelain
-git log --oneline -3
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+git_read_73_2219="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_73_2219}" = 1 ] || exit 1
+git_read_73_2220="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_73_2220}" = 'fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)' ] || exit 1
+git_read_73_2221="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_73_2221}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+message="$(git log -1 --format=%B)" || exit 1
+python3 -I - "$message" <<'PY73'
+import re,sys
+assert re.findall(r'^co-authored-by:[^\n]*$',sys.argv[1],re.I|re.M)==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>']
+PY73
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: dirty worktree' >&2; exit 1; }
+python3 -I - "$T64/task73-final-head" "$head" <<'PY73'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY73
+echo task73-signed-commit-verified
 ```
 
 Expected: the commit succeeds; `git status --porcelain` prints nothing; the log shows this commit on top of Task 72's `fsm: group seal key, header group_key and grouping window (S3-E3 Task 72)`. Task 74 starts from here.
 
 - [ ] **Step 20: Push the branch (optional; requires explicit user confirmation)**
 
-Remote write (push): needs explicit user confirmation in chat before running. It updates branch `urwt/claude/multi-source-s3e` on `github.com/sentioxyz/arbiter` (Plan S3-E2 Task 70 created it) with the commits since its last push, this task's among them. It opens no PR, merges nothing, creates no tag and starts no release workflow (`ci.yml` runs only on pushes to `main` and on pull requests); the branch stays unreleased until Plan S3-E4 Task 78 (K65). Without confirmation, skip this step: the commit stays local and Task 74 continues on the same worktree.
+Remote write (push): needs explicit user confirmation in chat before running. It updates branch `urwt/codex/multi-source-s3e` on `github.com/sentioxyz/arbiter` (Plan S3-E2 Task 70 created it) with the commits since its last push, this task's among them. It opens no PR, merges nothing, creates no tag and starts no release workflow (`ci.yml` runs only on pushes to `main` and on pull requests); the branch stays unreleased until Plan S3-E4 Task 78 (K65). Without confirmation, skip this step: the commit stays local and Task 74 continues on the same worktree.
 
-Confirm before running. Then, from fish or any shell (the two lines are the same in both):
+Confirm before running. Then execute this complete Bash block through the plan runner (commands handed to the user directly must use fish):
 
 ```bash
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e push origin HEAD:urwt/claude/multi-source-s3e
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e rev-parse HEAD '@{u}'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task73-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+git_read_73_2254="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_73_2254}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+head="$(cat "$T64/task73-final-head")" || exit 1
+git_read_73_2257="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_73_2257" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "${git_read_73_2257}" ] || exit 1
+git_read_73_2258="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_73_2258}" = 1 ] || exit 1
+git_read_73_2259="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_73_2259}" = 'fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)' ] || exit 1
+
+branch=urwt/codex/multi-source-s3e
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+remote_head="$(python3 -I - "$remote" "$branch" <<'PY71'
+import re,sys
+m=re.fullmatch(r'([0-9a-f]{40})\trefs/heads/'+re.escape(sys.argv[2]),sys.argv[1]); assert m
+print(m[1])
+PY71
+)" || exit 1
+git merge-base --is-ancestor "$remote_head" "$base" || exit 1
+# Only after explicit user confirmation in chat:
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git_read_73_2274="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_73_2274" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_73_2274}" = "$head" ] || exit 1
+echo task73-push-verified
 ```
 
-Expected: `HEAD -> urwt/claude/multi-source-s3e` with the old and new heads, then the same commit hash twice (the local head and its upstream). A rejected push means the branch moved: stop and ask the user; never force-push.
+Expected: `task73-push-verified` after both the remote ref and local HEAD equal the exact retained checked SHA. A rejected push means the branch moved: stop and ask the user; never force-push.
+
+Static workflow note: the exclusive observed `task73-final-head` is written only after the signed one-commit identity/trailer/clean-tree gates; Task 74 must consume it and the exact Task 73 subject. Step 1 succeeds only with `task73-entry-verified`; Steps 17/18/19/20 use respectively `task73-owned-files-staged`, `task73-full-checks-passed`, `task73-signed-commit-verified`, `task73-push-verified`. Historical drafting output examples remain explanatory, never executable acceptance gates. This static successor aligns all three readiness declarations with Task 71 and their population/validation with Task 73. Actual post-72 source must still be checked during formal runtime review; the reconciled documents neither establish that source nor authorize an invented predecessor.
+
 
 ---
 
@@ -10912,7 +12217,9 @@ Expected: `HEAD -> urwt/claude/multi-source-s3e` with the old and new heads, the
 
 Spec §7.4 (re-selection: a verifier without complete evidence is replaced when it is evicted, no longer eligible or timed out on the committed L2 registry cursor, one with complete evidence only when evicted; replacements walk the stored ring after the stored position; at most ring size − 3 re-selections; refused after the latch or on a challenged statement; replaced verifiers' evidence ignored; the proof and its epoch stored; restore checks the records structurally, the latch count and the proof under its epoch, without re-deriving node status), §10.4 switch 7 (`reselection`) and §17 (re-selection on a quiet track and its restore checks; two passes latch, one passing verifier is evicted, a re-selection is refused and a snapshot/restore keeps the verdict), as fixed by contract §52.2 and clarification K75. With the switch on, the WorkSet lists every block a re-selection would be applied for in `ReselectionDue`, the leader's orchestrator signs `ReselectVerifiers{l3_block_seq, expected_set}` with its authority signer and proposes it, and Apply replaces the verifiers, deletes their evidence, appends a `Reselection` record and re-evaluates the block; the verdict that latches records the block's re-selection count; `GetBlockVerification` serves the records without their signed expected set (D33); the node-local counter `arbiter_verifier_reselections_total` counts the applied commands. Before the switch Apply refuses tag 39 first, the row is empty, the orchestrator proposes nothing and no new field is written (all `omitempty`), so every Apply, snapshot and chain hash is byte for byte the branch's after Task 73.
 
-Worktree (contract §49): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, with Plan S3-E2's Tasks 64–70 and this plan's Tasks 71–73 committed; prefix every Bash call with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;`. Line anchors are arbiter `origin/main` `526a721` (`v0.13.0`: `fb42260` plus Plan S3-A Tasks 7–11, merged as #133, which `ARBITER_TAG_P4` and the branch contain) for arbiter's own files, and Plan S3-E2 Task 70's text for the selection record and its restore rule. Every hunk is anchored on text that no earlier task rewrites (a struct's or function's closing lines, Task 70's lines), so it applies on the branch as written; where Tasks 71–73 appended to the same struct, list or function, the step says where this task's lines go relative to theirs (hunk rule, Global Constraints).
+Worktree: Task 64's retained actual Codex JSON path and complete `env.sh`, loaded on every Bash call. Entry requires clean poetry/G HEAD with verify-commit, Task 73's exact final subject and exclusive observed `task73-final-head` equal to actual HEAD; Task 74 then exclusively saves its observed base. No reconstructed path, predicted SHA or overwritten receipt is permitted.
+
+**STATIC PREP / WAIT73:** actual root-approved 66→73 source is pending. Task 73's missing ReadySignature/ReadyEpoch production and entry ordering remain an upstream runtime stop; this preparation neither supplies those fields nor weakens prerequisite checks. Draft anchors remain historical `526a721`; reconcile all runtime hunks and dependencies on the approved actual source. Every original non-Bash fence remains byte-identical. No current TDD/runtime/Go/Bazel/golden/signing/publication result is claimed. All Go/Bazel calls disable downloads; an offline miss stops. GPG cancellation stops for the user's actual-key unlock, never unsigned fallback. Optional backup push still requires explicit confirmation.
 
 **Files:**
 - Create: `fsm/reselect_verifiers.go` (`applyReselectVerifiers`, the shared plan, the replaceable set, the cursor timeout, the ring walk, the WorkSet row, `ReselectionsApplied`, the restore rules and the proof check)
@@ -10961,12 +12268,24 @@ Notes:
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git rev-parse --abbrev-ref HEAD
-git status --porcelain
-git log -1 --format=%s
-CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)"
-PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)"
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+git_read_74_62="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_74_62}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+git_read_74_64="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_74_64}" = 'fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)' ] || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+python3 -I - "$T64/task73-final-head" "$head" <<'PY74'
+import pathlib,re,sys
+v=pathlib.Path(sys.argv[1]).read_text();assert re.fullmatch(r'[0-9a-f]{40}\n',v) and v[:-1]==sys.argv[2]
+PY74
+CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)" || exit 1
+PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)" || exit 1
 for p in 'func (f *FSM) reselectionOnLocked() bool' 'func (f *FSM) ReselectionOn() bool' 'func (f *FSM) authorityCommandRefusalLocked(' \
   'func (bv *BlockVerification) groupSeal() *GroupSeal' 'func (f *FSM) eligibleRingLocked(owner uint64, sources []string, seal *GroupSeal) []string' \
   'func (f *FSM) evictedNodeLocked(' 'func validateStage3Selection(' 'func verificationHasStage3Fields(' 'func blockSeededPosition(' \
@@ -10974,17 +12293,25 @@ for p in 'func (f *FSM) reselectionOnLocked() bool' 'func (f *FSM) ReselectionOn
   'func ownerAwareFSM(' 'func addPoolVerifiersOA(' 'func evictVerifierOA(' 'func resyncVerifierOA(' 'func reactivateVerifierOA(' \
   'func claimedBlockOA(' 'func markReplayingOA(' 'func verificationJSONOA(' 'func restoresBothWaysOA(' 'func forgedVerificationOA(' \
   'func rejectStage3Unchanged('; do
-  grep -rqF -- "$p" fsm || echo "missing in fsm: $p"
+  grep -rqF -- "$p" fsm || { echo "stop: missing in fsm: $p" >&2; exit 1; }
 done
-grep -rqF 'func (s *Signer) SignReselectVerifiersWithContextAt(' "$CORE/authority" || echo "missing in arbiter-core: SignReselectVerifiersWithContextAt"
-grep -rqF 'func (v *Validator) VerifyReselectVerifiers(' "$CORE/authority" || echo "missing in arbiter-core: VerifyReselectVerifiers"
-grep -rqE 'ReselectVerifiers +\*ReselectVerifiers' "$CORE/wire" || echo "missing in arbiter-core: wire.Command.ReselectVerifiers"
-grep -qF 'type BlockReselection struct' "$PROTO/gen/pb/arbiter.pb.go" || echo "missing in arbiter-proto: BlockReselection"
-grep -cE '"BlockVerification\.(reselections|reselections_at_latch)":' server/safestate_stage3_test.go
-git grep -nE 'type Reselection struct|ReselectionDue|applyReselectVerifiers|handleReselections|arbiter_verifier_reselections_total' -- fsm server orchestrator metrics
+grep -rqF 'func (s *Signer) SignReselectVerifiersWithContextAt(' "$CORE/authority" || { echo "stop: missing in arbiter-core: SignReselectVerifiersWithContextAt" >&2; exit 1; }
+grep -rqF 'func (v *Validator) VerifyReselectVerifiers(' "$CORE/authority" || { echo "stop: missing in arbiter-core: VerifyReselectVerifiers" >&2; exit 1; }
+grep -rqE 'ReselectVerifiers +\*ReselectVerifiers' "$CORE/wire" || { echo "stop: missing in arbiter-core: wire.Command.ReselectVerifiers" >&2; exit 1; }
+grep -qF 'type BlockReselection struct' "$PROTO/gen/pb/arbiter.pb.go" || { echo "stop: missing in arbiter-proto: BlockReselection" >&2; exit 1; }
+count="$(grep -cE '"BlockVerification\.(reselections|reselections_at_latch)":' server/safestate_stage3_test.go)" || exit 1
+[ "$count" = 2 ] || exit 1
+if git grep -nE 'type Reselection struct|ReselectionDue|applyReselectVerifiers|handleReselections|arbiter_verifier_reselections_total' -- fsm server orchestrator metrics; then
+ exit 1
+else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+python3 -I - "$T64/task74-base-sha" "$head" <<'PY74'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY74
+echo task74-entry-verified
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; `git status --porcelain` prints nothing; `fsm: MemberReady and group-aware eligible rings (S3-E3 Task 73)`; no `missing` line; `2` (the two `BlockVerification` entries Plan S3-E2 Task 64's pin fallout left for this task, after Task 72 removed its four); and the last `git grep` prints nothing. If the branch, the tree or `HEAD` differs, a seam is missing or one of this task's names exists, stop: Tasks 64–73 land in order before this task (contract §49), and a missing seam is an earlier task's step to finish, not this task's to invent.
+Expected: `task74-entry-verified` after the exact signed Task 73 predecessor, clean tree, observed receipt and every prerequisite check pass. Missing/mismatched seams, wrong pending count, existing Task 74 implementation names, tool errors or stale exclusive receipts stop. Task 73's proof-field production gap remains unresolved until its actual runtime review; do not fabricate that source or bypass its readiness gate.
 
 - [ ] **Step 2: Write the failing FSM tests**
 
@@ -12037,9 +13364,34 @@ func TestBlockVerificationViewCopiesTheReselections(t *testing.T) {
 - [ ] **Step 3: Run them and see them fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-RX='TestReselectVerifiersRefusals|TestReselectVerifiersReplacesOnlyIncompleteEvictedIneligibleOrTimedOut|TestAVerifierWithCompleteEvidenceIsReplacedOnlyIfEvicted|TestReplacementsFollowTheStoredRingAfterTheRingPosition|TestReplacedVerifiersEvidenceIsDeletedAndLateEvidenceRefused|TestReselectionIsLimitedToRingSizeMinusThree|TestReselectVerifiersOnAQuietTrackFiresOnTheRegistryCursor|TestReselectionIsRefusedAfterTheLatchAndTheVerdictSurvivesEvictionAndRestore|TestLatchRecordsTheReselectionCount|TestWorkSetListsReselectionDueWithTheApplyPredicate|TestRestoreRefusesAReselectionAfterTheLatch|TestRestoreRefusesAMalformedReselection|TestRestoreReverifiesReselectionProofsUnderTheirEpoch|TestSnapshotBelowV21RefusesReselectionFields|TestBlockVerificationViewCopiesTheReselections'
-GOWORK=off go test ./fsm/ -run "^($RX)\$" -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['Reselections undefined', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
 ```
 
 Expected: the package fails to build, and the compiler output begins:
@@ -12788,10 +14140,36 @@ If Task 73 left another final call, wrap that call the same way and return `vali
 - [ ] **Step 12: Run the FSM tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l fsm)" && echo gofmt-clean
-RX='TestReselectVerifiersRefusals|TestReselectVerifiersReplacesOnlyIncompleteEvictedIneligibleOrTimedOut|TestAVerifierWithCompleteEvidenceIsReplacedOnlyIfEvicted|TestReplacementsFollowTheStoredRingAfterTheRingPosition|TestReplacedVerifiersEvidenceIsDeletedAndLateEvidenceRefused|TestReselectionIsLimitedToRingSizeMinusThree|TestReselectVerifiersOnAQuietTrackFiresOnTheRegistryCursor|TestReselectionIsRefusedAfterTheLatchAndTheVerdictSurvivesEvictionAndRestore|TestLatchRecordsTheReselectionCount|TestWorkSetListsReselectionDueWithTheApplyPredicate|TestRestoreRefusesAReselectionAfterTheLatch|TestRestoreRefusesAMalformedReselection|TestRestoreReverifiesReselectionProofsUnderTheirEpoch|TestSnapshotBelowV21RefusesReselectionFields|TestBlockVerificationViewCopiesTheReselections'
-GOWORK=off go test ./fsm/ -run "^($RX)\$" -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race -run '^(TestReselectVerifiersRefusals|TestReselectVerifiersReplacesOnlyIncompleteEvictedIneligibleOrTimedOut|TestAVerifierWithCompleteEvidenceIsReplacedOnlyIfEvicted|TestReplacementsFollowTheStoredRingAfterTheRingPosition|TestReplacedVerifiersEvidenceIsDeletedAndLateEvidenceRefused|TestReselectionIsLimitedToRingSizeMinusThree|TestReselectVerifiersOnAQuietTrackFiresOnTheRegistryCursor|TestReselectionIsRefusedAfterTheLatchAndTheVerdictSurvivesEvictionAndRestore|TestLatchRecordsTheReselectionCount|TestWorkSetListsReselectionDueWithTheApplyPredicate|TestRestoreRefusesAReselectionAfterTheLatch|TestRestoreRefusesAMalformedReselection|TestRestoreReverifiesReselectionProofsUnderTheirEpoch|TestSnapshotBelowV21RefusesReselectionFields|TestBlockVerificationViewCopiesTheReselections)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestReselectVerifiersRefusals': 'pass', 'TestReselectVerifiersReplacesOnlyIncompleteEvictedIneligibleOrTimedOut': 'pass', 'TestAVerifierWithCompleteEvidenceIsReplacedOnlyIfEvicted': 'pass', 'TestReplacementsFollowTheStoredRingAfterTheRingPosition': 'pass', 'TestReplacedVerifiersEvidenceIsDeletedAndLateEvidenceRefused': 'pass', 'TestReselectionIsLimitedToRingSizeMinusThree': 'pass', 'TestReselectVerifiersOnAQuietTrackFiresOnTheRegistryCursor': 'pass', 'TestReselectionIsRefusedAfterTheLatchAndTheVerdictSurvivesEvictionAndRestore': 'pass', 'TestLatchRecordsTheReselectionCount': 'pass', 'TestWorkSetListsReselectionDueWithTheApplyPredicate': 'pass', 'TestRestoreRefusesAReselectionAfterTheLatch': 'pass', 'TestRestoreRefusesAMalformedReselection': 'pass', 'TestRestoreReverifiesReselectionProofsUnderTheirEpoch': 'pass', 'TestSnapshotBelowV21RefusesReselectionFields': 'pass', 'TestBlockVerificationViewCopiesTheReselections': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
 ```
 
 Expected: `gofmt-clean` (if `gofmt` lists a file, run `gofmt -w` on it and repeat), then:
@@ -12820,11 +14198,61 @@ with no `--- FAIL`; the subtests pass too (18 of `TestReselectVerifiersRefusals`
 - [ ] **Step 13: Run the whole fsm package, the goldens and the fsm red lines**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-GOWORK=off go test ./fsm/ -race -count=1
-GOWORK=off go test ./fsm/ -run '^(TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestOwnerAwareSelectionOffSelectsByteIdentically|TestPlacementGoldenVectorsAreFrozen|TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestDeterminism_.*)$' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-grep -rn 'time\.Now' fsm/
-git status --porcelain fsm/testdata
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestOwnerAwareSelectionOffSelectsByteIdentically|TestPlacementGoldenVectorsAreFrozen|TestGroupKeyGoldenVectorsAreFrozen|TestL3GroupKeyHeaderPreimagesAreFrozen|TestDeterminism_.*)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims': 'pass', 'TestPreActivationHistoryIsByteIdenticalAcrossTracks': 'pass', 'TestL3CommitmentPreimagesAreFrozen': 'pass', 'TestL3TrackHeaderPreimagesAreFrozen': 'pass', 'TestL3TransitionHeaderPreimageIsFrozen': 'pass', 'TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease': 'pass', 'TestStage3V21PlainContainerGolden': 'pass', 'TestStage3V21InternedContainerGolden': 'pass', 'TestStage3ActivationWithEverySwitchOffChangesNoBehaviour': 'pass', 'TestOwnerAwareSelectionOffSelectsByteIdentically': 'pass', 'TestPlacementGoldenVectorsAreFrozen': 'pass', 'TestGroupKeyGoldenVectorsAreFrozen': 'pass', 'TestL3GroupKeyHeaderPreimagesAreFrozen': 'pass', 'TestDeterminism_.*': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+protected="$(git status --porcelain fsm/testdata)" || exit 1
+[ -z "$protected" ] || exit 1
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/fsm` (every earlier task's tests included); `--- PASS:` for each listed golden, switch-off and determinism test and `ok`; the `time.Now` grep prints nothing; `git status --porcelain fsm/testdata` prints nothing. A failing golden or switch-off test means a new branch runs with its switch off, or a new field is written without `omitempty`: stop and find it.
@@ -12929,7 +14357,40 @@ func TestGetBlockVerificationServesReselections(t *testing.T) {
 
 - [ ] **Step 15: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server)" && GOWORK=off go test ./server/ -run '^(TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesReselections)$' -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -run '^(TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesReselections)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestBlockVerificationToPBCarriesEveryField': 'fail', 'TestGetBlockVerificationServesReselections': 'fail'};tokens=[]
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected (the converter drops both fields, so `proto.Equal` fails and nothing is served; protobuf's text form varies its spacing from run to run, and `…` stands for the unchanged rest of each message):
 
@@ -12970,7 +14431,64 @@ with:
 
 - [ ] **Step 17: Run the server package and see it pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server)" && GOWORK=off go test ./server/ -run '^(TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesReselections|TestL3BlockHeaderMirrorsProto|TestTableRegistryMirrorsProto|TestGetBlockVerificationServesTheSealedBlock|TestGetBlockVerificationNotFoundAndDataLoss)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test ./server/ -race -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -race -run '^(TestBlockVerificationToPBCarriesEveryField|TestGetBlockVerificationServesReselections|TestL3BlockHeaderMirrorsProto|TestTableRegistryMirrorsProto|TestGetBlockVerificationServesTheSealedBlock|TestGetBlockVerificationNotFoundAndDataLoss)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestBlockVerificationToPBCarriesEveryField': 'pass', 'TestGetBlockVerificationServesReselections': 'pass', 'TestL3BlockHeaderMirrorsProto': 'pass', 'TestTableRegistryMirrorsProto': 'pass', 'TestGetBlockVerificationServesTheSealedBlock': 'pass', 'TestGetBlockVerificationNotFoundAndDataLoss': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected:
 
@@ -13093,7 +14611,40 @@ func TestOrchestratorProposesNoReselectionBeforeTheSwitch(t *testing.T) {
 
 - [ ] **Step 19: Run them and see the proposal test fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l orchestrator)" && GOWORK=off go test ./orchestrator/ -run '^(TestOrchestratorProposesASignedReselection|TestOrchestratorProposesNoReselectionBeforeTheSwitch)$' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)|reselect_test.go'`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l orchestrator)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -run '^(TestOrchestratorProposesASignedReselection|TestOrchestratorProposesNoReselectionBeforeTheSwitch)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestOrchestratorProposesASignedReselection': 'fail', 'TestOrchestratorProposesNoReselectionBeforeTheSwitch': 'pass'};tokens=[]
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected:
 
@@ -13184,7 +14735,64 @@ with:
 
 - [ ] **Step 21: Run the orchestrator package and see it pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l orchestrator)" && GOWORK=off go test ./orchestrator/ -run '^(TestOrchestratorProposesASignedReselection|TestOrchestratorProposesNoReselectionBeforeTheSwitch|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test ./orchestrator/ -race -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l orchestrator)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race -run '^(TestOrchestratorProposesASignedReselection|TestOrchestratorProposesNoReselectionBeforeTheSwitch|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestOrchestratorProposesASignedReselection': 'pass', 'TestOrchestratorProposesNoReselectionBeforeTheSwitch': 'pass', 'TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected: `--- PASS:` for the three tests (the last is Plan S3-E2 Task 70's, unchanged), `ok`, then `ok  	github.com/sentioxyz/arbiter/orchestrator` for the whole package.
 
@@ -13239,7 +14847,40 @@ arbiter_verifier_reselections_total %d
 }
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l metrics)" && GOWORK=off go test ./metrics/ -run '^TestVerifierReselectionsMetricCountsAppliedReselections$' -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l metrics)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['undefined: reselectionReader', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected:
 
@@ -13302,16 +14943,86 @@ with:
 	}
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l metrics)" && GOWORK=off go test ./metrics/ -run '^TestVerifierReselectionsMetricCountsAppliedReselections$' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test ./metrics/ -race -count=1`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l metrics)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 -run '^(TestVerifierReselectionsMetricCountsAppliedReselections)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestVerifierReselectionsMetricCountsAppliedReselections': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+out="$(mktemp "$T64/task74-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY74'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task74-test-results-verified')
+PY74
+```
 
 Expected: `--- PASS: TestVerifierReselectionsMetricCountsAppliedReselections`, `ok`, then `ok  	github.com/sentioxyz/arbiter/metrics` for the whole package.
 
 - [ ] **Step 24: Regenerate the BUILD files**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-bazel run //:gazelle
-git diff -U0 -- '*.bazel' | grep '^[+-] '
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+diff="$(git diff --unified=0 -- '*.bazel')" || exit 1
+python3 -I - "$diff" <<'PY74'
+import sys
+added=[]
+for line in sys.argv[1].splitlines():
+ if line.startswith(('+++','---')):continue
+ assert not line.startswith('-'),line
+ if line.startswith('+'):added.append(line[1:].strip())
+assert sorted(added)==sorted(['"reselect_verifiers.go",','"reselect_verifiers_test.go",','"reselections_test.go",','"reselect.go",','"reselect_test.go",']),added
+PY74
+echo task74-build-files-verified
 ```
 
 Expected: gazelle adds exactly these five lines and nothing else (no dependency changes, since every import of the new files is already a dependency of its target):
@@ -13329,14 +15040,65 @@ They land in `fsm/BUILD.bazel` (`go_library` `srcs` after `"rejected_cleanup.go"
 - [ ] **Step 25: Full checks**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git add fsm server orchestrator metrics
-git status --porcelain
-test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && bazel run //:gazelle && git diff --exit-code -- '*.bazel' && bazel build //... && bazel test //... --test_output=errors
-bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/
-BASE="$(git merge-base origin/main HEAD)"
-git diff --cached --name-status -- fsm/testdata fsm/l3_track_golden_test.go fsm/l3_commitment_golden_test.go fsm/l3_transition_golden_test.go fsm/placement_golden_test.go fsm/l3_group_key_golden_test.go accumulator/testdata
-git diff --name-status "$BASE" -- fsm/l3_track_golden_test.go fsm/pre_tracks_golden_test.go
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task74-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git add -- fsm/reselect_verifiers.go fsm/reselect_verifiers_test.go orchestrator/reselect.go orchestrator/reselect_test.go metrics/reselections_test.go fsm/BUILD.bazel fsm/consensus_history.go fsm/fsm.go fsm/reads_verification.go fsm/reads_work.go fsm/reads_work_types.go fsm/snapshot.go fsm/stage3_restore.go fsm/state.go fsm/threeway.go metrics/BUILD.bazel metrics/metrics.go orchestrator/BUILD.bazel orchestrator/loop.go server/safestate_stage3.go server/safestate_stage3_test.go || exit 1
+statusfile="$(mktemp "$T64/task74-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY74'
+import pathlib,sys
+expected=['fsm/reselect_verifiers.go', 'fsm/reselect_verifiers_test.go', 'orchestrator/reselect.go', 'orchestrator/reselect_test.go', 'metrics/reselections_test.go', 'fsm/BUILD.bazel', 'fsm/consensus_history.go', 'fsm/fsm.go', 'fsm/reads_verification.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/snapshot.go', 'fsm/stage3_restore.go', 'fsm/state.go', 'fsm/threeway.go', 'metrics/BUILD.bazel', 'metrics/metrics.go', 'orchestrator/BUILD.bazel', 'orchestrator/loop.go', 'server/safestate_stage3.go', 'server/safestate_stage3_test.go']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY74
+list="$(mktemp "$T64/task74-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY74'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY74
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors || exit 1
+go vet ./... || exit 1
+deps="$(bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)')" || exit 1
+[ -n "$deps" ] || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) exit 1;; esac
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+protected="$(git status --porcelain fsm/testdata)" || exit 1
+[ -z "$protected" ] || exit 1
+changes="$(mktemp "$T64/task74-protected.XXXXXX")" || exit 1
+git diff --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY74'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b'' and len(rows)%2==0
+for st,p in zip(rows[::2],rows[1::2]):assert b'testdata/' not in p and not p.endswith(b'_golden_test.go'),p
+PY74
+statusfile="$(mktemp "$T64/task74-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY74'
+import pathlib,sys
+expected=['fsm/reselect_verifiers.go', 'fsm/reselect_verifiers_test.go', 'orchestrator/reselect.go', 'orchestrator/reselect_test.go', 'metrics/reselections_test.go', 'fsm/BUILD.bazel', 'fsm/consensus_history.go', 'fsm/fsm.go', 'fsm/reads_verification.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/snapshot.go', 'fsm/stage3_restore.go', 'fsm/state.go', 'fsm/threeway.go', 'metrics/BUILD.bazel', 'metrics/metrics.go', 'orchestrator/BUILD.bazel', 'orchestrator/loop.go', 'server/safestate_stage3.go', 'server/safestate_stage3_test.go']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY74
+echo task74-full-checks-passed
 ```
 
 Expected: `git status --porcelain` lists only staged entries: `A ` for `fsm/reselect_verifiers.go`, `fsm/reselect_verifiers_test.go`, `orchestrator/reselect.go`, `orchestrator/reselect_test.go`, `metrics/reselections_test.go`, and `M ` for `fsm/BUILD.bazel`, `fsm/consensus_history.go`, `fsm/fsm.go`, `fsm/reads_verification.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `fsm/snapshot.go`, `fsm/stage3_restore.go`, `fsm/state.go`, `fsm/threeway.go`, `metrics/BUILD.bazel`, `metrics/metrics.go`, `orchestrator/BUILD.bazel`, `orchestrator/loop.go`, `server/safestate_stage3.go`, `server/safestate_stage3_test.go`; gazelle changes nothing more (`git diff --exit-code` passes); every target builds and every test passes; the red-line `grep`s print nothing; both `git diff` lines print nothing (no golden or frozen fixture changed). A failure in a package this task never touches (for example `anchor/evm`, whose simulated chain can flake under load): rerun it alone and judge it against the branch's previous commit before calling it a regression.
@@ -13344,8 +15106,28 @@ Expected: `git status --porcelain` lists only staged entries: `A ` for `fsm/rese
 - [ ] **Step 26: Commit**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" commit -m "fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task74-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_74_2899="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_74_2899" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_74_2899}" = "$base" ] || exit 1
+statusfile="$(mktemp "$T64/task74-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY74'
+import pathlib,sys
+expected=['fsm/reselect_verifiers.go', 'fsm/reselect_verifiers_test.go', 'orchestrator/reselect.go', 'orchestrator/reselect_test.go', 'metrics/reselections_test.go', 'fsm/BUILD.bazel', 'fsm/consensus_history.go', 'fsm/fsm.go', 'fsm/reads_verification.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/snapshot.go', 'fsm/stage3_restore.go', 'fsm/state.go', 'fsm/threeway.go', 'metrics/BUILD.bazel', 'metrics/metrics.go', 'orchestrator/BUILD.bazel', 'orchestrator/loop.go', 'server/safestate_stage3.go', 'server/safestate_stage3_test.go']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY74
+git -C "$W" commit -S -m "fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)
 
 Stage-3 switch 7 (housegate spec 2026-10-14 §7.4, §10.4; plan S3-E3
 contract §52.2, K75). With the reselection switch on, the WorkSet lists
@@ -13366,25 +15148,83 @@ the chain to the stored set, the ring limit, the latch count and the
 evidence keys, and re-verifies each proof under its own epoch. With the
 switch off every path is byte for byte the previous commit's.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format=%s
-git -C "$W" status --porcelain
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+git_read_74_2937="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_74_2937}" = 1 ] || exit 1
+git_read_74_2938="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_74_2938}" = 'fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)' ] || exit 1
+git_read_74_2939="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_74_2939}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+message="$(git log -1 --format=%B)" || exit 1
+python3 -I - "$message" <<'PY74'
+import re,sys
+assert re.findall(r'^co-authored-by:[^\n]*$',sys.argv[1],re.I|re.M)==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>']
+PY74
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+python3 -I - "$T64/task74-final-head" "$head" <<'PY74'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY74
+echo task74-signed-commit-verified
 ```
 
 Expected: the commit succeeds; `fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)`; `git status --porcelain` prints nothing.
 
 - [ ] **Step 27: Push the branch (requires explicit user confirmation)**
 
-This step needs explicit user confirmation in chat: it publishes the new commit of branch `urwt/claude/multi-source-s3e` to `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests); the branch stays unreleased until Plan S3-E4 Task 78 (K65). Skip it if the user prefers to push the branch once after Task 75.
+This step needs explicit user confirmation in chat: it publishes the new commit of branch `urwt/codex/multi-source-s3e` to `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests); the branch stays unreleased until Plan S3-E4 Task 78 (K65). Skip it if the user prefers to push the branch once after Task 75.
 
-Confirm before running. Then (the same two lines run in fish):
+Confirm before running. Then execute the complete Bash block through the plan runner (commands handed directly to the user must use fish):
 
 ```bash
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e push origin HEAD:urwt/claude/multi-source-s3e
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e rev-parse HEAD '@{u}'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task74-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+git_read_74_2972="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_74_2972}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+head="$(cat "$T64/task74-final-head")" || exit 1
+git_read_74_2975="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_74_2975" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "${git_read_74_2975}" ] || exit 1
+git_read_74_2976="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_74_2976}" = 1 ] || exit 1
+git_read_74_2977="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_74_2977}" = 'fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)' ] || exit 1
+
+branch=urwt/codex/multi-source-s3e
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+remote_head="$(python3 -I - "$remote" "$branch" <<'PY71'
+import re,sys
+m=re.fullmatch(r'([0-9a-f]{40})\trefs/heads/'+re.escape(sys.argv[2]),sys.argv[1]); assert m
+print(m[1])
+PY71
+)" || exit 1
+git merge-base --is-ancestor "$remote_head" "$base" || exit 1
+# Only after explicit user confirmation in chat:
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git_read_74_2992="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_74_2992" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_74_2992}" = "$head" ] || exit 1
+echo task74-push-verified
 ```
 
-Expected: `HEAD -> urwt/claude/multi-source-s3e` with the previous head as the old value, then the same commit hash twice. A rejected push means the remote branch moved: stop and ask the user; never force-push.
+Expected: `task74-push-verified`, after remote ref and local HEAD both equal the exact retained checked SHA. A rejected push means the remote branch moved: stop and ask the user; never force-push.
+
+Static workflow note: only the explicit entry/build-files/full-checks/signed-commit/push verified markers establish procedural success. Historical drafting terminal examples are explanatory. Exact literal selected test names must have one required terminal result; the preserved TestDeterminism_.* selector additionally requires a nonempty matching set and every observed member passing, while the whole-FSM race run covers the package. No source or future commit value follows from this preparation. The exclusively observed task74-final-head and exact final subject are Task 75 entry obligations.
+
 
 ---
 
@@ -13400,7 +15240,9 @@ Spec §9.1, §9.2 and §10.4 step 8 make `checkpoints` the eighth stage-3 switch
 
 With the switch off nothing of it runs: both Apply arms refuse first with the K67 texts, the WorkSet row is nil, `recordOwnerAdvanceLocked` is never called, and every new field is `omitempty`, so each Apply, snapshot and chain hash stays byte for byte Task 74's.
 
-Worktree (contract §49): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, with `HEAD` at Task 74's commit `fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)`; every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own Bash call. Line anchors of base files are arbiter `fb42260` (v0.12.0, the plan's base revision); the files and functions of Plans S3-E2 and S3-E3 Tasks 64–74 are named by function. Apply every hunk on top of Tasks 64–74 under the hunk rule (Global Constraints): the quoted text and the contract bind, the line numbers guide. The task ends with one local commit (contract §49) and the push of the branch, which needs explicit user confirmation in chat; nothing else in it is remote or live.
+Worktree: Task 64's actual retained Codex JSON path and complete `env.sh`, loaded in every Bash call. Entry requires clean poetry/G HEAD with verify-commit, Task 74's exact final subject and exclusive observed `task74-final-head` equal to actual HEAD. Task 75 exclusively records its own observed base; existing receipts stop, never overwrite. No reconstructed path or predicted commit value is permitted.
+
+**STATIC PREP / WAIT74:** actual root-approved66→74 source is pending. Task 73 proof-field production and entry-ordering remain an upstream runtime stop, not a missing API to fabricate here. Draft base `fb42260` and other line anchors are historical; reconcile every original runtime hunk against the approved actual source. This successor retains all original test functions and implementation algorithms. Exactly four of77 Go fences differ: the two Step11 WorkSet anchors follow Task74, and the Step17/23 created test files gain one bounded regression each. Original drafting output examples are historical; selected GREEN rosters below include both new tests. The sole original fish push workflow is intentionally replaced by an authorized complete Bash plan-runner procedure, not a direct user-terminal command. No current TDD/runtime/Go/Bazel/golden/signing/publication result is claimed. Offline misses stop, GPG cancellation stops for the user's actual-key unlock, and no unsigned fallback is allowed. Optional push remains explicitly confirmed.
 
 **Files:**
 - Create: `fsm/member_checkpoint.go` (the state records `MemberCheckpointRecord`, `MemberCheckpointSeq`, `OwnerAdvances`; `entryCompare`, `memberLagLocked`, `classifyMemberLocked`, `recordOwnerAdvanceLocked`, `trimOwnerAdvancesLocked`, `storedCheckpointSeqLocked`, `applyMemberCheckpoint`, `MemberCheckpointRecorded`; Step 14 adds the restore halves `checkpointOnPublishedManifest` and `publishedTrackFrontiers` after `manifestTrackFrontier`)
@@ -13432,19 +15274,19 @@ Worktree (contract §49): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
   - Plan S3-E1 (contract §49, through Task 64's pin of `PROTO_TAG_P5` and `CORE_TAG_P5`): Raft tags `member_checkpoint = 41` and `mark_member_lagging = 42`; `pb.MemberCheckpointCmd`, `pb.MemberCheckpoint`, `pb.CheckpointGroup`, `pb.ExcludedTable`, `pb.CheckpointExclusionReason`, `pb.MarkMemberLaggingCmd`, `pb.MemberCheckpointRecord`, `pb.MemberCheckpointSeq`, `pb.GroupMember.{checkpoint, observed_entry, lag_advances}`, `pb.TableRegistrySnapshot.member_checkpoint_seqs`, `VerifierGateway.SubmitMemberCheckpoint` (method 5), `ConsensusAdmin.MarkMemberLagging` (method 17); `arbiter.MemberCheckpoint{NodeID; OwnerIndexerID; CheckpointSeq; Groups []arbiter.CheckpointGroup; SnapshotID; Entry replay.TrackFrontier}`, `arbiter.CheckpointGroup{DatabaseID; GroupGeneration; Excluded}`, `arbiter.ExcludedTable{TableID; Reason}`, the six `arbiter.Exclusion*` reasons, `arbiter.MarkMemberLaggingCommand`; `authority.VerifyMemberCheckpoint(ctx MessageContext, cp, jws, replicaSigner string) error`, `(*authority.Signer).SignMemberCheckpoint`/`SignMemberCheckpointAt`, `(*authority.Validator).VerifyMarkMemberLagging`/`AuthorizeMarkMemberLagging`, `(*authority.Signer).SignMarkMemberLaggingWithContext`/`SignMarkMemberLaggingWithContextAt`, `authority.SignMemberReady`, `(*authority.Signer).SignReselectVerifiersWithContextAt`; `wire.MemberCheckpoint{Checkpoint; ReplicaJWS}`, `wire.MarkMemberLagging{NodeID; OwnerIndexerID; DatabaseID; ObservedEntry; AuthorityJWS}` with `Canonical()`, `wire.Command.MemberCheckpoint`/`MarkMemberLagging`, `wire.MemberCheckpointFromRequest`/`ToRequest`, `wire.MemberCheckpointBodyToPB`, `wire.MarkMemberLaggingFromRequest`/`ToRequest`, `wire.TrackFrontierToPB`.
   - Plan S3-E2: Task 64's `Stage3State`, `Stage3SwitchCheckpoints`, `stage3SwitchValue`, `verifierEntryLocked`, the fixture `fsm/stage3_fixture_test.go` (`stage3MemberKey`, `stage3ReplicaSigner`, `memberConsent`, `turnOnStage3Switch`, `stage3TestMember`) and the server test map `stage3PendingProtoFields`; Task 65's rule that an update committing a changed `Params.Stage3` bumps the registry version (`stage3Changed`); Task 66's `validateStage3State`; Task 67's `persistedSnapshotBytes`, `v21Parts`, `snapshotBodyInterned`, `RehydrateSnapshotBody`; Task 70's `WorkSet.Unmarkable`.
   - This plan's Tasks 71–74 (contract §50–§52): Task 71's `DatabaseGroup`, `GroupMember`, `LeavingMember`, `MemberClass` and its constants, `placementOnLocked`/`checkpointsOnLocked`/`CheckpointsOn`, `groupLocked`, `groupMemberIndex`, `groupsChangedLocked`, `authorityCommandRefusalLocked`, `cloneDatabaseGroup`, `GroupView`/`GroupMemberView{HostIndexerID; LagAdvances}`, `groupsToPB`, `ConsensusAdmin.RebalanceGroup`'s handler (`quarantineAuthority`, `applyRefusalAsFailedPrecondition`), `runGroup`, `parseGroupFlags`, `requireFlags`, `checkHostPort`, `groupRPCError`; its test fixtures `groupsFSM` (G(0, db0) = {member-1, member-2, member-3}, G(1, db) = {member-0, member-2, member-3}), `mustGroup`, `rebalanceCmd`, `registryVersion`, `rejectGroupCommand`, `registerMember`, `memberPurged`, `evictCmd`, `addGroupTable`, `purgeByOwnerAndPool`, `updateStage3`, `groupMemberEntry`, `listGroupMembers`, `groupHostSigner`, `forgedGroupsSnapshot` (`fsm/stage3_groups_test.go`), `placementServer` and `applyServerStage3Update` (`server/groups_admin_test.go`: G(1, db) = {member-2}, whose ed25519 key and replica signer are derived from `sha256("server member-2")`), `groupsAdmin`, `groupsFixture` and `serveGroupsAdmin` (`cmd/arbiter-admin/groups_test.go`); Task 72's `GroupKey` seals (statements and transitions after placement seal under their group keys); Task 73's `MemberReady` arm, `VerifierGateway.SubmitMemberReady` in `server/member_gateway.go`, `validateMemberReadyProofs` and the group half of the eligible ring (a ready, Active verify member joins its group's rings); Task 74's `ReselectVerifiers` arm, `validateStage3Reselections`, `validateReselectionProofs` and `(*Loop).handleReselections`.
-  - Base (`fb42260`): `publishedTrackFrontierLocked`, `trackBaseFrontierLocked`, `indexerQuarantinedLocked` (`fsm/tracks.go`), `messageContextLocked`, `registryChangedLocked`, `splitTableKey`, `incarnationOwnerLocked`, `hasPhysicalTables`, `findVerifierEntry`; the test helpers `mustApply`, `testAccount`, `passTrackBlock`, `publishManifestInputs`, `cleanTrackPromotion`, `admitTrack`, `mustSeal`, `bindTrackClaim`, `verifyBlock`, `anchorFinal`, `promoteTrack`, `ackTrackPromotion`, `quarantineQ`, `messageContextFor`, `authorityContextFor`, `mustGenesisID`, `mustWorkSet`, `snapshotBytes`, `restoreInto`, `restoreErr`; server `newRecordingNode`, `lastProposalIs`, `evictionAdmin`, `mustDirectApply`, `addServerTableOfIndexer2`, `serverVerifierKey`, `serverMessageContext`, `serverAuthorityContext`, `serverTestAuthority`, `testServerNetworkID`; orchestrator `tracksHarnessO`, `fakeNode.rejectApply`.
+  - Base (`fb42260`): `publishedTrackFrontierLocked`, `trackBaseFrontierLocked`, `indexerQuarantinedLocked` (`fsm/tracks.go`), `messageContextLocked`, `registryChangedLocked`, `completePurgesLocked`, `splitTableKey`, `incarnationOwnerLocked`, `hasPhysicalTables`, `findVerifierEntry`; the test helpers `mustApply`, `testAccount`, `passTrackBlock`, `publishManifestInputs`, `cleanTrackPromotion`, `admitTrack`, `mustSeal`, `bindTrackClaim`, `verifyBlock`, `anchorFinal`, `promoteTrack`, `ackTrackPromotion`, `quarantineQ`, `messageContextFor`, `authorityContextFor`, `mustGenesisID`, `mustWorkSet`, `snapshotBytes`, `restoreInto`, `restoreErr`; server `newRecordingNode`, `lastProposalIs`, `evictionAdmin`, `mustDirectApply`, `addServerTableOfIndexer2`, `serverVerifierKey`, `serverMessageContext`, `serverAuthorityContext`, `serverTestAuthority`, `testServerNetworkID`; orchestrator `tracksHarnessO`, `fakeNode.rejectApply`.
 - Produces (contract §52.3 names verbatim; exported to Plan S3-E4: `memberLagLocked`, `entryCompare`, the classes):
-  - `fsm`: `MemberCheckpointRecord{Checkpoint arbiter.MemberCheckpoint; ReplicaJWS string; Epoch uint64}`, `MemberCheckpointSeq{NodeID string; OwnerIndexerID uint64; CheckpointSeq uint64; ReplicaSigner string}`, `OwnerAdvances{Owner uint64; Recent []replay.TrackFrontier}`; `Stage3State.CheckpointSeqs []MemberCheckpointSeq` (`checkpoint_seqs,omitempty`) and `Stage3State.OwnerAdvances []OwnerAdvances` (`owner_advances,omitempty`); `GroupMember.Checkpoint *MemberCheckpointRecord` (`checkpoint,omitempty`) and `GroupMember.ObservedEntry *replay.TrackFrontier` (`observed_entry,omitempty`); `func entryCompare(a, b replay.TrackFrontier) int`; `func (f *FSM) memberLagLocked(owner uint64, entry replay.TrackFrontier) uint32`; `func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember)`; `func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest)`; `func (f *FSM) trimOwnerAdvancesLocked()`; `func (f *FSM) storedCheckpointSeqLocked(nodeID string, owner uint64, replicaSigner string) uint64`; `func (f *FSM) MemberCheckpointRecorded(cp arbiter.MemberCheckpoint) bool`; `func (f *FSM) applyMemberCheckpoint(c *wire.MemberCheckpoint) any`; `func (f *FSM) applyMarkMemberLagging(c *wire.MarkMemberLagging) any`; `type MemberLagWork struct{NodeID string; Owner uint64; DatabaseID string; Class MemberClass; Checkpoint, Published replay.TrackFrontier}`, `WorkSet.MemberLag []MemberLagWork`, `func (f *FSM) MemberLagWork() []MemberLagWork`; `TableRegistryView.MemberCheckpointSeqs []MemberCheckpointSeq`; `GroupMemberView.LagAdvances` filled; `func validateStage3Checkpoints(st *State) error`; `func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID string) error`; this task's own helpers `ownerAdvancesIndex`, `appendOwnerAdvanceLocked`, `ownerHoldsCheckpointLocked`, `checkpointSeqIndex`, `compareCheckpointSeqKey`, `setCheckpointSeqLocked`, `cloneMemberCheckpoint`, `memberCheckpointsEqual`, `checkpointGroupsSorted`, `checkpointExclusionsValidLocked`, `manifestTrackFrontier`, `memberLagWorkLocked`, `cloneGroupMember`, `checkpointStatePresent`, `checkpointNamesGroup`, `checkpointOnPublishedManifest`, `publishedTrackFrontiers` and the constants `memberCheckpointsBeforeSwitchReason`, `markMemberLaggingBeforeSwitchReason`, `checkpointExclusionReasons`.
+  - `fsm`: `MemberCheckpointRecord{Checkpoint arbiter.MemberCheckpoint; ReplicaJWS string; Epoch uint64}`, `MemberCheckpointSeq{NodeID string; OwnerIndexerID uint64; CheckpointSeq uint64; ReplicaSigner string}`, `OwnerAdvances{Owner uint64; Recent []replay.TrackFrontier}`; `Stage3State.CheckpointSeqs []MemberCheckpointSeq` (`checkpoint_seqs,omitempty`) and `Stage3State.OwnerAdvances []OwnerAdvances` (`owner_advances,omitempty`); `GroupMember.Checkpoint *MemberCheckpointRecord` (`checkpoint,omitempty`) and `GroupMember.ObservedEntry *replay.TrackFrontier` (`observed_entry,omitempty`); `func entryCompare(a, b replay.TrackFrontier) int`; `func (f *FSM) memberLagLocked(owner uint64, entry replay.TrackFrontier) uint32`; `func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember)`; `func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest) bool`; `func (f *FSM) trimOwnerAdvancesLocked()`; `func (f *FSM) storedCheckpointSeqLocked(nodeID string, owner uint64, replicaSigner string) uint64`; `func (f *FSM) MemberCheckpointRecorded(cp arbiter.MemberCheckpoint) bool`; `func (f *FSM) applyMemberCheckpoint(c *wire.MemberCheckpoint) any`; `func (f *FSM) applyMarkMemberLagging(c *wire.MarkMemberLagging) any`; `type MemberLagWork struct{NodeID string; Owner uint64; DatabaseID string; Class MemberClass; Checkpoint, Published replay.TrackFrontier}`, `WorkSet.MemberLag []MemberLagWork`, `func (f *FSM) MemberLagWork() []MemberLagWork`; `TableRegistryView.MemberCheckpointSeqs []MemberCheckpointSeq`; `GroupMemberView.LagAdvances` filled; `func validateStage3Checkpoints(st *State) error`; `func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID string) error`; this task's own helpers `ownerAdvancesIndex`, `appendOwnerAdvanceLocked`, `ownerHoldsCheckpointLocked`, `checkpointSeqIndex`, `compareCheckpointSeqKey`, `setCheckpointSeqLocked`, `cloneMemberCheckpoint`, `memberCheckpointsEqual`, `checkpointGroupsSorted`, `checkpointExclusionsValidLocked`, `manifestTrackFrontier`, `memberLagWorkLocked`, `cloneGroupMember`, `checkpointStatePresent`, `checkpointNamesGroup`, `checkpointOnPublishedManifest`, `publishedTrackFrontiers` and the constants `memberCheckpointsBeforeSwitchReason`, `markMemberLaggingBeforeSwitchReason`, `checkpointExclusionReasons`.
   - `server`: `func (svc *verifierGatewayService) SubmitMemberCheckpoint(ctx context.Context, req *pb.MemberCheckpointCmd) (*pb.Ack, error)`, `func (svc *consensusAdminService) MarkMemberLagging(ctx context.Context, req *pb.MarkMemberLaggingCmd) (*pb.Ack, error)`, `memberCheckpointsBeforeSwitchMessage`, `memberLaggingRefusedMessage`, `func memberCheckpointSeqsToPB(seqs []fsm.MemberCheckpointSeq) []*pb.MemberCheckpointSeq`; `groupsToPB` serves `checkpoint`, `observed_entry` and `lag_advances`, `tableRegistryToPB` serves `member_checkpoint_seqs`.
   - `orchestrator`: `Config.MemberLaggingTimeout time.Duration`; `type memberLagKey struct{node string; owner uint64; database string}`, `type memberLagTimer struct{checkpoint replay.TrackFrontier; since time.Time}`, `Loop.lagSince map[memberLagKey]memberLagTimer`, `func (o *Loop) handleMemberLagging(ctx context.Context, ws fsm.WorkSet) error`.
   - `config`: `DispatchConfig.MemberLaggingTimeout Duration` (`yaml:"member_lagging_timeout"`, raw default `30m`, `0` disables, negative refused with `dispatch.member_lagging_timeout must not be negative`); `cmd/arbiter/services.go` maps it.
   - `cmd/arbiter-admin`: `arbiter-admin member lagging` (`runMember`, `runMemberLagging`) and its usage line.
-  - Tests: the 23 fsm tests of contract §52.3; server `TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch`, `TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint`, `TestMarkMemberLaggingRPCAuthorizesAndProposes` and this task's `TestTableRegistryToPBCarriesCheckpointsAndLag`; orchestrator `TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout`, `TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint`, `TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals`; config `TestLoadConfigReadsDispatchMemberLaggingTimeout`, `TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes`; arbiter-admin `TestMemberLaggingSignsTheCanonicalCommand`, `TestMemberLaggingFlagRefusals`; test helpers `checkpointsFSM`, `publishOwnerBlock`, `frontierOf`, `cpGroup`, `memberCheckpointAt`, `signedCheckpoint`, `memberCheckpointCmd`, `memberOf`, `requireClass`, `storedSeq`, `rotateReplicaSigner`, `reregisterMember`, `setLagBounds`, `ownerRecent`, `servedLag`, `markLaggingCmd`, `behindMember`, `mustManifest` (fsm); `serverMemberSeed`, `serverMemberReplica`, `registerServerMember`, `addServerTable`, `publishServerTransition`, `checkpointServer`, `serverCheckpointRequest`, `memberGateway` (server); `memberLagHarness`, `newMemberLagHarness`, `lagRow` (orchestrator).
+  - Tests: the 23 fsm tests of contract §52.3; server `TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch`, `TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint`, `TestMarkMemberLaggingRPCAuthorizesAndProposes` and this task's `TestTableRegistryToPBCarriesCheckpointsAndLag`, `TestCheckpointPublicationAndTableTransitionShareOneRegistryBump`; orchestrator `TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout`, `TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint`, `TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals`, `TestHandleWorkSetDispatchesMemberLagging`; config `TestLoadConfigReadsDispatchMemberLaggingTimeout`, `TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes`; arbiter-admin `TestMemberLaggingSignsTheCanonicalCommand`, `TestMemberLaggingFlagRefusals`; test helpers `checkpointsFSM`, `publishOwnerBlock`, `frontierOf`, `cpGroup`, `memberCheckpointAt`, `signedCheckpoint`, `memberCheckpointCmd`, `memberOf`, `requireClass`, `storedSeq`, `rotateReplicaSigner`, `reregisterMember`, `setLagBounds`, `ownerRecent`, `servedLag`, `markLaggingCmd`, `behindMember`, `mustManifest` (fsm); `serverMemberSeed`, `serverMemberReplica`, `registerServerMember`, `addServerTable`, `publishServerTransition`, `checkpointServer`, `serverCheckpointRequest`, `memberCheckpointGateway` (server); `memberLagHarness`, `newMemberLagHarness`, `lagRow` (orchestrator).
 
 Notes:
 - **Switch-off identity.** Every field this task adds is `omitempty` or a nil pointer, the WorkSet row is nil before the switch, and the publication hook runs only while `checkpointsOnLocked()`, so no pre-switch Apply, snapshot, registry version or chain hash changes: the existing goldens (`TestStage3V21PlainContainerGolden`, `TestStage3V21InternedContainerGolden`, the pre-tracks and L3 track goldens) pass untouched in Step 16. The `checkpoints` switch-on itself needs no hook in `onStage3SwitchOnLocked`: the advances start empty and the first publication after it appends the first entry, so a member's lag counts only advances published from the switch on (K76).
 - **Ordering inside `applyMemberCheckpoint`.** Refusals 7–10 are per group and run group by group in the checkpoint's order, before refusals 11–14, which are per checkpoint. Refusal 4 already refuses an evicted node with the contract's text, so the S3-E2 §47 voiding helper would never fire after it and is not called (contract §49: placement implies `eviction_voiding`). A same-entry re-checkpoint (excluded sets shrunk or grown, or another subset of groups) keeps every class; a first checkpoint or a new entry is classified, which may make a member `lagging` at once when its entry is older than every recorded advance.
-- **Lag and versions.** `memberLagLocked` counts the owner's recorded advances after the entry, so it never exceeds `max_lag_publications + 1` (D31), and a member becomes `lagging` only when that count exceeds `max_lag_publications`, which means saturated. A publication with an append bumps the registry version once when the owner's groups hold a checkpoint, through `groupsChangedLocked` when a class moved and through `registryChangedLocked` alone otherwise. One case cannot be folded: a publication that also flips a table in `applyPublishedTrackTransitionsLocked` (which bumps on its own, before this hook) bumps twice. Versions only need to increase and no content is served under two versions, so followers are unaffected; recorded in Appendix B with the S3-E2 Task 69 precedent.
+- **Lag and versions.** `memberLagLocked` counts the owner's recorded advances after the entry, so it never exceeds `max_lag_publications + 1` (D31), and a member becomes `lagging` only when that count exceeds `max_lag_publications`, which means saturated. `recordOwnerAdvanceLocked` retains the owner's state mutations and class-change purge, then returns whether the served class or lag is dirty without notifying. `applyPublishSafeSnapshot` captures the registry version before the unchanged track/table transition branch, always runs the owner helper while checkpoints are on, and issues the dirty-view notification only when the transition did not already change the version. A combined publication therefore coalesces these notification paths instead of adding a second bump. The binding rule is one registry bump per Apply. The new combined-publication server regression must measure the actual full path; any extra bump stops the campaign with its raw evidence for an owned correction, never a harmless/PASS classification.
 - **Beyond the contract's lists** (each recorded in Appendix B): the restore refusal `checkpoint state exists while the checkpoints switch is off` (Apply never writes any of it before the switch, so a container that carries some is forged); a missing `CheckpointSeqs` entry counts as `checkpoint_seq 0` in `validateMemberCheckpointProofs`, because Apply sets the entry with every stored checkpoint and never removes it; a Leaving record's checkpoint must name a generation in `[JoinedGeneration, RemovedGeneration − 1]`; the config refusal `dispatch.member_lagging_timeout must not be negative`; `SubmitMemberCheckpoint` answers `checkpoint is required` before `checkpoint.node_id is required` (in the contract's order the first text could never be returned, since a missing checkpoint has no node id), refuses an unknown exclusion reason as `InvalidArgument` with the wire decoder's text, and re-answers `Ack` when a refusal raced the same checkpoint (the `SubmitTablePurged` and `SubmitMemberReady` pattern); `TestTableRegistryToPBCarriesCheckpointsAndLag`; the server tests live in the new `server/member_checkpoint_test.go` rather than Task 73's `server/member_gateway_test.go` and Task 71's `server/groups_admin_test.go`, so neither file's imports need merging.
 - **Fixture facts.** `checkpointsFSM` is `groupsFSM` with member-2 registered and the `reselection` and `checkpoints` switches on (switch 7 must precede switch 8). Its manifests published before the switches carry no track frontiers, so every test first passes and publishes one block (`publishOwnerBlock`, which also cleans the block's promoted part so the drain gate lets later consensus updates through). An owner-1 block advances only owner 1's entry; each published manifest still names every enrolled indexer's frontier. The quarantine test promotes a block before `QuarantineIndexer` and acknowledges it during the quarantine (amendment A7), which is how an owner's published entry advances while it is quarantined. The server fixture publishes table-set transition blocks (`publishServerTransition`), which need no statements: indexer 2's `db.b` gives a manifest with frontiers, and indexer 1's `dbc.c` later moves indexer 1's published entry.
 - **Checked while drafting.** Every code block of this task was applied, in step order, to a `git archive` export of a scratch arbiter tree: origin/main `526a721` with stand-ins of Plan S3-E2 Tasks 64–70 and of this plan's Tasks 71–74 (the drafters' working copies of 2026-10-16, Task 74's reduced to its Apply arm, state fields, latch and restore hooks), against arbiter-core and arbiter-proto stubs built from Plan S3-E1's contract (the Task 60 check tree) through `replace` directives. Every failing run below printed what it states, `go vet` is clean, the five touched packages pass under `-race`, and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` of the export passes (2026-10-16). Forty single-point mutations (the lagging threshold, the quarantine exemption in the append and in the class rule, the hysteresis bounds, the signer-scoped seq, refusals 9, 10, 13 and 14, the same-entry rule, both bump paths, the trim, the view's lag and copies, each restore and proof rule, the WorkSet row, the gateway's idempotence, the RPC's authority check, the orchestrator's restart, zero and pruning rules, the config default and refusal, the CLI's entry fields) are each caught by at least one named test. `bazel run //:gazelle` ran offline on the export: for this task's files it adds exactly the srcs listed under Files and no deps line (it also relabels arbiter-core, an artefact of the export's `replace` directives that the branch's pins do not have); Bazel build and test were not run (no offline module cache for the stubbed modules). The published-manifest binding of Step 14 and `TestRestoreRefusesACheckpointOffItsPublishedManifest` were added after this check, in review; what was run for them is in Appendix B (Task 75, review fixes).
@@ -13452,17 +15294,159 @@ Notes:
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git rev-parse --abbrev-ref HEAD
-git status --porcelain
-git log -1 --format=%s
-git grep -n -e 'func (f \*FSM) applyMemberReady(' -e 'func (f \*FSM) applyReselectVerifiers(' -e 'func validateMemberReadyProofs(' -e 'func validateReselectionProofs(' -e 'func validateStage3Reselections(' -e 'func (f \*FSM) checkpointsOnLocked(' -e 'func (f \*FSM) groupsChangedLocked(' -e 'PlacementCutoverBlock \*uint64' -- fsm
-git grep -n -e 'func (o \*Loop) handleReselections(' -e 'func (svc \*verifierGatewayService) SubmitMemberReady(' -e 'func groupsToPB(' -e 'func runGroup(' -- orchestrator server cmd
-git grep -n -e 'func groupsFSM(' -e 'func placementServer(' -e 'func groupsFixture(' -e 'func persistedSnapshotBytes(' -- fsm server cmd
-GOWORK=off go test ./fsm/ ./server/ ./orchestrator/ ./config/ ./cmd/arbiter-admin/ -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+git_read_75_73="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_75_73}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+git_read_75_75="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_75_75}" = 'fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)' ] || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+python3 -I - "$T64/task74-final-head" "$head" <<'PY75'
+import pathlib,re,sys
+v=pathlib.Path(sys.argv[1]).read_text();assert re.fullmatch(r'[0-9a-f]{40}\n',v) and v[:-1]==sys.argv[2]
+PY75
+for pattern in 'func (f \*FSM) applyMemberReady(' 'func (f \*FSM) applyReselectVerifiers(' 'func validateMemberReadyProofs(' 'func validateReselectionProofs(' 'func validateStage3Reselections(' 'func (f \*FSM) checkpointsOnLocked(' 'func (f \*FSM) groupsChangedLocked(' 'PlacementCutoverBlock \*uint64'; do
+ git grep -q "$pattern" -- fsm || { echo 'stop: required upstream seam missing' >&2; exit 1; }
+done
+for pattern in 'func (o \*Loop) handleReselections(' 'func (svc \*verifierGatewayService) SubmitMemberReady(' 'func groupsToPB(' 'func runGroup('; do
+ git grep -q "$pattern" -- orchestrator server cmd || { echo 'stop: required upstream seam missing' >&2; exit 1; }
+done
+for pattern in 'func groupsFSM(' 'func placementServer(' 'func groupsFixture(' 'func persistedSnapshotBytes('; do
+ git grep -q "$pattern" -- fsm server cmd || { echo 'stop: required upstream seam missing' >&2; exit 1; }
+done
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./config/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter-admin/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+python3 -I - "$T64/task75-base-sha" "$head" <<'PY75'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY75
+echo task75-entry-verified
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; an empty status; `fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)`; the eight fsm seams (in `fsm/member_ready.go`, `fsm/reselect_verifiers.go`, `fsm/consensus_history.go` or the files Tasks 73 and 74 chose, `fsm/stage3_groups.go`, `fsm/stage3.go`), the four transport and CLI seams, and the four test fixtures (`fsm/stage3_groups_test.go`, `server/groups_admin_test.go`, `cmd/arbiter-admin/groups_test.go`, `fsm/snapshot_interned_test.go`); then `ok` for all five packages. Stop if a line is missing or a package fails: an earlier task is not done.
+Expected: `urwt/codex/multi-source-s3e`; an empty status; `fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)`; the eight fsm seams (in `fsm/member_ready.go`, `fsm/reselect_verifiers.go`, `fsm/consensus_history.go` or the files Tasks 73 and 74 chose, `fsm/stage3_groups.go`, `fsm/stage3.go`), the four transport and CLI seams, and the four test fixtures (`fsm/stage3_groups_test.go`, `server/groups_admin_test.go`, `cmd/arbiter-admin/groups_test.go`, `fsm/snapshot_interned_test.go`); then `ok` for all five packages. Stop if a line is missing or a package fails: an earlier task is not done.
 
 - [ ] **Step 2: Write the failing checkpoint, seq, restore and encoding tests**
 
@@ -14626,7 +16610,38 @@ func TestMarkMemberLaggingRecordsTheObservedEntry(t *testing.T) {
 
 - [ ] **Step 5: Run the FSM tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -count=1 2>&1 | head -12`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['undefined: manifestTrackFrontier', 'undefined: MemberCheckpointSeq', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the fsm test binary does not build: `# github.com/sentioxyz/arbiter/fsm [github.com/sentioxyz/arbiter/fsm.test]`, then errors such as `fsm/member_checkpoint_test.go:60:11: undefined: manifestTrackFrontier`, `fsm/member_checkpoint_test.go:118:65: undefined: MemberCheckpointSeq`, `fsm/member_checkpoint_test.go:120:45: f.st.Stage3.CheckpointSeqs undefined (type *Stage3State has no field or method CheckpointSeqs)` and `fsm/mark_member_lagging_test.go:107:15: f.MemberLagWork undefined (type *FSM has no field or method MemberLagWork)`, ending with `too many errors` (`head -12` cuts the `[build failed]` line).
 
@@ -14656,7 +16671,7 @@ with:
 }
 ```
 
-In `fsm/stage3_groups.go`, at the end of `GroupMember` (Task 71's struct, after Task 73's readiness fields), replace:
+In `fsm/stage3_groups.go`, at the end of `GroupMember` (Task 71's struct, after its readiness declarations populated by Task 73), replace:
 
 ```go
 	ReadyEpoch       uint64      `json:"ready_epoch,omitempty"`      // Task 73
@@ -14887,10 +16902,10 @@ func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember) {
 // because the published entry moved. An append can change the served
 // lag_advances of every member of the owner's groups that holds a checkpoint
 // (a saturated one stays at MaxLagPublications+1), so when such a member
-// exists the Apply bumps the registry version once: through
-// groupsChangedLocked when a class changed, else through registryChangedLocked
-// alone.
-func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest) {
+// exists this helper reports a dirty registry view. It completes class-change
+// purges but does not notify; applyPublishSafeSnapshot coalesces its notification
+// with the existing track/table transition notification.
+func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest) bool {
 	classChanged, lagServed := false, false
 	for _, entry := range manifest.TrackFrontiers {
 		if base, ok := f.trackBaseFrontierLocked(parent, entry.IndexerID); ok && entryCompare(entry, base) <= 0 {
@@ -14916,12 +16931,10 @@ func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotMani
 			}
 		}
 	}
-	switch {
-	case classChanged:
-		f.groupsChangedLocked()
-	case lagServed:
-		f.registryChangedLocked(f.st.TableRegistry)
+	if classChanged {
+		f.completePurgesLocked()
 	}
+	return classChanged || lagServed
 }
 
 // appendOwnerAdvanceLocked appends entry to owner's recent advances, keeping
@@ -15301,7 +17314,6 @@ In `fsm/fsm.go`, in `Apply`'s command switch (`:145-146` at the base, the `defau
 ```go
 	case cmd.MemberReady != nil:
 		return f.applyMemberReady(cmd.MemberReady)
-
 ```
 
 with:
@@ -15313,14 +17325,20 @@ with:
 		return f.applyMemberCheckpoint(cmd.MemberCheckpoint)
 	case cmd.MarkMemberLagging != nil:
 		return f.applyMarkMemberLagging(cmd.MarkMemberLagging)
-
 ```
 
 - [ ] **Step 10: Record owner advances at publication and trim them on a lowered bound**
 
-In `fsm/apply.go`, inside `applyPublishSafeSnapshot` (`:935-958`), the end of the transition branch and the event (`:954-956`), replace:
+In `fsm/apply.go`, inside `applyPublishSafeSnapshot` (`:935-958`), the complete track/table transition branch and the following event, replace:
 
 ```go
+	// After the tracks activation Pending→Active and Retiring→Purging advance
+	// per track, when the published entry of the table's track covers its
+	// transition block (spec 2026-10-10 §7.2); before it, when the global
+	// watermark does.
+	if f.tracksActiveLocked() {
+		f.applyPublishedTrackTransitionsLocked(parent, &m)
+	} else {
 		f.applyPublishedTableSetTransitionsLocked(previousSafe, m.SafeBlockSeq)
 	}
 	f.emit(Event{Kind: EventManifestPublished})
@@ -15329,13 +17347,27 @@ In `fsm/apply.go`, inside `applyPublishSafeSnapshot` (`:935-958`), the end of th
 with:
 
 ```go
+	// Observe publication notifications before either transition path runs.
+	var registryVersionBeforeTransitions uint64
+	if reg := f.st.TableRegistry; reg != nil {
+		registryVersionBeforeTransitions = reg.Version
+	}
+	// After the tracks activation Pending→Active and Retiring→Purging advance
+	// per track, when the published entry of the table's track covers its
+	// transition block (spec 2026-10-10 §7.2); before it, when the global
+	// watermark does.
+	if f.tracksActiveLocked() {
+		f.applyPublishedTrackTransitionsLocked(parent, &m)
+	} else {
 		f.applyPublishedTableSetTransitionsLocked(previousSafe, m.SafeBlockSeq)
 	}
-	// From the checkpoints switch on a publication also records each owner's
-	// advance and reclassifies its groups' members (housegate spec 2026-10-14
-	// §9.2, plan S3-E3 contract §52.3).
+	// From the checkpoints switch on, always record the owner advance before
+	// deciding whether the transition already notified the registry view.
 	if f.checkpointsOnLocked() {
-		f.recordOwnerAdvanceLocked(parent, &m)
+		registryDirty := f.recordOwnerAdvanceLocked(parent, &m)
+		if reg := f.st.TableRegistry; registryDirty && reg != nil && reg.Version == registryVersionBeforeTransitions {
+			f.registryChangedLocked(reg)
+		}
 	}
 	f.emit(Event{Kind: EventManifestPublished})
 ```
@@ -15364,17 +17396,17 @@ with:
 
 - [ ] **Step 11: Put the lag rows into the WorkSet**
 
-In `fsm/reads_work_types.go`, at the end of `WorkSet` (after `Tracks` `:85` at the base and Task 70's `Unmarkable`; Task 74's `ReselectionDue` sits before `Unmarkable` or after it, either way this field goes last), replace:
+In `fsm/reads_work_types.go`, append `MemberLag` after the actual final `ReselectionDue` field produced by Task 74. The exact field anchor below is declared by Task74 Step6. Actual-source reconciliation must establish this unique final field and preserve the complete WorkSet and ReselectionWork. Do not move `ReselectionDue`, reconstruct an earlier struct tail, or drop another task's fields.
 
 ```go
-	Unmarkable []uint64
+	ReselectionDue []ReselectionWork
 }
 ```
 
 with:
 
 ```go
-	Unmarkable []uint64
+	ReselectionDue []ReselectionWork
 	// MemberLag lists, once the checkpoints switch is on, every caught_up or
 	// behind group member whose checkpoint entry precedes its non-quarantined
 	// owner's published entry, sorted by (Owner, DatabaseID, NodeID) (plan
@@ -15468,7 +17500,38 @@ with:
 
 - [ ] **Step 13: Run the FSM tests again**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |    [a-z_]+_test[.]go:|ok|FAIL)'`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestMemberCheckpointRefusals': 'pass', 'TestAReplayedOrLowerCheckpointSeqIsRefused': 'pass', 'TestASameEntryCheckpointReplacesOnlyItsListedGroups': 'pass', 'TestASameEntryCheckpointMayShrinkOrGrowExcluded': 'pass', 'TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration': 'pass', 'TestCheckpointSeqRestartsWhenTheReplicaSignerRotates': 'pass', 'TestAMemberThatLostItsStateResumesAboveThePublishedSeq': 'pass', 'TestRegistryViewPublishesTheCheckpointSeq': 'pass', 'TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner': 'fail', 'TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint': 'fail', 'TestRestoreRefusesAClassInconsistentWithItsCheckpoint': 'fail', 'TestRestoreRefusesACheckpointOffItsPublishedManifest': 'fail', 'TestInternedBodyKeepsTheGroupLayer': 'pass', 'TestMemberClassesBootstrappingCaughtUpBehind': 'pass', 'TestAnEarlierGenerationCheckpointKeepsTheClass': 'pass', 'TestLagIsCountedInPublishedAdvancesOfTheOwner': 'pass', 'TestAQuarantinedOwnerAccruesNoLag': 'pass', 'TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow': 'pass', 'TestOwnerAdvancesStayBoundedByMaxLagPublications': 'pass', 'TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne': 'pass', 'TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint': 'pass', 'TestMarkMemberLaggingRefusals': 'pass', 'TestMarkMemberLaggingRecordsTheObservedEntry': 'pass'};tokens=[]
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the package builds; nineteen of the 23 tests PASS, and the four restore tests FAIL because restore accepts every forged container while nothing checks the new state: `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner` with `old record under the rotated signer's epoch: restore = <nil>, want "snapshot member member-2 checkpoint 1 of indexer 0: "`, `TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint` with `restore = <nil>, want "snapshot member member-2 checkpoint_seq 2 of indexer 1 is below a stored checkpoint 3"`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint` with `restore = <nil>, want "snapshot stage3 checkpoints: member member-0 of group of indexer 1 database \"db\" is behind without a checkpoint, or bootstrapping with one"`, and `TestRestoreRefusesACheckpointOffItsPublishedManifest` with `an unpublished snapshot: restore = <nil>, want "snapshot stage3 checkpoints: checkpoint of member member-3 in group of indexer 1 database \"db\" names snapshot 0xnope, which is not a published manifest, or an entry other than its track_frontiers entry for the indexer"` (its round trip of the unforged state passes); then `FAIL	github.com/sentioxyz/arbiter/fsm`.
 
@@ -15760,14 +17823,88 @@ func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID
 - [ ] **Step 16: Run the FSM tests, the whole package, the goldens and the red lines**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l fsm)" && echo gofmt-clean
-GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./fsm/ -race -count=1
-GOWORK=off go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go vet ./fsm/
-grep -rn 'time\.Now' fsm/ | grep -v _test.go
-git status --porcelain fsm/testdata
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestMemberCheckpointRefusals': 'pass', 'TestAReplayedOrLowerCheckpointSeqIsRefused': 'pass', 'TestASameEntryCheckpointReplacesOnlyItsListedGroups': 'pass', 'TestASameEntryCheckpointMayShrinkOrGrowExcluded': 'pass', 'TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration': 'pass', 'TestCheckpointSeqRestartsWhenTheReplicaSignerRotates': 'pass', 'TestAMemberThatLostItsStateResumesAboveThePublishedSeq': 'pass', 'TestRegistryViewPublishesTheCheckpointSeq': 'pass', 'TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner': 'pass', 'TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint': 'pass', 'TestRestoreRefusesAClassInconsistentWithItsCheckpoint': 'pass', 'TestRestoreRefusesACheckpointOffItsPublishedManifest': 'pass', 'TestInternedBodyKeepsTheGroupLayer': 'pass', 'TestMemberClassesBootstrappingCaughtUpBehind': 'pass', 'TestAnEarlierGenerationCheckpointKeepsTheClass': 'pass', 'TestLagIsCountedInPublishedAdvancesOfTheOwner': 'pass', 'TestAQuarantinedOwnerAccruesNoLag': 'pass', 'TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow': 'pass', 'TestOwnerAdvancesStayBoundedByMaxLagPublications': 'pass', 'TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne': 'pass', 'TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint': 'pass', 'TestMarkMemberLaggingRefusals': 'pass', 'TestMarkMemberLaggingRecordsTheObservedEntry': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -run '^(TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims': 'pass', 'TestPreActivationHistoryIsByteIdenticalAcrossTracks': 'pass', 'TestL3TrackHeaderPreimagesAreFrozen': 'pass', 'TestL3TransitionHeaderPreimageIsFrozen': 'pass', 'TestStage3V21PlainContainerGolden': 'pass', 'TestStage3V21InternedContainerGolden': 'pass', 'TestStage3ActivationWithEverySwitchOffChangesNoBehaviour': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+go vet ./fsm/ || exit 1
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+protected="$(git status --porcelain fsm/testdata)" || exit 1
+[ -z "$protected" ] || exit 1
 ```
 
 Expected: `gofmt-clean`; `--- PASS:` for each of the 23 tests and `ok`; `ok  	github.com/sentioxyz/arbiter/fsm` for the whole package under `-race` (every earlier task's tests included); `--- PASS:` for the seven golden and switch-off tests and `ok`; `go vet` prints nothing; the `time.Now` grep prints nothing (Apply reads no clock); `git status --porcelain fsm/testdata` prints nothing (no golden was rewritten: `stage3V21GoldenFSM` turns no switch on, so the frozen v21 containers hold no group state). A failing golden or switch-off test means a new branch runs with its switch off: stop and find it.
@@ -15958,8 +18095,8 @@ func serverCheckpointRequest(t *testing.T, f *fsm.FSM, signer *authority.Signer,
 	return wire.MemberCheckpointToRequest(wire.MemberCheckpoint{Checkpoint: cp, ReplicaJWS: jws})
 }
 
-// memberGateway is the VerifierGateway over rec.
-func memberGateway(rec *recordingNode) *verifierGatewayService {
+// memberCheckpointGateway is the VerifierGateway over rec.
+func memberCheckpointGateway(rec *recordingNode) *verifierGatewayService {
 	return &verifierGatewayService{s: New(Deps{Node: rec, FSM: rec.f, Cfg: Config{NodeID: "arb-0", ApplyTimeout: time.Second}})}
 }
 
@@ -15969,7 +18106,7 @@ func memberGateway(rec *recordingNode) *verifierGatewayService {
 func TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch(t *testing.T) {
 	rec := newRecordingNode(t)
 	placementServer(t, rec.fakeNode)
-	gw := memberGateway(rec)
+	gw := memberCheckpointGateway(rec)
 	ctx := context.Background()
 	cp := &pb.MemberCheckpoint{NodeId: "member-2", OwnerIndexerId: 1, CheckpointSeq: 1, SnapshotId: "0xsnap",
 		Groups: []*pb.CheckpointGroup{{DatabaseId: "db", GroupGeneration: 1}}, Entry: &pb.TrackFrontier{IndexerId: 1}}
@@ -16005,7 +18142,7 @@ func TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch(t *testi
 func TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint(t *testing.T) {
 	rec := newRecordingNode(t)
 	m := checkpointServer(t, rec.fakeNode)
-	gw := memberGateway(rec)
+	gw := memberCheckpointGateway(rec)
 	ctx := context.Background()
 	req := serverCheckpointRequest(t, rec.f, serverMemberReplica(t), m, 1)
 	if _, err := gw.SubmitMemberCheckpoint(ctx, req); err != nil {
@@ -16181,11 +18318,69 @@ func TestTableRegistryToPBCarriesCheckpointsAndLag(t *testing.T) {
 		t.Fatal("a view without checkpoint seqs serves some")
 	}
 }
+
+// TestCheckpointPublicationAndTableTransitionShareOneRegistryBump guards the
+// full publication path: transition and checkpoint lag belong to one Apply.
+func TestCheckpointPublicationAndTableTransitionShareOneRegistryBump(t *testing.T) {
+ rec := newRecordingNode(t)
+ m := checkpointServer(t, rec.fakeNode)
+ c, err := wire.MemberCheckpointFromRequest(serverCheckpointRequest(t, rec.f, serverMemberReplica(t), m, 1))
+ if err != nil { t.Fatal(err) }
+ mustDirectApply(t, rec.fakeNode, wire.Command{MemberCheckpoint: &c})
+ addServerTable(t, rec.fakeNode, 1, "dbc", "c", 160)
+ beforeView, beforeOK := rec.f.TableRegistryView()
+ if !beforeOK { t.Fatal("no registry view before combined publication") }
+ publishServerTransition(t, rec.fakeNode)
+ view, afterOK := rec.f.TableRegistryView()
+ if !afterOK { t.Fatal("no registry view after combined publication") }
+ if view.Version != beforeView.Version+1 { t.Fatalf("combined publication registry bump = %d, want 1", view.Version-beforeView.Version) }
+ found := false
+ for _, g := range view.Groups {
+  if g.Group.Owner != 1 || g.Group.DatabaseID != "db" { continue }
+  for i, member := range g.Group.Members {
+   if member.NodeID == "member-2" {
+    found = member.Class == fsm.MemberBehind && g.MemberViews[i].LagAdvances == 1
+   }
+  }
+ }
+ if !found { t.Fatal("combined publication omitted changed class or served lag") }
+}
 ```
 
 - [ ] **Step 18: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./server/ -run '^(TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch|TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint|TestMarkMemberLaggingRPCAuthorizesAndProposes|TestTableRegistryToPBCarriesCheckpointsAndLag)$' -count=1 2>&1 | head -12`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['undefined: memberCheckpointsBeforeSwitchMessage', 'undefined: memberLaggingRefusedMessage', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the server test binary does not build: `server/member_checkpoint_test.go:213:36: undefined: memberCheckpointsBeforeSwitchMessage` and `server/member_checkpoint_test.go:278:36: undefined: memberLaggingRefusedMessage`, then `FAIL	github.com/sentioxyz/arbiter/server [build failed]`.
 
@@ -16320,18 +18515,26 @@ func (svc *consensusAdminService) MarkMemberLagging(ctx context.Context, req *pb
 In `server/table_registry.go`, inside Task 71's `groupsToPB`, after the member's `host_indexer_id`, replace:
 
 ```go
-			if i < len(view.MemberViews) && view.MemberViews[i].HostIndexerID != nil {
-				host := *view.MemberViews[i].HostIndexerID
-				member.HostIndexerId = &host
+			if i < len(view.MemberViews) {
+				mv := view.MemberViews[i]
+				if mv.HostIndexerID != nil {
+					host := *mv.HostIndexerID
+					member.HostIndexerId = &host
+				}
+				member.LagAdvances = uint64(mv.LagAdvances)
 			}
 ```
 
 with:
 
 ```go
-			if i < len(view.MemberViews) && view.MemberViews[i].HostIndexerID != nil {
-				host := *view.MemberViews[i].HostIndexerID
-				member.HostIndexerId = &host
+			if i < len(view.MemberViews) {
+				mv := view.MemberViews[i]
+				if mv.HostIndexerID != nil {
+					host := *mv.HostIndexerID
+					member.HostIndexerId = &host
+				}
+				member.LagAdvances = uint64(mv.LagAdvances)
 			}
 			// The stored checkpoint, the observed entry of a lagging member and
 			// the saturating lag (Task 75, D31).
@@ -16340,9 +18543,6 @@ with:
 			}
 			if m.ObservedEntry != nil {
 				member.ObservedEntry = wire.TrackFrontierToPB(*m.ObservedEntry)
-			}
-			if i < len(view.MemberViews) {
-				member.LagAdvances = uint64(view.MemberViews[i].LagAdvances)
 			}
 ```
 
@@ -16374,6 +18574,9 @@ In `server/table_registry.go`, inside `tableRegistryToPB` (`:100` at the base), 
 
 ```go
 		Groups: groupsToPB(v.Groups),
+		// The committed stage-3 parameter, absent before the v21
+		// activation (plan S3-E2 contract §45).
+		Stage3: wire.Stage3ParamsToPB(v.Stage3),
 	}
 ```
 
@@ -16381,6 +18584,9 @@ with:
 
 ```go
 		Groups: groupsToPB(v.Groups),
+		// The committed stage-3 parameter, absent before the v21
+		// activation (plan S3-E2 contract §45).
+		Stage3: wire.Stage3ParamsToPB(v.Stage3),
 		// Every stored checkpoint_seq (plan S3-E3 Task 75); empty before the
 		// checkpoints switch.
 		MemberCheckpointSeqs: memberCheckpointSeqsToPB(v.MemberCheckpointSeqs),
@@ -16390,23 +18596,93 @@ with:
 Task 64 added a `stage3PendingProtoFields` entry only for a field a test failed on, and at the base no mirror or every-field test reads `TableRegistrySnapshot` (Task 65 Step 1 found none for `TableRegistrySnapshot.stage3`). This task maps `member_checkpoint_seqs`, so it removes its entry if one exists (contract §44: the owning task deletes its entries):
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-f=$(git grep -l 'stage3PendingProtoFields = map' -- server); echo "$f"
-git grep -n '"TableRegistrySnapshot\.member_checkpoint_seqs"' -- "$f"
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+changed=
+if f="$(git grep -l 'stage3PendingProtoFields = map' -- server)"; then
+ [ "$(printf '%s\n' "$f" | wc -l | tr -d ' ')" = 1 ] || exit 1
+ changed="$(python3 -I - "$f" <<'PY75'
+import pathlib,re,sys
+p=pathlib.Path(sys.argv[1]);assert p.parts[0]=='server' and p.name.endswith('_test.go') and '..' not in p.parts and not p.is_symlink()
+t=p.read_text();count=t.count('"TableRegistrySnapshot.member_checkpoint_seqs"');assert count in (0,1)
+u,n=re.subn(r'^\s*"TableRegistrySnapshot\.member_checkpoint_seqs":\s*"Plan S3-E3 Task 75",\s*\n','',t,flags=re.M)
+assert n==count
+if n:p.write_text(u);print(p)
+PY75
+)" || exit 1
+ if [ -n "$changed" ]; then gofmt -w "$changed" || exit 1; fi
+else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+if git grep -n '"TableRegistrySnapshot\.member_checkpoint_seqs"' -- server; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+python3 -I - "$T64/task75-pending-path" "$changed" <<'PY75'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n' if sys.argv[2] else '')
+PY75
+echo task75-pending-entry-resolved
 ```
 
-Expected: one path (`server/safestate_stage3_test.go`) and no grep line: nothing to delete. If the grep prints the line `"TableRegistrySnapshot.member_checkpoint_seqs": "Plan S3-E3 Task 75",`, delete exactly that line (`sed -i '' '/"TableRegistrySnapshot\.member_checkpoint_seqs":/d' "$f"`), run `gofmt -w "$f"`, and run the grep again, which then prints nothing.
-
+Expected: `task75-pending-entry-resolved`; true absence is accepted, while tool errors, multiple paths, a mismatched owner or stale receipt stop. The receipt is empty when no deletion was needed and otherwise records only the actual changed test path.
 - [ ] **Step 22: Run the server tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l server)" && echo gofmt-clean
-GOWORK=off go test ./server/ -run '^(TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch|TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint|TestMarkMemberLaggingRPCAuthorizesAndProposes|TestTableRegistryToPBCarriesCheckpointsAndLag)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./server/ -race -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -race -run '^(TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch|TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint|TestMarkMemberLaggingRPCAuthorizesAndProposes|TestTableRegistryToPBCarriesCheckpointsAndLag|TestCheckpointPublicationAndTableTransitionShareOneRegistryBump)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch': 'pass', 'TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint': 'pass', 'TestMarkMemberLaggingRPCAuthorizesAndProposes': 'pass', 'TestTableRegistryToPBCarriesCheckpointsAndLag': 'pass', 'TestCheckpointPublicationAndTableTransitionShareOneRegistryBump': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./server/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
 ```
 
-Expected: `gofmt-clean`; `--- PASS:` for the four tests and `ok`; then `ok  	github.com/sentioxyz/arbiter/server` for the whole package (Tasks 71–74's tests included). The base's `TestSubmitSnapshotQueryReturnsATerminalAdmissionCodeAsAResult` re-signs a token with the issue time one second earlier and fails once in a while with `re-signing produced the identical token` when its two signatures straddle a second (seen once in a dozen runs while drafting, at origin/main too); rerun the package, and treat only a repeated failure as real.
+Expected: `gofmt-clean`; `--- PASS:` for the five tests and `ok`; then `ok  	github.com/sentioxyz/arbiter/server` for the whole package (Tasks 71–74's tests included). The base's `TestSubmitSnapshotQueryReturnsATerminalAdmissionCodeAsAResult` re-signs a token with the issue time one second earlier and fails once in a while with `re-signing produced the identical token` when its two signatures straddle a second (seen once in a dozen runs while drafting, at origin/main too); rerun the package, and treat only a repeated failure as real.
 
 - [ ] **Step 23: Write the failing orchestrator tests**
 
@@ -16549,11 +18825,52 @@ func TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals(t *testing.T) {
 		t.Fatalf("a zero timeout proposed %+v", h.proposed)
 	}
 }
+
+// TestHandleWorkSetDispatchesMemberLagging exercises the actual loop entry.
+func TestHandleWorkSetDispatchesMemberLagging(t *testing.T) {
+ h := newMemberLagHarness(t, 30*time.Minute)
+ ws := fsm.WorkSet{MemberLag: []fsm.MemberLagWork{lagRow(4)}}
+ if err := h.o.handleWorkSet(context.Background(), ws); err != nil { t.Fatal(err) }
+ h.clock = h.clock.Add(30*time.Minute)
+ if err := h.o.handleWorkSet(context.Background(), ws); err != nil { t.Fatal(err) }
+ if len(h.proposed) != 1 { t.Fatalf("whole loop lagging proposals = %d, want 1", len(h.proposed)) }
+}
 ```
 
 - [ ] **Step 24: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./orchestrator/ -run '^(TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout|TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint|TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals)$' -count=1 2>&1 | head -12`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['MemberLaggingTimeout undefined', 'handleMemberLagging undefined', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the orchestrator test binary does not build: `orchestrator/member_lagging_test.go:37:10: o.d.Cfg.MemberLaggingTimeout undefined (type Config has no field or method MemberLaggingTimeout)`, `orchestrator/member_lagging_test.go:60:16: h.o.handleMemberLagging undefined (type *Loop has no field or method handleMemberLagging)` and two `h.o.lagSince undefined (type *Loop has no field or method lagSince)` lines, then `FAIL	github.com/sentioxyz/arbiter/orchestrator [build failed]`.
 
@@ -16715,7 +19032,6 @@ In `orchestrator/loop.go`, in `handleWorkSet` (`:189-197`), after Task 74's `han
 	if err := o.handleReselections(ctx, ws); err != nil {
 		return err
 	}
-
 ```
 
 with:
@@ -16727,19 +19043,68 @@ with:
 	if err := o.handleMemberLagging(ctx, ws); err != nil {
 		return err
 	}
-
 ```
 
 - [ ] **Step 26: Run the orchestrator tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l orchestrator)" && echo gofmt-clean
-GOWORK=off go test ./orchestrator/ -run '^(TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout|TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint|TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./orchestrator/ -race -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l orchestrator)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race -run '^(TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout|TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint|TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals|TestHandleWorkSetDispatchesMemberLagging)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout': 'pass', 'TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint': 'pass', 'TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals': 'pass', 'TestHandleWorkSetDispatchesMemberLagging': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
 ```
 
-Expected: `gofmt-clean`; `--- PASS:` for the three tests and `ok`; then `ok  	github.com/sentioxyz/arbiter/orchestrator` for the whole package.
+Expected: `gofmt-clean`; `--- PASS:` for the four tests and `ok`; then `ok  	github.com/sentioxyz/arbiter/orchestrator` for the whole package.
 
 - [ ] **Step 27: Write the failing config tests**
 
@@ -16779,7 +19144,38 @@ func TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes(t *testing.T) {
 
 - [ ] **Step 28: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./config/ -run '^(TestLoadConfigReadsDispatchMemberLaggingTimeout|TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes)$' -count=1 2>&1 | head -12`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./config/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['MemberLaggingTimeout undefined', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the config test binary does not build: two `config/config_test.go:<line>:31: c.Dispatch.MemberLaggingTimeout undefined (type DispatchConfig has no field or method MemberLaggingTimeout)` lines (one per appended test), then `FAIL	github.com/sentioxyz/arbiter/config [build failed]`.
 
@@ -16886,10 +19282,84 @@ with:
 - [ ] **Step 30: Run the config and service tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l config cmd/arbiter)" && echo gofmt-clean
-GOWORK=off go test ./config/ -run '^(TestLoadConfigReadsDispatchMemberLaggingTimeout|TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes)$' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./config/ ./cmd/arbiter/ -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l config)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./config/ -count=1 -run '^(TestLoadConfigReadsDispatchMemberLaggingTimeout|TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestLoadConfigReadsDispatchMemberLaggingTimeout': 'pass', 'TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./config/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
 ```
 
 Expected: `gofmt-clean`; `--- PASS:` for both tests and `ok`; then `ok` for `github.com/sentioxyz/arbiter/config` and `github.com/sentioxyz/arbiter/cmd/arbiter`.
@@ -17042,7 +19512,38 @@ func TestMemberLaggingFlagRefusals(t *testing.T) {
 
 - [ ] **Step 32: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestMemberLaggingSignsTheCanonicalCommand|TestMemberLaggingFlagRefusals)$' -count=1 -v 2>&1 | grep -E '^(--- |    [a-z_]+_test[.]go:|ok|FAIL)'`
+Run this complete Bash call:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter-admin/ -count=1 -run '^(TestMemberLaggingSignsTheCanonicalCommand|TestMemberLaggingFlagRefusals)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestMemberLaggingSignsTheCanonicalCommand': 'fail', 'TestMemberLaggingFlagRefusals': 'fail'};tokens=[]
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+```
 
 Expected: the package builds and both tests FAIL, because `run` does not know `member` yet and answers with the usage text: `groups_test.go:<line>: usage:` then `--- FAIL: TestMemberLaggingSignsTheCanonicalCommand`, and `groups_test.go:<line>: without --address = usage:` then `--- FAIL: TestMemberLaggingFlagRefusals`; then `FAIL	github.com/sentioxyz/arbiter/cmd/arbiter-admin`.
 
@@ -17190,10 +19691,60 @@ with:
 - [ ] **Step 34: Run the arbiter-admin tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-test -z "$(gofmt -l cmd/arbiter-admin)" && echo gofmt-clean
-GOWORK=off go test ./cmd/arbiter-admin/ -run '^(TestMemberLaggingSignsTheCanonicalCommand|TestMemberLaggingFlagRefusals)$' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-GOWORK=off go test ./cmd/arbiter-admin/ -count=1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l cmd/arbiter-admin)" || exit 1
+[ -z "$formatted" ] || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter-admin/ -count=1 -run '^(TestMemberLaggingSignsTheCanonicalCommand|TestMemberLaggingFlagRefusals)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestMemberLaggingSignsTheCanonicalCommand': 'pass', 'TestMemberLaggingFlagRefusals': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter-admin/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
 ```
 
 Expected: `gofmt-clean`; `--- PASS:` for both tests and `ok`; then `ok  	github.com/sentioxyz/arbiter/cmd/arbiter-admin` for the whole package (Task 71's group tests included).
@@ -17201,14 +19752,108 @@ Expected: `gofmt-clean`; `--- PASS:` for both tests and `ok`; then `ok  	github.
 - [ ] **Step 35: Gazelle and the checks of contract §49**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git add fsm server orchestrator config cmd
-test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && echo gofmt-clean
-bazel run //:gazelle && git diff --stat -- '*.bazel'
-git add -- '*.bazel' && git diff --exit-code -- '*.bazel' && echo gazelle-staged
-bazel build //... && bazel test //... --test_output=errors
-GOWORK=off go test ./... -count=1 2>&1 | grep -v '^ok' | grep -v 'no test files'
-grep -rn 'time\.Now' fsm/ | grep -v _test.go
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task75-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+list="$(mktemp "$T64/task75-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY75'
+import pathlib,subprocess,sys
+paths=list(dict.fromkeys(x.decode() for x in pathlib.Path(sys.argv[1]).read_bytes().split(b'\0') if x)); assert paths
+r=subprocess.run(['gofmt','-l',*paths],capture_output=True,text=True)
+assert r.returncode==0 and not r.stdout,(r.returncode,r.stdout,r.stderr)
+PY75
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+diff="$(git diff --unified=0 -- '*.bazel')" || exit 1
+python3 -I - "$diff" <<'PY75'
+import sys
+added=[]
+for line in sys.argv[1].splitlines():
+ if line.startswith(('+++','---')):continue
+ assert not line.startswith('-'),line
+ if line.startswith('+'):added.append(line[1:].strip())
+assert sorted(added)==sorted(['"mark_member_lagging.go",','"member_checkpoint.go",','"mark_member_lagging_test.go",','"member_checkpoint_test.go",','"member_classes_test.go",','"member_lagging.go",','"member_lagging_test.go",','"member_checkpoint_test.go",']),added
+PY75
+git add -- fsm/mark_member_lagging.go fsm/mark_member_lagging_test.go fsm/member_checkpoint.go fsm/member_checkpoint_test.go fsm/member_classes_test.go orchestrator/member_lagging.go orchestrator/member_lagging_test.go server/member_checkpoint_test.go cmd/arbiter-admin/groups.go cmd/arbiter-admin/groups_test.go cmd/arbiter-admin/main.go cmd/arbiter/services.go config/config.go config/config_test.go config/raw.go fsm/BUILD.bazel fsm/apply.go fsm/consensus_history.go fsm/consensus_updates.go fsm/fsm.go fsm/reads_work.go fsm/reads_work_types.go fsm/stage3.go fsm/stage3_groups.go fsm/stage3_restore.go fsm/table_registry.go orchestrator/BUILD.bazel orchestrator/deps.go orchestrator/loop.go server/BUILD.bazel server/groups_admin.go server/member_gateway.go server/table_registry.go || exit 1
+pending="$(cat "$T64/task75-pending-path")" || exit 1
+if [ -n "$pending" ]; then git add -- "$pending" || exit 1; fi
+statusfile="$(mktemp "$T64/task75-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" "$T64/task75-pending-path" <<'PY75'
+import pathlib,sys
+expected=['fsm/mark_member_lagging.go', 'fsm/mark_member_lagging_test.go', 'fsm/member_checkpoint.go', 'fsm/member_checkpoint_test.go', 'fsm/member_classes_test.go', 'orchestrator/member_lagging.go', 'orchestrator/member_lagging_test.go', 'server/member_checkpoint_test.go', 'cmd/arbiter-admin/groups.go', 'cmd/arbiter-admin/groups_test.go', 'cmd/arbiter-admin/main.go', 'cmd/arbiter/services.go', 'config/config.go', 'config/config_test.go', 'config/raw.go', 'fsm/BUILD.bazel', 'fsm/apply.go', 'fsm/consensus_history.go', 'fsm/consensus_updates.go', 'fsm/fsm.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/stage3.go', 'fsm/stage3_groups.go', 'fsm/stage3_restore.go', 'fsm/table_registry.go', 'orchestrator/BUILD.bazel', 'orchestrator/deps.go', 'orchestrator/loop.go', 'server/BUILD.bazel', 'server/groups_admin.go', 'server/member_gateway.go', 'server/table_registry.go']
+pending=pathlib.Path(sys.argv[2]).read_text()
+if pending:
+ assert pending.endswith('\n') and len(pending.splitlines())==1
+ path=pathlib.PurePosixPath(pending[:-1]);assert path.parts[0]=='server' and path.name.endswith('_test.go') and '..' not in path.parts
+ expected.append(str(path))
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY75
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors || exit 1
+out="$(mktemp "$T64/task75-test.XXXXXX")" || exit 1
+if go test -json ./... -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY75'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task75-test-results-verified')
+PY75
+go vet ./... || exit 1
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+protected="$(git status --porcelain fsm/testdata)" || exit 1
+[ -z "$protected" ] || exit 1
+changes="$(mktemp "$T64/task75-protected.XXXXXX")" || exit 1
+git diff --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY75'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b'' and len(rows)%2==0
+for st,p in zip(rows[::2],rows[1::2]):assert b'testdata/' not in p and not p.endswith(b'_golden_test.go'),p
+PY75
+statusfile="$(mktemp "$T64/task75-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" "$T64/task75-pending-path" <<'PY75'
+import pathlib,sys
+expected=['fsm/mark_member_lagging.go', 'fsm/mark_member_lagging_test.go', 'fsm/member_checkpoint.go', 'fsm/member_checkpoint_test.go', 'fsm/member_classes_test.go', 'orchestrator/member_lagging.go', 'orchestrator/member_lagging_test.go', 'server/member_checkpoint_test.go', 'cmd/arbiter-admin/groups.go', 'cmd/arbiter-admin/groups_test.go', 'cmd/arbiter-admin/main.go', 'cmd/arbiter/services.go', 'config/config.go', 'config/config_test.go', 'config/raw.go', 'fsm/BUILD.bazel', 'fsm/apply.go', 'fsm/consensus_history.go', 'fsm/consensus_updates.go', 'fsm/fsm.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/stage3.go', 'fsm/stage3_groups.go', 'fsm/stage3_restore.go', 'fsm/table_registry.go', 'orchestrator/BUILD.bazel', 'orchestrator/deps.go', 'orchestrator/loop.go', 'server/BUILD.bazel', 'server/groups_admin.go', 'server/member_gateway.go', 'server/table_registry.go']
+pending=pathlib.Path(sys.argv[2]).read_text()
+if pending:
+ assert pending.endswith('\n') and len(pending.splitlines())==1
+ path=pathlib.PurePosixPath(pending[:-1]);assert path.parts[0]=='server' and path.name.endswith('_test.go') and '..' not in path.parts
+ expected.append(str(path))
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY75
+echo task75-full-checks-passed
 ```
 
 Expected: every file of the task is staged first, so `git ls-files` lists the new ones too; then `gofmt-clean`; gazelle changes exactly `fsm/BUILD.bazel` (the two library srcs and three test srcs of the Files list), `orchestrator/BUILD.bazel` (`"member_lagging.go"`, `"member_lagging_test.go"`) and `server/BUILD.bazel` (`"member_checkpoint_test.go"`), with no deps line, then `gazelle-staged` (the diff is committed with the task); every target builds and every test passes (`Executed … out of … tests: … tests pass`); the `go test ./...` filter prints nothing (every package `ok`); the `time.Now` grep prints nothing (Apply reads no clock). A gazelle diff with a deps line means an import this task did not plan: stop and find it.
@@ -17216,10 +19861,33 @@ Expected: every file of the task is staged first, so `git ls-files` lists the ne
 - [ ] **Step 36: Commit**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
-git add fsm server orchestrator config cmd
-git status --porcelain
-git commit -q -F - <<'MSG'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task75-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git_read_75_4575="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_75_4575" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_75_4575}" = "$base" ] || exit 1
+statusfile="$(mktemp "$T64/task75-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" "$T64/task75-pending-path" <<'PY75'
+import pathlib,sys
+expected=['fsm/mark_member_lagging.go', 'fsm/mark_member_lagging_test.go', 'fsm/member_checkpoint.go', 'fsm/member_checkpoint_test.go', 'fsm/member_classes_test.go', 'orchestrator/member_lagging.go', 'orchestrator/member_lagging_test.go', 'server/member_checkpoint_test.go', 'cmd/arbiter-admin/groups.go', 'cmd/arbiter-admin/groups_test.go', 'cmd/arbiter-admin/main.go', 'cmd/arbiter/services.go', 'config/config.go', 'config/config_test.go', 'config/raw.go', 'fsm/BUILD.bazel', 'fsm/apply.go', 'fsm/consensus_history.go', 'fsm/consensus_updates.go', 'fsm/fsm.go', 'fsm/reads_work.go', 'fsm/reads_work_types.go', 'fsm/stage3.go', 'fsm/stage3_groups.go', 'fsm/stage3_restore.go', 'fsm/table_registry.go', 'orchestrator/BUILD.bazel', 'orchestrator/deps.go', 'orchestrator/loop.go', 'server/BUILD.bazel', 'server/groups_admin.go', 'server/member_gateway.go', 'server/table_registry.go']
+pending=pathlib.Path(sys.argv[2]).read_text()
+if pending:
+ assert pending.endswith('\n') and len(pending.splitlines())==1
+ path=pathlib.PurePosixPath(pending[:-1]);assert path.parts[0]=='server' and path.name.endswith('_test.go') and '..' not in path.parts
+ expected.append(str(path))
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY75
+git commit -S -q -F - <<'MSG' || exit 1
 fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)
 
 Switch 8 of housegate spec 2026-10-14 §10.4 (checkpoints, §9.1-§9.2).
@@ -17244,24 +19912,82 @@ checkpoints switch.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
-git log -1 --format=%s
-git show --stat --format= HEAD | tail -1
+
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+git_read_75_4621="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_75_4621}" = 1 ] || exit 1
+git_read_75_4622="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_75_4622}" = 'fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)' ] || exit 1
+git_read_75_4623="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_75_4623}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+message="$(git log -1 --format=%B)" || exit 1
+python3 -I - "$message" <<'PY75'
+import re,sys
+assert re.findall(r'^co-authored-by:[^\n]*$',sys.argv[1],re.I|re.M)==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>']
+PY75
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+python3 -I - "$T64/task75-final-head" "$head" <<'PY75'
+import pathlib,sys
+with pathlib.Path(sys.argv[1]).open('x') as f:f.write(sys.argv[2]+'\n')
+PY75
+echo task75-signed-commit-verified
 ```
 
 Expected: `git status --porcelain` lists only staged entries: `A ` for `fsm/mark_member_lagging.go`, `fsm/mark_member_lagging_test.go`, `fsm/member_checkpoint.go`, `fsm/member_checkpoint_test.go`, `fsm/member_classes_test.go`, `orchestrator/member_lagging.go`, `orchestrator/member_lagging_test.go`, `server/member_checkpoint_test.go`, and `M ` for `cmd/arbiter-admin/groups.go`, `cmd/arbiter-admin/groups_test.go`, `cmd/arbiter-admin/main.go`, `cmd/arbiter/services.go`, `config/config.go`, `config/config_test.go`, `config/raw.go`, `fsm/BUILD.bazel`, `fsm/apply.go`, `fsm/consensus_history.go`, `fsm/consensus_updates.go`, `fsm/fsm.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `fsm/stage3.go`, `fsm/stage3_groups.go`, `fsm/stage3_restore.go`, `fsm/table_registry.go`, `orchestrator/BUILD.bazel`, `orchestrator/deps.go`, `orchestrator/loop.go`, `server/BUILD.bazel`, `server/groups_admin.go`, `server/member_gateway.go`, `server/table_registry.go` (and `server/safestate_stage3_test.go` only if Step 21 deleted its entry); then the subject `fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)` and `33 files changed` (34 with the pending entry), about 2,860 insertions and 3 deletions.
 
 - [ ] **Step 37: Push the branch (requires explicit user confirmation)**
 
-Remote write (push): needs explicit user confirmation in chat before running. It publishes Plan S3-E3's five commits (Tasks 71–75) on branch `urwt/claude/multi-source-s3e` of `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests, `cut-release.yml` only by `workflow_dispatch`); K65 keeps the branch unreleased until Plan S3-E4 Task 78, and Plan S3-E4 continues on this worktree.
+Remote write (push): needs explicit user confirmation in chat before running. It publishes Plan S3-E3's five commits (Tasks 71–75) on branch `urwt/codex/multi-source-s3e` of `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests, `cut-release.yml` only by `workflow_dispatch`); K65 keeps the branch unreleased until Plan S3-E4 Task 78, and Plan S3-E4 continues on this worktree.
 
-Confirm before running. Then, from fish (the lines are the same in any shell):
+Confirm before running. Then execute this complete Bash block through the plan runner. Commands handed directly to the user must instead use fish:
 
-```fish
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e push origin HEAD:urwt/claude/multi-source-s3e
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e rev-parse HEAD origin/urwt/claude/multi-source-s3e
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task75-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'stop: worktree is dirty' >&2; exit 1; }
+git_read_75_4656="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${git_read_75_4656}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git verify-commit HEAD || exit 1
+head="$(cat "$T64/task75-final-head")" || exit 1
+git_read_75_4659="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_75_4659" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "${git_read_75_4659}" ] || exit 1
+git_read_75_4660="$(git rev-list --count "$base..$head")" || exit 1
+[ "${git_read_75_4660}" = 1 ] || exit 1
+git_read_75_4661="$(git log -1 --format=%s)" || exit 1
+[ "${git_read_75_4661}" = 'fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)' ] || exit 1
+
+branch=urwt/codex/multi-source-s3e
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+remote_head="$(python3 -I - "$remote" "$branch" <<'PY71'
+import re,sys
+m=re.fullmatch(r'([0-9a-f]{40})\trefs/heads/'+re.escape(sys.argv[2]),sys.argv[1]); assert m
+print(m[1])
+PY71
+)" || exit 1
+git merge-base --is-ancestor "$remote_head" "$base" || exit 1
+# Only after explicit user confirmation in chat:
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git_read_75_4676="$(git rev-parse HEAD)" || exit 1
+[[ "$git_read_75_4676" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${git_read_75_4676}" = "$head" ] || exit 1
+echo task75-push-verified
 ```
 
 Expected: `HEAD -> urwt/claude/multi-source-s3e` (a fast-forward of the branch Plan S3-E2 Task 70 pushed), then the same commit hash twice. A rejected push means the branch moved on the remote: stop and ask the user; never force-push.
+
+Static workflow note: success requires the explicit task75 entry/pending-entry/full-checks/signed-commit/push verified markers. Original expected terminal examples and insertion counts are historical drafting notes, never acceptance substitutes. Step 13 requires exactly nineteen PASS plus four restore FAIL terminal results; Step 16 requires all twenty-three PASS. The actual observed task75-final-head and exact final subject become the next task’s predecessor obligation; a Markdown preparation hash is never source readiness.
+
 
 ---
 
@@ -17347,7 +20073,24 @@ The earlier appendices stay binding: Plan S3-A's §0–§6, Plan S3-B's §7–§
   1. `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`.
   2. `python3 -I $HOME/.cache/s3-ledger/s3-ledger.py get /Users/uranuswch/Dev/projects/sentio-network/housegate PROTO_TAG_P5 HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P4` (the S3-C1 §19 ledger tool). It reads each name on its plan's ledger copy: the plans-cf branch until the stage-3 plans PR merges, then `origin/main` (D34).
   3. `grep -E '^\s*github.com/(sentioxyz/arbiter-proto|sentioxyz/arbiter-core|housegate/housegate) ' "$W/go.mod"` must name `PROTO_TAG_P5`, `CORE_TAG_P5` and `HG_TAG_P5`. Otherwise stop.
-- Checks, run by every task before its commit: `cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git diff --exit-code -- '*.bazel' && bazel build //... && bazel test //... --test_output=errors` (a gazelle diff is committed with the task). Focused runs: `bazel test //fsm:fsm_test --test_filter='<regex>' --test_output=errors`, and the same for `//server:server_test`, `//orchestrator:orchestrator_test`, `//cmd/arbiter-admin:arbiter-admin_test`, `//metrics:metrics_test`, `//config:config_test`.
+- Checks, run by every task before its commit: run the complete checked common block below, then every task-specific full-check command and inherited golden/descriptor guard. A successful formatter with no output does not prove Git enumeration succeeded. Focused runs remain `bazel test //fsm:fsm_test --test_filter='<regex>' --test_output=errors`, and the same for `//server:server_test`, `//orchestrator:orchestrator_test`, `//cmd/arbiter-admin:arbiter-admin_test`, `//metrics:metrics_test`, `//config:config_test`.
+
+```bash
+set -eo pipefail
+cd "$W" || exit 1
+format_paths="$(mktemp "${TMPDIR:-/tmp}/s3e3-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$format_paths" || exit 1
+git ls-files -z --others --exclude-standard -- '*.go' >> "$format_paths" || exit 1
+[ -s "$format_paths" ] || { echo 'stop: empty Go file inventory' >&2; exit 1; }
+format_output="$(xargs -0 gofmt -l < "$format_paths")" || exit 1
+[ -z "$format_output" ] || { printf '%s\n' "$format_output" >&2; exit 1; }
+rm -- "$format_paths" || exit 1
+bazel run //:gazelle || exit 1
+git diff --exit-code -- '*.bazel' || exit 1
+bazel build //... || exit 1
+bazel test //... --test_output=errors || exit 1
+```
+
 - Golden recomputation (Tasks 71, 72): the throwaway script `$HOME/.cache/s3e3/goldens.py`, run with `python3 -I $HOME/.cache/s3e3/goldens.py`, never committed. It recomputes `sha256(b"housegate-replay-mvp-v0:" + domain + b"\x00" + json)` over the preimages of §50–§51 and must print the frozen values. It also recomputes `goldenTrack1HeaderChainHash` (`0x38e0adb5…`) and `goldenTrack1TransitionHeaderChainHash` (`0x87847b96…`) first, proving the recomputation matches `replay.CanonicalDigest`.
 - Commits: one per task, subject `<area>: <summary> (S3-E3 Task <N>)`. The subjects are:
   - Task 71: `fsm: database groups, placement and RebalanceGroup (S3-E3 Task 71)`;
@@ -17404,9 +20147,9 @@ type GroupMember struct {
 	NodeID           string                  `json:"node_id"`
 	JoinedGeneration uint64                  `json:"joined_generation"`
 	Class            MemberClass             `json:"class"`
-	ReadyGeneration  uint64                  `json:"ready_generation,omitempty"` // Task 73; 0 = not ready
-	ReadySignature   string                  `json:"ready_signature,omitempty"`  // Task 73
-	ReadyEpoch       uint64                  `json:"ready_epoch,omitempty"`      // Task 73
+	ReadyGeneration  uint64                  `json:"ready_generation,omitempty"` // Declared Task 71; populated Task 73; 0 = not ready
+	ReadySignature   string                  `json:"ready_signature,omitempty"`  // Declared Task 71; populated Task 73
+	ReadyEpoch       uint64                  `json:"ready_epoch,omitempty"`      // Declared Task 71; populated Task 73
 	Checkpoint       *MemberCheckpointRecord `json:"checkpoint,omitempty"`       // Task 75
 	ObservedEntry    *replay.TrackFrontier   `json:"observed_entry,omitempty"`   // Task 75
 }
@@ -17545,7 +20288,7 @@ func (f *FSM) openBlockDatabasesLocked() []string
   - It runs in the Apply-only half and never on restore, and `EvictNode` never calls it.
 - **Authority commands:** `authorityCommandRefusalLocked(kind, verify)` verifies under `authority.Validator{AllowedAddresses: authorityAddressSet(f.st.Params.AuthorityAddresses)}` with the exact current `{network, genesis, epoch}` and no clock, like `trackCommandLocked` (`arbiter:fsm/quarantine.go:114-146`). Its refusal is `<kind>: authority: <err>`. The caller passes `kind` with its target already formatted, for example `fmt.Sprintf("rebalance group indexer %d database %q", owner, database)` or `fmt.Sprintf("reselect verifiers block %d", seq)`, which yields the verbatim refusals below.
 - **Seal first:** `prepareGroupSealLocked(owner, databases)` returns `nil, ""` when the open block holds no statement whose live incarnation belongs to (`owner`, one of `databases`). Otherwise it returns `prepareStatementSealLocked(f.spentIDsRootLocked())` and mutates nothing. `openBlockDatabasesLocked` lists the sorted distinct databases of the open block's statements.
-- **`groupsChangedLocked()`** reruns `completePurgesLocked()` and then `registryChangedLocked(f.st.TableRegistry)`. Every Apply of this plan that changes a group calls it once, last; Plan S3-E4 Task 76 inserts its release evaluation at its start.
+- **`groupsChangedLocked()`** reruns `completePurgesLocked()` and then `registryChangedLocked(f.st.TableRegistry)`. The dedicated group-changing Apply paths call it once, last; Plan S3-E4 Task 76 inserts its release evaluation at its start. Checkpoint publication is the notification-coalescing exception in §52: `recordOwnerAdvanceLocked` completes class-change purges without notifying, and its caller folds the dirty view into the publication Apply's existing registry notification. This exception does not add a Leaving-release trigger solely for publication class reclassification: previously `caught_up`/`behind` members remain within strict E's eligible classes (`caught_up`, `behind` or `lagging`), while non-strict release uses frozen E without a current-class filter; reclassification alone does not advance checkpoints past the fixed `Leaving.Entry` or change the other release inputs (S3-E4 §53).
 
 **`RebalanceGroup` (tag 38; `fsm/rebalance_group.go`, `func (f *FSM) applyRebalanceGroup(c *wire.RebalanceGroup) any`).** Refusals, in this order, verbatim:
 1. `group rebalancing is refused until the placement switch is on`
@@ -17603,7 +20346,7 @@ Effects, after every check:
   - Each `LeavingMember` → `pb.LeavingMember{node_id: Member.NodeID, removed_generation, release_entry: Entry, frozen_members: FrozenE, frozen_domains: FrozenEDomains, released}`.
   - `ReadySignature` and `ReadyEpoch` are not served (D33).
 - **Registry version.** Every Apply that changes a value the view serves bumps the registry version once (one bump per Apply, folded into any other bump of the same Apply), so `WatchTableRegistry` followers learn it:
-  - every Apply that changes a group, through `groupsChangedLocked`;
+  - dedicated group-changing Apply paths, through `groupsChangedLocked`; publication reclassification uses §52's state/purge-only helper and caller notification coalescing, folded into any existing registry bump of that publication Apply;
   - while `placementOnLocked()`, a `ConsensusParamsUpdate` that adds, removes or changes the `verifiers` entry of a node that is a current member of a group. That covers the served `host_indexer_id` and, from Task 72, the served `group_key`. It sets the update's `registryChanged` (`arbiter:fsm/consensus_updates.go:105-139`).
   - from Task 75, a publication that appends an advance of an owner whose groups hold a member with a checkpoint, because it can change that member's served `lag_advances` (§52.3).
 
@@ -18055,7 +20798,7 @@ type OwnerAdvances struct {
 func entryCompare(a, b replay.TrackFrontier) int // by (SafeBlockSeq, AppliedPromotionSeq); IndexerID is not compared
 func (f *FSM) memberLagLocked(owner uint64, entry replay.TrackFrontier) uint32 // |{e ∈ Recent(owner) : entryCompare(e, entry) > 0}|, so at most MaxLagPublications+1 (D31)
 func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember)
-func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest)
+func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest) bool
 func (f *FSM) trimOwnerAdvancesLocked()
 func (f *FSM) storedCheckpointSeqLocked(nodeID string, owner uint64, replicaSigner string) uint64 // 0 when absent or accepted under another signer
 func (f *FSM) MemberCheckpointRecorded(cp arbiter.MemberCheckpoint) bool
@@ -18064,10 +20807,10 @@ func (f *FSM) MemberLagWork() []MemberLagWork // read-locked; the WorkSet uses t
 - **`classifyMemberLocked`** (spec §9.2) applies to a member with a `Checkpoint`. It uses `published = publishedTrackFrontierLocked(owner)`, `lag = memberLagLocked(owner, entry)`, `maxLag = MaxLagPublications` and `low = LagLow`:
   - A `lagging` member returns to `caught_up` (entry equals `published`) or `behind`, clearing `ObservedEntry`, only when `entryCompare(entry, *ObservedEntry) > 0 && lag < low`. Otherwise it stays `lagging`.
   - Any other member becomes `lagging` with `ObservedEntry = &published` when `lag > maxLag` and O is not quarantined. Otherwise it becomes `caught_up` when the entry equals `published`, else `behind`.
-- **Publication** (K76): `applyPublishSafeSnapshot` calls `recordOwnerAdvanceLocked(parent, &m)` after the track transitions while `checkpointsOnLocked()`. For each owner whose entry in `m` is after its base entry (`trackBaseFrontierLocked(parent, owner)`):
+- **Publication** (K76): `applyPublishSafeSnapshot` captures the registry version before the unchanged track/table transition branch and calls `recordOwnerAdvanceLocked(parent, &m)` after those transitions while `checkpointsOnLocked()`. The helper completes class-change purges without notifying and returns whether class or served lag is dirty; its caller notifies only when dirty and the transition did not already change the registry version. For each owner whose entry in `m` is after its base entry (`trackBaseFrontierLocked(parent, owner)`):
   - it appends the new entry to that owner's `Recent`, dropping the oldest beyond `MaxLagPublications + 1`, unless the owner is quarantined;
   - then it classifies every `caught_up` or `behind` member of that owner's groups;
-  - an append can change the served `lag_advances` of every member of that owner's groups that holds a checkpoint (it stays at `MaxLagPublications + 1` once saturated). When there is such a member, the Apply bumps the registry version once (§50): through `groupsChangedLocked()` when a class changed, else through `registryChangedLocked` alone. An append for an owner whose groups hold no checkpoint, and a publication while `!checkpointsOnLocked()`, bump nothing new.
+  - an append can change the served `lag_advances` of every member of that owner's groups that holds a checkpoint (it stays at `MaxLagPublications + 1` once saturated). A class change runs `completePurgesLocked()` inside the helper; class or served-lag dirtiness is returned to the caller. The caller uses `registryChangedLocked` only when that dirty view was not already covered by the unchanged track/table transition notification, preserving one registry bump per Apply (§50). An append for an owner whose groups hold no checkpoint, and a publication while `!checkpointsOnLocked()`, add no notification.
 - **Params update:** `applyUpdateConsensusParams` calls `trimOwnerAdvancesLocked()` when `MaxLagPublications` changes. That update changes `Params.Stage3`, so S3-E2 Task 65's rule already bumps the registry version for the trimmed `lag_advances`.
 
 **`MemberCheckpoint` (tag 41; `func (f *FSM) applyMemberCheckpoint(c *wire.MemberCheckpoint) any`).** With `cp := c.Checkpoint`, refusals in this order, verbatim:
@@ -18170,7 +20913,75 @@ Effects: set `Class = MemberLagging` and `ObservedEntry = &c.ObservedEntry`, the
 
 ## Appendix B: drafting decisions and cross-task facts
 
-Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
+### Final local whole-plan consistency review — bounded source decisions for Tasks71–75
+
+This entry records the final local documentary consistency candidate after root accepted Task75 source. The complete selected Tasks71–75 and corrected Appendix A remain frozen at the selectors listed in File Structure. Earlier entries below are historical PREP/drafting/adapter cuts, including their then-pending upstream states; they are not contradictory current source decisions. Root controls final E3 consistency/adoption and formal accounting.
+
+| Owning task | Current bounded disposition and review attribution |
+|---|---|
+| 71 | Root accepted V8 SOURCE_CUSTODY `b88c075440783354b2d6b29a47ddcab36a0d8661062e822122e59fd31a0dce25`; final review `8a4ea703f6bf19a56839f2dd148cfe0cf90d88d4d84ea4daea9349763c096fba`:70 calls,10 causal mutants,48 new tops,22 plain/4 affected-race Bazel targets and64 fresh focused identities;652 matching candidate/fresh files. Readiness fields are uniquely declared here, consumed72, populated73. Historical V7 HOLD and checksum/transient/tool qualifications remain. |
+| 72 | Root accepted V12 SOURCE_CUSTODY `e9ee10152820ac6626ddba8a13af1ad5e9247cf6b81c5df1c6e5a73dff4ba1f9`; final owning review `ffa262d75ebe8a514afc71af5bab635fdf82d0a409501c3d2132f2458556388b`:119 classified calls,33 honest baselineGREEN/assertionRED pairs,48 operations,4132 full-Go identities with19 inherited skips,22 plain/3 race targets and78 fresh identities;660 matching files. M30 descriptor construction repair is distinct from owning source; V9–V11 HOLDs receive no retrospective kill/source credit. |
+| 73 | Root accepted V10 SOURCE_CUSTODY `f326b5cd58984b9e41eeb2e9a56ae1da86992c9be2316f60b734f94d1fe8f952`; final review `b8eb6372b64fd8475ecd356bbc2c291396389e7e5977524e8915b3220c0051a9`:83 calls,28 pairs,17 operations/18 tops,4176 derived identities with19 inherited skips,22 plain/2 race targets,44 fresh identities and665 matching files. M06 owning diagnostic, M17 verifier binder and idempotent source-redline receipt adapter retain separate scopes. Historical V7–V9 HOLDs remain. |
+| 74 | Root accepted V3 SOURCE_CUSTODY `32586f35b25da2311fc9971a1db85e9494b85eea344c5d44e3dc486b8ac353f6`; final documentary root review `46ec8cf21a4604cc4ce07849f436f6af94c072128cc37ed895fdcf479bc41a9d`:53 calls/106 streams,4 pairs,29 operations/19 tops,4248 derived identities with19 inherited skips,22 plain/4 race targets,72 fresh identities and670 matching files. Fragmented-output and receiver-owner adapter fixes do not alter owning Task74. The accepted18-field Task75 input `1cb50b58aeda459940a9dba37da5a20e421934903158aac312b4e899a07b5605` is a predecessor projection, not an execution grant. Historical V1/V2 HOLDs remain. |
+| 75 | Root accepted V4 SOURCE_CUSTODY `7ad693697faeea3df61e205b43d43c45059910e34cd239d4f1e1f1e6ec9fdc28`, selecting complete V12 task `60c6c8aa7185b8e017ee73b7b4964ace508eb7b6b653a0a212d141d0a228b42c`:72 classified calls/144 streams/16759819B,10 honest baselineGREEN/targetRED pairs,46 operations/77 owning Go bodies/36 new tops,4313 whole-Go identities (4294PASS/19 inherited SKIP),22 plain/5 affected-race Bazel targets,678 matching candidate/fresh files and unchanged core469/housegate935/proto57 dependency custody. All five root manual scopes are closed boundedly; PARTIAL `f93c33719397a1171e7a7d041180dfbb1e525356f0dc6f10c5d1136a4ecf6f15` remains non-authoritative exit2. Exact accepted-source manifest `3fb4c7a3e3dfa9c0b29736ba2f19984645276f40e8a64536ccc60b7e483d9dd6` and cleanup projection `8e2bac917e161900d88933c9a8322c3a7fc3b57d5d406d0acf07a69cd1d7f7c6` bind root's decision. Old75 V1/V2/V3 HOLDs and the first unretained reader78 remain uncredited. |
+
+Task75 final owning report `f302b70a2d290aa7aaebe0601833f76fafa65b3727d79d51656e99cd00ca7516` and root documentary closure `21fd43c6e81fee5251aa931666250f657511d3c89729177b708a47d9ccac5abc` preserve the exact complete task and all limits. Task75's four independent manual reports retain their individual scopes: ordered phase review `989b36a12a571ad1d8db7d21a897a3564429c17a15782d1453676d437c618691`; literal/module/BUILD lineage `ab1d24201a0bcd213b453574ff18e8a308971b136557999d15b8e773f51c24e5`; accepted74/proto/fixture lineage `a267e94f751df7bdc3b5e3e791f50d436b265864b7d36cb3a62901a10811a8eb`; publication/source diagnostics `5aadf59ec1cf947021b7f78f772a7b0b9b284d209e781c598d6efff54f009e9d`. Root combined them with measured custody/resource/terminal evidence. This plan does not repeat their raw/source reads or turn their individually false authority flags into independent approvals.
+
+Task75 acceptance retains nine limits: (1) local source, no signed HEAD/release/R4/operator/live workflow; (2) registration oracle source rows precede final Gazelle, with exactly three stage-qualified BUILD differences and separately bound final custody; (3) first reader f6adfc exited78 with unretained observations, uncredited, while separately authorized reader77242 returned2/PARTIAL with retained sidecar9da898a0; (4) transient formatter/mutant/normalized-module beforeimages remain unretained; (5) three layout bridges use finite lexical/semicolon models, not independent Go scanner/AST/formatter execution; (6) narrow selected SDK action and fixed22 measurements do not establish hostwide tool/cache closure; (7) recorded clock/environment and known-group cleanup do not establish independent full-job wall time, arbitrary inherited-environment behavior, global containment or reliability; (8) original69 full-race failure remains unattributed; (9) five affected Bazel race targets were tested, not all22 under race, and Task76 retains its own original all22-race obligation. No R4/R5, release, live, current CI or Task76 execution grant is inferred.
+
+
+All accepted source decisions above are bounded local SOURCE_CUSTODY with null observed HEAD/formalWorkflowExecuted=false. They do not establish signed formal commits, release/tag/image, R4/R5, live or ledger execution. Fixed22 files and selected SDK actions are scoped observations, not continuous host/tool integrity. Transient formatting/Gazelle/module beforeimages remain unpersisted where the root reviews qualify them; closed predicates/restoration receipts and independent final-source reconstruction retain their distinct roles. Derived oracle identities preserve inherited skips and are not fresh whole-repository Go/race claims. PARTIAL outputs remain non-authoritative even when separate root manual reviews later close them. The original unattributed Task69 race failure and all retired HOLDs remain uncredited; current accepted passes do not infer old causes or general reliability. Historical D25-pending report wording records those reports' old cuts: D25 is now user-approved append-only, with the13 old names/types/order and exact9 appended tokens preserved by E1; no other freeze rule is widened.
+
+The current Appendix A publication contract includes exactly the four reviewed replacements and both mandatory corrections under root `c020914ece14b0454b26a35f6a163bfdc4141e04dc070377a4daf3ad06000334`. The state/purge-only owner-advance helper returns dirty status and the caller coalesces notification with any existing publication transition bump. Strict E includes caught_up/behind/lagging; non-strict Leaving release reads its frozen E. Class reclassification alone does not advance a checkpoint past the fixed Leaving.Entry or change other release inputs; no publication-only Task76 release hook or §53 algorithm change is introduced.
+
+
+### Current Task75 V12 and corrected publication contract (CONDITIONAL FINAL-CONS INPUT; source75 pending)
+
+Select complete Task75 `60c6c8aa7185b8e017ee73b7b4964ace508eb7b6b653a0a212d141d0a228b42c` from V12 manifest `519e35cff0922697e142770158a3fbe372eaab8f5eab6112b99548025c490217`, replacing the parent V10 e020 whole. Current V12 prose describes its inherited V11 implementation: recordOwnerAdvanceLocked is state/purge-only and returns bool class/served-lag dirtiness; applyPublishSafeSnapshot captures registry Version before unchanged transitions and supplements notification only if dirty and no existing transition bump. No local task hunk or algorithm rewrite is made; the complete frozen task is copied byteexact. V12's all93 fences/77Go/46ops/10mutants equality is relative to its V11 parent, not this candidate's V10 input; our V10→V12 difference is separately measured. Prior V10 field/context fixes and V1/V2/V3 HOLD/live statements below remain historical, not current source authority. Source75 acceptance remains pending and no current runtime result or completion is inferred.
+
+Mandatory E3 AppA contract synchronization comes from sealed design `f77a2106291b41d00d63b993e87616853c917d481643c7108b34064de4453bff`, independent audit `b3c013f5dc1b660264999db3f5e6b1d04d4f4ea51875eddd656f85f51817ea12` and root `c020914ece14b0454b26a35f6a163bfdc4141e04dc070377a4daf3ad06000334`. Exactly four producer replacements are applied, then both exact correction inputs `bc01c1fc6607b8fab844d78c6c50c711e790b4ca3c58e249a7a98a3612a35e4a`. The uncorrected V1 proposal alone remains conditional_not_selected; no historical audit verdict is overwritten. The corrected AppA names the bool signature, helper class-change completePurges without notification, caller-owned one-bump coalescing, and the exception to dedicated group-changing Apply paths. No blanket groupsChanged claim or overnarrow caught_up/behind→lagging-only explanation remains in the synchronized paragraphs.
+
+The bounded cross-plan reason is eligibility invariance, not a new release hook. Under Task76's fixed Leaving.Entry predicate, strict E includes caught_up/behind/lagging; non-strict uses FrozenE without a current-class filter, still checking current membership/listing/eviction/checkpoint/exclusions/domains. Publication reclassification among those classes alone does not advance the checkpoint past fixed Leaving.Entry or improve the other release inputs. No Task76 hook, §53 algorithm, threshold, release eligibility or expected+1 regression is changed or relaxed. This finite documentary implication is not source76 runtime compatibility or a proof for arbitrary state changes. Dedicated checkpoint/rebalance/lagging paths retain their existing groupsChanged release hook; consensus-update/eviction paths retain their existing end-of-Apply release discipline.
+
+Task71–74 and AppC stay exact current parent, including accepted73f326 and Task74root32586/finaldoc46ec source dispositions and all transient/tool/oracle/HOLD limitations. No fake Base revision/main freshness, names update, ledger value, actual75 result, final E3 consistency/adoption, Task76 execution grant or formal credit is created. All original user/Git/live/release/ledger/execution stops remain. The inherited two-space AppA Go fence is retained; full whole-plan fence inventory accepts0–3 spaces (381 valid fences) separately from column0 count380. Final E3 consistency still waits75 source disposition and ordered root review.
+
+### Historical Task75 V10 complete owning-text selection (earlier sourceUNKNOWN/LIVE documentary cut)
+
+Select the COMPLETE Task75 `e02048a9dca87b7be3a08d565f11a2afcdfb1d5f47308ca102163db9c70c7f74`, replacing the parent selected `1f95edbbbd06bb457e58eaf4f1bf3cb1708d9edb50ddc0fc5c7168eb75165e9e`. Frozen V10 manifest `7063a549133195f0485f1a9012eac3d5ee44acf5b4971a3869083a119448e833` is root STATIC accepted in `task75-runtime-dispatch-v10-root-static-acceptance.json` SHA `e804e081fcd43c3ba3c4f639ed981509bb2fef4dce8fd9d6354f3a1c44ce9fcf`, with independent audit `c7d3bf5eb0c8112fbae11576eb15f5056bbf2e85a0dd2d07bd26fd6e35e5eb43`. This document copies those exact complete bytes, with no local hunk rewrite. All Task71–74/AppA/C, names and their existing root source qualifications remain exact; current Task74 accepted32586/finaldoc46ec and Task73 acceptedf326 are not reopened or relabelled by selecting75.
+
+The four owning contexts have precise scopes. L09 removes the extra final LF from the MemberReady dispatch-anchor pair in fsm/fsm.go before the intended checkpoint/lagging cases. Step21 L24 retains accepted74's detached mv/nested host pointer mapping and exactly one existing LagAdvances assignment, then adds only the intended Checkpoint/ObservedEntry mappings; it removes the redundant second lag assignment. L26 retains Groups, its full stage-3 comment and Stage3: wire.Stage3ParamsToPB(v.Stage3) in old/new contexts before adding MemberCheckpointSeqs. Step25 L33 removes one extra terminal LF from both snippets while preserving reselection→member-lagging→promotion-handler ordering. Strict preimage uniqueness, existing APIs/guards and intended checkpoint behavior are not bypassed. Current task/map identity is e020/47894e83da8f59163a43e34085a3b6dc78af1b1b904146916b9df8e3767ca6e5; historical1f95/V8/V9 preservation claims are historical, not current-text proof.
+
+The source of these corrections is81's sealed finite RAM diagnostic `fa73f8d3daf18a3a95c44e277480927e00518618f629281ad6aeac62b36f8372` / report `cfafe5ff2c48db6419a5b9231d6c220dcbbbd89b1b3c263d21a9c9087d96d1f3`, root-reviewed in `task75-literal46-root-diagnostic-review.json` SHA `33ad428d382d0a215207b9fc0dbac799c1b8ff9ce1d279c9c3bc71fe5287255f`. Its all46 sequential RAM operations/inverse are attributed static applicability against accepted74 cached bytes; real post-formatter applicability and product behavior were UNKNOWN there. V10 root independently reconstructed exact7668 base and measured77 Go bodies (65 unchanged/12 changed versus that base), distinct from this successor's separately measured1f95→e020 fence delta. No old controls/formatter/Go/source replay is rerun or retagged by this document selection.
+
+At the present root-message documentary cut actual75 V3 session17166 is LIVE only. Source75 remains UNKNOWN; no current test/count/kill/source completion, runtime PASS, consistency PASS or final E3 adoption is inferred. Older75V1 stageHOLD/zero-tests and V2 HOLDs are preserved as historical attempts, and the earlier V8-waiting statement below is explicitly its old cut. Accepted74 typed1cb50 remains the sole prospective predecessor lineage; no failed75 tree is a new baseline. The18-field receiver/release gate is unchanged. All source/transient/token/SDK/oracle qualifications, old69 risk,73/74 old HOLDs, original user/Git/live/release/ledger/execution stops and separate names7748 candidate remain. Final E3 consistency waits75 source disposition and ordered root review; formal increment0 and no new adoption/grant.
+
+### Historical Task74 documentary parent cut (Task74 acceptance retained; Task75 V1/V8 status belongs to that earlier cut)
+
+This finite documentary successor preserves every complete Task71–75 body, Appendix A/C and all product fences from selected parent `881ccd2c3733f65dd58498643ac5944aa11b264992a63a69690720a84aedb27e`. Task74 remains whole `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca`, including its historical task banner/formal workflow. Root source receipt `32586f35b25da2311fc9971a1db85e9494b85eea344c5d44e3dc486b8ac353f6` accepts bounded V3 SOURCE_CUSTODY; final owning-review package `1e852750eb960d61eb6a2dbee9819db56bf7ad8c9691d9ef079da8d80a6c8687` / report `38a99b48ba5d6bc68a478353bfdefea264902046fb572d2110f12e2e6802cca8` was independently root-verified as14 members/22 documentary pins in receipt `46ec8cf21a4604cc4ce07849f436f6af94c072128cc37ed895fdcf479bc41a9d`. No task/code/API/control result is rewritten by this update.
+
+Task74 bounded evidence is53 classified calls/106 complete streams/8430755bytes,33 ordered phases,4 baselineGREEN→assertionRED mutant pairs,29 literal operations plus2 pending-map deletions/19 new tops,670 final/fresh files,4248 derived identities with19 inherited skips,1862 registered tops,22 plain/4 affected-race Bazel targets andfresh19tops/72 PASS identities. Root closed resource/phase/source/ancestry/inherited-converter manual scopes using literal root `6c5e1937da0d06b3e9b29bf840db6d7b38505e9749c86e1f84c23827fbb2a5bc` (671 artifacts/338 inputs/81 full patch pairs/41 authorized source leaves read once and6 inspected formatting diffs), ancestry root `7bb84c7e4b1265f862741dfc3b2bcaecfb4555ce0b54a0505bd714745e969193` (strict26/12 mirrors/7 initial bindings), separately reviewed terminal/resource/observer/phase/tool evidence, and one measured PARTIAL map/flat22. This candidate reads only final documentary metadata, not those underlying source/raw/tool leaves.
+
+Accepted Task73 V10 source `f326b5cd58984b9e41eeb2e9a56ae1da86992c9be2316f60b734f94d1fe8f952` is Task74's actual upstream lineage. The following historical parent section's Task73 V8 HOLD/NOT-accepted/V9-static statements describe its earlier producer cut only; they do not negate current73 acceptance, erase old V7/V8/V9 HOLDs or assign old failure causes. Task74 V1 fragment refusal and V2 metrics-receiver ambiguity HOLDs likewise stay immutable/uncredited. Root-approved transport fragment assembly and receiver-qualified adapter fixes have their bounded scopes; every29 literal body and selected owning task remains unchanged. Historical69 unattributed race risk and Task72 V9–11 HOLD qualifications remain intact.
+
+All six source limits remain: local HEAD-null SOURCE_CUSTODY only/no formal Git/signing/push/release/live/ledger; transient formatter/second-Gazelle BUILD-zero/module pre-normalization beforeimages unpersisted, so reviewed predicates+closed calls/restoration records rather than invented independent transient measurements;18 Go full-token correspondences and6 formatting-only diffs do not claim independent gofmt/full Go AST/semicolon analysis; fixed22 plus294 selected SDK actions/10 leaves per mode is a one-time/narrow qualification, not continuous/all-target SDK/full-host proof;4248 derives four actual whole packages plus1169 inherited outside identities/19 skips, not fresh allrepoGo/race, with22plain/4race/fresh72 separate; PARTIAL stays nonauthoritative, no optional proto source leaf read, and unchanged dependencies rely on complete measured custody. Root accepted these bounded limits rather than removing them.
+
+The Task75 receiving18-field projection `1cb50b58aeda459940a9dba37da5a20e421934903158aac312b4e899a07b5605` points to accepted74 and separate post-acceptance resource binding `2ab0921701a1c5d0f479e06e2c39048cfbc97cc2ebacb69991a7c4889403a156`; it is not the26-field earlier producer proposal and does not authorize an actual75 run. At this root-supplied documentary cut Task75 V1 is stage HOLD/zero tests and its V8 correction is waiting to run. No75 completion, new runtime result, consistency PASS, formal count, canonical adoption or release is recorded. The conditional banner, all original execution/user/Git/release/live/global stops, whole task bodies and separate names7748 candidate remain. Finalization waits for Task75 bounded source/runtime disposition and ordered root E3 review/adoption; this candidate creates no source/grant/formal authority.
+
+### Historical complete-text selection (earlier conditional parent cut; Task73 NOT-accepted and73–75 pending statements describe that time only)
+
+The historical V3 owning-selection parent was sealed prepare-e3-current-task72-owning-witness-selection-v2, manifest `75bb29f188258782155c89d66133da31ec2342d6c77511f6588816f7461aed65`, whole `5803f823801fbd7334b1a4b95c405389a04334f9b3606aaebc367cbaf115e158`, root static review `d1023201927acfa38ba5065ed3b358ea6292819a7dae9cf32300d04a77fbab98`. V3 replaced only its complete Task72 with `e8bb8428a0d2d252ae3b847c6e40dd833f8cb226bd3541f36199ed663e5fd78d` from owning M24 package `3bfe4c0b0ab8e16466b3b91615982394721d5abdcca60be056933f8306a6e838`, root STATIC receipt `ae07e1a8ac8bdb65e8013f8ab2d25d881fd1dfad7c7e5dbb16d0686a37fc462e`. The existing eight-case pre-v21 test now owns the same bare/configured restore calls, predicates/order/want and fixed diagnostic `pre-v21 group seal fields must fail at the version gate:`. No test name, call count, production guard, mutation scope or API changes. Earlier M08/M31 and all four M32/M33 bodies remain exact. Full33 descriptors a36d change only M24's prefix versus prior300e; the earlier300e Unicode-escape qualification remains historical. Same-line classifier root2197 remains separately accepted static adapter evidence, not a runtime result.
+
+V3 replaced only the complete selected Task75 706879 preimage with `1f95edbbbd06bb457e58eaf4f1bf3cb1708d9edb50ddc0fc5c7168eb75165e9e` from fix-pr249-task75-checkpoint-entry-v1 manifest `01737b101f891f90e25b4cd12eb3b5f9018f43c741c03ec21de7e5e71a0823ba`, independent audit `40644194f2f05fecb5eccc52316cd5499240951e4d2eb45b0cd24fae9b993ff1`, root fixture receipt `54aa8d4ec04a758f8660bc95055eb07e4372973649098c5ef42d007977146f3a`. This is the selected future owning text, not the different canonical ef6f variant. Its only17-byte change adds Entry: cp.Entry to the unknown-exclusion request, leaving every other case, exact reason/status assertion, final switch-off request, import/API and production payload intact. Task60's independent missing-body/entry regression is retained. No actual75 test or current CI outcome is inferred, and this document does not refresh or launch a runtime profile.
+
+Task71 bounded source context remains separately root-accepted under b88c0754. This documentary completion update derives from selected V3 manifest `8ff2f1e86b4b0851d1f9b7b60d1dcc142bf4ab91d8fd4e8e7d6856294333c370` / root `882a36d207751a2ee49a0837b927cfc0eb7b6036744556004f376a13f5a22d63`, separately from the published canonical E3 eb13e0ca. Current root receipt `task72-v12-root-source-acceptance.json` SHA `e9ee10152820ac6626ddba8a13af1ad5e9247cf6b81c5df1c6e5a73dff4ba1f9` accepts bounded Task72 V12 SOURCE_CUSTODY with HEAD null:119 calls all classified,33 exact named causal mutants,4132 full Go identities/19 inherited skips,22 uncached plain Bazel targets and3 race targets; independent fresh focused race observes78 identities/zero skips. The actual literal replay is the selected48-operation plan;33 denotes the causal-mutant roster and permanent top declarations, not a current operation count. Earlier numeric drafting/profile cuts below remain historical. Evidence provenance: root terminal review5098e5600b78029b37bcb4609cc0a6932d3e9b070cb481e05bb147ca4b039a8c, resource releasec2619944baef89bc958b3747a8e2d92d2fec0e07fbe48d12bd4a70ff6f17972d, immutable measured PARTIAL evidence861c0c775b4a0b386603a1fce8500fe2d1fb186c092ec94445053c8a39de2035 and exact source-only Task73 input10d6ac783e040da314f02563bcad4ac134da5872ee1bd61d8c6b2809ce1afd08. The partial helper remains PARTIAL; the separate root decision closes all five manual reviews. Transient formatter/Gazelle/module bodies were not independently persisted; accepted execution predicates and completed calls attest only those bounded states. Timing4615s is an external wall envelope, not independent Job monotonic telemetry. Old69 unattributed full-race risk and retired V9/V10/V11 HOLDs remain immutable/uncredited; no reliability or causal attribution is inferred. That parent cut reported Task73 RUNNING. Current documentary selection does not record Task73–75 completion or a new grant: Task73 V8 is HOLD after47 classified calls through baseline-M17, mutant-M17 unattempted, and actual Task73 source is NOT accepted. V9 preparation/root design remains static-only. Owning ae07/fixture54aa remain static receipts; root e9ee supplies the separate bounded source authority. E1/E2 publication and approved D25 do not close remaining E3 obligations. Final E3 adoption/consistency/global/formal review and original release/live/ledger/user/Git gates remain separate; this candidate earns no formal increment.
+
+This successor replaces only complete Task73 with root-selected owning text `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` (owning package `692babff49e7878c5559f1dab777bfddad9ff97cef23edc1973135d7693ad590`, root STATIC receipt `874a871cb0a00a6c4cf4d89974aa277466cae917be3265ab29ad7a0af93eeb83`). The sole changed Go fence replaces the existing rejection helper call with one direct Apply and exact Rejected type assertion/owned diagnostic, preserving original reason/state/version/seal predicates and all cases. Other Task71/72/74/75 bodies and AppA/AppC remain whole-byte exact the selected parent, including the no-ledger AppC fix. This is documentary selection of static owning bytes, not actual source acceptance or semantic mutant credit. The separate names-index candidate `7748eca5b32f709302ea2456321a682fbde7311805c3e3e1e85be2523512ff86` remains unchanged: M24 retains the same existing test name and the Entry fixture adds no declaration. Earlier drafting/synthetic/stand-in replay/mutant/profile-binding evidence remains historical below. All contracts, readiness ownership, generation domains, approved D25 freeze scope and original user/Git/release/live/global gates remain unchanged.
+
+Current ownership remains71 readiness declarations→72 readiness consumer→73 readiness writer/proof validation→75 checkpoint pointers/deep copies.71 retains actual predecessor encoding/eviction-voiding/selection-validation anchors and explicit doc checksum procedure.75 retains final ReselectionDue append anchors, memberCheckpointGateway (distinct from Task73's memberGateway), real registry Version checks with separate boolean results, combined-publication and full-loop regressions and matching command rosters. These unchanged literal obligations require their own actual verification.
+
+Task72 M32/M33 boundary obligations remain generic/specialized placement-cutover equality and structural positive historical group-ref generations. The four definitions in `fsm/seal_key_test.go` retain two forged-restore refusals and two honest signed-rebalance/real-purge history positives; no current-generation equality or full historical-authenticity claim is substituted. Their current bounded causal/runtime/source evidence is covered by separate Task72 V12 root acceptance e9ee above; that acceptance does not extend to Task73–75 or replace the stated semantic limits. Historical drafting/profile-binding statements below are not current terminal/source facts.
+
+Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. This readiness-ownership successor is STATIC / WAIT70: all retained drafting verification and prior PREP control claims remain historical and do not prove the changed Task 71 declaration or Task 72 entry/field ownership. Root and actual Task 71 runtime review are still required. `<scratch>` stands for local verification directories that are not part of the plan.
 
 ### Task 71
 
@@ -18180,7 +20991,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - The backfill is planned in applyUpdateConsensusParams before 'wasEnabled :=' (after every gate, before any mutation). It reaches the placement case of onStage3SwitchOnLocked through the FSM field placementBackfill, which installs and clears it in the same Apply. The install calls no extra registry bump (Task 65's stage3 bump covers it).
 - Each Apply bumps the registry once: a placing AddTable ends with groupsChangedLocked; applyEvictNode and evictNodesLocked use completePurgesReportLocked, which also counts dropped groups and pruned past members; a params update changing a current member's verifiers entry bumps while placement is on.
 - The floor and the candidates under the next parameters use evictedUnderLocked: NodeEvicted, or a registered verifier that next does not list under its key (rule 6).
-- GroupView.Key and GroupMemberView.LagAdvances are declared and mapped (group_key, lag_advances) by Task 71 as contract §50's verbatim types require; they stay empty until Tasks 72 and 75 fill them. GroupMember's Task 73/75 fields are left to those tasks, and Task 75 must deep-copy its pointers in cloneDatabaseGroup.
+- GroupView.Key and GroupMemberView.LagAdvances are declared and mapped (group_key, lag_advances) by Task 71 as contract §50's verbatim types require; they stay empty until Tasks 72 and 75 fill them. Task 71 declares GroupMember's three readiness fields; Task 73 populates and validates them. Task 75 alone adds its two checkpoint pointers and must deep-copy them in cloneDatabaseGroup.
 - The restore rule validateStage3Groups lives in fsm/stage3_groups.go and is called last from validateStage3State. Task 69's two purge_members rules are kept.
 - All golden values in contract §50 were independently recomputed by python3 -I and match. The script also checks the frozen goldenTrack1 header and transition hashes first.
 - Names added while drafting: fsm: PlacementTarget, PlacementTargetsFrom, PlacementCandidatesFrom, PlacementSaltFrom, comparePlacementTargets (exported pure halves shared by Apply and group preview); fsm: compareGroupKey, groupGenerationLocked, setGroupGenerationLocked, evictedUnderLocked, physicalDatabasesLocked, placementBackfillLocked, installPlacementBackfillLocked, groupMemberIDs, groupMemberIndex, pastMemberDoneLocked, groupFloorRefusalLocked, memberEntriesChangedLocked, groupRecordCountLocked, completePurgesReportLocked, cloneDatabaseGroup, leavingMemberMalformed; fsm: node-local FSM field placementBackfill []*DatabaseGroup (never snapshotted); fsm: rebalanceBeforePlacementReason, strictlySortedIDs, rebalanceMembershipRefusalLocked, insertLeavingMember; fsm refusal texts: 'placement salt: %v', 'placement salt: incarnation %d of %s is genesis-origin and the genesis snapshot id is unknown', 'placement salt: database %q of indexer %d has no physical incarnation'; server: groupRebalancingRefusedMessage, sortedUniqueNodeIDs; cmd/arbiter-admin: nodeFlags, parseGroupFlags, requireFlags, checkHostPort, dialTableRegistry, runConsensusGroups, runGroup, runGroupPreview, runGroupRebalance, incarnationStatusFromPB, incarnationOriginFromPB, incarnationsFromPB; metrics: groupStatsReader; test: TestRestoreRefusesMalformedGroupRecords (extra fsm test); fsm test helpers: groupHostSigner, updateStage3, enrolGroupHosts, groupMemberEntry, listGroupMembers, groupsReadyFSM, groupsFSM, mustGroup, rebalanceCmd, registryVersion, rejectGroupCommand, registerMember, memberPurged, evictCmd, addGroupTable, purgeByOwnerAndPool, expectedPlacement, setMemberClass, forgedGroupsSnapshot, rebalanceRefusalFSM, goldenPlacementInput; server test helpers: applyServerStage3Update, placementServer, rebalanceRequest; cmd test helpers: groupsAdmin, serveGroupsAdmin, groupsFixture, appendBook, previewOutput; metrics: groupSnapshot; throwaway script $HOME/.cache/s3e3/goldens.py (never committed)
@@ -18189,7 +21000,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 ### Task 72
 
 - origin/main of arbiter is now 526a721 (v0.13.0, Plan S3-A merged as #133), pinning arbiter-core v0.15.0, arbiter-proto v0.12.0, housegate v0.20.0; the plan header still says fb42260. Anchors are given at 526a721; the files Task 72 edits outside S3-A's (state.go, admission.go, apply.go, snapshot_query_block.go, consensus_updates.go, table_set_transition.go, reads_tracks.go, table_registry.go, grouper.go, safestate.go) are unchanged between the two.
-- Task 71's draft (e3/tasks/task-71.md, written during this run) defines GroupMember with only NodeID, JoinedGeneration, Class and defers ReadyGeneration/ReadySignature/ReadyEpoch to Task 73; Task 72 adds ReadyGeneration only (the key reads it) and its readyGK fixture writes all three JSON keys, which the non-strict snapshot decoder ignores until Task 73 declares the other two.
+- Readiness ownership reconciliation (STATIC / WAIT70): Task 71 declares ReadyGeneration uint64, ReadySignature string and ReadyEpoch uint64 with contract §50's exact omitempty tags. Task 72 consumes readiness and does not replace GroupMember; its readyGK fixture retains all three declared JSON fields. Task 73 populates readiness and adds restore/proof validation and D33 view filtering without duplicating declarations. Task 75 alone adds Checkpoint and ObservedEntry. Earlier drafting verification below used the old field split and remains historical; it is not evidence for this reconciled candidate.
 - Task 71 plans the switch-on backfill before wasEnabled, stores it in FSM.placementBackfill before f.st.Params = next, and installs it in the placement case of onStage3SwitchOnLocked; Task 72 commits its cutover/key-change seal right after f.st.Params = next, which precedes that install, so the hook is not edited.
 - Task 71's applyRebalanceGroup commits with `if seal != nil { f.commitSealLocked(seal) }`; Task 72 changes it to pass SealReasonKeyChange. Task 71's groupsToPB already maps GroupView.Key to DatabaseGroup.group_key, so server/table_registry.go needs no edit.
 - Task 71 ends with a confirmed push of the shared branch; Task 72 mirrors it with Step 27 (explicit user confirmation required).
@@ -18197,7 +21008,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Snapshot-query blocks cannot be sealed after the tracks activation (C7), so every block after the placement cutover is a statement or transition block with a track, which the restore rule 'after the cutover has no group_key' relies on.
 - AddTable refuses dotted ids and genesis ids split at the first '.', so a statement's database is the part of its target id before the first '.', equal to the incarnation's DatabaseID; blockGroupRefsLocked and restore use that split.
 - Plan S3-E2 Task 66's state-component test lists 'stage3' (needed in the scratch base only; Task 66's draft already does it).
-- Names added while drafting: fsm: compareSealKeys; fsm: sealReasonCounter (add, snapshot); fsm: readyVerifyMembers, groupSealOf (state-only halves used by restore); fsm: statementDatabase; fsm: blockGroupRefsLocked; fsm: openBlockKeyChangesLocked; fsm: consensusUpdateSealLocked; fsm: groupSealFieldsPresent, openBlockGroupFieldsPresent, groupRefsSortedAndUnique, groupRefsHold; fsm: preparedSeal.group; fsm: tableSetChanges.refusal and (*tableSetChanges).addGroup; fsm: GroupMember.ReadyGeneration uint64 `json:"ready_generation,omitempty"` (contract §50 field, added by Task 72 because Task 71's draft defers it and the key reads it); fsm refusal: database %q of indexer %d: %v (admission, GroupKey error, unreachable); fsm test: TestRegistryViewServesEachGroupsCurrentKey; server test: TestL3HeaderWireFormCarriesTheGroupKey; file: server/group_seal_serving_test.go; metrics: sealReasonReader, sealReasonCollector, newSealReasonCollector; fsm test helpers (suffix GK): groupKeyReadyFSMGK, groupKeyFSMGK, readyGK, generationGK, keyGK, mustGroupKeyGK, envelopeGK, admitGK, entryUpdateGK, registerMemberGK, evictGK, verificationGK, requireKeylessGK, requireKeyedGK, restoresGK, stage3FieldsPresentInGroupLayerGK, forgedGK, docBlockGK, docVerificationGK, keyedTransitionFSMGK; server test helpers: sealKeysOf, servedGroupKey, l3HeaderWithGroupKeyFromPB; metrics test fake: sealReasonSource; docs: README paragraph **Block seal reasons**; docs/specs/issue-31-metrics.md section 'Block seal reasons'
+- Names added while drafting: fsm: compareSealKeys; fsm: sealReasonCounter (add, snapshot); fsm: readyVerifyMembers, groupSealOf (state-only halves used by restore); fsm: statementDatabase; fsm: blockGroupRefsLocked; fsm: openBlockKeyChangesLocked; fsm: consensusUpdateSealLocked; fsm: groupSealFieldsPresent, openBlockGroupFieldsPresent, groupRefsSortedAndUnique, groupRefsHold; fsm: preparedSeal.group; fsm: tableSetChanges.refusal and (*tableSetChanges).addGroup; fsm refusal: database %q of indexer %d: %v (admission, GroupKey error, unreachable); fsm test: TestRegistryViewServesEachGroupsCurrentKey; server test: TestL3HeaderWireFormCarriesTheGroupKey; file: server/group_seal_serving_test.go; metrics: sealReasonReader, sealReasonCollector, newSealReasonCollector; fsm test helpers (suffix GK): groupKeyReadyFSMGK, groupKeyFSMGK, readyGK, generationGK, keyGK, mustGroupKeyGK, envelopeGK, admitGK, entryUpdateGK, registerMemberGK, evictGK, verificationGK, requireKeylessGK, requireKeyedGK, restoresGK, stage3FieldsPresentInGroupLayerGK, forgedGK, docBlockGK, docVerificationGK, keyedTransitionFSMGK; server test helpers: sealKeysOf, servedGroupKey, l3HeaderWithGroupKeyFromPB; metrics test fake: sealReasonSource; docs: README paragraph **Block seal reasons**; docs/specs/issue-31-metrics.md section 'Block seal reasons'
 - Verified while drafting: Fresh scratch under work/e3/task-72/r2: git archive origin/main of arbiter (526a721), arbiter-core (cfd4f42) and arbiter-proto (7a73f25); PROTO_TAG_P5 stand-in fields applied and regenerated with buf generate; CORE_TAG_P5 stand-in stubs; arbiter replace directives; stand-ins of S3-E2 Tasks 64-70 and of Task 71 shaped like Task 71's draft (GroupMember, Stage3State end, RebalanceGroup seal commit, member-entry registry bump). / A script (gen/verify3.py) applied every code block of the final task-72.md in step order to a fresh export of the base and the result equalled the tested tree byte for byte; it observed Step 7's fsm build failure, Step 15's 19 passes and the four restore tests failing with 'bare restore = <nil>', Step 17's count 23, Step 19's 'undefined: orderBySealKey', Step 22's 'undefined: sealReasonReader', and every later run passing. / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off: gofmt clean, go vet ./... clean, go test ./... all packages ok, go test -race ./fsm ./server ./metrics ok. / 23 single-point mutations of Task 72's code (tools/mutate72.py) each caught by a named test (re-run on the final tree: 23/23). / python3 -I goldens.py (the Step 2 script) prints 21 ok lines: the two existing track digests, Task 71's placement vectors and the seven §51 group-key vectors. / bash -n on every bash block and shellcheck -s bash (SC2016 excluded, intentional literal backticks) clean; Step 1's block smoke-run against the base export. / Markdown scanned: no TBD/TODO/placeholder, no hard-wrapped prose, no literal tabs in inline code. / Not run: Bazel and gazelle (P5 modules exist only as local stand-ins); the expected BUILD diff (8 srcs lines, no deps) is derived from the targets' existing deps.
 
 ### Task 73
@@ -18246,6 +21057,8 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - classifyMemberLocked skips members without a checkpoint (Task 71's tests set classes by hand); lagging only when lag > max_lag_publications (i.e. saturated) and the owner is not quarantined; return requires entry strictly past ObservedEntry and lag < lag_low.
 - recordOwnerAdvanceLocked: for each owner whose manifest entry is after its base, append unless quarantined, then reclassify caught_up/behind members of its groups; bump once via groupsChangedLocked if a class moved, else via registryChangedLocked if any current member of the owner's groups holds a checkpoint.
 - Known unfoldable case: a publication that also flips a table (applyPublishedTrackTransitionsLocked bumps first) bumps the registry version twice; versions only need to increase (S3-E2 Task 69 precedent) - for Appendix B.
+- **Explicit historical conflict, not a current waiver:** The immediately preceding drafting claim conflicts with binding AppendixA §50 (one bump per Apply, folded into any other bump of that Apply), §52.3, and selected Task75's current one-bump rule/regression. It remains quoted as historical diagnosis only. Current TestCheckpointPublicationAndTableTransitionShareOneRegistryBump must observe view.Version == beforeView.Version + 1 with valid TableRegistryView booleans; any extra bump stops for an owned correction. This document PREP does not silently change the API or claim that the existing two bump sites are fixed/proven.
+
 - The checkpoints switch-on needs no onStage3SwitchOnLocked case: OwnerAdvances start empty, so lag counts only advances published from the switch on.
 - trimOwnerAdvancesLocked runs in applyUpdateConsensusParams after f.st.Params = next when MaxLagPublications changes (anchor: Task 65's stage3Changed bump, which already bumps the registry).
 - Restore: validateStage3Checkpoints runs after Task 74's validateStage3Reselections; a Leaving record's checkpoint must name a generation in [JoinedGeneration, RemovedGeneration-1]; validateMemberCheckpointProofs runs after validateReselectionProofs and treats a missing CheckpointSeqs entry as seq 0 under the verifying signer (refused).
@@ -18264,10 +21077,16 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - the spec-coverage row for §11 `replica_hosts` no longer pairs the host side with `ready_generation`: Plan S3-E4 contract §56 (its review finding 2) lists every current member's served `host_indexer_id`, never filtered by `MemberReady`. This plan still serves `ready_generation`; nothing else changes.
 
 
+### Bounded failed-Git-read procedural follow-up (STATIC; not runtime acceptance)
 
-### Review fixes (AgentConnect PR #249, checkpoint fixture)
+The final Task71–75 PREP procedures separate all56 audited Git comparison reads into explicitly checked captures before their unchanged predicates; captured HEADs are validated as lowercase40-hex before equality. Existing50 checked captures remain unchanged. The generic AppendixA formatter now checks both NUL-delimited tracked/untracked enumeration and formatter status before the build chain, so empty or matching stdout cannot hide a failed read. Exact old/direct/conditional inert controls reproduce the class and final candidate controls refuse failure before following writes or success markers. This bounded procedural repair preserves every original runtime/data fence and every source/formal/user hold; Task73's missing owned proof-field hunk/entry ordering remains future actual-source work. No implementation, real source/build/signing/remote/ledger action or formal acceptance is implied. The controller alone may adopt these parts.
 
-- **Review fixes (AgentConnect, PR #249 current review), P2 — checkpoint exclusion fixture presence:** Task75 Step17's unknown-exclusion request omitted `Entry`; the current inherited Task60 decoder correctly refuses missing entry before traversing exclusion reasons, so the request could not reach its exact expected unknown-reason diagnostic. Added only `Entry: cp.Entry`, reusing the earlier valid frontier read-only, in that one request. All other cases, exact status/message assertions, final switch-off request and no-proposal check remain unchanged. Task60's existing `TestMemberCheckpointRequiresExplicitBodyAndEntry` separately retains missing-body/missing-entry refusal through body/request/Raft and the present owner0 zero-frontier positive; its unknown-reason fixtures already supply Entry. Both canonical and selected706 Task75 variants receive the same17-byte fixture edit while retaining their other differences. Static whole-task/fence inverse, decoder/gateway ordering and sibling checks pass; no Go/product/actual75 tests ran. Future actual75 proof remains required on the normal accepted predecessor chain; no source approval, runtime efficacy or CI-green claim is inferred.
+
+### Format-only Step2 heading correction — E3 local consistency V2
+
+Root's post-adoption document diff check found a trailing space on the standalone `- [ ] ` lines before Step2 in Tasks73/74 (prior assembled lines10020 and12317). Joined only those two checkbox/heading pairs. The owned old-whole→new-whole `git diff --no-index --check` now completes without whitespace diagnostics; complete forward/inverse and official raw-A+B+C roundtrip preserve all381 fenced literals, their order and languages. This is a documentary formatting check, not a new product/source/runtime verification.
+
+Original source/profile acceptance remains bound to Task73 `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` and Task74 `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca`; current formatted complete documents are `28d0a06f363332193b6b8e09096eb84b66da0b4dd1eda14b350432b34dbe9b47` and `325e0c4d0214c50998b28d0a981f32b104dc389353bc5cf2b6b693dc0cdabe67`. Other three tasks, Appendix A/C and all code bytes remain unchanged. V1 root adoption is preserved, V2 root approval is pending, and this delta adds no formal credit or execution authority. No old source/runtime result, HOLD or limitation is rewritten.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+Plan S3-E3 records no ledger values; its commits are released by Plan S3-E4 Task 78 as `ARBITER_TAG_P5`.
