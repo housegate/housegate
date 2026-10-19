@@ -1,13 +1,20 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
@@ -434,5 +441,203 @@ func TestReplayCHExecutorNativePayloadMatchesInProcessRoot(t *testing.T) {
 	}
 	if chRes.ComputedStateRoot != inRes.ComputedStateRoot {
 		t.Fatalf("native executor equivalence broken:\n  ch: %s\n  in: %s", chRes.ComputedStateRoot, inRes.ComputedStateRoot)
+	}
+}
+
+// stmtRecorder is a clickhouse.Conn that records the text of every statement
+// sent through it (Exec, Query, QueryRow and PrepareBatch) before forwarding
+// it to the real connection.
+type stmtRecorder struct {
+	clickhouse.Conn
+	mu    sync.Mutex
+	stmts []string
+}
+
+func (r *stmtRecorder) record(query string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stmts = append(r.stmts, query)
+}
+
+func (r *stmtRecorder) statements() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.stmts)
+}
+
+func (r *stmtRecorder) Exec(ctx context.Context, query string, args ...any) error {
+	r.record(query)
+	return r.Conn.Exec(ctx, query, args...)
+}
+
+func (r *stmtRecorder) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	r.record(query)
+	return r.Conn.Query(ctx, query, args...)
+}
+
+func (r *stmtRecorder) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
+	r.record(query)
+	return r.Conn.QueryRow(ctx, query, args...)
+}
+
+func (r *stmtRecorder) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
+	r.record(query)
+	return r.Conn.PrepareBatch(ctx, query, opts...)
+}
+
+// materializerStatement is one Native INSERT of chReplaySchema's columns, as a
+// verifier receives it.
+func materializerStatement(t *testing.T, tableID, statementID string) replay.PreparedStatement {
+	t.Helper()
+	payload := nativeCHReplayPayload(t,
+		chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5},
+		chReplayRow{userID: "0xabc", balance: 250, score: 99, ratio: -0.25},
+		chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5},
+	)
+	return replay.PreparedStatement{
+		Statement: replay.Statement{
+			StatementID:    statementID,
+			TargetTableID:  tableID,
+			PayloadRef:     "p1",
+			PayloadFormat:  replay.PayloadFormatClickHouseNativeData,
+			ClientRevision: 54460,
+		},
+		Payload: payload,
+	}
+}
+
+// scratchStatements is what a materializer sends for one statement of
+// chReplaySchema into the scratch table ref.
+func scratchStatements(ref string) []string {
+	return []string{
+		"CREATE TABLE " + ref + " (_hg_row_id FixedString(32), `user_id` String, `balance` UInt64, `score` Int32, `ratio` Float64) ENGINE = MergeTree ORDER BY tuple()",
+		"INSERT INTO " + ref,
+		"SELECT _hg_row_id, `user_id`, `balance`, `score`, `ratio` FROM " + ref,
+		"DROP TABLE IF EXISTS " + ref,
+	}
+}
+
+func sortedByRowID(rows []payloadexec.Row) []payloadexec.Row {
+	out := slices.Clone(rows)
+	slices.SortFunc(out, func(a, b payloadexec.Row) int { return bytes.Compare(a.RowID, b.RowID) })
+	return out
+}
+
+// scratchTablesLike lists the tables of database whose name starts with prefix.
+func scratchTablesLike(t *testing.T, conn clickhouse.Conn, database, prefix string) []string {
+	t.Helper()
+	rows, err := conn.Query(context.Background(), "SELECT name FROM system.tables WHERE database = ? AND startsWith(name, ?) ORDER BY name", database, prefix)
+	if err != nil {
+		t.Fatalf("query system.tables: %v", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("system.tables rows: %v", err)
+	}
+	return names
+}
+
+// TestChexecMaterializer_DefaultScratchIsUnchanged pins NewMaterializer
+// byte for byte (arbiter's verifier relies on it): every statement names the
+// unqualified _hg_replay_scratch_<n> of the connection's default database, n
+// counts per materializer, the scratch is gone afterwards, and the read-back
+// rows equal the in-process Native materializer's.
+func TestChexecMaterializer_DefaultScratchIsUnchanged(t *testing.T) {
+	ctx := context.Background()
+	conn := openDirectCH(t)
+	tableID := uniqueTable(t)
+	schema := chReplaySchema(tableID)
+	st := materializerStatement(t, tableID, "stmt-1")
+	rec := &stmtRecorder{Conn: conn}
+	m := chexec.NewMaterializer(chReplayNetwork, rec)
+
+	first, err := m.Materialize(ctx, schema, st)
+	if err != nil {
+		t.Fatalf("Materialize 1: %v", err)
+	}
+	if _, err := m.Materialize(ctx, schema, st); err != nil {
+		t.Fatalf("Materialize 2: %v", err)
+	}
+	want := append(scratchStatements("`_hg_replay_scratch_1`"), scratchStatements("`_hg_replay_scratch_2`")...)
+	if got := rec.statements(); !slices.Equal(got, want) {
+		t.Fatalf("statements = %q\nwant %q", got, want)
+	}
+	if left := scratchTablesLike(t, conn, chEnv.Database, "_hg_replay_scratch_"); len(left) != 0 {
+		t.Fatalf("scratch tables left in %s: %v", chEnv.Database, left)
+	}
+	inProcess, err := nativepayload.Materializer{NetworkID: chReplayNetwork}.Materialize(ctx, schema, st)
+	if err != nil {
+		t.Fatalf("in-process Materialize: %v", err)
+	}
+	if len(first) != 3 || !reflect.DeepEqual(sortedByRowID(first), sortedByRowID(inProcess)) {
+		t.Fatalf("read-back rows = %+v, in-process rows = %+v", first, inProcess)
+	}
+}
+
+// TestChexecMaterializerIn_KeepsScratchInItsDatabaseUnderItsPrefix pins the
+// materializer of spec 2026-10-14 §8.5's last paragraph: every CREATE,
+// INSERT, read-back and drop-on-exit names `<database>`.`<prefix>replay_<n>`,
+// nothing reaches the connection's default database, the scratch is gone
+// afterwards, the rows equal NewMaterializer's, and a database that does not
+// exist fails the CREATE (ClickHouse code 81) instead of falling back.
+func TestChexecMaterializerIn_KeepsScratchInItsDatabaseUnderItsPrefix(t *testing.T) {
+	ctx := context.Background()
+	conn := openDirectCH(t)
+	const database, prefix = "hg_matin_test", "s3c1-m1_"
+	mustExec(t, conn, "CREATE DATABASE IF NOT EXISTS "+database)
+	t.Cleanup(func() {
+		_ = conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database)
+	})
+	tableID := uniqueTable(t)
+	schema := chReplaySchema(tableID)
+	st := materializerStatement(t, tableID, "stmt-1")
+
+	rec := &stmtRecorder{Conn: conn}
+	m, err := chexec.NewMaterializerIn(chReplayNetwork, rec, database, prefix)
+	if err != nil {
+		t.Fatalf("NewMaterializerIn: %v", err)
+	}
+	rows, err := m.Materialize(ctx, schema, st)
+	if err != nil {
+		t.Fatalf("Materialize 1: %v", err)
+	}
+	if _, err := m.Materialize(ctx, schema, st); err != nil {
+		t.Fatalf("Materialize 2: %v", err)
+	}
+	want := append(scratchStatements("`hg_matin_test`.`s3c1-m1_replay_1`"), scratchStatements("`hg_matin_test`.`s3c1-m1_replay_2`")...)
+	if got := rec.statements(); !slices.Equal(got, want) {
+		t.Fatalf("statements = %q\nwant %q", got, want)
+	}
+	if left := scratchTablesLike(t, conn, database, prefix); len(left) != 0 {
+		t.Fatalf("scratch tables left in %s: %v", database, left)
+	}
+	if left := scratchTablesLike(t, conn, chEnv.Database, prefix); len(left) != 0 {
+		t.Fatalf("scratch tables under %s in the default database %s: %v", prefix, chEnv.Database, left)
+	}
+	reference, err := chexec.NewMaterializer(chReplayNetwork, conn).Materialize(ctx, schema, st)
+	if err != nil {
+		t.Fatalf("NewMaterializer Materialize: %v", err)
+	}
+	if len(rows) != 3 || !reflect.DeepEqual(sortedByRowID(rows), sortedByRowID(reference)) {
+		t.Fatalf("NewMaterializerIn rows = %+v, NewMaterializer rows = %+v", rows, reference)
+	}
+
+	missing, err := chexec.NewMaterializerIn(chReplayNetwork, conn, "hg_matin_missing", prefix)
+	if err != nil {
+		t.Fatalf("NewMaterializerIn(missing database): %v", err)
+	}
+	_, err = missing.Materialize(ctx, schema, st)
+	var exception *clickhouse.Exception
+	if err == nil || !strings.HasPrefix(err.Error(), "create scratch table hg_matin_missing.s3c1-m1_replay_1: ") ||
+		!errors.As(err, &exception) || exception.Code != 81 {
+		t.Fatalf("Materialize into a missing database = %v, want the CREATE refused with code 81 (UNKNOWN_DATABASE)", err)
 	}
 }
