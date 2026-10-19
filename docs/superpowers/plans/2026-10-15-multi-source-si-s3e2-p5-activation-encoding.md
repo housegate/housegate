@@ -10196,7 +10196,7 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 }
 ```
 
-In `fsm/state_size.go`, replace the `StateSizeSample.DocBytes` comment through the `ContainerBytes` comment (keep the following `ContainerBytes uint64` field) with:
+In `fsm/state_size.go`, replace from the `// DocBytes plus SpentIDsBytes.` line immediately preceding `StateSizeSample.StateBytes` through the `ContainerBytes` comment (keep the preceding `// StateBytes is the uncompacted canonical encoding length of the state:` line and the following `ContainerBytes uint64` field) with:
 
 ```go
 	// DocBytes plus SpentIDsBytes.
@@ -16307,6 +16307,8 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 ### Root documentary adoption and publication scope
 
 Root adopted E1 Tasks57–63 and plan consistency under `e1-v6-root-review-consistency-adoption.json` SHA256 `f52c1c743504808621d097d0f3ca50a87d6668895ab7d5ea1b91b64466182d55`, then E2 Tasks64–70 and plan consistency under `e2-v4-root-review-consistency-adoption.json` SHA256 `3927f0a61f796ceaf444b884e269d426a82b42e25104a1e24648bd43c4314873`. Publication remains pending. These receipts preserve every bounded source/proof scope and historical failure/CLI qualification; they create no new product execution, release/live approval, ledger value, Task72 source approval or Task73 grant. This publication-only prose preparation changes no task or code fence and adds no formal increment.
+
+- **Review fixes (AgentConnect, PR #248 current review), P2 — StateSizeSample edit range:** Task67's state-size instruction began at the DocBytes field comment, leaving the existing StateBytes declaration before a replacement that declares StateBytes again. Extend only the English range instruction to begin at `// DocBytes plus SpentIDsBytes.` immediately before StateBytes, retaining its preceding comment line and the following ContainerBytes field. All47 fences/24 Go bodies remain byte-identical. Exact text application to pinned S3-A Task9's struct plus Task66's ContainerBytes comment reproduces two StateBytes declarations under the old range and one under the corrected range, with all six original fields/order and outside bytes preserved. This is static application/field-uniqueness evidence only; no Go/Bazel/product or accepted-source replay was run.
 ## Appendix C: execution record
 
 This plan produces no ledger name and has no recording task. Consumed producing releases are read only through the canonical ledger procedure after their owning R4; no value is predicted or copied here as an E2 output. Local source/custody/runtime observations are not live execution records.
