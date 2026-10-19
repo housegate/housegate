@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give every SI owner on devnet2 verified, incremental backups of its `hg_safe` in a versioned GCS bucket, written with a key that is confined to that owner's prefix and cannot delete, readable with read-only restore keys, and prove each one with a restore drill that gates the restored parts against the published manifest the backup names; land, now, the restore-and-gate library and the pure §8.5 install gate that Plan S3-C2's si-member reuses unchanged; and do all of it without a consensus change and without restarting any ClickHouse, host pod, verifier or voter (spec §16 P1: "tracks paused: none").
+**Goal:** Give every SI owner on devnet2 verified, incremental backups of its `hg_safe` in a versioned GCS bucket, written with a key that is confined to that owner's prefix and cannot delete data or index objects (only that backup's own `.lock` under K24), readable with read-only restore keys, and prove each one with a restore drill that gates the restored parts against the published manifest the backup names; land, now, the restore-and-gate library and the pure §8.5 install gate that Plan S3-C2's si-member reuses unchanged; and do all of it without a consensus change and without restarting any ClickHouse, host pod, verifier or voter (spec §16 P1: "tracks paused: none").
 
-**Architecture:** housegate adds the replay helpers stage 3 needs from P1 on: `replay.OwnerEntry`, the exported ledger check `payloadexec.VerifyLedger` and `payloadexec.SumPartRowLtHashes`, `chexec.ScanAllParts` over every active part of a scratch, `chexec.NewMaterializerIn` (named database and prefix) and additive `chexec.NewMaterializerInWithStoragePolicy` (explicit member-disk policy; both older constructors unchanged) and `sitable.CopyTable`, releases `HG_TAG_P1`, and writes the stage-3 ledger tool `s3-ledger.py` (Task 22). arbiter-core pins `HG_TAG_P1`, extracts the partition helpers of the SNode into `dataplane/chparts` with `snode` delegating (applied on top of Plan S3-A Task 5's owner audit), and adds the pure gate `member/gate` (plan, scratch classifier, arithmetic closure) (Task 23); then `dataplane/objstore`: `S3()` builders, the backup index object, the chained full/incremental `Backuper`, `RestoreAndGate`, the restore `Drill` and its verdict, a manifest reader that applies the §8.4 accept rule, and mechanics M12–M14 against MinIO in the mechanics script (incremental BACKUP/RESTORE to an S3 endpoint keeps `hash_of_all_files`; what BACKUP needs to delete; secret masking), released as `CORE_TAG_P1` with the measured delete right `P1_BACKUP_DELETE` (Task 24). sentio-node pins both and adds `sentio-node storage-integrity backup` and `storage-integrity restore-drill`, which read a job config that needs no node identity and take every key and password from the environment, and releases `SN_COMMIT_P1` / `SN_DIGEST_P1` (Task 25). production adds the replica bucket, its no-delete backup service accounts (each confined to its prefix by a managed folder, K25) and read-only restore service accounts in Terraform, the installation-wide `si_backup` ClickHouse user (literal hash, users.d reload, grant-probe rows), a P1 staging installation with the staging-only `si_restore`, the `charts/sentio-node` `siBackup` CronJob outside the host checksum, the backup alerts, the users' key and login scripts and render tests (Task 26), and the P1 runbook and PR (Task 27). On devnet2 the user applies the Terraform and creates the keys; then the staging installation, the mechanics on GCS with the deployed image, `si_backup` on every installation, a drill table on indexer-b, one CronJob per owner with a full and an incremental backup each, one confirmed restore drill per owner, the backup alerts, and the P1 record (Task 28).
+**Architecture:** housegate adds the replay helpers stage 3 needs from P1 on: `replay.OwnerEntry`, the exported ledger check `payloadexec.VerifyLedger` and `payloadexec.SumPartRowLtHashes`, `chexec.ScanAllParts` over every active part of a scratch, `chexec.NewMaterializerIn` (named database and prefix) and additive `chexec.NewMaterializerInWithStoragePolicy` (explicit member-disk policy; both older constructors unchanged) and `sitable.CopyTable`, releases `HG_TAG_P1`, and writes the stage-3 ledger tool `s3-ledger.py` (Task 22). arbiter-core pins `HG_TAG_P1`, extracts the partition helpers of the SNode into `dataplane/chparts` with `snode` delegating (applied on top of Plan S3-A Task 5's owner audit), and adds the pure gate `member/gate` (plan, scratch classifier, arithmetic closure) (Task 23); then `dataplane/objstore`: `S3()` builders, the backup index object, the chained full/incremental `Backuper`, `RestoreAndGate`, the restore `Drill` and its verdict, a manifest reader that applies the §8.4 accept rule, and mechanics M12–M14 against MinIO in the mechanics script (incremental BACKUP/RESTORE to an S3 endpoint keeps `hash_of_all_files`; what BACKUP needs to delete; secret masking), released as `CORE_TAG_P1` with the measured delete right `P1_BACKUP_DELETE` (Task 24). sentio-node pins both and adds `sentio-node storage-integrity backup` and `storage-integrity restore-drill`, which read a job config that needs no node identity and take every key and password from the environment, and releases `SN_COMMIT_P1` / `SN_DIGEST_P1` (Task 25). production adds the replica bucket, its no-delete backup service accounts (each confined to its prefix by a managed folder, K25) and read-only restore service accounts in Terraform, the installation-wide `si_backup` ClickHouse user (literal hash, users.d reload, grant-probe rows), a P1 staging installation with the staging-only `si_restore`, the `charts/sentio-node` `siBackup` CronJob outside the host checksum, the backup alerts, the users' key and login scripts and render tests (Task 26), and the P1 runbook and PR (Task 27). On devnet2 the user applies the Terraform and creates the keys; then the staging installation, the mechanics on GCS with the deployed image, `si_backup` on every installation, a drill table on indexer-b, one CronJob per owner with a full and an incremental backup each, one confirmed restore drill per owner, explicit monitoring-OFF waiver evidence, and the P1 record (Task 28).
 
 **Tech Stack:** Go 1.26; Bazel 9.1.0 + Bzlmod + gazelle (housegate, arbiter-core, sentio-node); ClickHouse 26.3 (`clickhouse/clickhouse-server:26.3.37.3` in CI and the release gate, `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` on devnet2 and for the manual run, S3-A K9); MinIO `bitnamilegacy/minio:2024.12.18-debian-12-r1@sha256:c0ede65eb88e47138470202c517bacf55ab3c27df848030b7b46e69d34b7d192` with its bundled `mc` as the S3 endpoint of the mechanics pair; Google Cloud Storage through its S3-compatible XML API with HMAC keys, IAM custom roles and IAM Conditions; Terraform (backend Terraform Cloud `prod`, applied by the user with `-target`); Helm charts with `test_render.py` (Python 3, PyYAML), `helm lint --strict` and helmfile; the Altinity clickhouse-operator 0.27.2 (`devnet2-operator`, frozen, S3-B K22); kube-state-metrics, VictoriaMetrics VMRule and the Grafana delivery of S3-B K13; `kubectl`, `gcloud`, the runbook helpers and throwaway local tools (live steps); Python 3 for the ledger tool.
 
@@ -12,7 +12,7 @@
 
 **Base revisions.** Current fetched source bases (freshness reconciliation, 2026-10-17): housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, arbiter-core `cfd4f42` (v0.15.0 and the merged owner audit), sentio-node `0828f21` (`SN_COMMIT`, S3-B Task 12 merged), arbiter-proto `7a73f25` (v0.12.0) and arbiter `526a721` (v0.13.0; both read-only in this plan). Housegate's changes since the measured Task 22 code base `ed24705` are documentation-only and retain its implementation anchors; the earlier `aa6912c` refresh remains historical evidence. Production is `efe5c77859e98d0465838cb5763c7f1fcbd89ee3`, with S3-B Task 21 completed and its actual ledger record on housegate `origin/main`: `E_END` is recorded, indexer-c is already allocated `snode-3`, and its host placement is `sea-dg-6` while its source CHI remains on `sea-dg-3`. Read the actual rows and run record through `s3-ledger.py`; never replay a pending Task 21 producer or synthetic enrolment state over them. Apply only still-future P1 intent, Task 26 then Task 27, over that current source. The older production `36a680517` plus pending-S3-B reconstruction remains a historical consistency proof, not the current base. Line anchors in each reviewed task identify its measured review base; use named anchors and reconcile context on actual main rather than replacing merged source.
 
-Current source already lists all three monitored hosts and installations, but `DEVNET2_MONITORING_ENABLED` / `monitoring.enabled` remains false. The actual S3-B execution record does not waive P1's monitoring prerequisite: the live flow must stop until the user explicitly authorizes restoring monitoring and the required delivery proof is obtained; a non-empty list or recorded `E_END` is insufficient. The fresh source-only replay deliberately preserves that false flag, and its chart/render passes claim no live enablement, delivery or health. Required live baseline when this plan starts (verify afresh against Plan S3-B's `E run and the steady state after E` record and the live checks; a recorded `E_END` alone proves none of these current runtime conditions; every value read from the ledger, never predicted): epoch `ENROLMENT_EPOCH`, tracks enabled with cutover 60/52, `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, `max_writers` 3, verifiers `verifier-1..3`, snapshot v20, voters at 2Gi memory and 2Gi PVC on `ARBITER_DIGEST`; hosts `sentio-node-devnet2-indexer-a`, `-b`, `-c` on `SN_DIGEST` with `owner_audit: repair`; every SI ClickHouse (`storage-integrity-si-v2`, `-indexer-b`, `-indexer-c`) in posture C (`default` locked to loopback; `si_snode`, `si_gateway`, `si_reader`, plus `si_verifier` on the network CHI), the operator pinned at `OPERATOR_CHART_VERSION` and frozen; monitoring enabled for the three hosts and the three installations; SI tables: indexer-a `devnet101.swap_new2` (genesis), indexer-b none (the P0 soak table `devuser1.s3_p0` was dropped; database `devuser1` stays assigned to indexer-b), indexer-c `s3eaccept<n>.s3e_e2e` (rows 1–3; `<n>` is the acceptance database Plan S3-B's indexer-c runbook assigned to `INDEXER_C_ID` and wrote to `$HOME/si-devnet2-stage3-indexer-c/acceptance-db`, read there, never predicted; S3-B D19's runbook names, which D35 restores in its Appendix B); no replica bucket, no backup user, no backup job; the lockdown staging installation deleted.
+Current source already lists all three monitored hosts and installations, but `DEVNET2_MONITORING_ENABLED` / `monitoring.enabled` remains false. The user's dated 2026-10-19 decision explicitly keeps monitoring OFF for C1 Tasks26–28. This supersedes C1's prospective monitoring enablement/delivery gate only: require literal `DEVNET2_MONITORING_ENABLED = False`, actual overlay `monitoring.enabled: false`, empty monitored-backup lists and the bounded waiver evidence below throughout C1. Monitoring is not deployed; delivery and alert health are not measured. Cost: P1 has no automated alert/delivery coverage. This decision authorizes no live operation and changes no downstream monitoring prerequisite; a waived C1 `P1_END` cannot prove any C2–F monitoring gate. The fresh source-only replay deliberately preserves that false flag, and its chart/render passes claim no live enablement, delivery or health. Required live baseline when this plan starts (verify afresh against Plan S3-B's `E run and the steady state after E` record and the live checks; a recorded `E_END` alone proves none of these current runtime conditions; every value read from the ledger, never predicted): epoch `ENROLMENT_EPOCH`, tracks enabled with cutover 60/52, `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, `max_writers` 3, verifiers `verifier-1..3`, snapshot v20, voters at 2Gi memory and 2Gi PVC on `ARBITER_DIGEST`; hosts `sentio-node-devnet2-indexer-a`, `-b`, `-c` on `SN_DIGEST` with `owner_audit: repair`; every SI ClickHouse (`storage-integrity-si-v2`, `-indexer-b`, `-indexer-c`) in posture C (`default` locked to loopback; `si_snode`, `si_gateway`, `si_reader`, plus `si_verifier` on the network CHI), the operator pinned at `OPERATOR_CHART_VERSION` and frozen; monitoring OFF, with the existing three-host/installation selector lists retained and both backup lists empty; SI tables: indexer-a `devnet101.swap_new2` (genesis), indexer-b none (the P0 soak table `devuser1.s3_p0` was dropped; database `devuser1` stays assigned to indexer-b), indexer-c `s3eaccept<n>.s3e_e2e` (rows 1–3; `<n>` is the acceptance database Plan S3-B's indexer-c runbook assigned to `INDEXER_C_ID` and wrote to `$HOME/si-devnet2-stage3-indexer-c/acceptance-db`, read there, never predicted; S3-B D19's runbook names, which D35 restores in its Appendix B); no replica bucket, no backup user, no backup job; the lockdown staging installation deleted.
 
 ## Global Constraints
 
@@ -21,11 +21,11 @@ Current source already lists all three monitored hosts and installations, but `D
 - **Plans S3-A and S3-B apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies, and through them those of Plans S1-A, S1-B, S2-A and S2-B (strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions, the production rule, the runbook conventions, passwords).
 - **Activation model (contract §16):** no Raft command, Raft tag, Raft-reachable field, snapshot version (it stays 20), header byte or feature string changes, and `arbiter.LocalNodeFeatures()` is unchanged; no voter, verifier or host image changes in this plan (only the backup and drill Jobs run `SN_DIGEST_P1`); every component stays rollback-able and P1 holds no consensus state.
 - **No track pauses (spec §16 P1):** nothing restarts an SI ClickHouse, a host pod, a verifier or a voter: `si_backup` is a users.d reload, the CronJob and its ConfigMap stay outside the host checksum (the `checksum/config` annotation in `charts/sentio-node/templates/node.yaml`), and every live block that changes an installation or a release records the pods' UIDs and restart counts before and after and stops on a difference.
-- **Ordering:** 22 → 23 → 24 → 25 → 26 → 27 → 28; per installation indexer-b → indexer-c → network (indexer-a); keys and logins before any user, users before any job, a full backup before the incremental one, both before the drill, the drill before the monitoring commit.
+- **Ordering:** 22 → 23 → 24 → 25 → 26 → 27 → 28; per installation indexer-b → indexer-c → network (indexer-a); keys and logins before any user, users before any job, a full backup before the incremental one, both before the drill, the drill before the explicit monitoring-OFF evidence check; no monitoring commit or sync.
 - **Irreversible steps:** the replica bucket (`prevent_destroy`, versioned) and every object written to it (no key in this plan deletes, K24); the on-chain `CREATE TABLE devuser1.s3_p1` and its two INSERTs (a registry incarnation and four promotions that stay in consensus state); each is preceded by `Confirm before running.` and marked irreversible in the runbook. HMAC keys and Secrets are revocable (runbook §15.3).
 - **Object-store access is ClickHouse-side only (K23):** every `BACKUP`, `RESTORE` and index read or write is a ClickHouse statement naming the bucket with `S3(...)` / `s3(...)`; no repository gains a Go S3 or GCS client; no ClickHouse config file changes.
 - **Keys and passwords (S3-B K16, extended):** HMAC keys are created only by the user's terminal with `scripts/storage-integrity/make-si-backup-keys.sh`, ClickHouse logins only with `make-clickhouse-logins.sh`; plaintext lives only in Kubernetes Secrets; git and the CHIs carry only SHA-256 hashes; agents never print, echo, log or pass a key or password on argv; SQL that carries a key is built by Go from the environment or inside the pod from stdin (`si_s3_sql`, contract §19); keys never appear in chat.
-- **Production rule (S3-B, unchanged):** one P1 PR carries Tasks 26–27, inert on merge (render-and-cmp of every `charts/sentio-node` release and `storage-integrity-si-v2` against `origin/main`; Terraform is applied only by the user after merge); the `si_backup` user per installation, `siBackup.enabled` per host and the monitoring list are single-service commits pushed to `main` after the PR merged; CHI manifests go through `kubectl apply --dry-run=server` then `kubectl apply`; the P1 outcome record is a docs-only PR; every live mutation needs explicit user confirmation in chat, for that step only.
+- **Production rule (S3-B, unchanged):** one P1 PR carries Tasks 26–27, inert on merge (render-and-cmp of every `charts/sentio-node` release and `storage-integrity-si-v2` against `origin/main`; Terraform is applied only by the user after merge); the `si_backup` user per installation and `siBackup.enabled` per host are six single-service commits pushed to `main` after the PR merged; CHI manifests go through `kubectl apply --dry-run=server` then `kubectl apply`; the P1 outcome record is a docs-only PR; every live mutation needs explicit user confirmation in chat, for that step only.
 - **Runbook conventions (S3-B, unchanged):** bash blocks run in one dedicated session (`set -eo pipefail`) from a production checkout at `origin/main`, by a live agent from block files after sourcing the helpers (D24); `Confirm before running.` before every mutating block; every cross-block value under `$si_backup` (`$HOME/si-devnet2-stage3-p1`, mode 700, created fresh); read-only checks in their own re-runnable blocks that `tee` into `$si_backup`; writes never re-run; one stage per window; values disjoint from every earlier runbook (D19); all helpers in the first bash block of §0 (D20); commands handed to the user in fish.
 - **Security:** the commented YAML in production `k8s-sea/clickhouse/clickhouse-extra.yaml` and `k8s-sea/clickhouse/clickhouse.yaml` (a GCP service-account key and a ClickHouse password; the user rotates them) is never read, copied or quoted; the `sentio-clickhouse-backup` service account and the `sentio-clickhouse` bucket are never reused.
 - **Cross-plan boundary:** Plan S3-C2 consumes contract §16–§18 verbatim; `member/gate` is the install gate it reuses unchanged; this plan defines no `dataplane.Client.GetSafeWatermark` or `GetManifest` (Plan S3-C2 Task 29 owns them) and no member id, si-member process or `si_member` user.
@@ -40,8 +40,8 @@ Current source already lists all three monitored hosts and installations, but `D
 The spec and Plans S3-A and S3-B leave these P1 details open; each is resolved here and binding for Plan S3-C1 and for every later plan that consumes its names.
 
 - **K23 — The backup destination is `S3()` per statement with keys from the job's environment (spec §16 P1 "tracks paused: none", §8.6).** Gap: the spec names an object-store backup but not how ClickHouse reaches the bucket; a config-defined backup disk or named collection would keep keys out of SQL but is a server config change, and operator 0.27.2 restarts a ClickHouse on any config change (S3-B K22). Resolution: every `BACKUP`, `RESTORE` and index read or write names the bucket inline — `S3('<url>', '<access key id>', '<secret>')` for BACKUP and RESTORE, `s3(...)` for the index object — rendered only by arbiter-core `objstore` from `objstore.Credentials`, which sentio-node reads only from `STORAGE_INTEGRITY_S3_ACCESS_KEY_ID` and `STORAGE_INTEGRITY_S3_SECRET_ACCESS_KEY` (Secret env), or by the runbook's `si_s3_sql` inside the pod from stdin; the ClickHouse login is a new installation-wide user `si_backup` holding exactly `SI_BACKUP_GRANTS` and, on the P1 staging installation only, `si_restore` holding `SI_RESTORE_GRANTS` (contract §18), both measured by M13 on `26.3.37.3` and by the grant probe on staging. Why: nothing restarts; the key travels in query text inside the namespace, so M14 measures its masking in `system.query_log`, `system.backups`, `system.processes` and the server log before any real key exists, and the plaintext native protocol stays a recorded residual until P4's policies.
-- **K24 — "Not delete" is measured, and its only possible exception is each backup's own lock file (spec §16 P1).** Gap: ClickHouse's BACKUP writes `<backup>/.lock` and removes it when it finishes, a failed upload may leave parts, and GCS needs `storage.objects.delete` for any removal or overwrite. Resolution: Task 24's M13 (`TestMechanics_S3BackupWithAKeyThatCannotDelete`) backs up to MinIO with a key that may not delete (`mech-nodelete`) and with one that may delete only `*/.lock` (`mech-lockdelete`); the ledger value `P1_BACKUP_DELETE` is `none` when the first completes and `lock` when only the second does; with `none` no backup key holds any delete; with `lock` the plan stops before Task 26 (Task 25 does not depend on it) until the user amends spec §16 P1 to "not delete, except the backup's own `.lock`", and Task 26 then adds the `siDevnet2SiV2BackupLockRemover` binding conditioned on the owner's prefix and the `/.lock` suffix; if neither key completes, the plan stops and the user decides (the scoping fallback, delete on the own prefix with versioning and retention, is never taken without that decision). Backup names are never reused (an overwrite needs delete): `objstore` refuses an existing name and ClickHouse refuses an existing `.backup`. Multipart uploads may be created, listed and aborted (`storage.multipartUploads.*` deletes no object), and a bucket lifecycle rule aborts incomplete uploads after 7 days. Task 28 §5 proves the same on GCS with the deployed image: an overwrite of a backup object is refused and the lock removal behaves as recorded. Why: a prefix-wide delete would let a leaked backup key erase its owner's backups, which the spec's "not delete" exists to prevent; the lock-only exception keeps every data and metadata object immutable.
-- **K25 — List confinement is one managed folder per writer prefix, proved live (spec §16 P1 "list … on their own prefix"; user decision, the conservative default).** The scoping reports disagree on whether a list can be prefix-scoped. Gap: GCS checks `storage.objects.list` on the bucket, and an IAM Condition of a bucket binding may use only the resource name, the resource type and the date and time: Cloud Storage's API attributes, the list prefix among them, are supported only in Credential Access Boundaries (IAM attribute reference, "Cloud Storage API attributes"), so a conditional bucket binding can confine a create or a read to a prefix but never a list (it refuses every list, the writer's own included, which stops `Backuper.Run` in `ReadIndexes`). Resolution: each writer prefix (`owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/`, `mechanics/`) is a managed folder of the bucket of the same name (`google_storage_managed_folder`; the bucket has uniform bucket-level access, which managed folders require), and each backup service account holds the writer role `siDevnet2SiV2BackupWriter` on its own managed folder only (`google_storage_managed_folder_iam_member`, no condition) and nothing on the bucket but, with `lock`, K24's `/.lock` remover. A role granted on a managed folder covers every object whose name starts with the folder's name and a list whose prefix lies in the folder (Cloud Storage "List objects": a principal with a role on one managed folder lists it with `prefix=<folder>/`), so `ReadIndexes` (`ListObjectsV2` with the prefix `owner-<id>/`) and the name check (the prefix `owner-<id>/<name>/`) work, while a list of another prefix or of the whole bucket and a read outside the folder are refused. The bucket, the prefixes, the roles, the service accounts and the Secrets that Plans S3-C2, S3-C3 and S3-D consume keep their names. The documentation shows the managed-folder list with the JSON API; Task 28 §5 proves it on GCS with HMAC keys through the XML API, which ClickHouse uses: the mechanics key lists `mechanics/<stamp>-full/` (a prefix inside its folder) and is refused a list and a read of `owner-0/`; each owner's key lists and reads its own prefix and is refused a list and a read of another owner's prefix and a write to `mechanics/`. A row that differs stops P1 before any owner's data reaches the bucket (contract §19: §5 passes only when every row does); no residual is accepted, because §2's bucket verdict proves that no writer holds a list right on the bucket, so a granted cross-prefix list would mean the layout does not confine, and the user then decides another one (one bucket per owner, which renames the bucket the later plans read). Restore keys read and list the whole bucket (`roles/storage.objectViewer` on the bucket), which is what "read-only" asks. Why: a managed folder is the GCS IAM mechanism that scopes a list to a prefix, and it keeps every bucket and object name.
+- **K24 — "Not delete" is measured, and its only possible exception is each backup's own lock file (spec §16 P1).** Gap: ClickHouse's BACKUP writes `<backup>/.lock` and removes it when it finishes, a failed upload may leave parts, and GCS needs `storage.objects.delete` for any removal or overwrite. Resolution: Task 24's M13 (`TestMechanics_S3BackupWithAKeyThatCannotDelete`) backs up to MinIO with a key that may not delete (`mech-nodelete`) and with one that may delete only `*/.lock` (`mech-lockdelete`); the ledger value `P1_BACKUP_DELETE` is `none` when the first completes and `lock` when only the second does; with `none` no backup key holds any delete; with `lock` the user approved the spec §16 P1 amendment on 2026-10-19 to "not delete, except the backup's own `.lock`", and Task 26 adds the `siDevnet2SiV2BackupLockRemover` binding conditioned on the owner's prefix and the `/.lock` suffix; if neither key completes, the plan stops and the user decides (the scoping fallback, delete on the own prefix with versioning and retention, is never taken without that decision). Backup names are never reused (an overwrite needs delete): `objstore` refuses an existing name and ClickHouse refuses an existing `.backup`. Multipart uploads may be created, listed and aborted (`storage.multipartUploads.*` deletes no object), and a bucket lifecycle rule aborts incomplete uploads after 7 days. Task 28 §5 proves the same on GCS with the deployed image: an overwrite of a backup object is refused and the lock removal behaves as recorded. Why: a prefix-wide delete would let a leaked backup key erase its owner's backups, which the spec's "not delete" exists to prevent; the lock-only exception keeps every data and metadata object immutable.
+- **K25 — List confinement is one managed folder per writer prefix, proved live (spec §16 P1 "list … on their own prefix"; user decision, the conservative default).** The scoping reports disagree on whether a list can be prefix-scoped. Gap: GCS checks `storage.objects.list` on the bucket, and an IAM Condition of a bucket binding may use only the resource name, the resource type and the date and time: Cloud Storage's API attributes, the list prefix among them, are supported only in Credential Access Boundaries (IAM attribute reference, "Cloud Storage API attributes"), so a conditional bucket binding can confine a create or a read to a prefix but never a list (it refuses every list, the writer's own included, which stops `Backuper.Run` in `ReadIndexes`). Resolution: each writer prefix (`owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/`, `mechanics/`) is a managed folder of the bucket of the same name (`google_storage_managed_folder`; the bucket has uniform bucket-level access, which managed folders require), and each backup service account holds the writer role `siDevnet2SiV2BackupWriter` on its own managed folder only (`google_storage_managed_folder_iam_member`, no condition) and nothing on the bucket but, with `lock`, K24's `/.lock` remover. A role granted on a managed folder covers every object whose name starts with the folder's name and a list whose prefix lies in the folder (Cloud Storage "List objects": a principal with a role on one managed folder lists it with `prefix=<folder>/`), so `ReadIndexes` (`ListObjectsV2` with the prefix `owner-<id>/`) and the name check (the prefix `owner-<id>/<name>/`) work, while a list of another prefix or of the whole bucket and a read outside the folder are refused. The bucket, the prefixes, the roles, the service accounts and the Secrets that Plans S3-C2, S3-C3 and S3-D consume keep their names. The documentation shows the managed-folder list with the JSON API; Task 28 §5 proves it on GCS with HMAC keys through the XML API, which ClickHouse uses: the mechanics key lists `mechanics/<stamp>-full/` (a prefix inside its folder) and is refused a list and a read of `owner-0/`; each owner's key lists and reads its own prefix and is refused a list and a read of another owner's prefix and a write to `mechanics/`. A row that differs stops P1 before any owner's data reaches the bucket (contract §19: §5 passes only when every row does); no residual is accepted, because §2's bucket verdict proves that no writer holds a list right on the bucket, so a granted cross-prefix list would mean the layout does not confine, and the user then decides another one (one bucket per owner, which renames the bucket the later plans read). The user confirmed this existing one-bucket layout on 2026-10-19: `owner-0/`, `owner-1/`, `owner-2/`, `mechanics/` (owner 2 is the recorded `INDEXER_C_ID`; still read it from the ledger). This is a decision record, not an apply or live result. Restore keys read and list the whole bucket (`roles/storage.objectViewer` on the bucket), which is what "read-only" asks. Why: a managed folder is the GCS IAM mechanism that scopes a list to a prefix, and it keeps every bucket and object name.
 - **K26 — Granularity, naming and cadence.** Prefix `owner-<indexer_id>/` (the contract-assigned id, which no signer change alters); one backup service account per owner (`si-devnet2-si-v2-backup-0`, `-1`, `-<INDEXER_C_ID>`), one restore service account per member host for Plan S3-C2 (`si-devnet2-si-v2-restore-a`, `-b`, `-c`), one restore service account for drills (`-restore-drill`) and one writer confined to `mechanics/` (`-backup-mech`); each a separately revocable HMAC key. A backup is `BACKUP DATABASE hg_safe` named `<UTC yyyymmddThhmmssZ>-<full|incr>` with its index object `<name>.index.json` beside it under the owner's prefix; a chain is one full backup and at most `max_chain_links − 1` incremental ones on it (default 7: a weekly full); one CronJob per owner, daily at `17 3 * * *`, `47 3 * * *` and `17 4 * * *` UTC for indexer-a, -b and -c. Why: a database backup needs no per-table bookkeeping and restores any single table; lexicographic names order the chain; per-key revocation never touches another owner.
 - **K27 — A drill gates against the manifest its backup names, on a staging installation (spec §16 P1 exit, §8.4, §8.5).** Resolution: the index object names S, the latest published manifest when the backup started, with its `track_frontiers[O]`; `restore-drill` fetches S through `objstore.NewArbiterManifests` (the existing `GetSafeWatermark` and `GetManifest` RPCs; S is accepted only when its id equals the requested id and its recomputed `ManifestRoot`, `Validate` passes and `payloadexec.VerifyLedger` holds — the §8.4 rule) and, for every partition of every backed-up table S lists, restores it into `hg_rstage` of the P1 staging installation `storage-integrity-si-v2-p1-staging` and runs `objstore.RestoreAndGate` with an empty local copy: Need = M(S), kept parts satisfy it exactly once, unneeded parts (a backup ahead of publication) are dropped inside the scratch, and closure Σ(kept) = R must hold. Each table's schema is read from the owner host's `sentio_getStorageIntegrityTableStatus` and must hash (`payloadexec.TableSchemaHash`) to S's `schema_hash`. A verdict passes only with at least one verified table and every backed-up table that S lists verified; the runbook compares the verified set with the owner's Active tables in the registry. `member/gate` is the gate Plan S3-C2 reuses unchanged. Why it is sound: after S is published the owner's `hg_safe` only grows (promotions append, `REPLACE PARTITION` keeps every part's bytes, `hash_of_all_files` and rows, merges are pinned off, and the owner audit drops only unacknowledged twins), so M(S) is a sub-multiset of every later backup; the schema source is untrusted but checked against the manifest's committed hash; the manifest reader stays inside `objstore`, so Plan S3-C2 Task 29 keeps `Client.GetSafeWatermark` / `GetManifest`.
 - **K28 — The promotion budget is quadratic (spec §13.1, S3-B defect D1).** Every stage-3 runbook from P1 on computes its budget with the quadratic estimate of Plan S3-B's P0 runbook §13.4 (as fixed in housegate#237). P1 writes two statements (`devuser1.s3_p1`, rows 5101–5104 over two partitions), at most four promotions; backups and drills make none; runbook §1.3 runs that §13.4 procedure (the leader's newest finished snapshot and the live promotion sequence) and refuses to start §7 unless the budget is at least 16 promotions. Why: the earlier linear estimate overstated the budget about fourfold, and P2's devnet2 soak (K38) runs within half of whatever budget P1 leaves.
@@ -90,7 +90,7 @@ Plan S3-A's releases (`HG_TAG`, `PROTO_TAG`, `CORE_TAG`, `ARBITER_TAG`) → 22 (
 | 25 | sentio-node | pins; the job config (`storage_integrity.backup`, keys from the environment, no node identity); `sentio-node storage-integrity backup` and `restore-drill`; release `SN_COMMIT_P1` / `SN_DIGEST_P1` |
 | 26 | production | the replica bucket and its service accounts in Terraform; `si_backup` (chart value and grant-probe rows) and the P1 staging installation with `si_restore`; `charts/sentio-node` `siBackup` CronJob outside the host checksum; the backup alerts; `make-si-backup-keys.sh` and the `make-clickhouse-logins.sh` extensions (user: logins before the PR); render tests |
 | 27 | production | runbook `docs/storage-integrity-devnet2-stage3-p1-backups.md`; tracks runbook stage row 10; the P1 PR (`P1_PR`) |
-| 28 | devnet2 (live) | Terraform and keys (user); staging; GCS mechanics (`P1_MECHANICS`); `si_backup` per installation; the drill table; CronJobs with a full and an incremental backup per owner; one drill per owner; backup alerts; staging cleanup; record (`P1_END`) |
+| 28 | devnet2 (live) | Terraform and keys (user); staging; GCS mechanics (`P1_MECHANICS`); `si_backup` per installation; the drill table; CronJobs with a full and an incremental backup per owner; one drill per owner; monitoring-OFF waiver evidence; staging cleanup; record (`P1_END`) |
 
 ## File Structure
 
@@ -127,7 +127,7 @@ Line anchors in the tasks refer to the base revisions above; files that Plans S3
 - `.github/workflows/storage-integrity-chart.yml` (paths).
 - `docs/storage-integrity-devnet2-stage3-p1-backups.md` (new); `docs/storage-integrity-devnet2-multi-source-tracks.md` (stage row 10).
 
-**devnet2** (Task 28): single-service commits pushed to production `main` after `P1_PR` merged — `si_backup` on `storage-integrity-si-v2-indexer-b-source.yaml`, `storage-integrity-si-v2-indexer-c-source.yaml` and the network overlay `storage-integrity-si-v2.yaml` (`clickhouse.access.backupUser`, the hash), `siBackup.enabled` in each host overlay, `monitoring.backups.cronJobs`, each with its `test_render.py` constant (`DEVNET2_SI_BACKUP_USER`, `DEVNET2_SI_BACKUP`, `DEVNET2_MONITORED_BACKUPS`); the P1 outcome record PR (docs only, the runbook's §12 record); evidence under `$HOME/si-devnet2-stage3-p1`.
+**devnet2** (Task 28): single-service commits pushed to production `main` after `P1_PR` merged — `si_backup` on `storage-integrity-si-v2-indexer-b-source.yaml`, `storage-integrity-si-v2-indexer-c-source.yaml` and the network overlay `storage-integrity-si-v2.yaml` (`clickhouse.access.backupUser`, the hash), `siBackup.enabled` in each host overlay, each with its `test_render.py` constant (`DEVNET2_SI_BACKUP_USER`, `DEVNET2_SI_BACKUP`); no M commit, no monitoring sync, and `DEVNET2_MONITORED_BACKUPS=()` with actual overlay backup list `[]`; the P1 outcome record PR (docs only, the runbook's §12 record); evidence under `$HOME/si-devnet2-stage3-p1`.
 
 **housegate, ledger** (Tasks 22, 24, 25, 27, 28): Appendix C of this plan file (`docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`) on its ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, D34), one record commit per recording task from a URWT worktree `multi-source-s3c1-ledger-<N>` (contract §19).
 
@@ -10801,6 +10801,8 @@ Expected: `SN_COMMIT_P1=<the value written>`, `SN_DIGEST_P1=<the value written>`
 
 ## Task 26: production — the replica bucket and its service accounts, `si_backup` and the P1 staging installation, the `siBackup` CronJob outside the host checksum, the backup alerts, the key and login scripts, render tests (S3-C1)
 
+**Current C1 execution policy (2026-10-19).** The user approved monitoring OFF, K24 own-backup-lock deletion only and K25's existing managed-folder layout. Historical monitoring-True/commit-M test observations below describe earlier text; their prospective enablement/delivery requirement is superseded by the explicit OFF/empty/dated-waiver path. No production/live action follows from these decisions; downstream monitoring gates remain independent.
+
 Contract §18 (its production part: Terraform, keys and logins, ClickHouse users, `siBackup`, monitoring, `test_render.py`), spec §16 P1 ("tracks paused: none", backup keys that list, read and create on their own prefix and never delete, read-only restore keys), §14 (the lockdown rules for every new ClickHouse user: literal hash, users.d reload, grant probe) and §8.2 as amended (decision D36: `si_restore`'s explicit `hg_rstage` rights, never `ALL`), clarifications K23 (ClickHouse-side object-store access with keys from the job's environment), K24 (no delete; the lock remover only when `P1_BACKUP_DELETE` is `lock`), K25 (list confinement by one managed folder per prefix), K26 (prefixes, accounts, schedules) and K27 (the drill on a staging installation). This task gives production everything P1's live task (Task 28) applies, inert on merge: (1) the Terraform of the versioned replica bucket `sentio-352722-si-devnet2-si-v2-replica`, one backup service account per owner and one mechanics writer on a no-delete custom role, each granted only on the managed folder of its own prefix, the lock remover gated on `P1_BACKUP_DELETE`, and four read-only restore service accounts; (2) the installation-wide ClickHouse user `si_backup` (`clickhouse.access.backupUser` in charts/storage-integrity, a users.d reload) with `SI_BACKUP_GRANTS`; (3) the grant probe rows of `si_backup` and `si_restore`, measured; (4) `make-si-backup-keys.sh` and the `p1-staging` and `--add-user` modes of `make-clickhouse-logins.sh`, after which the user creates the P1 staging and `si_backup` logins in their own terminal; (5) the P1 staging installation `storage-integrity-si-v2-p1-staging`, born locked with `si_backup` and the staging-only `si_restore`; (6) the `charts/sentio-node` `siBackup` CronJob and its ConfigMap, outside the host's `checksum/config`, and a `siBackup` block (off) in each devnet2 SI host overlay; (7) the backup alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` (`monitoring.backups`, nothing listed); (8) the render tests that keep all of it equal to the contract and follow Task 28's rollout. Nothing here is applied, synced or pushed: Task 27 adds the runbook and opens the P1 PR from this branch, and every release renders byte-identically to the branch base (Step 18).
 
 Worktree: production `multi-source-s3c1` on branch `urwt/codex/multi-source-s3c1`, created from `origin/main` after `E_PR` merged and `E_END` and `INDEXER_C_ID` are recorded (contract §19). Every command below runs in its own Bash call prefixed with `W=<the worktree path>; P="$HOME/si-devnet2-stage3-p1-prep";` (the path Step 1 prints; `$P` is this task's local directory).
@@ -10870,16 +10872,20 @@ spec=docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-de
 for r in origin/main origin/urwt/claude/ms-si-stage3-plans-cf; do printf '%s: %s\n' "$r" "$(git -C "$h" show "$r:$spec" 2>/dev/null | grep '^| P1 |' | grep -c "not delete, except the backup's own \`.lock\`")"; done
 ```
 
-Expected (only with `lock`): a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR; Task 27 Step 1 runs the same check): the P1 row of spec §16 reads "… but not delete, except the backup's own `.lock`" (K24). The delete right is the user's decision: stop and ask the user in chat unless they confirm that this amendment is theirs (or approved by them) and stands; never write or open the amendment as an agent, and never go on with `lock` on two `0` counts. With `none` nothing is asked: no backup key holds a delete, and the lock remover's two resources render no instance.
+Expected (only with `lock`): a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR; Task 27 Step 1 runs the same check): the P1 row of spec §16 reads "… but not delete, except the backup's own `.lock`" (K24). The user approved this exact own-lock-only amendment on 2026-10-19; do not ask again. Verify its adopted ref; never go on with `lock` on two `0` counts, and never grant data/index deletion, overwrite or cross-prefix access. With `none` nothing is asked: no backup key holds a delete, and the lock remover's two resources render no instance.
 
-**K25 is the user's decision too (status §3).** This task writes K25's managed-folder layout: one managed folder per writer prefix, the writer role on its own folder only, nothing of it on the bucket. It is the default that runbook §5 proves live on GCS and that stops P1 on any differing row. Before Step 4, ask the user in chat to confirm that this layout stands. If the user chose another layout (one bucket per owner renames the bucket that Plans S3-C2, S3-C3 and S3-D read), stop: that layout is not this task's text.
+**K25 is the user's decision too (status §3).** This task writes K25's managed-folder layout: one managed folder per writer prefix, the writer role on its own folder only, nothing of it on the bucket. It is the default that runbook §5 proves live on GCS and that stops P1 on any differing row. The user confirmed this exact layout on 2026-10-19; do not ask again. This approval does not prove list confinement or authorize an apply; Step 4 and the live mechanics retain their own gates. If the user chose another layout (one bucket per owner renames the bucket that Plans S3-C2, S3-C3 and S3-D read), stop: that layout is not this task's text.
 
 ```bash
 p=/Users/uranuswch/Dev/projects/sentio-network/production
 git -C "$p" cat-file -e origin/main:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml && git -C "$p" cat-file -e origin/main:k8s-sea/sentio-network-devnet2/sentio-node-indexer-c-storage-integrity-si-v2.yaml && echo "E_PR is on origin/main"
 git -C "$p" grep -c '"sentio-node-devnet2-indexer-c": "si_snode",' origin/main -- charts/storage-integrity/tests/test_render.py
 git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | python3 -I -c 'import ast, sys; names = ("DEVNET2_MONITORED_HOSTS", "DEVNET2_MONITORED_CLICKHOUSES"); found = {node.targets[0].id: ast.literal_eval(node.value) for node in ast.parse(sys.stdin.read()).body if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in names}; print(*(found[name][-1] for name in names))'
-git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py | python3 -I -c 'import ast, sys; found = [ast.literal_eval(n.value) for n in ast.parse(sys.stdin.read()).body if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == "DEVNET2_MONITORING_ENABLED" for v in n.targets)]; assert found == [True], "S3-B monitoring is not enabled: stop before P1"; print("S3-B monitoring enabled")' || exit 1
+t="$(mktemp -d)" || exit 1
+git -C "$p" show origin/main:charts/storage-integrity/tests/test_render.py > "$t/test_render.py" || exit 1
+git -C "$p" show origin/main:k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml > "$t/network.yaml" || exit 1
+python3 -I -c 'import ast, sys, yaml; from pathlib import Path; source=Path(sys.argv[1]); nodes=ast.parse(source.read_text()).body; values=lambda name: [ast.literal_eval(n.value) for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]; flags=values("DEVNET2_MONITORING_ENABLED"); assert len(flags)==1 and flags[0] is False, "C1 requires exactly one literal False monitoring flag"; lists=values("DEVNET2_MONITORED_BACKUPS"); assert lists in ([], [()]), "C1 monitored backups must be empty"; mon=yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {}); assert mon.get("enabled") is False, "C1 overlay monitoring must be boolean false"; assert (mon.get("backups") or {}).get("cronJobs", []) == [], "C1 overlay monitored backups must be empty"; assert sys.argv[3] == "user-approved-c1-monitoring-off-2026-10-19", "missing C1 monitoring waiver"; print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")' "$t/test_render.py" "$t/network.yaml" user-approved-c1-monitoring-off-2026-10-19 || exit 1
+rm -r "$t"
 mkdir -p -m 700 "$HOME/.cache/s3-worktrees"
 [ ! -e "$HOME/.cache/s3-worktrees/s3c1-production.json" ] || { echo "saved URWT state exists; preserve it and reconcile the prior attempt before an explicit resume; stop"; exit 1; }
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" codex multi-source-s3c1 urwt/codex/multi-source-s3c1 origin/main)" || { echo "URWT failed; stop before configuring or committing"; exit 1; }
@@ -11117,7 +11123,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 +    "storage-integrity-si-v2-indexer-c": False,
 +}
 +# The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
-+# three in one commit once every owner's restore drill passed (§11).
++# C1 keeps this tuple empty under the dated monitoring-OFF waiver (§11).
 +DEVNET2_MONITORED_BACKUPS = ()
 +# P1_BACKUP_DELETE (Plan S3-C1 Appendix C, K24): the delete right a ClickHouse
 +# BACKUP needs, as mechanics M13 measured it: "none", or "lock" (each backup's
@@ -14229,7 +14235,7 @@ diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-s
        - storage-integrity-si-v2-indexer-b
        - storage-integrity-si-v2-indexer-c
 +  # The SI owners' backup CronJobs (docs/storage-integrity-devnet2-stage3-p1-backups.md
-+  # §11): all three are listed in one commit once every owner's restore drill passed.
++  # §11): C1 keeps this list empty under the dated monitoring-OFF waiver.
 +  backups:
 +    cronJobs: []
 ```
@@ -14328,6 +14334,8 @@ Expected: `Ran N+19 tests` / `OK`; four `1 chart(s) linted, 0 chart(s) failed`; 
 
 ## Task 27: production — the stage-3 P1 runbook and the P1 PR (S3-C1)
 
+**Current C1 execution policy (2026-10-19).** The user approved monitoring OFF, K24 own-backup-lock deletion only and K25's existing managed-folder layout. Historical monitoring-True/commit-M test observations below describe earlier text; their prospective enablement/delivery requirement is superseded by the explicit OFF/empty/dated-waiver path. No production/live action follows from these decisions; downstream monitoring gates remain independent.
+
 Contract §18–§19 and K23–K28: Task 26 put the replica bucket's Terraform, the `si_backup` user and its grant-probe rows, the P1 staging installation with the staging-only `si_restore`, the `siBackup` CronJob of `charts/sentio-node`, the backup alerts, the key and login scripts and the render tests on the branch `urwt/codex/multi-source-s3c1`; this task adds the runbook Task 28 executes, `docs/storage-integrity-devnet2-stage3-p1-backups.md` (sections exactly as contract §18 lists them, helpers and evidence files as contract §19 names them), and takes the P1 PR (Tasks 26 and 27 together) through push, review, CI and merge, then records `P1_PR`. Merging it applies, syncs and turns on nothing: the bucket is the user's Terraform apply (runbook §2), the keys the user's terminal (§3), and every live change of P1 a single-service commit the runbook makes after the merge; the PR renders every release byte-identically (`render-inertness.sh` without `--new`).
 
 **Files** (anchors are production `origin/main` after `E_PR` merged and `E_END` was recorded, the base of Task 26's branch: at review time `origin/main` is `7e08b6ea5`, and Plan S3-B's Tasks 16–21 (the lockdown and indexer-c runbooks, their charts and live commits) are still to land on it; the branch already carries Task 26's commits, and none of them touches the two files below):
@@ -14338,7 +14346,7 @@ Contract §18–§19 and K23–K28: Task 26 put the replica bucket's Terraform, 
 
 **Interfaces:**
 - Consumes (contract §16–§19, verbatim): the bucket `sentio-352722-si-devnet2-si-v2-replica`, the roles `siDevnet2SiV2BackupWriter` and `siDevnet2SiV2BackupLockRemover`, the service accounts `si-devnet2-si-v2-backup-{0,1,<INDEXER_C_ID>,mech}` and `si-devnet2-si-v2-restore-{a,b,c,drill}`, the Terraform resource addresses of `terraform/storage_integrity_devnet2_si_v2_replica.tf`; `scripts/storage-integrity/make-si-backup-keys.sh <account>` and the access-id files `$HOME/si-devnet2-stage3-p1-logins/hmac-<account>.access-id`; `make-clickhouse-logins.sh p1-staging` and `--add-user si_backup <installation> <hashes-file>` with the hashes files `$HOME/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml` and `hashes-si_backup-<network|indexer-b|indexer-c>.yaml` (the user's, before the P1 PR); the Secrets `storage-integrity-si-v2-backup-*`, `storage-integrity-si-v2-restore-{a,b,c,drill}` (keys `access-id`, `secret`), `storage-integrity-si-v2-clickhouse-backup-{network,indexer-b,indexer-c}` (key `password`) and `storage-integrity-si-v2-p1-staging-logins`; `docs/examples/storage-integrity-p1-staging-chi.yaml` (CHI `storage-integrity-si-v2-p1-staging`, pod `storage-integrity-si-v2-p1-staging-source-0-0-0`, Service `storage-integrity-si-v2-p1-staging-source`, Keeper root `/storage-integrity/devnet2/p1-staging`); the values `clickhouse.access.backupUser`, `clickhouse.access.passwordSha256.si_backup`, `siBackup.*`, `monitoring.backups.{cronJobs,maxAgeSeconds,runbookURL}`; the CronJobs and ConfigMaps `<fullname>-si-backup` (key `config.yaml`); the alerts `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` in the rule group `<fullname>.backups`; the `test_render.py` constants `SI_BACKUP_BUCKET`, `SI_BACKUP_GRANTS`, `SI_RESTORE_GRANTS`, `DEVNET2_SI_BACKUP_IMAGE`, `DEVNET2_BACKUP_OWNERS`, `DEVNET2_SI_BACKUP_SCHEDULES`, `DEVNET2_SI_BACKUP`, `DEVNET2_SI_BACKUP_USER`, `DEVNET2_MONITORED_BACKUPS`, `DEVNET2_BACKUP_DELETE_RIGHT`, `P1_STAGING_USERS`; the grant-probe rows of `si_backup` and `si_restore` in `clickhouse_grant_probe.tsv`; the commands `/sentio-node storage-integrity backup` and `restore-drill --config-path --owner --owner-rpc` (Task 25) and their one stdout line, the `objstore.BackupIndex` (`format` `si-backup-index-v1`, `name`, `kind`, `base`, `chain_length`, `snapshot_id`, `entry`, `tables[].physical_table`) and the `objstore.DrillVerdict` (`format` `si-restore-drill-v1`, `backup`, `snapshot_id`, `entry`, `tables[].{table_id, physical_table, reason, partitions[].{partition_id, reason, need, kept, dropped, scratch}}`, `pass`) of Task 24. The ledger values `HG_TAG_P1`, `CORE_TAG_P1`, `P1_BACKUP_DELETE`, `SN_COMMIT_P1`, `SN_DIGEST_P1` (this plan, Tasks 22, 24 and 25) and `INDEXER_C_ID`, `E_END` (Plan S3-B), read with `s3-ledger.py get`. The earlier runbooks' §0 helpers, unchanged: dynamic-table-set (`si_kubectl`, `si_arbiter`, `si_leader`, `si_show`, `si_images`), multi-source (`si_rpc_on`, `si_info`, `si_status`), multi-source-tracks (`si_tracks`, `si_track`, `si_track_published`, `si_wait_track`, `si_agent_start`, `si_agent_stop`, `si_agent_ch`), stage-3 P0 (`si_vm_query`, `si_vmalert_groups`, `si_head_is`, `si_revert_stage3`; its §13.4 budget procedure, copied verbatim), lockdown (`si_lockdown_dir` and its lock records, `si_ch_admin`, `si_ch_pod`, `si_installation`, `si_inpod_client`, `si_keeper`, `si_stamp`, `si_chi_state`, `si_wait_chi`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff`), indexer-c (`si_source_ch`, `si_info`, `si_status` and `si_rpc_on` with `c`; `$HOME/si-devnet2-stage3-indexer-c/acceptance-db` and `e-end.txt`).
-- Produces: the runbook with the sections of contract §18 verbatim and the names of contract §19: `si_backup="$HOME/si-devnet2-stage3-p1"`, `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, the helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql <account> <sql-file>`, `si_p1s_grant_probe`, `si_index <a|b|c> <name>`, `si_host_pods <a|b|c>`, `si_backup_run <a|b|c> <n>` (Job `sentio-node-devnet2-indexer-<x>-si-backup-p1-<n>`), `si_drill <a|b|c>` (ConfigMap `si-p1-drill-config-<x>`, Job `si-p1-drill-<x>`), the evidence files of contract §19 and the run values (`devuser1.s3_p1`, rows `5101`–`5104`, `hg_safe.p1_mech`, `mechanics/<stamp>-*`, `hg_rstage.p1drill_<x>_<n>`); the tracks runbook's stage row 10 (`| 10 | Multi-source stage 3 P1 (…): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |`). The names this task adds (Appendix B): the variables `si_p1_bucket`, `si_p1_bucket_url`, `si_p1s_chi`, `si_p1s_pod`, `si_p1s_logins`, `si_p1_trailer`, `si_p1_inpod_client`, `si_s3_inpod`; the helpers `si_p1_pin`, `si_p1_owner`, `si_p1_installation`, `si_p1_chi`, `si_p1_rpc_url`, `si_p1_cronjob`, `si_p1_account`, `si_p1s_as`, `si_secret_hits`, `si_s3_outcome`, `si_p1_check`, `si_p1_probe`, `si_indexes`, `si_p1_pods_check`, `si_p1_wait_backup_user`, `si_p1_grants`, `si_p1_backup_login`, `si_p1_servers`, `si_p1_fresh_main`, `si_p1_tests`, `si_p1_user_commit`, `si_p1_user_apply`, `si_p1_schedule_clear`, `si_p1_job_commit`, `si_p1_job_apply`, `si_p1_job_line`, `si_p1_backup_check`, `si_p1_active`, `si_p1_drill_check`, `si_p1_monitoring_commit`, `si_p1_monitoring_apply`, `si_p1_revert_chi`, `si_p1_mech_url`, `si_p1_sql`, `si_p1_status`, `si_p1_mech_backups`, `si_p1_mech_lock`, `si_p1_mech_keys`, `si_p1_hits_all`, `si_p1_key_fd`, `si_p1_mech_masking`, `si_p1_budget_left`, `si_p1_py` (subcommands `pr-state`, `hashes`, `staging-check`, `bucket`, `service-accounts`, `hmac`, `chi-add-user`, `values-add-user`, `enable-backup`, `monitoring`, `mirror`, `grants-check`, `cronjob-check`, `job-line`, `index-check`, `same-json`, `drill-config`, `drill-job`, `verdict-check`, `mech-verdict`); the mechanics checks of `mechanics-gcs.tsv` (49 rows, named in §5); the evidence files `identities.txt`, `known-tables.txt`, `expected-table-<x>`, `preconditions.txt`, `sts-<x>-before.txt`, `chi-<installation>-before.txt`, `runtime-uids-before.txt`, `images-before.txt`, `tracks-before.json`, `backup-writer-role.json`, `lock-remover-role.json`, `managed-folders.json`, `managed-folder-iam-<folder>.json` (K25), `hmac-list.json`, `keys.txt`, `staging-file.txt`, `staging-logins.txt`, `staging-server.txt`, `staging-chi.txt`, `staging-grants-<user>.jsonl`, `mech-stamp`, `mechanics-gcs.log`, `mechanics-verdict.txt`, `grants-si_backup-<host>.jsonl`, `chi-<installation>-after-si-backup-user.txt`, `render-si-backup-user-network.txt`, `render-si-backup-<x>.txt`, `cronjob-<x>.json`, `cronjob-<x>-config.yaml`, `host-pods-<x>-<step>.txt`, `drill-table-*.txt`, `backup-<x>-<n>.{prev,prev.json,log}`, `index-<x>-<n>.json`, `backup-check-<x>-<n>.txt`, `drill-<x>.log`, `drill-config-<x>.yaml`, `drill-job-<x>.json`, `active-<x>.tsv`, `drill-check-<x>.txt`, `render-monitoring-backups.txt`, `monitoring-backups.txt`, `staging-pvcs.txt`, `keeper-after-cleanup.txt`, `tests-<name>.txt`. The ledger value `P1_PR` (Step 10). PR title (contract §18): `storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)`.
+- Produces: the runbook with the sections of contract §18 verbatim and the names of contract §19: `si_backup="$HOME/si-devnet2-stage3-p1"`, `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, the helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql <account> <sql-file>`, `si_p1s_grant_probe`, `si_index <a|b|c> <name>`, `si_host_pods <a|b|c>`, `si_backup_run <a|b|c> <n>` (Job `sentio-node-devnet2-indexer-<x>-si-backup-p1-<n>`), `si_drill <a|b|c>` (ConfigMap `si-p1-drill-config-<x>`, Job `si-p1-drill-<x>`), the evidence files of contract §19 and the run values (`devuser1.s3_p1`, rows `5101`–`5104`, `hg_safe.p1_mech`, `mechanics/<stamp>-*`, `hg_rstage.p1drill_<x>_<n>`); the tracks runbook's stage row 10 (`| 10 | Multi-source stage 3 P1 (…): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |`). The names this task adds (Appendix B): the variables `si_p1_bucket`, `si_p1_bucket_url`, `si_p1s_chi`, `si_p1s_pod`, `si_p1s_logins`, `si_p1_trailer`, `si_p1_inpod_client`, `si_s3_inpod`; the helpers `si_p1_pin`, `si_p1_owner`, `si_p1_installation`, `si_p1_chi`, `si_p1_rpc_url`, `si_p1_cronjob`, `si_p1_account`, `si_p1s_as`, `si_secret_hits`, `si_s3_outcome`, `si_p1_check`, `si_p1_probe`, `si_indexes`, `si_p1_pods_check`, `si_p1_wait_backup_user`, `si_p1_grants`, `si_p1_backup_login`, `si_p1_servers`, `si_p1_fresh_main`, `si_p1_tests`, `si_p1_user_commit`, `si_p1_user_apply`, `si_p1_schedule_clear`, `si_p1_job_commit`, `si_p1_job_apply`, `si_p1_job_line`, `si_p1_backup_check`, `si_p1_active`, `si_p1_drill_check`, `si_p1_revert_chi`, `si_p1_mech_url`, `si_p1_sql`, `si_p1_status`, `si_p1_mech_backups`, `si_p1_mech_lock`, `si_p1_mech_keys`, `si_p1_hits_all`, `si_p1_key_fd`, `si_p1_mech_masking`, `si_p1_budget_left`, `si_p1_py` (subcommands `pr-state`, `hashes`, `staging-check`, `bucket`, `service-accounts`, `hmac`, `chi-add-user`, `values-add-user`, `enable-backup`, `monitoring-off`, `monitoring` (refused), `mirror`, `grants-check`, `cronjob-check`, `job-line`, `index-check`, `same-json`, `drill-config`, `drill-job`, `verdict-check`, `mech-verdict`); the mechanics checks of `mechanics-gcs.tsv` (49 rows, named in §5); the evidence files `identities.txt`, `known-tables.txt`, `expected-table-<x>`, `preconditions.txt`, `sts-<x>-before.txt`, `chi-<installation>-before.txt`, `runtime-uids-before.txt`, `images-before.txt`, `tracks-before.json`, `backup-writer-role.json`, `lock-remover-role.json`, `managed-folders.json`, `managed-folder-iam-<folder>.json` (K25), `hmac-list.json`, `keys.txt`, `staging-file.txt`, `staging-logins.txt`, `staging-server.txt`, `staging-chi.txt`, `staging-grants-<user>.jsonl`, `mech-stamp`, `mechanics-gcs.log`, `mechanics-verdict.txt`, `grants-si_backup-<host>.jsonl`, `chi-<installation>-after-si-backup-user.txt`, `render-si-backup-user-network.txt`, `render-si-backup-<x>.txt`, `cronjob-<x>.json`, `cronjob-<x>-config.yaml`, `host-pods-<x>-<step>.txt`, `drill-table-*.txt`, `backup-<x>-<n>.{prev,prev.json,log}`, `index-<x>-<n>.json`, `backup-check-<x>-<n>.txt`, `drill-<x>.log`, `drill-config-<x>.yaml`, `drill-job-<x>.json`, `active-<x>.tsv`, `drill-check-<x>.txt`, `monitoring-waiver.json`, `monitoring-off.json`, `staging-pvcs.txt`, `keeper-after-cleanup.txt`, `tests-<name>.txt`. The ledger value `P1_PR` (Step 10). PR title (contract §18): `storage-integrity: multi-source SI stage 3 P1 (replica bucket, backup users and jobs, P1 staging, runbook)`.
 
 Notes (drafting decisions, Appendix B):
 - **Sections, helpers and evidence are the contract's.** The headings are contract §18's list, the §0 helpers and evidence files contract §19's, each spelled as there; §5's four parts (backups and restore, versions, keys, masking) are run-in labels, not headings, because the contract lists no subsection of §5. §1, §2 and §3 hold no confirmed block (§2 and §3 are the user's fish blocks; their checks are read-only), which Task 28 relies on.
@@ -14359,7 +14367,7 @@ Notes (drafting decisions, Appendix B):
 - **Every series the backup alerts read is proven exported (review fix).** §11's read-only check after the sync requires, for each listed CronJob, `kube_cronjob_created`, `kube_cronjob_status_last_successful_time` and `kube_job_status_failed` of the Jobs `kube_job_owner` names it the owner of, the selectors of Task 26's two rules; a missing one would leave a rule that never fires.
 - **§12 records `P1_END` only for a clean end (review fix).** The CHIs, the arbiter and verifier images, the tracks and the backup alerts stop the record when they differ, as the pod checks already did.
 - **The tracks runbook points here (review fix).** As the P0 runbook did with row 9, the stage table of `docs/storage-integrity-devnet2-multi-source-tracks.md` gains row 10 for P1, so Plan S3-C3 contract §27.10's P2 row goes after it.
-- **Contract issue (recorded):** the render tests must accept every state the live commits produce. Plan S3-B's `test_si_clients_take_clickhouse_passwords_only_from_secrets`, `test_devnet2_clickhouse_logins_follow_the_rollout` and the indexer-c profile comparison see the CronJob's Secret env vars and the `si_backup` users once the P1 mirrors turn on; Task 26 extends them (contract §18), and Step 5's self-test applies every live commit of §6, §8 and §11 in a clone and runs the render tests, so a gap fails here, before the PR, not in Task 28.
+- **Contract issue (recorded):** the render tests must accept every state the live commits produce. Plan S3-B's `test_si_clients_take_clickhouse_passwords_only_from_secrets`, `test_devnet2_clickhouse_logins_follow_the_rollout` and the indexer-c profile comparison see the CronJob's Secret env vars and the `si_backup` users once the P1 mirrors turn on; Task 26 extends them (contract §18), and Step 5's self-test applies the six user/job commits of §6 and §8 while §11 keeps monitoring OFF in a clone and runs the render tests, so a gap fails here, before the PR, not in Task 28.
 - **Verification while drafting.** The runbook and both scripts were run in a scratch export: the production tree that Plan S3-B's live tasks leave (a git archive of `origin/main` with S3-B Tasks 13, 16 and 19 and the P0, L and E live commits applied from their text, `test_render.py` 127 tests OK) plus stand-ins of Task 26's files written from contract §18; the six earlier runbooks' §0 blocks (the P0, lockdown and indexer-c ones extracted from Plan S3-B's text) sourced in order before this one (no name collides but `si_backup`); the helpers run against a locked ClickHouse 26.3.51.7 container standing in for the P1 staging installation and an S3 endpoint modelling the bucket's IAM rules (writer, writer with the lock remover, reader; overwrite needs delete): the grant probe (108 rows as expected, 30 `si_verifier` rows skipped, 8 s), all 49 mechanics rows (PASS, verdict `lock`), `si_index`, `si_indexes`, `si_backup_run` and `si_drill` with stand-in Jobs, every edit subcommand on the stand-in files, the render diffs of every live commit (as listed above), and `render-inertness.sh` (all eight releases `identical`); the conventions check, `bash -n`, `fish --no-execute`, `shellcheck` and the self-test as Steps 2 and 5 run them, on bash 5.3 and 3.2.
 - **Commit identity (review fix).** GitHub never shows the global `uranuswch@gmail.com`: Step 1 sets the worktree identity `poetry <chen@sentio.xyz>` again (Task 26 set it first) and checks Task 26's authors, Step 6 checks this task's commit, Step 10 checks every commit of the PR (authors and co-author trailers) before the squash merge, and the ledger worktree of R1 sets the same identity before its record commit, which R2 refuses under any other author. The runbook's own commit helpers run in Task 28's live worktree, whose identity Task 28 sets.
 - **Review (2026-10-17).** Re-verified on a production export with Task 26 applied (the chain `base febc6c4ac + S3-B Tasks 15–21 stand-ins + C1 Task 26`, with S3-B Task 17's lockdown runbook extracted from its plan text): Steps 2–5 as written (69 bash blocks, 36 confirmed, 4 fish blocks; `shellcheck` with SC2154 and SC2034 excluded; `bash -n` on bash 5.3 and 3.2; `fish -n`; the self-test; `test_render.py` 147 tests OK; three `helm lint --strict`; `render-inertness.sh` eight `identical`); Task 28's 24 markers and two record markers each name exactly one block; §5's backups, keys and masking helpers ran against a real ClickHouse 26.3.37.3 and MinIO with a writer key without delete (`lock-removal-denied` on the full backup, as K24 predicts), one with delete on `*/.lock` only (every row as expected except the overwrite, which MinIO grants without a delete right and GCS refuses), and a reader key; `si_s3_sql`'s in-pod script ran under the deployed image's `dash` and `mawk`; the §14 revert order applies without conflicts on all seven live commits.
@@ -14458,7 +14466,7 @@ for r in origin/main origin/urwt/claude/ms-si-stage3-plans-cf; do printf '%s: %s
 echo "P1_BACKUP_DELETE=$P1_BACKUP_DELETE"
 ```
 
-Expected with `none`: nothing more to decide (no backup key holds a delete; §2 creates no lock remover). With `lock`: a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR), the P1 row of spec §16 amended to "… but not delete, except the backup's own `.lock`" (K24; the phrase Task 26 checks). Stop and ask the user in chat unless they confirm that this amendment is theirs (or approved by them) and stands; never write or open the amendment as an agent, and never go on with `lock` on a count of `0`. The runbook covers both rights: §2 applies the lock remover only for `lock`, and §5 stops P1 when GCS measures another right than the ledger's.
+Expected with `none`: nothing more to decide (no backup key holds a delete; §2 creates no lock remover). With `lock`: a count of `1` on at least one of the two refs (the amendment may land on `main` or, like decision D36's §8.2 amendment, through the stage-3 plans PR), the P1 row of spec §16 amended to "… but not delete, except the backup's own `.lock`" (K24; the phrase Task 26 checks). The user approved this exact own-lock-only amendment on 2026-10-19; do not ask again. Verify the adopted ref, and never go on with `lock` when neither ref carries the phrase. This decision proves no GCS result and authorizes no live action. The runbook covers both rights: §2 applies the lock remover only for `lock`, and §5 stops P1 when GCS measures another right than the ledger's.
 
 - [ ] **Step 2: The failing conventions check**
 
@@ -14561,7 +14569,7 @@ This task changes documentation only, so the check of Step 2 is its failing test
 ````markdown
 # Storage integrity devnet2: stage-3 P1, verified object-store backups
 
-This runbook gives each SI owner of devnet2-si-v2 (indexer-a, indexer-b, indexer-c) verified, incremental backups of its `hg_safe` in the versioned GCS bucket `sentio-352722-si-devnet2-si-v2-replica`, written by ClickHouse `BACKUP DATABASE hg_safe TO S3(...)` as the installation-wide user `si_backup` with an HMAC key that is confined to the owner's prefix `owner-<indexer id>/` (a managed folder of the bucket, the only GCS IAM scope that confines a list) and cannot delete, and proves every owner's latest backup with a restore drill on a throwaway staging installation that gates each restored partition against the published manifest the backup's index object names. Design: housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §16 row P1 and its exit criterion, §8.4 to §8.6, §13.1 and §14, as clarified by Plan S3-C1 (housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`, clarifications K23 to K28, on top of Plans S3-A and S3-B). It continues [storage-integrity-devnet2-stage3-lockdown.md](storage-integrity-devnet2-stage3-lockdown.md) (every SI ClickHouse locked) and [storage-integrity-devnet2-stage3-indexer-c.md](storage-integrity-devnet2-stage3-indexer-c.md) (indexer-c enrolled), both done. P1 pauses no track: nothing here restarts an SI ClickHouse, a host pod, a verifier or a voter, and nothing changes consensus state except the drill table and its two INSERTs.
+This runbook gives each SI owner of devnet2-si-v2 (indexer-a, indexer-b, indexer-c) verified, incremental backups of its `hg_safe` in the versioned GCS bucket `sentio-352722-si-devnet2-si-v2-replica`, written by ClickHouse `BACKUP DATABASE hg_safe TO S3(...)` as the installation-wide user `si_backup` with an HMAC key that is confined to the owner's prefix `owner-<indexer id>/` (a managed folder of the bucket, the only GCS IAM scope that confines a list) and cannot delete data or index objects (only that backup's own `.lock` under K24), and proves every owner's latest backup with a restore drill on a throwaway staging installation that gates each restored partition against the published manifest the backup's index object names. Design: housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §16 row P1 and its exit criterion, §8.4 to §8.6, §13.1 and §14, as clarified by Plan S3-C1 (housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md`, clarifications K23 to K28, on top of Plans S3-A and S3-B). It continues [storage-integrity-devnet2-stage3-lockdown.md](storage-integrity-devnet2-stage3-lockdown.md) (every SI ClickHouse locked) and [storage-integrity-devnet2-stage3-indexer-c.md](storage-integrity-devnet2-stage3-indexer-c.md) (indexer-c enrolled), both done. P1 pauses no track: nothing here restarts an SI ClickHouse, a host pod, a verifier or a voter, and nothing changes consensus state except the drill table and its two INSERTs.
 
 | Stage | Change | Way back |
 | --- | --- | --- |
@@ -14569,13 +14577,13 @@ This runbook gives each SI owner of devnet2-si-v2 (indexer-a, indexer-b, indexer
 | 1 | The bucket and the service accounts, the user's Terraform apply (§2) | The bucket stays (`prevent_destroy`); service accounts only through a reviewed Terraform change |
 | 2 | Eight HMAC keys and their Secrets, the user's terminal (§3) | Deactivate the keys and delete the Secrets (§15.3) |
 | 3 | The P1 staging installation, born locked, and its grant probe (§4) | Staging cleanup (§13) |
-| 4 | Mechanics on GCS with the deployed ClickHouse image: objects under `mechanics/` (§5) | None: no key deletes an object |
+| 4 | Mechanics on GCS with the deployed ClickHouse image: objects under `mechanics/` (§5) | Data/index objects stay; only own `.lock` under K24 |
 | 5 | `si_backup` on indexer-b's, indexer-c's, then the network installation (§6) | Revert (§14) |
 | 6 | The drill table `devuser1.s3_p1`, rows `5101` to `5104` (§7) | None: on chain for good |
 | 7 | The backup CronJobs of indexer-b, indexer-c and indexer-a, each with a first, full backup run by hand (§8) | Revert (§14); the objects stay |
 | 8 | A second, incremental backup per owner (§9) | The objects stay |
 | 9 | One restore drill per owner (§10) | None needed |
-| 10 | The backup alerts (§11) | Revert (§14) |
+| 10 | Dated C1 monitoring-OFF waiver and actual OFF evidence (§11); no deployment/delivery claim | No M to revert |
 | 11 | End record (§12); staging cleanup (§13) | None needed |
 
 Every command block is bash, except the user's own fish blocks of §2, §3 and §15.3. Run the bash blocks from the root of a production checkout at `origin/main` (the live worktree, held at a detached, freshly fetched `origin/main`), in order, in one dedicated `bash` session started with `set -eo pipefail` (from fish, run `bash` first), each block from a file of its own after §0 is defined. Every value a later block needs is written under `$si_backup`, so a block also runs in a new session once §0 is defined. Never run two stages in one window, never change more than one installation or one host per window, and from §6 to §12 change `storage-integrity-si-v2`, the three host releases and the three SI ClickHouse installations only through this runbook.
@@ -15058,39 +15066,6 @@ si_p1_drill_check() { # $1 a|b|c: read-only: the verdict passes against the mani
     echo "scratch tables left on staging: $(si_p1s_ch "SELECT count() FROM system.tables WHERE database = 'hg_rstage' AND startsWith(name, 'p1drill_$1_')")"
   } 2>&1 | tee "$si_backup/drill-check-$1.txt"
 }
-si_p1_monitoring_commit() { # local only: the single-service commit that lists the three backup CronJobs in monitoring.backups.cronJobs with DEVNET2_MONITORED_BACKUPS; prints the commit
-  local workflow_commit_before workflow_commit_after workflow_identity
-  local file=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-  si_p1_fresh_main || return 1
-  si_p1_py monitoring "$file" sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup || return 1
-  si_p1_py mirror charts/storage-integrity/tests/test_render.py DEVNET2_MONITORED_BACKUPS - '("sentio-node-devnet2-indexer-a-si-backup", "sentio-node-devnet2-indexer-b-si-backup", "sentio-node-devnet2-indexer-c-si-backup")' || return 1
-  si_p1_tests monitoring-backups || return 1
-  git add -- "$file" charts/storage-integrity/tests/test_render.py || return 1
-  git config --worktree commit.gpgsign true || return 1
-  workflow_commit_before="$(git rev-parse HEAD)" || return 1
-  git commit -q -m "chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs" -m "Lists the backup CronJobs of indexer-a, indexer-b and indexer-c in monitoring.backups.cronJobs, which renders the storage-integrity-si-v2.backups rules StorageIntegrityBackupStale and StorageIntegrityBackupFailed, and DEVNET2_MONITORED_BACKUPS (docs/storage-integrity-devnet2-stage3-p1-backups.md §11)." -m "$si_p1_trailer" || { echo "commit/signing failed; preserve staged work and ask the user to unlock this repository actual signing key; no unsigned fallback" >&2; return 1; }
-  workflow_commit_after="$(git rev-parse HEAD)" || return 1
-  [ "$workflow_commit_after" != "$workflow_commit_before" ] || { echo "commit produced no new HEAD; stop" >&2; return 1; }
-  workflow_identity="$(git log -1 --format='%an <%ae> %G?')" || return 1
-  [ "$workflow_identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new HEAD must be poetry <chen@sentio.xyz> G; stop" >&2; return 1; }
-  git verify-commit HEAD || return 1
-  git show --stat --oneline HEAD | cat
-}
-si_p1_monitoring_apply() { # mutating (only in a confirmed block): pushes si_p1_monitoring_commit's commit and syncs storage-integrity-si-v2; the render changes only the VMRule, and no pod restarts
-  local file=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml x
-  [ ! -e "$si_backup/monitoring-backups-commit" ] || { echo "monitoring-backups-commit exists: this step ran; never re-run it" >&2; return 1; }
-  si_head_is charts/storage-integrity/tests/test_render.py "$file" || return 1
-  si_p1_tests monitoring-backups-apply || return 1
-  si_render_diff storage-integrity-si-v2 > "$si_backup/render-monitoring-backups.txt" || return 1
-  [ "$(cat "$si_backup/render-monitoring-backups.txt")" = "changed VMRule/storage-integrity-si-v2" ] || { cat "$si_backup/render-monitoring-backups.txt" >&2; echo "the commit renders more than the VMRule differently: stop" >&2; return 1; }
-  git rev-parse HEAD > "$si_backup/monitoring-backups-commit" || return 1
-  git push origin HEAD:main || return 1
-  helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2 || return 1
-  si_chi_state storage-integrity-si-v2 > "$si_backup/chi-network-after-monitoring.txt" || return 1
-  diff "$si_backup/chi-network-before.txt" "$si_backup/chi-network-after-monitoring.txt" >&2 || { echo "the network CHI changed: stop (§14)" >&2; return 1; }
-  for x in a b c; do si_p1_pods_check "$x" monitoring || return 1; done
-  si_stamp > "$si_backup/monitoring-backups-synced-at"
-}
 si_p1_revert_chi() { # $1 b|c, mutating (only in a confirmed block): reverts si-backup-user-indexer-<x>-commit on origin/main, tests, pushes, applies the CHI file and waits until si_backup has left system.users; after a push it only applies and waits again
   local inst f c n
   case "$1" in b|c) ;; *) echo "si_p1_revert_chi: b or c; the network installation reverts with si_revert_stage3 (§14)" >&2; return 2 ;; esac
@@ -15253,12 +15228,14 @@ si_p1_budget_left() { # read-only: the promotion budget §1.3 computed, minus ev
   [ -n "$budget" ] && [ -n "$seq_then" ] && [ -n "$seq_now" ] || { echo "no budget: run §1.3 first" >&2; return 1; }
   echo $((budget - (seq_now - seq_then)))
 }
-si_p1_py() { # the runbook's local checks and edits (no cluster access): pr-state, hashes, staging-check, bucket, service-accounts, hmac, chi-add-user, values-add-user, enable-backup, monitoring, mirror, grants-check, cronjob-check, job-line, index-check, same-json, drill-config, drill-job, verdict-check, mech-verdict
+si_p1_py() { # the runbook's local checks and edits (no cluster access): pr-state, hashes, staging-check, bucket, service-accounts, hmac, chi-add-user, values-add-user, enable-backup, monitoring-off, monitoring (refused), mirror, grants-check, cronjob-check, job-line, index-check, same-json, drill-config, drill-job, verdict-check, mech-verdict
   python3 -I -B - "$@" <<'PY'
+import ast
 import json
 import os
 import re
 import sys
+from pathlib import Path
 
 BUCKET = "sentio-352722-si-devnet2-si-v2-replica"
 BUCKET_URL = "https://storage.googleapis.com/" + BUCKET
@@ -15312,11 +15289,33 @@ def hashes(path, users):
     return got
 
 
+def cmd_monitoring_off(waiver_path):
+    expected = {'decision': 'user-approved-c1-monitoring-off-2026-10-19', 'date': '2026-10-19', 'scope': 'S3-C1 Tasks26-28'}
+    waiver = json.loads(Path(waiver_path).read_text())
+    if not isinstance(waiver, dict) or waiver != expected:
+        fail("missing or mismatched dated C1 user waiver")
+    source = Path("charts/storage-integrity/tests/test_render.py")
+    nodes = ast.parse(source.read_text()).body
+    def value(name):
+        hits = [n for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]
+        if len(hits) != 1:
+            fail(f"expected exactly one literal {name}")
+        return ast.literal_eval(hits[0].value)
+    if value("DEVNET2_MONITORING_ENABLED") is not False or value("DEVNET2_MONITORED_BACKUPS") != ():
+        fail("C1 requires literal False and an empty monitored-backup tuple")
+    monitoring = load_yaml("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml").get("monitoring", {})
+    if monitoring.get("enabled") is not False or (monitoring.get("backups") or {}).get("cronJobs") != []:
+        fail("C1 requires actual overlay boolean false and an empty cronJobs list")
+    if Path(waiver_path).with_name("monitoring-backups-commit").exists():
+        fail("C1 OFF has no monitoring commit M")
+    evidence = dict(expected, monitoring_enabled=False, overlay_enabled=False, monitored_backups=[], overlay_backups=[], deployment="not-deployed", delivery="not-measured", alert_health="not-measured")
+    print(json.dumps(evidence, sort_keys=True))
+
+
 def cmd_pr_state(pins_path):
     p = pins(pins_path)
     t = test_render()
-    if t.DEVNET2_MONITORING_ENABLED is not True:
-        fail("S3-B monitoring is not enabled: stop before P1")
+    cmd_monitoring_off(str(Path(pins_path).with_name("monitoring-waiver.json")))
     owners = {"sentio-node-devnet2-indexer-a": 0, "sentio-node-devnet2-indexer-b": 1, "sentio-node-devnet2-indexer-c": int(p["INDEXER_C_ID"])}
     image = f"ghcr.io/sentioxyz/sentio-node:sha-{p['SN_COMMIT_P1']}@{p['SN_DIGEST_P1']}"
     checks = {
@@ -15572,29 +15571,13 @@ def cmd_enable_backup(path):
     print(f"{path}: siBackup.enabled true")
 
 
-def cmd_monitoring(path, *names):
-    doc = load_yaml(path)
-    mon = doc.get("monitoring")
-    if not isinstance(mon, dict) or mon.get("enabled") is not True:
-        fail(f"{path}: monitoring is not enabled")
-    if mon.get("backups") != {"cronJobs": []}:
-        fail(f"{path}: monitoring.backups is {mon.get('backups')!r}, not the P1 PR's empty cronJobs list")
-    lines = open(path).read().split("\n")
-    start = next(i for i, line in enumerate(lines) if line == "monitoring:")
-    at = [i for i in range(start + 1, len(lines) - 1) if lines[i] == "  backups:" and lines[i + 1] == "    cronJobs: []"]
-    if len(at) != 1:
-        fail(f"{path}: no single '  backups:' line followed by '    cronJobs: []' under monitoring")
-    lines = lines[:at[0] + 1] + ["    cronJobs:"] + [f"      - {n}" for n in names] + lines[at[0] + 2:]
-    import yaml
-    after = yaml.safe_load("\n".join(lines))
-    doc["monitoring"]["backups"] = {"cronJobs": list(names)}
-    if after != doc:
-        fail(f"{path}: the edit would change more than monitoring.backups.cronJobs")
-    open(path, "w").write("\n".join(lines))
-    print(f"{path}: monitoring.backups.cronJobs {list(names)}")
+def cmd_monitoring(*args):
+    fail("monitoring mutation is disabled by the dated C1 OFF waiver")
 
 
 def cmd_mirror(path, constant, key, value):
+    if constant in ("DEVNET2_MONITORING_ENABLED", "DEVNET2_MONITORED_BACKUPS"):
+        fail("C1 monitoring must remain False with an empty tuple")
     text = open(path).read()
     if key == "-":
         old = f"{constant} = ()\n"
@@ -15809,7 +15792,7 @@ def cmd_mech_verdict(tsv_path, pins_path, iam_path):
 
 
 COMMANDS = {
-    "pr-state": (cmd_pr_state, 1), "hashes": (cmd_hashes, None), "staging-check": (cmd_staging_check, 2), "bucket": (cmd_bucket, 6),
+    "monitoring-off": (cmd_monitoring_off, 1), "pr-state": (cmd_pr_state, 1), "hashes": (cmd_hashes, None), "staging-check": (cmd_staging_check, 2), "bucket": (cmd_bucket, 6),
     "service-accounts": (cmd_service_accounts, 2), "hmac": (cmd_hmac, 4), "chi-add-user": (cmd_chi_add_user, 2), "values-add-user": (cmd_values_add_user, 2),
     "enable-backup": (cmd_enable_backup, 1), "monitoring": (cmd_monitoring, None), "mirror": (cmd_mirror, 4), "grants-check": (cmd_grants_check, 2),
     "cronjob-check": (cmd_cronjob_check, 5), "job-line": (cmd_job_line, 2), "index-check": (cmd_index_check, None), "same-json": (cmd_same_json, 2),
@@ -15840,7 +15823,7 @@ PY
 | The delete right a backup key holds | `<P1_BACKUP_DELETE>` (`none`: no delete at all; `lock`: each backup's own `/.lock` only, after the user amended spec §16 P1), measured by mechanics M13 on `26.3.37.3` and on the deployed image | Plan S3-C1 Appendix C (Task 24); `DEVNET2_BACKUP_DELETE_RIGHT` |
 | indexer-c's indexer id | `<INDEXER_C_ID>`: its prefix `owner-<INDEXER_C_ID>/`, its backup account `backup-<INDEXER_C_ID>` | Plan S3-B Appendix C (Task 21) |
 
-Create the evidence directory once, fresh, and record the pins (read-only for the cluster; the image check reads the registry):
+The 2026-10-19 user decision below is the C1-only monitoring waiver, not runtime evidence or live authorization. Preserve it as `monitoring-waiver.json`; all OFF checks consume it. Create the evidence directory once, fresh, and record the pins (read-only for the cluster; the image check reads the registry):
 
 ```bash
 [ ! -e "$si_backup" ] || { echo "$si_backup exists: this runbook starts a fresh evidence directory; move the old one aside"; exit 1; }
@@ -15852,6 +15835,7 @@ case "$HG_TAG_P1$CORE_TAG_P1$SN_COMMIT_P1$SN_DIGEST_P1$P1_BACKUP_DELETE$INDEXER_
 case "$P1_BACKUP_DELETE" in none|lock) ;; *) echo "P1_BACKUP_DELETE is none or lock; stop"; exit 1 ;; esac
 [ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P1" | sed -n 's/^Digest: *//p')" = "$SN_DIGEST_P1" ] || { echo "sha-$SN_COMMIT_P1 does not resolve to $SN_DIGEST_P1; stop"; exit 1; }
 printf '%s\n' "$HG_TAG_P1" "$CORE_TAG_P1" "$SN_COMMIT_P1" "$SN_DIGEST_P1" "$P1_BACKUP_DELETE" "$INDEXER_C_ID" > "$si_backup/pins"
+printf '%s\n' '{"decision":"user-approved-c1-monitoring-off-2026-10-19","date":"2026-10-19","scope":"S3-C1 Tasks26-28"}' > "$si_backup/monitoring-waiver.json"
 si_p1_py pr-state "$si_backup/pins"
 echo "pins resolve: $(si_p1_image)"
 ```
@@ -16563,48 +16547,17 @@ Expected: as §10.1: the verified tables are exactly indexer-a's Active ones, `d
 
 ## 11. Monitoring
 
-Once every owner's drill passed, one single-service commit lists the three CronJobs in `monitoring.backups.cronJobs` of `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml`, with `DEVNET2_MONITORED_BACKUPS`. That renders the rule group `storage-integrity-si-v2.backups` of the VMRule: `StorageIntegrityBackupStale` (critical, after 30 minutes: a listed CronJob's last success is older than `monitoring.backups.maxAgeSeconds`, 26 hours, or it has none and is older than that, or it is gone) and `StorageIntegrityBackupFailed` (warning, after 5 minutes: a Job of a listed CronJob failed), both delivered by Grafana's `StorageIntegrity.*` rule and both pointing at §15.2.
-
-The commit (local only):
+The user explicitly chose monitoring OFF on 2026-10-19 for C1 Tasks26–28. No monitoring commit M, list mutation, sync, VMRule deployment or delivery query occurs. The existing alert implementation and synthetic enabled-chart tests remain local capability evidence only. Automated alert/delivery coverage is absent: monitoring not deployed; delivery and alert health not measured. The four exporter families (`kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_owner`, `kube_job_status_failed`), loaded-rule health and Grafana delivery are not executed or claimed. Revalidate the actual False/off/empty state and dated waiver after every drill:
 
 ```bash
-si_p1_monitoring_commit
+si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" | tee "$si_backup/monitoring-off.json"
 ```
 
-Expected: `…/storage-integrity-si-v2.yaml: monitoring.backups.cronJobs ['sentio-node-devnet2-indexer-a-si-backup', 'sentio-node-devnet2-indexer-b-si-backup', 'sentio-node-devnet2-indexer-c-si-backup']`, the mirror, the render tests `OK`, commit `chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs`.
-
-Confirm before running.
-
-```bash
-si_p1_monitoring_apply
-```
-
-Expected: the render diff exactly `changed VMRule/storage-integrity-si-v2`; the push and the sync; no difference to `chi-network-before.txt`; the three pod checks `unchanged since §1.3 (monitoring)`.
-
-Then, read-only, a few minutes after the sync:
-
-```bash
-{
-  si_vmalert_groups | jq -c 'select(.group == "storage-integrity-si-v2.backups")'
-  si_vm_query 'kube_cronjob_status_last_successful_time{namespace="sentio-network-devnet2", cronjob=~"sentio-node-devnet2-indexer-[abc]-si-backup"}' | jq -c '[.data.result[] | {cronjob: .metric.cronjob, last_success: .value[1]}]'
-  si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[].metric | {alertname, alertstate, cronjob, owner_name}]'
-  for x in a b c; do
-    cj="$(si_p1_cronjob "$x")"
-    sel="namespace=\"sentio-network-devnet2\""
-    created="$(si_vm_query "kube_cronjob_created{$sel, cronjob=\"$cj\"}" | jq '.data.result | length')"
-    success="$(si_vm_query "kube_cronjob_status_last_successful_time{$sel, cronjob=\"$cj\"}" | jq '.data.result | length')"
-    failed="$(si_vm_query "max by (cluster, namespace, job_name) (kube_job_status_failed{$sel}) and on (cluster, namespace, job_name) max by (cluster, namespace, job_name) (kube_job_owner{$sel, owner_kind=\"CronJob\", owner_name=\"$cj\"})" | jq '.data.result | length')"
-    echo "$cj: kube_cronjob_created $created, kube_cronjob_status_last_successful_time $success, kube_job_status_failed of its Jobs $failed"
-    [ "$created" -ge 1 ] && [ "$success" -ge 1 ] && [ "$failed" -ge 1 ] || { echo "kube-state-metrics does not export a series the backup alerts read for $cj: an alert would never fire; stop and fix the exporter or the rules"; exit 1; }
-  done
-} 2>&1 | tee "$si_backup/monitoring-backups.txt"
-```
-
-Expected: the group `storage-integrity-si-v2.backups` with `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed`, both `health` `ok`; three `last_success` values (the manual runs of §8 and §9 count, being the CronJobs' own Jobs); no alert (`[]`); then, per CronJob, `kube_cronjob_created 1, kube_cronjob_status_last_successful_time 1, kube_job_status_failed of its Jobs <n>` with `<n>` at least `1` (the Jobs of §8 and §9 its `successfulJobsHistoryLimit` keeps). Every selector of the two rules thus has a series (Task 26's rules read exactly `kube_cronjob_created`, `kube_cronjob_status_last_successful_time`, `kube_job_status_failed` and `kube_job_owner`); a `0` stops here, because that rule could never fire. A `StorageIntegrityBackupFailed` here names a failed Job of §8 or §9 that is still kept: read §15.2, delete that Job only once its failure is understood, and check again.
+Expected: JSON with the dated user decision, `monitoring_enabled: false`, `overlay_enabled: false`, both backup lists `[]`, `deployment: "not-deployed"`, `delivery: "not-measured"` and `alert_health: "not-measured"`. Missing, nonboolean, enabled, mismatched or nonempty state, a missing waiver or a monitoring commit file fails. No empty-alert response is success evidence. Downstream plans retain their own monitoring prerequisites; this C1 waiver and any eventual waived `P1_END` satisfy none of them.
 
 ## 12. End
 
-P1's exit (spec §16 P1): every owner has a full and an incremental backup whose index names a published manifest, and one restore drill per owner passed against it; the GCS mechanics are recorded; the alerts are deployed; no SI ClickHouse, host pod, verifier or voter restarted. Read-only:
+P1's exit (spec §16 P1): every owner has a full and an incremental backup whose index names a published manifest, and one restore drill per owner passed against it; the GCS mechanics are recorded; monitoring is not deployed under the dated C1 waiver, and delivery/alert health are not measured; no SI ClickHouse, host pod, verifier or voter restarted. Read-only:
 
 ```bash
 {
@@ -16628,15 +16581,20 @@ P1's exit (spec §16 P1): every owner has a full and an incremental backup whose
   si_tracks | jq -e '[.indexers[] | select(.quarantined)] | length == 0' > /dev/null || { echo "a track is quarantined: stop"; exit 1; }
   echo "promotions since §1.3: $(( $(si_show | jq -r .promotion_seq) - $(cat "$si_backup/budget-live-seq") ))"
   grep '^P1_MECHANICS=' "$si_backup/p1-mechanics.txt"
-  alerts="$(si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[].metric.alertname]')"
-  echo "alerts: $alerts"
-  [ "$alerts" = '[]' ] || { echo "a backup alert is pending or firing: §15.2, then this block again"; exit 1; }
-  for f in si-backup-user-indexer-b-commit si-backup-user-indexer-c-commit si-backup-user-network-commit si-backup-b-commit si-backup-c-commit si-backup-a-commit monitoring-backups-commit; do echo "$f $(cat "$si_backup/$f")"; done
+  [ -s "$si_backup/monitoring-off.json" ] || { echo "missing §11 OFF evidence; stop"; exit 1; }
+  si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > "$si_backup/monitoring-off-current.json" || exit 1
+  cmp "$si_backup/monitoring-off.json" "$si_backup/monitoring-off-current.json" || exit 1
+  echo "monitoring waived 2026-10-19: not deployed; delivery and alert health not measured"
+  for f in si-backup-user-indexer-b-commit si-backup-user-indexer-c-commit si-backup-user-network-commit si-backup-b-commit si-backup-c-commit si-backup-a-commit; do
+    c="$(cat "$si_backup/$f")" || exit 1
+    [[ "$c" =~ ^[0-9a-f]{40}$ ]] || { echo "missing or invalid commit evidence $f; stop"; exit 1; }
+    echo "$f $c"
+  done
   echo "P1_END=$(date -u +%Y-%m-%d)"
 } 2>&1 | tee "$si_backup/p1-end.txt"
 ```
 
-Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; `network CHI unchanged`, `indexer-b CHI unchanged`, `indexer-c CHI unchanged` and `arbiter and verifier images unchanged`; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; `alerts: []`; the seven commits; and the last line `P1_END=<YYYY-MM-DD>`. A changed pod, CHI or image, a quarantined track or a backup alert stops the block before that line, so no `P1_END` is written for an end that is not clean; promotions above four are reported here and stop Task 28's record (K28). Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
+Expected: per owner its two backups (a `full` with chain 1, an `incr` with chain 2 on it) and both names in the bucket, its verdict `"pass":true` with its verified tables and its `drill of owner` line, and `unchanged since §1.3 (after)`; `network CHI unchanged`, `indexer-b CHI unchanged`, `indexer-c CHI unchanged` and `arbiter and verifier images unchanged`; no track quarantined; promotions since §1.3 of at most four; the `P1_MECHANICS=` line; the explicit dated monitoring waiver with deployment/delivery/alert-health limitations; the six actual user/job commits; and the last line `P1_END=<YYYY-MM-DD>`. A changed pod, CHI or image, a quarantined track or missing/mismatched OFF waiver evidence stops the block before that line, so no `P1_END` is written for an end that is not clean; promotions above four are reported here and stop Task 28's record (K28). Plan S3-C1 Task 28 records that date as `P1_END` and the record as its run record `P1 run`, and adds a paragraph `Record of the first run:` with this record's facts at the end of this section in a docs-only PR. Then §13.
 
 ## 13. Staging cleanup
 
@@ -16686,16 +16644,9 @@ si_kubectl delete secret "$si_p1s_logins"
 
 ## 14. Rollback
 
-P1 changes no consensus state but the drill table's (§7), so every live change has a way back; only the bucket's objects and the drill table stay. Every revert is a single-service commit pushed to `main` with the render tests passing, in the reverse order of the changes: the monitoring commit, then each backup CronJob (indexer-a, indexer-c, indexer-b), then each `si_backup` user (network, indexer-c, indexer-b), never a user before the CronJob that logs in with it. A step that has not run has no commit file and is skipped; a revert already pushed only syncs or applies again. Each block on its own, one per window, and none while a backup Job runs (`si_kubectl get jobs | grep -- -si-backup-`).
+P1 changes no consensus state but the drill table's (§7), so every live change has a way back; only the bucket's objects and the drill table stay. Every revert is a single-service commit pushed to `main` with the render tests passing, in the reverse order of the changes: each backup CronJob (indexer-a, indexer-c, indexer-b), then each `si_backup` user (network, indexer-c, indexer-b), never a user before the CronJob that logs in with it. A step that has not run has no commit file and is skipped; a revert already pushed only syncs or applies again. Each block on its own, one per window, and none while a backup Job runs (`si_kubectl get jobs | grep -- -si-backup-`).
 
-The backup alerts:
-
-Confirm before running.
-
-```bash
-si_revert_stage3 monitoring-backups-commit storage-integrity-si-v2
-for x in a b c; do si_p1_pods_check "$x" rollback; done
-```
+Monitoring rollback is inapplicable to this C1 OFF execution: no M commit exists and no monitoring revert or sync runs. A `monitoring-backups-commit` file is a policy mismatch that stops execution.
 
 The backup CronJobs, one block per owner, indexer-a's, then indexer-c's, then indexer-b's (each release's sync removes its CronJob and its ConfigMap; the StatefulSet never changes):
 
@@ -16763,7 +16714,7 @@ Expected, each: the revert pushed (or `syncing only`), the sync or apply, `si_ba
 
 ### 15.2 A failed or stale backup
 
-`StorageIntegrityBackupFailed` (warning) fires 5 minutes after a Job of a listed CronJob failed; `StorageIntegrityBackupStale` (critical) 30 minutes after a listed CronJob's last success became older than 26 hours (or it has none and is that old). Read-only first:
+C1 has no automated alert coverage: use the manual status checks below. In a separately authorized future monitoring-enabled deployment, `StorageIntegrityBackupFailed` (warning) fires 5 minutes after a Job of a listed CronJob failed; `StorageIntegrityBackupStale` (critical) 30 minutes after a listed CronJob's last success became older than 26 hours (or it has none and is that old). Read-only first:
 
 ```bash
 for x in a b c; do
@@ -16783,7 +16734,7 @@ Then the failed Job's log (`si_kubectl logs job/<job>`; it never holds a key, be
 - An arbiter that could not be reached (`storage integrity arbiter client`), a manifest read that timed out (`storage integrity arbiter: reading … took longer than …`) or `has no track frontier for indexer`: the arbiter or the owner's track; the next scheduled run retries.
 - A Job that hit `activeDeadlineSeconds` (3600): GCS throughput or a large `hg_safe`; the objects it wrote stay without an index and are never used.
 
-Once fixed, run one backup by hand outside the owner's schedule window, in a confirmed block of its own: during P1 with the next run number (`si_backup_run <x> <n>`); after §13 with `si_kubectl create job --from=cronjob/<cronjob> <cronjob>-manual-$(date -u +%Y%m%dt%H%M%S)` and its log read through `si_secret_hits` as above. Delete the failed Job (`si_kubectl delete job <job>`, confirmed) only after its log is read, so the warning clears. A backup older than 26 hours is the critical case because a member's restore (stage 3 P2) and a rebuild (stage 3 P4) take the latest backup and catch up from it.
+Once fixed, run one backup by hand outside the owner's schedule window, in a confirmed block of its own: during P1 with the next run number (`si_backup_run <x> <n>`); after §13 with `si_kubectl create job --from=cronjob/<cronjob> <cronjob>-manual-$(date -u +%Y%m%dt%H%M%S)` and its log read through `si_secret_hits` as above. Delete the failed Job (`si_kubectl delete job <job>`, confirmed) only after its log is read; a future monitoring-enabled deployment then clears the warning. A backup older than 26 hours is the critical case because a member's restore (stage 3 P2) and a rebuild (stage 3 P4) take the latest backup and catch up from it.
 
 ### 15.3 Keys and logins
 
@@ -16843,7 +16794,7 @@ path = sys.argv[1]
 text = open(path).read()
 lines = text.split("\n")
 p0 = [i for i, line in enumerate(lines) if line.startswith("| 9 | Multi-source stage 3 P0 (") and line.endswith("| See that runbook (§12) |")]
-row = "| 10 | Multi-source stage 3 P1 (verified object-store backups of every SI owner's `hg_safe` in a versioned GCS bucket, with keys confined to each owner's prefix that cannot delete; one restore drill per owner gated against the manifest its backup names; backup alerts): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |"
+row = "| 10 | Multi-source stage 3 P1 (verified object-store backups of every SI owner's `hg_safe` in a versioned GCS bucket, with keys confined to each owner's prefix that cannot delete; one restore drill per owner gated against the manifest its backup names; monitoring OFF under the dated C1 waiver): see [storage-integrity-devnet2-stage3-p1-backups.md](storage-integrity-devnet2-stage3-p1-backups.md) | See that runbook (§14) |"
 assert len(p0) == 1, "expected one stage-3 P0 row 9 in the stage table: re-anchor the pointer"
 assert row not in lines and not lines[p0[0] + 1].startswith("| 10 | "), "the stage table has a row 10 already: never add a second one"
 lines.insert(p0[0] + 1, row)
@@ -16865,9 +16816,9 @@ cd "$W" && python3 -I "$HOME/.cache/s3c1-task27/check_runbook.py" docs/storage-i
 shellcheck -s bash -S info -e SC2154,SC2034 "$HOME/.cache/s3c1-task27/blocks"/*.bash && echo "shellcheck clean apart from SC2154, SC2034"
 ```
 
-Expected: `sections as listed; one helpers block in §0; 69 bash blocks (36 confirmed, every write confirmed), 4 fish blocks; no hard-wrapped prose; bash -n and fish --no-execute pass; 7 python snippets compile; blocks in <home>/.cache/s3c1-task27/blocks`, then `shellcheck clean apart from SC2154, SC2034` (SC2154 is `si_backup` and the earlier runbooks' names, defined in their §0; SC2034 the loop counters of the wait loops).
+Expected: `sections as listed; one helpers block in §0; 66 bash blocks (34 confirmed, every write confirmed), 4 fish blocks; no hard-wrapped prose; bash -n and fish --no-execute pass; 7 python snippets compile; blocks in <home>/.cache/s3c1-task27/blocks`, then `shellcheck clean apart from SC2154, SC2034` (SC2154 is `si_backup` and the earlier runbooks' names, defined in their §0; SC2034 the loop counters of the wait loops).
 
-The self-test of the §0 helpers (local only: it sources the seven runbooks' §0 blocks from this branch, applies every live commit of §6, §8 and §11 in a clone of the worktree and runs the render tests on that state, builds the drill Job from the CronJob the branch renders, runs `si_s3_sql`'s in-pod script with a stand-in `clickhouse-client`, and checks the index, verdict and mechanics parsers on synthetic objects; it reads the user's `hashes-p1-staging.yaml`, which holds hashes only, and touches no cluster, bucket or ClickHouse). Write `$HOME/.cache/s3c1-task27/selftest.bash` with the Write tool:
+The self-test of the §0 helpers (local only: it sources the seven runbooks' §0 blocks from this branch, applies the six user/job commits of §6 and §8 while §11 keeps monitoring OFF in a clone of the worktree and runs the render tests on that state, builds the drill Job from the CronJob the branch renders, runs `si_s3_sql`'s in-pod script with a stand-in `clickhouse-client`, and checks the index, verdict and mechanics parsers on synthetic objects; it reads the user's `hashes-p1-staging.yaml`, which holds hashes only, and touches no cluster, bucket or ClickHouse). Write `$HOME/.cache/s3c1-task27/selftest.bash` with the Write tool:
 
 ```bash
 set -eo pipefail
@@ -16895,21 +16846,61 @@ si_p1_logins_dir="$t/logins"
 mkdir -m 700 "$si_backup" "$si_backup/sql" "$si_p1_logins_dir"
 printf '%s\n' "$HG_TAG_P1" "$CORE_TAG_P1" "$SN_COMMIT_P1" "$SN_DIGEST_P1" "$P1_BACKUP_DELETE" "$INDEXER_C_ID" > "$si_backup/pins"
 echo "== pins and the PR state"
+printf '%s\n' '{"decision":"user-approved-c1-monitoring-off-2026-10-19","date":"2026-10-19","scope":"S3-C1 Tasks26-28"}' > "$si_backup/monitoring-waiver.json"
 si_p1_py pr-state "$si_backup/pins"
 si_p1_image
 echo "== the committed staging installation against the user's hashes file"
 si_p1_py staging-check docs/examples/storage-integrity-p1-staging-chi.yaml "$HOME/si-devnet2-stage3-p1-logins/hashes-p1-staging.yaml"
-echo "== every live commit of §6, §8 and §11, in a clone"
+echo "== the six live user/job commits of §6 and §8, in a local clone; §11 stays OFF"
 git clone -q "$W" "$t/repo"
 cd "$t/repo"
 git config user.email selftest@example.invalid
 git config user.name selftest
 git config commit.gpgsign false
 cp charts/storage-integrity/tests/test_render.py "$t/monitoring-before.py"
-python3 -I -c 'import re; from pathlib import Path; p=Path("charts/storage-integrity/tests/test_render.py"); text,n=re.subn(r"(?m)^DEVNET2_MONITORING_ENABLED = True$", "DEVNET2_MONITORING_ENABLED = False", p.read_text()); assert n == 1; p.write_text(text)'
-if si_p1_py pr-state "$si_backup/pins" > /dev/null 2>&1; then echo "UNEXPECTED: disabled S3-B monitoring passed P1 preconditions"; exit 1; fi
+cp k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml "$t/monitoring-before.yaml"
+si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > "$t/monitoring-off-positive.json"
+for bad in true missing nonboolean duplicate overlay-true overlay-missing overlay-nonboolean tuple-nonempty overlay-nonempty missing-waiver fake-M; do
+  cp "$t/monitoring-before.py" charts/storage-integrity/tests/test_render.py
+  cp "$t/monitoring-before.yaml" k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+  printf '%s\n' '{"decision":"user-approved-c1-monitoring-off-2026-10-19","date":"2026-10-19","scope":"S3-C1 Tasks26-28"}' > "$si_backup/monitoring-waiver.json"
+  rm -f "$si_backup/monitoring-backups-commit"
+  python3 -I - "$bad" "$si_backup" <<'PYEOF'
+import re, sys
+from pathlib import Path
+import yaml
+bad, out = sys.argv[1:]
+p = Path("charts/storage-integrity/tests/test_render.py")
+text = p.read_text()
+changes = {"true": "True", "nonboolean": "0", "missing": None}
+if bad in changes:
+    replacement = "" if changes[bad] is None else "DEVNET2_MONITORING_ENABLED = " + changes[bad]
+    text, n = re.subn(r"(?m)^DEVNET2_MONITORING_ENABLED = False$", replacement, text)
+    assert n == 1
+if bad == "duplicate":
+    text += "\nDEVNET2_MONITORING_ENABLED = False\n"
+if bad == "tuple-nonempty":
+    text, n = re.subn(r"(?m)^DEVNET2_MONITORED_BACKUPS = \(\)$", 'DEVNET2_MONITORED_BACKUPS = ("fixture",)', text)
+    assert n == 1
+p.write_text(text)
+p = Path("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml")
+doc = yaml.safe_load(p.read_text())
+if bad == "overlay-true": doc["monitoring"]["enabled"] = True
+if bad == "overlay-missing": del doc["monitoring"]["enabled"]
+if bad == "overlay-nonboolean": doc["monitoring"]["enabled"] = 0
+if bad == "overlay-nonempty": doc["monitoring"]["backups"]["cronJobs"] = ["fixture"]
+p.write_text(yaml.safe_dump(doc))
+if bad == "missing-waiver": Path(out, "monitoring-waiver.json").unlink()
+if bad == "fake-M": Path(out, "monitoring-backups-commit").write_text("fixture\n")
+PYEOF
+  if si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > /dev/null 2>&1; then echo "UNEXPECTED: $bad monitoring policy passed"; exit 1; fi
+  echo "ok: $bad monitoring policy refused"
+done
 cp "$t/monitoring-before.py" charts/storage-integrity/tests/test_render.py
-echo "ok: disabled S3-B monitoring refuses P1"
+cp "$t/monitoring-before.yaml" k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
+printf '%s\n' '{"decision":"user-approved-c1-monitoring-off-2026-10-19","date":"2026-10-19","scope":"S3-C1 Tasks26-28"}' > "$si_backup/monitoring-waiver.json"
+rm -f "$si_backup/monitoring-backups-commit"
+si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > /dev/null
 for i in network indexer-b indexer-c; do printf 'passwordSha256:\n  si_backup: "%s"\n' "$(printf 'selftest-%s' "$i" | shasum -a 256 | cut -d' ' -f1)" > "$si_p1_logins_dir/hashes-si_backup-$i.yaml"; done
 for i in indexer-b indexer-c; do
   si_p1_py chi-add-user "k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-$i-source.yaml" "$si_p1_logins_dir/hashes-si_backup-$i.yaml"
@@ -16927,12 +16918,10 @@ for x in b c a; do
   git commit -qam "selftest: backup job $x"
   echo "render: $(si_render_diff "sentio-node-devnet2-indexer-$x" 2>/dev/null | tr '\n' ' ')"
 done
-si_p1_py monitoring k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup
-si_p1_py mirror charts/storage-integrity/tests/test_render.py DEVNET2_MONITORED_BACKUPS - '("sentio-node-devnet2-indexer-a-si-backup", "sentio-node-devnet2-indexer-b-si-backup", "sentio-node-devnet2-indexer-c-si-backup")'
-git commit -qam "selftest: monitoring"
-echo "render: $(si_render_diff storage-integrity-si-v2 2>/dev/null)"
-echo "== the render tests with every P1 change on"
+si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > "$t/monitoring-off-after-six-commits.json"
+echo "== the render tests with all six P1 user/job changes and monitoring OFF"
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -n 3
+# Separate synthetic enabled values in the chart suite test inert alert capability only, never delivery.
 echo "== the backup CronJob and the drill Job of indexer-b"
 helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml template --selector name=sentio-node-devnet2-indexer-b --skip-deps 2> /dev/null > "$t/render-b.yaml"
 python3 -I - "$t/render-b.yaml" "$t" <<'PYEOF'
@@ -17334,6 +17323,8 @@ Expected: `P1_PR=<the value written>`. Anything else (for example the stage-3 pl
 
 ## Task 28: devnet2 — stage-3 P1 (live): replica bucket and keys, P1 staging, GCS mechanics, `si_backup` on every installation, drill table, backup jobs and chains, one restore drill per owner, backup alerts, record (S3-C1)
 
+**Current C1 execution policy (2026-10-19).** The user approved monitoring OFF, K24 own-backup-lock deletion only and K25's existing managed-folder layout. Historical monitoring-True/commit-M test observations below describe earlier text; their prospective enablement/delivery requirement is superseded by the explicit OFF/empty/dated-waiver path. No production/live action follows from these decisions; downstream monitoring gates remain independent.
+
 Spec §16 row P1 and its exit criterion, as clarified by K23–K28 and bound by contract §16–§19: every SI owner of devnet2-si-v2 gets a full and an incremental backup of its `hg_safe` in the versioned replica bucket, written with a key that is confined to its own prefix and cannot delete, and one restore drill per owner verifies its latest backup against the manifest that backup's index names; nothing changes consensus and nothing restarts an SI ClickHouse, a host pod, a verifier or a voter. The task executes `docs/storage-integrity-devnet2-stage3-p1-backups.md` (Task 27, merged in `P1_PR`) section by section in contract §19's binding order: §1 → §2 (the user's Terraform) → §3 (the user's eight HMAC keys) → §4 staging → §5 GCS mechanics → §6 `si_backup` on indexer-b, indexer-c, then the network installation → §7 drill table (the user's writes) → §8 backup jobs b, c, a with a first, full backup each → §9 incremental backups → §10 restore drills b, c, a → §11 backup alerts → §12 end → §13 staging cleanup. The runbook is the source of truth for every check, acceptance name and value (Plan S3-B decision D19) and holds every mutating block; this task adds the Gates, the exact content of the seven single-service commits, the user's actions, its own read-only verdicts that decide each stop, the P1 record PR and the ledger record of `P1_MECHANICS` and `P1_END` (contract §19).
 
 No step changes consensus state; the only promotions are the drill table's (at most four, K28). Irreversible: the replica bucket (`prevent_destroy`, versioned) and every object written to it, because no key of this plan deletes (K24) — the mechanics objects under `mechanics/` (Step 6) and the backups under `owner-<id>/` (Steps 11–14); and the drill table `devuser1.s3_p1` with its two INSERTs (Step 10: a registry incarnation and its promotions stay in consensus state). Every commit can be reverted (runbook §14), the HMAC keys and Secrets can be revoked (runbook §15.3), and the staging installation is throwaway (runbook §13).
@@ -17343,24 +17334,24 @@ No step changes consensus state; the only promotions are the drill table's (at m
 - Modify, commit U-c (Step 8): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml` (Plan S3-B Task 19's born-locked CHI) — the same four keys at the end of its `    users:` block; `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2-indexer-c"]` `False` → `True`.
 - Modify, commit U-n (Step 9): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — the top-level `clickhouse:` block (Plan S3-B Task 18 Step 16's posture C block, before `da:`, line 47 at `7e08b6ea5`): `    backupUser: true` right after `    lockDefault: true` (or its `false` turned `true` if Task 26 wrote the key) and `      si_backup: "<hash>"` after the last entry of `passwordSha256`; `DEVNET2_SI_BACKUP_USER["storage-integrity-si-v2"]` `False` → `True`.
 - Modify, commits J-b, J-c, J-a (Steps 11–13): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, `sentio-node-indexer-c-storage-integrity-si-v2.yaml`, `sentio-node-indexer-a-storage-integrity-si-v2.yaml` — `siBackup.enabled: false` → `true` in Task 26's top-level `siBackup` block (appended after the last line of each overlay: line 148 of the indexer-b and line 155 of the indexer-a overlay at `7e08b6ea5`); `DEVNET2_SI_BACKUP["sentio-node-devnet2-indexer-<x>"]` `False` → `True`.
-- Modify, commit M (Step 16): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — `monitoring.backups.cronJobs` empty → `sentio-node-devnet2-indexer-a-si-backup`, `sentio-node-devnet2-indexer-b-si-backup`, `sentio-node-devnet2-indexer-c-si-backup` (Task 26's empty `monitoring.backups`, at the end of Plan S3-B Task 13's `monitoring` block); `DEVNET2_MONITORED_BACKUPS` `()` → the same three names.
+- No monitoring commit M (Step 16): actual `monitoring.enabled` remains boolean `false`, `DEVNET2_MONITORING_ENABLED` literal `False`, and `monitoring.backups.cronJobs` / `DEVNET2_MONITORED_BACKUPS` remain `[]` / `()`. Record the dated user waiver and actual OFF evidence only.
 - Modify, the P1 record PR (Step 19, docs only): `docs/storage-integrity-devnet2-stage3-p1-backups.md` — one paragraph `Record of the first run: …` at the end of §12.
 - Modify, housegate (Step 20): Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3c1-p1-backups.md` on this plan's ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; decision D34) — the rows `P1_MECHANICS` and `P1_END` and the run record `P1 run (Task 28)`, with contract §19's record procedure from the URWT worktree `multi-source-s3c1-ledger-28`.
 - Local only, never committed: the live worktree's commit identity (`git config --worktree user.name poetry` and `user.email chen@sentio.xyz` after `extensions.worktreeConfig true`, Step 1) and the ledger worktree's (Step 20), so no commit of this task carries the global `uranuswch@gmail.com`; every commit is checked to be authored and committed by `poetry <chen@sentio.xyz>` before it is pushed.
 - Create (local only, never committed): the session directory `$HOME/si-devnet2-stage3-p1-session` (mode 700) with this task's tools `p1-block.py`, `p1-helpers.py`, `p1-edit.py`, `p1-record.py`, `p1-tools.sh` and `p1-user-block.sh` (Step 1, exact content below), `live-path`, the assembled `helpers.sh`, `ledger.env`, `indexer-c-id` and `blocks/` (every block file, decision D24); the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (contract §19, verbatim) and `$HOME/.cache/s3-ledger/s3-ledger.py.plan` (the tool's text as the ledger copy holds it, for `cmp`), and the record files `$HOME/.cache/s3-ledger/record-s3c1-28`, `record-s3c1-28.md`, `record-s3c1-28-pr.md`; in the runbook's evidence directory `$HOME/si-devnet2-stage3-p1` (`$si_backup`, created fresh by runbook §1.1, never by this task) this task's `record.env` (one `KEY=value` per line, the last line of a key wins), `msg-*.txt`, `user-7-<k>.{sh,out,done}`, `tests-last.txt` and `task28-*` files.
-- Test: `python3 -B charts/storage-integrity/tests/test_render.py` at every commit (`p1_commit` refuses to commit on a failing run or on a test count other than Step 2's); `si_render_diff <release>` for every release commit (U-n: exactly `changed ClickHouseInstallation/storage-integrity-si-v2`; J-x: exactly `added ConfigMap/sentio-node-devnet2-indexer-<x>-si-backup` and `added CronJob/sentio-node-devnet2-indexer-<x>-si-backup`; M: exactly `changed VMRule/storage-integrity-si-v2`).
+- Test: `python3 -B charts/storage-integrity/tests/test_render.py` at every commit (`p1_commit` refuses to commit on a failing run or on a test count other than Step 2's); `si_render_diff <release>` for every release commit (U-n: exactly `changed ClickHouseInstallation/storage-integrity-si-v2`; J-x: exactly `added ConfigMap/sentio-node-devnet2-indexer-<x>-si-backup` and `added CronJob/sentio-node-devnet2-indexer-<x>-si-backup`; §11: OFF/empty/waiver evidence only, no monitoring render diff or sync).
 
 **Interfaces:**
 - Consumes (Appendix C, read with `s3-ledger.py get` from each plan's ledger copy, never predicted, never from a local checkout or a pending PR): `HG_TAG_P1` (Task 22), `CORE_TAG_P1` and `P1_BACKUP_DELETE` (`none` or `lock`, Task 24), `SN_COMMIT_P1` and `SN_DIGEST_P1` (Task 25), `P1_PR` (Task 27); `INDEXER_C_ID`, `E_END`, `L_END`, `SN_COMMIT`, `SN_DIGEST` (Plan S3-B); `ARBITER_TAG`, `ARBITER_DIGEST` (Plan S3-A). `P1_MECHANICS` and `P1_END` must still be empty.
 - Consumes (objects of `P1_PR`, contract §18, verbatim): `terraform/storage_integrity_devnet2_si_v2_replica.tf` with `google_storage_bucket.storage_integrity_devnet2_si_v2_replica`, `google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_writer` (`siDevnet2SiV2BackupWriter`), `google_service_account.storage_integrity_devnet2_si_v2_backup`, `google_storage_managed_folder.storage_integrity_devnet2_si_v2_backup` (the managed folders `owner-0/`, `owner-1/`, `owner-<INDEXER_C_ID>/` and `mechanics/`, K25), `google_storage_managed_folder_iam_member.storage_integrity_devnet2_si_v2_backup_writer`, `google_service_account.storage_integrity_devnet2_si_v2_restore`, `google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_restore_viewer` and, only with `lock`, `google_project_iam_custom_role.storage_integrity_devnet2_si_v2_backup_lock_remover` (`siDevnet2SiV2BackupLockRemover`) and `google_storage_bucket_iam_member.storage_integrity_devnet2_si_v2_backup_lock_remover`; `scripts/storage-integrity/make-si-backup-keys.sh <account>`; `docs/examples/storage-integrity-p1-staging-chi.yaml` (CHI `storage-integrity-si-v2-p1-staging`, pod `storage-integrity-si-v2-p1-staging-source-0-0-0`, Keeper root `/storage-integrity/devnet2/p1-staging`); the chart values `clickhouse.access.backupUser`, `clickhouse.access.passwordSha256.si_backup`, `siBackup.*`, `monitoring.backups.cronJobs`; the test constants `SI_BACKUP_BUCKET`, `SI_BACKUP_GRANTS`, `DEVNET2_SI_BACKUP_IMAGE`, `DEVNET2_BACKUP_OWNERS`, `DEVNET2_SI_BACKUP_SCHEDULES`, `DEVNET2_SI_BACKUP` (every release `False`), `DEVNET2_SI_BACKUP_USER` (every CHI `False`), `DEVNET2_MONITORED_BACKUPS` (`()`), `DEVNET2_BACKUP_DELETE_RIGHT` (= `P1_BACKUP_DELETE`); the user's logins made before the PR: the Secrets `storage-integrity-si-v2-clickhouse-backup-network`, `-indexer-b`, `-indexer-c` (key `password`) and `storage-integrity-si-v2-p1-staging-logins` (keys `default`, `si_snode`, `si_gateway`, `si_reader`, `si_backup`, `si_restore`), and the hashes files `hashes-p1-staging.yaml` and `hashes-si_backup-<network|indexer-b|indexer-c>.yaml` in `$HOME/si-devnet2-stage3-p1-logins` (mode 700).
-- Consumes (the runbook, Task 27, contract §18–§19): its headings (§0 to §15.5, verbatim as contract §18 lists them); its §0 helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql`, `si_p1s_grant_probe`, `si_index`, `si_host_pods`, `si_backup_run`, `si_drill`, `si_p1_check`, `si_p1_py` (its `mech-verdict`), `si_p1_schedule_clear` (read-only; it refuses from 90 minutes before to 70 minutes after an owner's daily schedule) and the names `si_backup="$HOME/si-devnet2-stage3-p1"` and `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, all in §0's first bash block (D20), whose prose links the six earlier runbooks of contract §19 in order; the evidence files of contract §19 (`pins`, `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt`, `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv`, `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-backups-commit`, `p1-end.txt`) and §5's `mechanics-verdict.txt` (Task 27's name); and these forms, which this task's tools read (Plan S3-B's runbook forms): a mutating block is preceded by the line `Confirm before running.`; the confirmed block of §6.1, §6.2 and §6.3 that pushes this task's local commit is one call of the runbook's apply helper `si_p1_user_apply b`, `c` or `a`, of §8.1, §8.2 and §8.3 `si_p1_job_apply b`, `c` or `a`, and of §11 `si_p1_monitoring_apply` (each helper, defined in §0, refuses a HEAD that is not one commit on origin/main changing exactly its two files (`si_head_is`), runs `git push origin HEAD:main`, writes that commit to its `-commit` evidence file and then applies the manifest (§6.1, §6.2) or syncs that one release (§6.3, §8.x, §11)), so this task selects each by that call (`--marker 'si_p1_user_apply b'`, never by `HEAD:main`, which only §0 contains); the read-only block before it in §6.x, §8.x and §11 is the runbook's own commit helper (`si_p1_user_commit <x>`; `si_p1_backup_login <x>` and `si_p1_job_commit <x>`; `si_p1_monitoring_commit`), which this task never runs, because its own reviewed commit of the same two files replaces it; §8.x has a confirmed block calling `si_backup_run <x> 1` followed by the read-only `si_p1_backup_check <x> 1`, §9 one confirmed block calling `si_backup_run <x> 2` per owner and one read-only block running `si_p1_backup_check` for the three, §10.x one confirmed block calling `si_drill <x>` followed by the read-only `si_p1_drill_check <x>`, and §11 a read-only check after the apply calling `si_vmalert_groups` (this task runs each of these read-only blocks by that marker too); §7's writes are devuser1 blocks whose first line is `key_file=/path/to/devuser1-owner.key`; `budget.txt` holds the line Plan S3-B's §13.4 procedure prints (`… budget to L/4 (<n> bytes): <b> promotions; a drill spends at most <h>`); `staging-grant-probe.tsv` has `si_grant_probe`'s header `row	role	expect	got	code	statement`, one row per corpus row, and `got` `skipped` (code `-`) for the rows of a role the P1 staging installation has no login for (`si_verifier`'s); `mechanics-gcs.tsv` has the header `check	expect	got` and one `si_p1_check` row per check named in §5 (49; none names the delete right, and the list rows are `mech_lists_*` and `backup-<o>_lists_*` with `expect` `ok` or `denied`); `mechanics-verdict.txt` starts with §5's verdict line `<n> rows, <f> failed; measured delete right <none|lock|undetermined>, P1_BACKUP_DELETE <none|lock>`; `p1-mechanics.txt` starts with the named record `P1_MECHANICS=<YYYY-MM-DD>` (then the stamp line), and `p1-end.txt` starts with `P1 end check <stamp> UTC` and ends with the named record `P1_END=<YYYY-MM-DD>`.
+- Consumes (the runbook, Task 27, contract §18–§19): its headings (§0 to §15.5, verbatim as contract §18 lists them); its §0 helpers `si_p1_image`, `si_p1s_ch`, `si_s3_sql`, `si_p1s_grant_probe`, `si_index`, `si_host_pods`, `si_backup_run`, `si_drill`, `si_p1_check`, `si_p1_py` (its `mech-verdict`), `si_p1_schedule_clear` (read-only; it refuses from 90 minutes before to 70 minutes after an owner's daily schedule) and the names `si_backup="$HOME/si-devnet2-stage3-p1"` and `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"`, all in §0's first bash block (D20), whose prose links the six earlier runbooks of contract §19 in order; the evidence files of contract §19 (`pins`, `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt`, `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv`, `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-waiver.json`, `monitoring-off.json`, `p1-end.txt`) and §5's `mechanics-verdict.txt` (Task 27's name); and these forms, which this task's tools read (Plan S3-B's runbook forms): a mutating block is preceded by the line `Confirm before running.`; the confirmed block of §6.1, §6.2 and §6.3 that pushes this task's local commit is one call of the runbook's apply helper `si_p1_user_apply b`, `c` or `a`, of §8.1, §8.2 and §8.3 `si_p1_job_apply b`, `c` or `a`, (each helper, defined in §0, refuses a HEAD that is not one commit on origin/main changing exactly its two files (`si_head_is`), runs `git push origin HEAD:main`, writes that commit to its `-commit` evidence file and then applies the manifest (§6.1, §6.2) or syncs that one release (§6.3, §8.x)), so this task selects each by that call (`--marker 'si_p1_user_apply b'`, never by `HEAD:main`, which only §0 contains); the read-only block before it in §6.x and §8.x is the runbook's own commit helper (`si_p1_user_commit <x>`; `si_p1_backup_login <x>` and `si_p1_job_commit <x>`), which this task never runs, because its own reviewed commit of the same two files replaces it; §8.x has a confirmed block calling `si_backup_run <x> 1` followed by the read-only `si_p1_backup_check <x> 1`, §9 one confirmed block calling `si_backup_run <x> 2` per owner and one read-only block running `si_p1_backup_check` for the three, §10.x one confirmed block calling `si_drill <x>` followed by the read-only `si_p1_drill_check <x>`, and §11 one read-only `si_p1_py monitoring-off` evidence check, with no apply or delivery query (this task runs each of these read-only blocks by that marker too); §7's writes are devuser1 blocks whose first line is `key_file=/path/to/devuser1-owner.key`; `budget.txt` holds the line Plan S3-B's §13.4 procedure prints (`… budget to L/4 (<n> bytes): <b> promotions; a drill spends at most <h>`); `staging-grant-probe.tsv` has `si_grant_probe`'s header `row	role	expect	got	code	statement`, one row per corpus row, and `got` `skipped` (code `-`) for the rows of a role the P1 staging installation has no login for (`si_verifier`'s); `mechanics-gcs.tsv` has the header `check	expect	got` and one `si_p1_check` row per check named in §5 (49; none names the delete right, and the list rows are `mech_lists_*` and `backup-<o>_lists_*` with `expect` `ok` or `denied`); `mechanics-verdict.txt` starts with §5's verdict line `<n> rows, <f> failed; measured delete right <none|lock|undetermined>, P1_BACKUP_DELETE <none|lock>`; `p1-mechanics.txt` starts with the named record `P1_MECHANICS=<YYYY-MM-DD>` (then the stamp line), and `p1-end.txt` starts with `P1 end check <stamp> UTC` and ends with the named record `P1_END=<YYYY-MM-DD>`.
 - Consumes (the §0 helpers of the earlier runbooks, the first bash block of each, in the chain the P1 runbook's §0 names, D20): `si_kubectl`, `si_arbiter`, `si_leader`, `si_show` (dynamic table set); `si_status` (stage 1); `si_tracks`, `si_track` (tracks); `si_vm_query`, `si_vm_value`, `si_vmalert_groups`, `si_head_is`, `si_state_size`, `si_series_value` (stage-3 P0); `si_keeper`, `si_stamp`, `si_ch_pod`, `si_installation`, `si_inpod_client`, `si_ch_exec`, `si_ch_admin`, `si_chi_state`, `si_uptime`, `si_runtime_uids`, `si_secret_keys`, `si_render_diff` and `$si_lockdown_dir` (lockdown, contract §11); `si_rpc_on`, `si_info` and `si_source_ch` over `a`, `b` and `c` (indexer-c).
 - Consumes (the user's own actions, in the user's own fish terminal): the Terraform plan and apply of runbook §2; the eight runs of `make-si-backup-keys.sh` of runbook §3; devuser1's owner's writes of runbook §7, run with `p1-user-block.sh`, the key only in `HOUSEGATE_AGENT_KEY`.
 - Consumes (Plan S3-B's evidence, read only): `$HOME/si-devnet2-stage3-indexer-c/acceptance-db` (the acceptance database `s3eaccept<n>` of indexer-c, whose table `s3e_e2e` its drill verifies).
 - Produces (Appendix C, Step 20): `P1_MECHANICS` (the UTC date of the passing runbook §5 run, `YYYY-MM-DD`, from `p1-mechanics.txt`) and `P1_END` (the UTC date of runbook §12, from `p1-end.txt`), with the run record `P1 run` (the run's paragraph, then the steady state after P1 for Plan S3-C2 as its sub-items).
-- Produces (production `main`, in order): U-b, U-c, U-n, J-b, J-c, J-a, M (recorded in `record.env` as `USER_COMMIT_B`, `USER_COMMIT_C`, `USER_COMMIT_N`, `JOB_COMMIT_B`, `JOB_COMMIT_C`, `JOB_COMMIT_A`, `MONITORING_COMMIT`), and the docs-only P1 record PR (`RECORD_PR`).
-- Produces (devnet2): the replica bucket and its service accounts (the user's), the eight HMAC keys and Secrets (the user's), `si_backup` on the three SI installations, the drill table `devuser1.s3_p1` (rows 5101–5104, kept for P2), three backup CronJobs with a full and an incremental backup per owner, the backup alerts; the P1 staging installation exists only between Steps 5 and 18.
-- Produces (`record.env` keys, for Steps 19 and 20): `START_UTC`, `TESTS_START`, `BUDGET`, `BUDGET_LIVE_SEQ`, `EPOCH_START` (Step 2); `TERRAFORM_PLAN_ADDS`, `TERRAFORM_UTC` (Step 3); `KEYS_UTC` (Step 4); `STAGING_UTC`, `PROBE_ROWS` (the rows the probe ran, skipped rows not counted) (Step 5); `P1_MECHANICS`, `MECHANICS_ROWS` (Step 6); the seven commit keys above; `DRILL_TABLE_UTC`, `DRILL_TABLE_PROMOTIONS` (Step 10); `FULL_B`, `FULL_C`, `FULL_A` (Steps 11–13); `INCR_B`, `INCR_C`, `INCR_A` (Step 14); `DRILL_B_TABLES`, `DRILL_B_SNAPSHOT` and the same for C and A (Step 15); `END_UTC`, `P1_END`, `PROMOTIONS_USED`, `BUDGET_LEFT`, `EPOCH_END` (Step 17); `CLEANUP_UTC` (Step 18); `RECORD_PR` (Step 19).
+- Produces (production `main`, in order): six commits U-b, U-c, U-n, J-b, J-c, J-a (recorded in `record.env` as `USER_COMMIT_B`, `USER_COMMIT_C`, `USER_COMMIT_N`, `JOB_COMMIT_B`, `JOB_COMMIT_C`, `JOB_COMMIT_A`); no M; `MONITORING_WAIVER`, `MONITORING_STATUS=not-deployed`, `MONITORING_EVIDENCE` record the dated waiver and actual OFF evidence, and the docs-only P1 record PR (`RECORD_PR`).
+- Produces (devnet2): the replica bucket and its service accounts (the user's), the eight HMAC keys and Secrets (the user's), `si_backup` on the three SI installations, the drill table `devuser1.s3_p1` (rows 5101–5104, kept for P2), three backup CronJobs with a full and an incremental backup per owner; monitoring not deployed, delivery/alert health not measured; the P1 staging installation exists only between Steps 5 and 18.
+- Produces (`record.env` keys, for Steps 19 and 20): `START_UTC`, `TESTS_START`, `BUDGET`, `BUDGET_LIVE_SEQ`, `EPOCH_START` (Step 2); `TERRAFORM_PLAN_ADDS`, `TERRAFORM_UTC` (Step 3); `KEYS_UTC` (Step 4); `STAGING_UTC`, `PROBE_ROWS` (the rows the probe ran, skipped rows not counted) (Step 5); `P1_MECHANICS`, `MECHANICS_ROWS` (Step 6); the six commit keys above and the three monitoring waiver/status/evidence fields (Step 16); `DRILL_TABLE_UTC`, `DRILL_TABLE_PROMOTIONS` (Step 10); `FULL_B`, `FULL_C`, `FULL_A` (Steps 11–13); `INCR_B`, `INCR_C`, `INCR_A` (Step 14); `DRILL_B_TABLES`, `DRILL_B_SNAPSHOT` and the same for C and A (Step 15); `END_UTC`, `P1_END`, `PROMOTIONS_USED`, `BUDGET_LEFT`, `EPOCH_END` (Step 17); `CLEANUP_UTC` (Step 18); `RECORD_PR` (Step 19).
 
 Notes:
 - **Cross-task dependency.** Task 26's `test_si_backup_user_follows_the_rollout` and `test_devnet2_backup_jobs_follow_the_rollout` run at every commit here, and so do three Plan S3-B tests that compare the SI installations' users and that Task 26 extends for `si_backup` by following each installation's own `DEVNET2_SI_BACKUP_USER` entry (a CHI or overlay carries `si_backup` exactly when its entry is `True`): `test_devnet2_clickhouse_logins_follow_the_rollout` (the network overlay's hashes gain `si_backup` once its entry is `True`), `test_indexer_b_source_clickhouse_carries_the_network_source_profile` (each source CHI against the network chart rendered at that CHI's own posture and `si_backup` state, through `source_profile`) and `test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk` (indexer-c's hash keys, with `si_backup` once its entry is `True`). Commits U-b and U-c leave indexer-b's or indexer-c's installation with `si_backup` while the network installation has none yet, and J-b and J-c leave the hosts at different steps; the review simulation of all seven commits on Task 26's tree passed the whole suite after each (status §4.2's Task 26 note: equivalent to leaving `si_backup` out of the by-role comparison). If one fails, stop: the live task never edits a test.
@@ -17376,11 +17367,11 @@ Notes:
   ```
 
   followed by the block; the agent runs it with the Bash tool as `bash -eo pipefail "$HOME/si-devnet2-stage3-p1-session/blocks/<nnn>-<what>.sh" < /dev/null` (the Bash tool's own shell is zsh, so a block never runs in it directly, and no command of a block can read the tool's stdin). Step 1's first block, which creates that directory, goes into a fresh directory of the agent's session scratchpad, and Step 1's second block, which writes `helpers.sh`, has no `source` and `cd` lines. A block that may wait longer than 10 minutes (every sync, every CHI apply, every backup run and drill) runs with `run_in_background: true`; read its output before the next step.
-- **Runbook blocks run verbatim.** "Run runbook §X's block …" means an agent-written block file whose one command is `p1_run '<heading>' <selector> --confirmed|--read-only`: `p1_run` copies that bash block of the live checkout's runbook, unchanged, into the next block file (with the two session lines and a comment naming its source lines) and runs it in its own `bash -eo pipefail`. The selector is `--marker '<text>'` (the one block of that section containing the text) or `--index <k>` (the k-th bash block of the section, as `p1_list '<heading>'` numbers them). `p1_run` refuses a block whose confirmation differs from the flag, so a confirmed block can only run with `--confirmed`, which the agent writes only after the step's Gate has its yes; it never runs a devuser1 block. A confirmed block that stopped is never re-run as is: report its output. "Run §X's read-only blocks" means `p1_list '<heading>'`, then one `p1_run '<heading>' --index <k> --read-only` per read-only block, in order. A confirmed block that a step does not name is not run: stop and report it. The runbook's own commit blocks (`si_p1_user_commit <x>`, `si_p1_backup_login <x>` with `si_p1_job_commit <x>`, `si_p1_monitoring_commit`; read-only by the runbook's convention, because they only commit locally) are never run either: Steps 7–9, 11–13 and 16 make the same single-service commits with `p1_edit` and `p1_commit`, which the runbook's apply helpers accept (`si_head_is`: exactly one commit on origin/main, changing exactly its two files), and each step names the apply helper's call as its marker (`--marker 'si_p1_user_apply b'`), never text that only §0 holds. The read-only blocks a step names by marker (`si_p1_backup_check <x> 1` of §8.x, `si_p1_backup_check` of §9, `si_p1_drill_check <x>` of §10.x and `si_vmalert_groups` of §11) run with `--marker '<text>' --read-only`. If a marker matches no block or more than one, stop and report the `p1_list` output (the runbook's form differs from this task's; Plan S3-C1's consistency pass decides); Step 1's last block checks every marker of this task against the live runbook before anything runs.
+- **Runbook blocks run verbatim.** "Run runbook §X's block …" means an agent-written block file whose one command is `p1_run '<heading>' <selector> --confirmed|--read-only`: `p1_run` copies that bash block of the live checkout's runbook, unchanged, into the next block file (with the two session lines and a comment naming its source lines) and runs it in its own `bash -eo pipefail`. The selector is `--marker '<text>'` (the one block of that section containing the text) or `--index <k>` (the k-th bash block of the section, as `p1_list '<heading>'` numbers them). `p1_run` refuses a block whose confirmation differs from the flag, so a confirmed block can only run with `--confirmed`, which the agent writes only after the step's Gate has its yes; it never runs a devuser1 block. A confirmed block that stopped is never re-run as is: report its output. "Run §X's read-only blocks" means `p1_list '<heading>'`, then one `p1_run '<heading>' --index <k> --read-only` per read-only block, in order. A confirmed block that a step does not name is not run: stop and report it. The runbook's own commit blocks (`si_p1_user_commit <x>`, `si_p1_backup_login <x>` with `si_p1_job_commit <x>`, read-only by the runbook's convention, because they only commit locally) are never run either: Steps 7–9 and 11–13 make the same six single-service commits with `p1_edit` and `p1_commit`, which the runbook's apply helpers accept (`si_head_is`: exactly one commit on origin/main, changing exactly its two files), and each step names the apply helper's call as its marker (`--marker 'si_p1_user_apply b'`), never text that only §0 holds. The read-only blocks a step names by marker (`si_p1_backup_check <x> 1` of §8.x, `si_p1_backup_check` of §9, `si_p1_drill_check <x>` of §10.x and `si_p1_py monitoring-off` of §11) run with `--marker '<text>' --read-only`. If a marker matches no block or more than one, stop and report the `p1_list` output (the runbook's form differs from this task's; Plan S3-C1's consistency pass decides); Step 1's last block checks every marker of this task against the live runbook before anything runs.
 - **Explicit user confirmation.** Every remote or live mutation waits for an explicit yes in chat, given for that block only: each `git push`, each `kubectl apply`, `create` or `delete`, each `helmfile sync`, each Keeper write, each backup run and drill, the grant probe and the mechanics blocks (they write to the staging installation and the bucket), the user's own writes, the record PR's push, creation and merge, and the housegate push, PR and merge. Before asking, the agent states the step's Gate sentence, which says exactly what will change. Read-only blocks need none.
 - **The user's terminal.** Terraform, the HMAC keys and devuser1's owner's writes are the user's; the agent never runs them. The agent hands the user fish commands (`bash <script> <args>` included); keys and passwords never enter the chat, argv, a log or a file outside their Secret (HMAC secrets) and the user's own key file (devuser1's owner key).
 - **One window per step.** Steps 5 to 18 are one window each: never two installations, two releases or a release and an installation in one window, and no other sync of `storage-integrity-si-v2` or of a host release during this task. Nothing runs helmfile on `k8s-sea/clickhouse` (Plan S3-B K22).
-- **Stop rules.** Stop on any unexpected output and report it; never improvise a fix on the cluster. Above all: a `CHANGED:` line of `p1_same` (a pod, StatefulSet or CHI changed), a fallen ClickHouse uptime, a user or grant that is not the contract's, a render diff beyond the one named, a backup index or a drill verdict that `p1_edit` refuses, a firing `StorageIntegrityBackup*` alert, or any `stop` printed by a tool. A commit block that stops before its `git commit` leaves its edits in the live checkout: discard them with `git -C "$P" checkout -- .` (local) and report. A local commit whose push the user declined stays on the detached HEAD and makes `p1_fresh_main` stop: report it, and only on the user's word drop it with `git -C "$P" switch -q --detach origin/main` (local; it was never pushed).
+- **Stop rules.** Stop on any unexpected output and report it; never improvise a fix on the cluster. Above all: a `CHANGED:` line of `p1_same` (a pod, StatefulSet or CHI changed), a fallen ClickHouse uptime, a user or grant that is not the contract's, a render diff beyond the one named, a backup index or a drill verdict that `p1_edit` refuses, missing/mismatched dated OFF waiver evidence or any monitoring policy drift, or any `stop` printed by a tool. A commit block that stops before its `git commit` leaves its edits in the live checkout: discard them with `git -C "$P" checkout -- .` (local) and report. A local commit whose push the user declined stays on the detached HEAD and makes `p1_fresh_main` stop: report it, and only on the user's word drop it with `git -C "$P" switch -q --detach origin/main` (local; it was never pushed).
 - **Irreversible points.** Step 3's apply (a bucket with `prevent_destroy`); every write to the bucket (Steps 6, 11–14); Step 10's writes. Each Gate says so.
 - **Commit identity (user rule).** GitHub must never show `uranuswch@gmail.com` (the global git identity) as author, committer or co-author. Step 1 sets the live worktree's own identity (`git config --worktree user.name poetry`, `user.email chen@sentio.xyz`, after `extensions.worktreeConfig true`) before anything is committed, and Step 20 the ledger worktree's; `p1_commit` refuses to commit unless the checkout's identity is `poetry <chen@sentio.xyz>` and checks the commit's author and committer after it; Step 19 checks the record commit before its push and every commit of the record PR before its squash merge, and Step 20 the ledger commit before its push and the ledger PR before its merge. Commit messages carry only the Claude `Co-Authored-By` line.
 - **User decisions (stop and ask).** K24 and K25 are the user's (status §3): Step 3 asks the user to confirm both before the Terraform apply (K25: the managed-folder layout that confines each writer's list; K24, only with `P1_BACKUP_DELETE` = `lock`: that their amendment of spec §16 P1 to "… but not delete, except the backup's own `.lock`" stands), and Step 6 stops and asks on any differing list or read row (K25) or a measured delete right other than `P1_BACKUP_DELETE` (K24). The agent never decides either.
@@ -17704,7 +17695,7 @@ if __name__ == "__main__":
     main(sys.argv[1:])
 ```
 
-`p1-edit.py`, the edits of the seven commits and this task's read-only verdicts:
+`p1-edit.py`, the edits of the six user/job commits and this task's read-only verdicts:
 
 ```python
 #!/usr/bin/env python3
@@ -17716,9 +17707,9 @@ change; on any doubt it writes nothing):
   backup-user-chi MANIFEST CHI HASHES TESTS    si_backup added to a source CHI's users
   backup-user-network OVERLAY HASHES           clickhouse.access.backupUser and its hash
   backup-job OVERLAY                           siBackup.enabled false -> true
-  monitor-backups OVERLAY CRONJOB...           monitoring.backups.cronJobs empty -> the CronJobs
+  monitor-backups OVERLAY CRONJOB...           refused under the C1 OFF waiver
   rollout TESTS CONSTANT KEY                   one False entry of a dict constant -> True
-  rollout-tuple TESTS CONSTANT VALUE...        an empty tuple constant -> those values
+  rollout-tuple TESTS CONSTANT VALUE...        non-monitoring tuples only; monitoring edits refused
 Verdicts (read-only; exit 1 with the reasons on a mismatch):
   pr-state TESTS CHECKOUT INDEXER_C_ID DELETE_RIGHT IMAGE
   grants-check TESTS HOST USERS_JSONL GRANTS_JSONL
@@ -17919,51 +17910,8 @@ def cmd_backup_job(path):
     print(f"{path}: siBackup.enabled true")
 
 
-def cmd_monitor_backups(path, cronjobs):
-    if not cronjobs or len(set(cronjobs)) != len(cronjobs):
-        fail("name distinct CronJobs")
-    text = read(path)
-    before = yaml.safe_load(text)
-    monitoring = (before or {}).get("monitoring")
-    if not isinstance(monitoring, dict) or monitoring.get("enabled") is not True:
-        fail(f"{path}: monitoring.enabled is not true")
-    backups = monitoring.get("backups")
-    if backups not in (None, {}) and (not isinstance(backups, dict) or backups.get("cronJobs") not in (None, [])):
-        fail(f"{path}: monitoring.backups.cronJobs is {backups!r}, not empty")
-    lines = text.split("\n")
-    top, end = top_block(lines, "monitoring")
-    children = children_of(lines, top, end)
-    pad = step = min(indent_of(lines[i]) for i in children)
-    hits = [i for i in range(top + 1, end) if re.match(" " * pad + r"backups:", lines[i])]
-    if len(hits) > 1:
-        fail(f"{path}: monitoring has {len(hits)} backups keys")
-
-    def listing(at):
-        return [" " * at + "cronJobs:"] + [" " * (at + step) + f"- {name}" for name in cronjobs]
-
-    if not hits:
-        last = max(children)
-        lines[last + 1:last + 1] = [" " * pad + "backups:"] + listing(pad + step)
-    elif re.match(" " * pad + r"backups:\s*\{\}\s*(#.*)?$", lines[hits[0]]):
-        lines[hits[0]:hits[0] + 1] = [" " * pad + "backups:"] + listing(pad + step)
-    elif re.match(" " * pad + r"backups:\s*(#.*)?$", lines[hits[0]]):
-        b_end = block_end(lines, hits[0])
-        keys = [i for i in range(hits[0] + 1, b_end) if re.match(r"\s+cronJobs:", lines[i])]
-        flow = [i for i in keys if re.match(r"\s+cronJobs:\s*\[\]\s*(#.*)?$", lines[i])]
-        if len(flow) == 1 and keys == flow:
-            lines[flow[0]:flow[0] + 1] = listing(indent_of(lines[flow[0]]))
-        elif not keys:
-            lines[hits[0] + 1:hits[0] + 1] = listing(pad + step)
-        else:
-            fail(f"{path}: monitoring.backups.cronJobs is not one 'cronJobs: []' line")
-    else:
-        fail(f"{path}: monitoring.backups is neither a block nor {{}}")
-    new_text = "\n".join(lines)
-    expected = copy.deepcopy(before)
-    expected["monitoring"]["backups"] = dict(expected["monitoring"].get("backups") or {}, cronJobs=list(cronjobs))
-    check_yaml(path, new_text, [before], [expected], "monitoring.backups.cronJobs")
-    write(path, new_text)
-    print(f"{path}: monitoring.backups.cronJobs {', '.join(cronjobs)}")
+def cmd_monitor_backups(*args):
+    fail("monitoring mutation is disabled by the dated C1 OFF waiver")
 
 
 def assignment(source, name, path):
@@ -18000,6 +17948,8 @@ def cmd_rollout(tests, name, key):
 
 
 def cmd_rollout_tuple(tests, name, values):
+    if name in ("DEVNET2_MONITORING_ENABLED", "DEVNET2_MONITORED_BACKUPS"):
+        fail("C1 monitoring must remain False with an empty tuple")
     path = os.path.join(tests, "test_render.py")
     src = read(path)
     node = assignment(src, name, path)
@@ -18019,6 +17969,8 @@ def cmd_rollout_tuple(tests, name, values):
 
 def cmd_pr_state(tests, checkout, indexer_c, delete_right, image):
     t = tests_module(tests)
+    if getattr(t, "DEVNET2_MONITORING_ENABLED", None) is not False:
+        fail("C1 monitoring must remain boolean False")
     c = int(indexer_c)
     hosts = {"sentio-node-devnet2-indexer-a": 0, "sentio-node-devnet2-indexer-b": 1, "sentio-node-devnet2-indexer-c": c}
     chis = ("storage-integrity-si-v2", "storage-integrity-si-v2-indexer-b", "storage-integrity-si-v2-indexer-c")
@@ -18048,8 +18000,9 @@ def cmd_pr_state(tests, checkout, indexer_c, delete_right, image):
     overlay = yaml.safe_load(read(os.path.join(checkout, "k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml")))
     if ((overlay.get("clickhouse") or {}).get("access") or {}).get("backupUser"):
         problems.append("the network overlay sets clickhouse.access.backupUser already")
-    if ((overlay.get("monitoring") or {}).get("backups") or {}).get("cronJobs"):
-        problems.append("the network overlay lists backup CronJobs already")
+    monitoring = overlay.get("monitoring") or {}
+    if monitoring.get("enabled") is not False or (monitoring.get("backups") or {}).get("cronJobs") != []:
+        problems.append("C1 requires actual overlay boolean false and an empty backup list")
     for p in problems:
         print(f"  {p}")
     if problems:
@@ -18354,6 +18307,7 @@ writes Task 28's run record (one paragraph, then the steady state after P1 as
 existing output file.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -18362,7 +18316,7 @@ NEED = ["START_UTC", "END_UTC", "CLEANUP_UTC", "P1_MECHANICS", "P1_END", "MECHAN
         "TERRAFORM_PLAN_ADDS", "USER_COMMIT_B", "USER_COMMIT_C", "USER_COMMIT_N", "DRILL_TABLE_PROMOTIONS",
         "JOB_COMMIT_B", "JOB_COMMIT_C", "JOB_COMMIT_A", "FULL_B", "FULL_C", "FULL_A", "INCR_B", "INCR_C", "INCR_A",
         "DRILL_B_TABLES", "DRILL_C_TABLES", "DRILL_A_TABLES", "DRILL_B_SNAPSHOT", "DRILL_C_SNAPSHOT", "DRILL_A_SNAPSHOT",
-        "MONITORING_COMMIT", "PROMOTIONS_USED", "BUDGET", "BUDGET_LEFT", "EPOCH_START", "EPOCH_END",
+        "MONITORING_WAIVER", "MONITORING_STATUS", "MONITORING_EVIDENCE", "PROMOTIONS_USED", "BUDGET", "BUDGET_LEFT", "EPOCH_START", "EPOCH_END",
         "P1_BACKUP_DELETE", "INDEXER_C_ID", "SN_COMMIT_P1", "SN_DIGEST_P1", "CORE_TAG_P1", "HG_TAG_P1", "P1_PR",
         "SN_COMMIT", "ARBITER_TAG"]
 DATE = re.compile(r"20[0-9]{2}-[01][0-9]-[0-3][0-9]")
@@ -18385,6 +18339,24 @@ def load(record_env, ledger_env, need):
     missing = [k for k in need if not r.get(k)]
     if missing:
         fail(f"record.env and ledger.env lack {missing}")
+    allowed = {"MONITORING_WAIVER", "MONITORING_STATUS", "MONITORING_EVIDENCE"}
+    if any(("MONITOR" in k or "ALERT" in k or "DELIVERY" in k) and k not in allowed for k in r):
+        fail("C1 OFF forbids monitoring commits and alert/delivery claims")
+    if r["MONITORING_WAIVER"] != "user-approved-c1-monitoring-off-2026-10-19" or r["MONITORING_STATUS"] != "not-deployed":
+        fail("missing dated C1 waiver or not-deployed status")
+    evidence_path = Path(r["MONITORING_EVIDENCE"])
+    try:
+        evidence = json.loads(evidence_path.read_text())
+    except (OSError, ValueError) as e:
+        fail(f"missing or unreadable actual OFF evidence: {e}")
+    expected = {'decision': 'user-approved-c1-monitoring-off-2026-10-19', 'date': '2026-10-19', 'scope': 'S3-C1 Tasks26-28', 'monitoring_enabled': False, 'overlay_enabled': False, 'monitored_backups': [], 'overlay_backups': [], 'deployment': 'not-deployed', 'delivery': 'not-measured', 'alert_health': 'not-measured'}
+    if not isinstance(evidence, dict) or evidence != expected or any(type(evidence.get(k)) is not bool for k in ("monitoring_enabled", "overlay_enabled")):
+        fail("actual OFF evidence differs, or claims monitoring/delivery/alert health")
+    if evidence_path.with_name("monitoring-backups-commit").exists():
+        fail("C1 OFF has no monitoring commit M")
+    commit_keys = ("USER_COMMIT_B", "USER_COMMIT_C", "USER_COMMIT_N", "JOB_COMMIT_B", "JOB_COMMIT_C", "JOB_COMMIT_A")
+    if any(not re.fullmatch(r"[0-9a-f]{40}", r[k]) for k in commit_keys) or len({r[k] for k in commit_keys}) != 6:
+        fail("six distinct actual user/job commits are required; no M")
     for k in ("P1_MECHANICS", "P1_END"):
         if not DATE.fullmatch(r[k]):
             fail(f"{k} {r[k]!r} is not a date")
@@ -18419,7 +18391,7 @@ def paragraph(r):
         f"The drill table `devuser1.s3_p1` (rows 5101 to 5104 in two partitions, {r['DRILL_TABLE_PROMOTIONS']} promotions) stays for P2. "
         f"Backup jobs: {jobs}; backups: {chains}; each index names a published manifest. "
         f"Restore drills on the P1 staging installation passed: {drills}. "
-        f"Monitoring commit `{short(r['MONITORING_COMMIT'])}` lists the three CronJobs; `StorageIntegrityBackupStale` and `StorageIntegrityBackupFailed` are loaded and silent. "
+        f"Monitoring not deployed under dated user waiver `{r['MONITORING_WAIVER']}` (OFF evidence `{r['MONITORING_EVIDENCE']}`); delivery and alert health not measured. "
         f"No SI ClickHouse, host pod, verifier or voter restarted during P1 and the consensus epoch stayed `{r['EPOCH_END']}`; P1 made {r['PROMOTIONS_USED']} promotions of a budget of {r['BUDGET']}, which leaves {r['BUDGET_LEFT']}. "
         f"The staging installation, its volumes and its Keeper root were deleted in §13 ({r['CLEANUP_UTC']}).\n"
     )
@@ -18477,8 +18449,9 @@ def cmd_ledger(record_env, ledger_env, out_md, out_env):
         f"the replica bucket and its service accounts (Terraform, {r['TERRAFORM_PLAN_ADDS']} resources) and the eight HMAC keys by the user; the P1 staging installation and its grant probe; "
         f"the GCS mechanics on {r['P1_MECHANICS']} (backup delete right `{r['P1_BACKUP_DELETE']}`); "
         f"`si_backup` on indexer-b, indexer-c and the network installation; the drill table `devuser1.s3_p1`; a full and an incremental backup per owner "
-        f"({'; '.join(f'owner {o} ' + r['FULL_' + x.upper()] + ' + ' + r['INCR_' + x.upper()] for x, _, o in owners(r))}); one passing restore drill per owner; the backup alerts "
-        f"(monitoring commit `{short(r['MONITORING_COMMIT'])}`); no restart of any SI ClickHouse, host pod, verifier or voter. Steady state after P1, for Plan S3-C2:"
+        f"({'; '.join(f'owner {o} ' + r['FULL_' + x.upper()] + ' + ' + r['INCR_' + x.upper()] for x, _, o in owners(r))}); one passing restore drill per owner; "
+        f"monitoring not deployed under dated user waiver `{r['MONITORING_WAIVER']}` (OFF evidence `{r['MONITORING_EVIDENCE']}`); delivery and alert health not measured; "
+        f"no restart of any SI ClickHouse, host pod, verifier or voter. Steady state after P1, for Plan S3-C2 (its own monitoring prerequisites remain unsatisfied by this C1 waiver):"
     )
     steady = [
         "Bucket `sentio-352722-si-devnet2-si-v2-replica` (versioned, `prevent_destroy`, incomplete multipart uploads aborted after 7 days); no key of P1 deletes"
@@ -18495,7 +18468,7 @@ def cmd_ledger(record_env, ledger_env, out_md, out_env):
         f"rows 5101 to 5104, which stays); the §13.4 estimate leaves {r['BUDGET_LEFT']} promotions to L/4, and P2's devnet2 soak runs within half of it (K38).",
         f"Images unchanged: the hosts run sentio-node `{r['SN_COMMIT']}`, the voters and verifiers arbiter `{r['ARBITER_TAG']}`; `SN_DIGEST_P1` runs only in the backup "
         f"CronJobs and the drill Jobs; arbiter-core `{r['CORE_TAG_P1']}` and housegate `{r['HG_TAG_P1']}` carry the restore-and-gate library.",
-        "Residuals: the HMAC secret travels in query text over the plaintext native protocol inside the namespace until P4's policies (which must admit the backup "
+        "Residuals: C1 has no automated alert/delivery coverage; C1 P1_END does not satisfy downstream monitoring prerequisites. The HMAC secret travels in query text over the plaintext native protocol inside the namespace until P4's policies (which must admit the backup "
         "CronJobs and the drill Jobs); the bucket grows without expiry until a retention decision.",
     ]
     Path(out_md).write_text(para + "\n" + "".join(f"- {line}\n" for line in steady))
@@ -18801,9 +18774,7 @@ done <<'EOF'
 ### 10.2 indexer-c|si_p1_drill_check c|read-only
 ### 10.3 indexer-a|si_drill a|confirmed
 ### 10.3 indexer-a|si_p1_drill_check a|read-only
-## 11. Monitoring|si_p1_monitoring_commit|read-only
-## 11. Monitoring|si_p1_monitoring_apply|confirmed
-## 11. Monitoring|si_vmalert_groups|read-only
+## 11. Monitoring|si_p1_py monitoring-off|read-only
 EOF
 echo "selectors: $n markers, each exactly one block of its kind in the live runbook"
 python3 -I "$p1_session/p1-block.py" get "$P/$p1_runbook" '## 5. Mechanics on GCS and the deployed image' --marker 'P1_MECHANICS=' --read-only "$t/record-5.sh" > /dev/null
@@ -18859,14 +18830,15 @@ echo "record dates: P1_MECHANICS and P1_END read from the runbook's own record l
 echo "self-check passed"
 ```
 
-Expected: `selectors: 31 markers, each exactly one block of its kind in the live runbook`; `…/mechanics/mechanics-gcs.tsv: 9 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)`; `ok: a granted cross-prefix list fails the runbook's verdict and this task's check (K25)`; `record dates: P1_MECHANICS and P1_END read from the runbook's own record lines (<today, UTC>)`; `PROBE_ROWS=<n>` and `ok: probe-check reads the runbook's grant-probe table (every row of <n> is as expected; <s> rows of roles without a P1 staging login skipped)` (on the P1 PR's corpus `<n>` 113 and `<s>` 30); `self-check passed`. A marker that names no block or several, or a verdict or record line this task cannot read, means the runbook on `main` and this task disagree: stop and report, before any step runs; never adjust a marker or a parser on the fly.
+Expected: `selectors: 29 markers, each exactly one block of its kind in the live runbook`; `…/mechanics/mechanics-gcs.tsv: 9 rows, every row as expected; backup delete right <P1_BACKUP_DELETE> (measured by runbook §5's verdict)`; `ok: a granted cross-prefix list fails the runbook's verdict and this task's check (K25)`; `record dates: P1_MECHANICS and P1_END read from the runbook's own record lines (<today, UTC>)`; `PROBE_ROWS=<n>` and `ok: probe-check reads the runbook's grant-probe table (every row of <n> is as expected; <s> rows of roles without a P1 staging login skipped)` (on the P1 PR's corpus `<n>` 113 and `<s>` 30); `self-check passed`. A marker that names no block or several, or a verdict or record line this task cannot read, means the runbook on `main` and this task disagree: stop and report, before any step runs; never adjust a marker or a parser on the fly.
 
 - [ ] **Step 2: Preparation, pins, budget and the P1 PR state (read-only)** — runbook §1.
 
 Run §1's read-only blocks in order (`p1_list '## 1. Preparation'`, then `p1_run '## 1. Preparation' --index <k> --read-only` for each). §1.1's first block creates `$si_backup` fresh, mode 700, and writes `pins`; §1.3 runs Plan S3-B's §13.4 budget procedure into `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq` and `budget.txt`. §1 holds no confirmed block: if `p1_list` shows one, stop and report. Expected: §1's expected paragraphs (`pins` with the lines `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1`, `SN_DIGEST_P1`, `P1_BACKUP_DELETE`, `INDEXER_C_ID`, each equal to the ledger's; the three owners, the bucket and the Secrets; the budget line, at least 16). Then this task's checks:
 
 ```bash
-python3 -I -c 'import ast; from pathlib import Path; import sys; p=Path(sys.argv[1])/"charts/storage-integrity/tests/test_render.py"; found=[ast.literal_eval(n.value) for n in ast.parse(p.read_text()).body if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == "DEVNET2_MONITORING_ENABLED" for v in n.targets)]; assert found == [True], "S3-B monitoring is not enabled: stop before P1"; print("S3-B monitoring enabled")' "$P" || exit 1
+python3 -I -c 'import ast, sys, yaml; from pathlib import Path; source=Path(sys.argv[1]); nodes=ast.parse(source.read_text()).body; values=lambda name: [ast.literal_eval(n.value) for n in nodes if isinstance(n, ast.Assign) and any(isinstance(v, ast.Name) and v.id == name for v in n.targets)]; flags=values("DEVNET2_MONITORING_ENABLED"); assert len(flags)==1 and flags[0] is False, "C1 requires exactly one literal False monitoring flag"; lists=values("DEVNET2_MONITORED_BACKUPS"); assert lists in ([], [()]), "C1 monitored backups must be empty"; mon=yaml.safe_load(Path(sys.argv[2]).read_text()).get("monitoring", {}); assert mon.get("enabled") is False, "C1 overlay monitoring must be boolean false"; assert (mon.get("backups") or {}).get("cronJobs", []) == [], "C1 overlay monitored backups must be empty"; assert sys.argv[3] == "user-approved-c1-monitoring-off-2026-10-19", "missing C1 monitoring waiver"; print("C1 monitoring OFF; dated user waiver; delivery and alert health not measured")' "$P/charts/storage-integrity/tests/test_render.py" "$P/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml" user-approved-c1-monitoring-off-2026-10-19 || exit 1
+si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" > /dev/null || exit 1
 [ -d "$si_backup" ] && [ "$(stat -f %Lp "$si_backup")" = 700 ] || { echo "$si_backup is missing or not mode 700: run runbook §1.1 first; stop"; exit 1; }
 merge="$(gh pr view "$P1_PR" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')" || exit 1
 [ -n "$merge" ] || { echo "P1_PR #$P1_PR is not merged; stop"; exit 1; }
@@ -19305,7 +19277,7 @@ index <old>..<new> 100644
 +    "storage-integrity-si-v2-indexer-c": True,
  }
  # The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
- # three in one commit once every owner's restore drill passed (§11).
+ # C1 keeps this tuple empty under the dated monitoring-OFF waiver (§11).
 diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml
 index <old>..<new> 100644
 --- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-c-source.yaml
@@ -19867,121 +19839,24 @@ p1_note "DRILL_${X}_SNAPSHOT" "$(jq -r .snapshot_id "$si_backup/drill-$x.json")"
 
 Expected (for each owner): that subsection's expected paragraphs (the Job succeeded with exit 0; `drill-<x>.json` holds one line; the verified set equals the owner's Active registry tables the manifest lists); then `drill-<x>.json: pass; owner <id>, backup <INCR_X>, manifest 0x…; verified <tables> (<p> partition(s), need <n>, kept <n>, dropped <d>)` with indexer-b's `devuser1.s3_p1`, indexer-c's `s3eaccept<n>.s3e_e2e` and indexer-a's `devnet101.swap_new2` among the verified tables (`dropped` above zero only for a backup ahead of its manifest, K27), and `DRILL_TABLES=…`; both `unchanged:` lines. A verdict other than pass (`restore-drill` exits non-zero): stop and report `drill-<x>.json`; its failing partitions keep their scratch tables on staging for forensics, named in the verdict.
 
-- [ ] **Step 16: Backup alerts, commit M (local; push and sync require explicit user confirmation)** — runbook §11.
+- [ ] **Step 16: Monitoring OFF evidence (read-only/local; no commit M)** — runbook §11.
 
-`p1_list '## 11. Monitoring'`: one read-only block, the runbook's own commit helper `si_p1_monitoring_commit`, then one confirmed block, `si_p1_monitoring_apply`, then the read-only alert check (`si_vmalert_groups`); a read-only check the runbook places before its commit helper runs, in order, before this step's commit, and one after the apply runs after it; any other confirmed block: stop and report. The commit block is not run: this step's commit below changes the same two files, and running both would leave two commits on `HEAD`, which `p1_fresh_main` and `si_p1_monitoring_apply`'s `si_head_is` refuse.
-
-First the series the two alerts read (read-only; status §4.2's Task 26 question): `StorageIntegrityBackupStale` reads `kube_cronjob_status_last_successful_time` and `kube_cronjob_created`, `StorageIntegrityBackupFailed` `kube_job_status_failed` joined on `kube_job_owner`; a series kube-state-metrics does not export would leave its alert silently unarmed, so the commit waits until devnet2 exports all four for the three CronJobs and their six manual Jobs:
+`p1_list '## 11. Monitoring'` must show exactly one read-only block, marked `si_p1_py monitoring-off`, and no confirmed block. Run it verbatim; it validates the dated user waiver and current literal False/overlay false/empty lists and refuses any M evidence. Do not run monitoring mutation or delivery helpers. The four kube-state-metrics families, rule loading, silence and Grafana delivery are not executed or claimed. Every owner's full/incremental backups and passing drill remain required before this step.
 
 ```bash
-cj='sentio-node-devnet2-indexer-(a|b|c)-si-backup'
-k_created="$(si_vm_value "count(kube_cronjob_created{namespace=\"sentio-network-devnet2\",cronjob=~\"$cj\"})")"
-k_success="$(si_vm_value "count(kube_cronjob_status_last_successful_time{namespace=\"sentio-network-devnet2\",cronjob=~\"$cj\"})")"
-k_owner="$(si_vm_value "count(kube_job_owner{namespace=\"sentio-network-devnet2\",owner_kind=\"CronJob\",owner_name=~\"$cj\"})")"
-k_failed="$(si_vm_value "count(kube_job_status_failed{namespace=\"sentio-network-devnet2\",job_name=~\"$cj-p1-(1|2)\"})")"
-echo "kube-state-metrics: kube_cronjob_created $k_created, kube_cronjob_status_last_successful_time $k_success, kube_job_owner $k_owner, kube_job_status_failed $k_failed" | tee "$si_backup/task28-backup-series.txt"
-[ "$k_created" = 3 ] && [ "$k_success" = 3 ] && [ "$k_failed" = 6 ] && [ "$k_owner" != none ] && [ "$k_owner" -ge 6 ] || { echo "devnet2 does not export every series the backup alerts read: the alerts would be silently unarmed; stop and report (nothing is committed)"; exit 1; }
+for x in a b c; do [ -s "$si_backup/drill-$x.json" ] && [ "$(jq -r .pass "$si_backup/drill-$x.json")" = true ] || { echo "a drill has not passed; stop"; exit 1; }; done
+p1_run '## 11. Monitoring' --marker 'si_p1_py monitoring-off' --read-only
+[ ! -e "$si_backup/monitoring-backups-commit" ] || { echo "C1 OFF has no commit M; stop"; exit 1; }
+p1_note MONITORING_WAIVER user-approved-c1-monitoring-off-2026-10-19
+p1_note MONITORING_STATUS not-deployed
+p1_note MONITORING_EVIDENCE "$si_backup/monitoring-off.json"
 ```
 
-Expected: `kube-state-metrics: kube_cronjob_created 3, kube_cronjob_status_last_successful_time 3, kube_job_owner <at least 6>, kube_job_status_failed 6` (each CronJob's two manual Jobs carry its controller reference, so the CronJob controller records their success and kube-state-metrics their owner). `none` or a smaller count: stop and report; the alerts are not committed until the series exist (a scrape interval or two after the last Job).
-
-Then, in `$P`, one commit (local):
-
-```bash
-p1_fresh_main
-p1_same "$si_backup/task28-pods-start.txt" p1_pods
-for x in a b c; do [ -s "$si_backup/drill-$x.json" ] && [ "$(jq -r .pass "$si_backup/drill-$x.json")" = true ] || { echo "the drill of indexer-$x has not passed; the monitoring commit comes after every drill; stop"; exit 1; }; done
-[ -s "$si_backup/task28-backup-series.txt" ] || { echo "the series check above has not run; stop"; exit 1; }
-f=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-p1_edit monitor-backups "$f" sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup
-p1_edit rollout-tuple charts/storage-integrity/tests DEVNET2_MONITORED_BACKUPS sentio-node-devnet2-indexer-a-si-backup sentio-node-devnet2-indexer-b-si-backup sentio-node-devnet2-indexer-c-si-backup
-cat > "$si_backup/msg-monitoring-backups.txt" <<'EOF'
-chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs
-
-Lists sentio-node-devnet2-indexer-a-si-backup, -indexer-b-si-backup and
--indexer-c-si-backup in monitoring.backups.cronJobs, which renders the
-rule group storage-integrity-si-v2.backups: StorageIntegrityBackupStale
-(no successful run for 26 hours) and StorageIntegrityBackupFailed (a
-failed Job of a listed CronJob). Each owner has a full and an
-incremental backup and a passing restore drill
-(docs/storage-integrity-devnet2-stage3-p1-backups.md §8 to §11). The
-sync changes only the VMRule.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-EOF
-p1_commit "$si_backup/msg-monitoring-backups.txt" charts/storage-integrity/tests/test_render.py "$f"
-git show --format= HEAD | cat
-si_render_diff storage-integrity-si-v2 | tee "$si_backup/task28-render-monitoring.txt"
-[ "$(cat "$si_backup/task28-render-monitoring.txt")" = "changed VMRule/storage-integrity-si-v2" ] || { echo "commit M renders more than the VMRule differently; stop"; exit 1; }
-```
-
-Expected: `unchanged: p1_pods`; `…: monitoring.backups.cronJobs sentio-node-devnet2-indexer-a-si-backup, sentio-node-devnet2-indexer-b-si-backup, sentio-node-devnet2-indexer-c-si-backup`, `DEVNET2_MONITORED_BACKUPS: () -> (sentio-node-devnet2-indexer-a-si-backup, sentio-node-devnet2-indexer-b-si-backup, sentio-node-devnet2-indexer-c-si-backup)`, `render tests: <TESTS_START>, OK`, one commit touching exactly the two files, and exactly `changed VMRule/storage-integrity-si-v2`.
-
-The exact diff of commit M (`chore(devnet2): backup alerts for the stage-3 P1 backup CronJobs`), as `git show --format= HEAD` prints it; simulated on the P1 PR state, `<…>` are run-time values, and neither the `index` lines nor the hunk line numbers are compared (the hunk context of `test_render.py` is Task 26's text around the constant). Any other difference: stop, and drop the local commit with `git -C "$P" switch -q --detach origin/main` (it was never pushed):
-
-```diff
-diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-integrity/tests/test_render.py
-index <old>..<new> 100644
---- a/charts/storage-integrity/tests/test_render.py
-+++ b/charts/storage-integrity/tests/test_render.py
-@@ -<l>,7 +<l>,11 @@ DEVNET2_SI_BACKUP_USER = {
- }
- # The backup CronJobs devnet2's backup alerts cover: the P1 runbook lists all
- # three in one commit once every owner's restore drill passed (§11).
--DEVNET2_MONITORED_BACKUPS = ()
-+DEVNET2_MONITORED_BACKUPS = (
-+    "sentio-node-devnet2-indexer-a-si-backup",
-+    "sentio-node-devnet2-indexer-b-si-backup",
-+    "sentio-node-devnet2-indexer-c-si-backup",
-+)
- # P1_BACKUP_DELETE (Plan S3-C1 Appendix C, K24): the delete right a ClickHouse
- # BACKUP needs, as mechanics M13 measured it: "none", or "lock" (each backup's
- # own .lock only, once the user amended spec §16 P1).
-diff --git a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-index <old>..<new> 100644
---- a/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-+++ b/k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml
-@@ -<l>,4 +<l>,7 @@ monitoring:
-   # The SI owners' backup CronJobs (docs/storage-integrity-devnet2-stage3-p1-backups.md
-   # §11): all three are listed in one commit once every owner's restore drill passed.
-   backups:
--    cronJobs: []
-+    cronJobs:
-+      - sentio-node-devnet2-indexer-a-si-backup
-+      - sentio-node-devnet2-indexer-b-si-backup
-+      - sentio-node-devnet2-indexer-c-si-backup
-```
-
-Requires explicit user confirmation in chat. Gate: "push commit M (the backup alerts) to production main and sync release storage-integrity-si-v2 only: the VMRule storage-integrity-si-v2 gains the rule group storage-integrity-si-v2.backups with StorageIntegrityBackupStale and StorageIntegrityBackupFailed over the three backup CronJobs; no pod restarts, the bootstrap-source hook runs once more as on every sync of this release". After a yes, run §11's confirmed block (`p1_run '## 11. Monitoring' --marker 'si_p1_monitoring_apply' --confirmed`, in the background), then §11's remaining read-only block (the alert check, `p1_run '## 11. Monitoring' --marker 'si_vmalert_groups' --read-only`), then:
-
-```bash
-git fetch -q origin main
-c="$(cat "$si_backup/monitoring-backups-commit")"
-git_read_34="$(git rev-parse HEAD)" || exit 1
-git_read_35="$(git rev-parse origin/main)" || exit 1
-[[ "$git_read_34" =~ ^[0-9a-f]{40}$ && "$git_read_35" =~ ^[0-9a-f]{40}$ ]] || exit 1
-[ "$c" = "$git_read_34" ] && [ "$c" = "$git_read_35" ] || { echo "the recorded commit $c is not HEAD on origin/main; stop"; exit 1; }
-git_read_36="$(git log -1 --format=%s "$c")" || exit 1
-[ "$git_read_36" = "$(head -n 1 "$si_backup/msg-monitoring-backups.txt")" ] || { echo "the pushed commit $c is not this step's commit; stop"; exit 1; }
-for _ in $(seq 1 30); do
-  si_vmalert_groups > "$si_backup/task28-vmalert-groups.jsonl"
-  jq -s -e '[.[] | select(.group == "storage-integrity-si-v2.backups")] | length == 1' "$si_backup/task28-vmalert-groups.jsonl" > /dev/null && break
-  sleep 10
-done
-jq -s -e '[.[] | select(.group == "storage-integrity-si-v2.backups")] | length == 1 and ((.[0].rules | map(.name) | sort) == ["StorageIntegrityBackupFailed", "StorageIntegrityBackupStale"]) and all(.[0].rules[]; .health == "ok" and ((.lastError // "") == ""))' "$si_backup/task28-vmalert-groups.jsonl" > /dev/null || { cat "$si_backup/task28-vmalert-groups.jsonl"; echo "vmalert did not load the backups group with two healthy rules; stop"; exit 1; }
-si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | tee "$si_backup/task28-backup-alerts.json" | jq -c '[.data.result[] | .metric]'
-[ "$(jq '.data.result | length' "$si_backup/task28-backup-alerts.json")" = 0 ] || { echo "a backup alert is pending or firing; stop and read runbook §15.2"; exit 1; }
-for x in a b c; do p1_cron "$x"; done
-p1_same "$si_backup/task28-pods-start.txt" p1_pods
-p1_same "$si_backup/task28-chi-start.txt" p1_chi3
-p1_note MONITORING_COMMIT "$c"
-```
-
-Expected: §11's expected paragraphs (the group with both rules `health` `ok`, three `last_success` values, no alert, then one line per CronJob `<cronjob>: kube_cronjob_created 1, kube_cronjob_status_last_successful_time 1, kube_job_status_failed of its Jobs <n>` with `<n>` at least 1; a `0` stops that block, because a rule could never fire); then `[]` (no `StorageIntegrityBackup*` series), three CronJob lines with `"suspend":false` and `"active":0`, both `unchanged:` lines. The group `storage-integrity-si-v2.backups` with both rules `health` `ok` and an empty `lastError` within five minutes of the sync; Grafana's `Arbiter.*|SentioNode.*|StorageIntegrity.*` rule (Plan S3-B K13) delivers both alerts without a change.
+Expected: the explicit §11 JSON evidence; monitoring not deployed, delivery and alert health not measured. Exactly six actual user/job commits exist (U-b/U-c/U-n/J-b/J-c/J-a); no M is created, pushed, synced or rolled back. These source/evidence checks alone prove no production monitoring or runtime result.
 
 - [ ] **Step 17: End (read-only)** — runbook §12. Records `P1_END`.
 
-Run §12's read-only blocks (`p1_list '## 12. End'`; they write `p1-end.txt`; §12 holds no confirmed block, else stop and report). §12's block stops before its `P1_END=` line on a CHI or image that changed since §1.3, a quarantined track or a backup alert; `record-date` below then refuses too, and nothing is recorded: report and stop. Then:
+Run §12's read-only blocks (`p1_list '## 12. End'`; they write `p1-end.txt`; §12 holds no confirmed block, else stop and report). §12's block stops before its `P1_END=` line on a CHI or image that changed since §1.3, a quarantined track or missing/mismatched OFF waiver evidence; `record-date` below then refuses too, and nothing is recorded: report and stop. Then:
 
 ```bash
 p1_same "$si_backup/task28-pods-start.txt" p1_pods
@@ -19998,7 +19873,7 @@ p1_edit budget "$si_backup/budget.txt" "$(cat "$si_backup/budget-live-seq")" "$s
   si_state_size "$(si_leader)" | grep -E '^arbiter_state_bytes '
   for x in a b c; do echo "host $x: $(si_info "$x" | jq -c '{si_indexer_id, enrolled, quarantined}')"; done
   si_tracks | jq -c '[.indexers[] | {id: .indexer_id, quarantined}]'
-  si_vm_query 'ALERTS{alertname=~"StorageIntegrityBackup.*"}' | jq -c '[.data.result[] | .metric]'
+  si_p1_py monitoring-off "$si_backup/monitoring-waiver.json" || exit 1
   for x in a b c; do p1_cron "$x"; done
 } 2>&1 | tee "$si_backup/task28-end.txt"
 [ "$used" -le 4 ] || { echo "P1 saw $used promotions, more than the drill table's four (K28): stop and ask before recording"; exit 1; }
@@ -20010,7 +19885,7 @@ p1_note EPOCH_END "$e1"
 echo "P1_END=$d"
 ```
 
-Expected: §12's expected paragraphs (`p1-end.txt` from `P1 end check <stamp> UTC` to its last line, the named record `P1_END=<YYYY-MM-DD>`, which `record-date` reads; every evidence file of contract §19, each owner's full and incremental backups and its passing drill); then both `unchanged:` lines (no SI ClickHouse, host, DinD, voter or verifier pod restarted or moved since Step 2), `budget <b> promotions at promotion <s>; <used> made since; <left> left (at least 0 needed)`, `epoch <EPOCH_START> (unchanged); promotions during P1: <1 to 4>`, `arbiter_state_bytes` far below L/4 (134217728), the three hosts enrolled and not quarantined, three tracks not quarantined, `[]` for the backup alerts, three CronJob lines, and `P1_END=<today, UTC>`. The spec §16 P1 exit holds: every owner has a full and an incremental backup in the bucket whose index names a published manifest, one restore drill per owner passed against it, `P1_MECHANICS` is recorded, the alerts are deployed, and nothing restarted.
+Expected: §12's expected paragraphs (`p1-end.txt` from `P1 end check <stamp> UTC` to its last line, the named record `P1_END=<YYYY-MM-DD>`, which `record-date` reads; every evidence file of contract §19, each owner's full and incremental backups and its passing drill); then both `unchanged:` lines (no SI ClickHouse, host, DinD, voter or verifier pod restarted or moved since Step 2), `budget <b> promotions at promotion <s>; <used> made since; <left> left (at least 0 needed)`, `epoch <EPOCH_START> (unchanged); promotions during P1: <1 to 4>`, `arbiter_state_bytes` far below L/4 (134217728), the three hosts enrolled and not quarantined, three tracks not quarantined, the dated monitoring-OFF evidence with delivery/alert health not measured, three CronJob lines, and `P1_END=<today, UTC>`. The spec §16 P1 exit holds: every owner has a full and an incremental backup in the bucket whose index names a published manifest, one restore drill per owner passed against it, `P1_MECHANICS` is recorded, monitoring is not deployed under the dated C1 waiver (delivery/alert health not measured), and nothing restarted.
 
 - [ ] **Step 18: Staging cleanup (each block requires explicit user confirmation; deletes the throwaway staging data for good)** — runbook §13.
 
@@ -20057,7 +19932,7 @@ Section 12 of docs/storage-integrity-devnet2-stage3-p1-backups.md now
 records the first run of P1 (housegate Plan S3-C1, Task 28): the replica
 bucket and keys, the GCS mechanics, si_backup on the three SI
 installations, the drill table, a full and an incremental backup per
-owner, one passing restore drill per owner and the backup alerts, with
+owner, one passing restore drill per owner and the dated monitoring-OFF waiver, with
 no restart of any SI ClickHouse, host, verifier or voter.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -20359,7 +20234,7 @@ production, charts/sentio-node `siBackup` (Task 26; a top-level block, never und
 
 production, monitoring (Task 26; charts/storage-integrity, S3-B §9's `monitoring` block):
 - Values `monitoring.backups.cronJobs` ([], CronJob names in this namespace), `monitoring.backups.maxAgeSeconds` (93600), `monitoring.backups.runbookURL` (`https://github.com/sentioxyz/production/blob/main/docs/storage-integrity-devnet2-stage3-p1-backups.md`). Refusals (verbatim): `monitoring.backups.cronJobs must name distinct CronJobs`; `monitoring.backups.maxAgeSeconds must be at least 3600`.
-- Rule group `<fullname>.backups`, rendered only when `cronJobs` is non-empty: `StorageIntegrityBackupStale` (critical, `for: 30m`: a listed CronJob's `kube_cronjob_status_last_successful_time` is older than `maxAgeSeconds`, or it has none and was created more than `maxAgeSeconds` ago) and `StorageIntegrityBackupFailed` (warning, `for: 5m`: a Job owned by a listed CronJob has `kube_job_status_failed > 0`); both select `namespace="<namespace>"` and the listed names, never `job`; `runbook_url` = `<backups.runbookURL>#152-a-failed-or-stale-backup`. `MONITORING_ALERTS` gains `"backups": frozenset({"StorageIntegrityBackupStale", "StorageIntegrityBackupFailed"})`. Both match Grafana's `Arbiter.*|SentioNode.*|StorageIntegrity.*` delivery (S3-B K13).
+- Rule group `<fullname>.backups`, rendered only when `cronJobs` is non-empty: `StorageIntegrityBackupStale` (critical, `for: 30m`: a listed CronJob's `kube_cronjob_status_last_successful_time` is older than `maxAgeSeconds`, or it has none and was created more than `maxAgeSeconds` ago) and `StorageIntegrityBackupFailed` (warning, `for: 5m`: a Job owned by a listed CronJob has `kube_job_status_failed > 0`); both select `namespace="<namespace>"` and the listed names, never `job`; `runbook_url` = `<backups.runbookURL>#152-a-failed-or-stale-backup`. `MONITORING_ALERTS` gains `"backups": frozenset({"StorageIntegrityBackupStale", "StorageIntegrityBackupFailed"})`. Both names match Grafana's intended `Arbiter.*|SentioNode.*|StorageIntegrity.*` selector (S3-B K13); this is capability/selector compatibility only. C1 monitoring stays OFF with `backups.cronJobs=[]`; synthetic enabled tests prove no deployment or delivery.
 
 production, test_render.py (Task 26):
 - Constants: `SI_BACKUP_BUCKET = "sentio-352722-si-devnet2-si-v2-replica"`, `SI_BACKUP_GRANTS`, `SI_RESTORE_GRANTS`, `DEVNET2_SI_BACKUP_IMAGE` (`ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>`), `STAGE3_BACKUP_IMAGES = frozenset({DEVNET2_SI_BACKUP_IMAGE})`, `DEVNET2_BACKUP_OWNERS` (`{"sentio-node-devnet2-indexer-a": 0, "sentio-node-devnet2-indexer-b": 1, "sentio-node-devnet2-indexer-c": <INDEXER_C_ID>}`), `DEVNET2_SI_BACKUP_SCHEDULES`, `DEVNET2_SI_BACKUP` (release → bool; all False in the PR), `DEVNET2_SI_BACKUP_USER` (CHI name → bool; all False in the PR), `DEVNET2_MONITORED_BACKUPS` (tuple of CronJob names; empty in the PR), `DEVNET2_BACKUP_DELETE_RIGHT` (= `P1_BACKUP_DELETE`), `P1_STAGING_CHI = ROOT / "docs/examples/storage-integrity-p1-staging-chi.yaml"`, `P1_STAGING_USERS = ("default", "si_snode", "si_gateway", "si_reader", "si_backup", "si_restore")`, `REPLICA_TERRAFORM = ROOT / "terraform/storage_integrity_devnet2_si_v2_replica.tf"`.
@@ -20372,12 +20247,12 @@ production, runbook (Task 27) `docs/storage-integrity-devnet2-stage3-p1-backups.
 ### 19. devnet2, the ledger, repositories and commands (Tasks 22–28)
 
 devnet2 (Task 28; runbook of §18, one stage per window, every mutating block confirmed in chat):
-- Order (binding): §1 → §2 (user: Terraform) → §3 (user: the eight HMAC keys) → §4 (staging Keeper root, refusing a non-empty one; the CHI born locked; grant probe) → §5 (GCS mechanics; stop unless every row passes and the measured delete right equals `P1_BACKUP_DELETE`) → §6 (`si_backup` on indexer-b, indexer-c, then the network CHI, one installation per window, pod UIDs and restart counts unchanged) → §7 (the drill table, irreversible) → §8 (per owner b, c, a: one single-service commit setting `siBackup.enabled: true` and `DEVNET2_SI_BACKUP`, sync of that release only, the host StatefulSet unchanged, the first run by hand, a `full` index) → §9 (a second run per owner: `incr`, `base` = the first, `chain_length` 2) → §10 (one drill per owner b, c, a against the newest checked backup of §8–§9, named explicitly by `--backup`: `pass`) → §11 (the monitoring commit listing the three CronJobs and `DEVNET2_MONITORED_BACKUPS`; the alerts present and silent) → §12 (end record) → §13 (staging cleanup).
-- Exit (spec §16 P1): every owner has a full and an incremental backup in the bucket whose index names a published manifest, and one restore drill per owner passes against it; `P1_MECHANICS` is recorded; the alerts are deployed; no SI ClickHouse, host pod, verifier or voter restarted during P1.
+- Order (binding): §1 → §2 (user: Terraform) → §3 (user: the eight HMAC keys) → §4 (staging Keeper root, refusing a non-empty one; the CHI born locked; grant probe) → §5 (GCS mechanics; stop unless every row passes and the measured delete right equals `P1_BACKUP_DELETE`) → §6 (`si_backup` on indexer-b, indexer-c, then the network CHI, one installation per window, pod UIDs and restart counts unchanged) → §7 (the drill table, irreversible) → §8 (per owner b, c, a: one single-service commit setting `siBackup.enabled: true` and `DEVNET2_SI_BACKUP`, sync of that release only, the host StatefulSet unchanged, the first run by hand, a `full` index) → §9 (a second run per owner: `incr`, `base` = the first, `chain_length` 2) → §10 (one drill per owner b, c, a against the newest checked backup of §8–§9, named explicitly by `--backup`: `pass`) → §11 (dated C1 user waiver and actual False/off/empty evidence; no M; monitoring not deployed, delivery and alert health not measured) → §12 (end record) → §13 (staging cleanup).
+- Exit (spec §16 P1): every owner has a full and an incremental backup in the bucket whose index names a published manifest, and one restore drill per owner passes against it; `P1_MECHANICS` is recorded; monitoring is not deployed under the dated C1 waiver, and delivery/alert health are not measured; no SI ClickHouse, host pod, verifier or voter restarted during P1.
 - Runbook names: `si_backup="$HOME/si-devnet2-stage3-p1"` (mode 700, created fresh); `si_p1_logins_dir="$HOME/si-devnet2-stage3-p1-logins"` (the user's hashes and access-id files; read only); helpers, all in §0's first bash block (D20), after the §0 helpers of the dynamic-table-set, multi-source, multi-source-tracks, stage3-p0, stage3-lockdown and stage3-indexer-c runbooks in that order: `si_p1_image` (prints `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P1>@<SN_DIGEST_P1>` from `$si_backup/pins`), `si_p1s_ch <sql>` (`clickhouse-client` as `default` over loopback in `storage-integrity-si-v2-p1-staging-source-0-0-0`, the password piped from `storage-integrity-si-v2-p1-staging-logins` key `default` into `kubectl exec -i` stdin), `si_s3_sql <account> <sql-file>` (runs the file's SQL as `default` on the P1 staging installation only — no live owner ClickHouse ever receives a key from the runbook; the Secret `storage-integrity-si-v2-<account>`'s `access-id` and `secret` and `default`'s password are piped on stdin and substituted for `@@S3_ACCESS_KEY_ID@@` and `@@S3_SECRET_ACCESS_KEY@@` inside the pod; nothing on argv or printed), `si_p1s_grant_probe` (Plan S3-B's grant-probe corpus, with this plan's rows, run against the P1 staging installation as `si_grant_probe` runs it, each role's password piped from `storage-integrity-si-v2-p1-staging-logins`; output `$si_backup/staging-grant-probe.tsv`), `si_index <a|b|c> <name>` (one index object, read on the staging installation with the `restore-drill` key, as JSON), `si_host_pods <a|b|c>` (UID, restart count and start time of the host pod and of its source ClickHouse pod), `si_backup_run <a|b|c> <n>` (mutating: `kubectl create job --from=cronjob/sentio-node-devnet2-indexer-<x>-si-backup sentio-node-devnet2-indexer-<x>-si-backup-p1-<n>`, waits, saves its stdout to `$si_backup/backup-<x>-<n>.json`), `si_drill <a|b|c>` (mutating: ConfigMap `si-p1-drill-config-<x>` and Job `si-p1-drill-<x>` running `/sentio-node storage-integrity restore-drill --config-path /etc/si-drill/config.yaml --owner <id> --owner-rpc <url> --backup <name of the newest checked backup-<x>-<n>.json>` on `si_p1_image`, `clickhouse_dsn: storage-integrity-si-v2-p1-staging-source:9000`, `clickhouse_username: si_restore`, `scratch_prefix: p1drill_<x>_`, env from `storage-integrity-si-v2-p1-staging-logins` key `si_restore` and `storage-integrity-si-v2-restore-drill`; saves its stdout to `$si_backup/drill-<x>.json`).
 - Owner identities: indexer-a = owner 0, `sentio-node-devnet2-indexer-a`, source `storage-integrity-si-v2-source:9000`, `--owner-rpc http://sentio-node-devnet2-indexer-a:32003`; indexer-b = owner 1, `sentio-node-devnet2-indexer-b`, `storage-integrity-si-v2-indexer-b-source:9000`, `http://sentio-node-devnet2-indexer-b:33003`; indexer-c = owner `INDEXER_C_ID`, `sentio-node-devnet2-indexer-c`, `storage-integrity-si-v2-indexer-c-source:9000`, `http://sentio-node-devnet2-indexer-c:34003`.
 - Writes and values (disjoint from P0's `3001`–`3004`, the lockdown runbook's `4101`–`4104`, E's `3101`–`3102` and `s3e_e2e`'s 1–3): the `devuser1` owner, through its own local agent in the user's terminal, creates `devuser1.s3_p1` (two partitions) and inserts rows `5101`–`5104` in two statements (§7; kept for P2); the staging-only mechanics table `hg_safe.p1_mech` and the `mechanics/` prefix (§5); the backups and index objects under `owner-<id>/`; the drill scratch tables `hg_rstage.p1drill_<x>_<n>` on staging.
-- Evidence files under `$si_backup`: `pins` (lines `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1`, `SN_DIGEST_P1`, `P1_BACKUP_DELETE`, `INDEXER_C_ID`), `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt` (access ids and states only), `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv` (`check`, `expect`, `got` per row), `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-backups-commit`, `p1-end.txt`.
+- Evidence files under `$si_backup`: `pins` (lines `HG_TAG_P1`, `CORE_TAG_P1`, `SN_COMMIT_P1`, `SN_DIGEST_P1`, `P1_BACKUP_DELETE`, `INDEXER_C_ID`), `bucket.json`, `bucket-iam.json`, `service-accounts.txt`, `hmac-keys.txt` (access ids and states only), `budget-voter`, `budget-snapshots.tgz`, `budget-live-seq`, `budget.txt`, `staging-grant-probe.tsv`, `mechanics-gcs.tsv` (`check`, `expect`, `got` per row), `p1-mechanics.txt`, `host-pods-<x>-{before,after}.txt`, `si-backup-user-<installation>-commit`, `drill-table.txt`, `si-backup-<x>-commit`, `backup-<x>-{1,2}.json`, `drill-<x>.json`, `monitoring-waiver.json`, `monitoring-off.json`, `p1-end.txt`.
 
 Ledger (Appendix C of this plan file; S3-B decision D23's shape and procedure, through `s3-ledger.py`):
 - Consumed: from Plan S3-A `HG_TAG`, `PROTO_TAG`, `CORE_TAG`, `ARBITER_TAG`, `ARBITER_DIGEST` and its deployed-image mechanics record; from Plan S3-B `SN_COMMIT`, `SN_DIGEST`, `L_END`, `E_END`, `INDEXER_C_ID`.
@@ -21065,6 +20940,16 @@ Task27's production runbook is a documentation overlay: SHA256 changes from `ab5
 ### Bounded optional gazelle diff-status follow-up (2026-10-18)
 
 Task25 Step10 now distinguishes Git diff status0 (no change),1 (legitimate reviewed differences) and fatal statuses, stopping before configuration, staging or commit on a fatal result. The complete original fence reproduced fatal73 dispatch into commit on both Bash versions under direct and conditional callers;56 old/new inert outcomes preserve valid optional behavior and existing commit/new-HEAD/identity/signature refusal paths. Independent sibling audit binds the same original body; the controller verified39 output hashes. One procedural Bash fence changes;413 other fences, all10 canonical REST readers and the adopted Task27 runbook6d76d0d6 remain exact. Historical implementation/source/session evidence stays within its original scope; no actual build/source/remote/GPG/ledger action or formal review/consistency increment follows.
+
+### C1 monitoring-OFF execution reconciliation (2026-10-19)
+
+The user explicitly kept monitoring disabled, approved K24's own-backup `.lock` exception and confirmed K25's existing one-bucket managed-folder layout (`owner-0/`, `owner-1/`, `owner-2/`, `mechanics/`). These are scoped decisions, not apply authorization or live results. Source basis: housegate `4aa5a429577ed5ea2a9e26699137f6d6e6c25b1e`; the read-only impact map inspected production `a9f9b26686029cfae0fc8621ba41ac30e002624d`. Earlier observed outputs, hashes, counts, monitoring-True refusals and pending-enablement prose above remain historical evidence of their original texts; this dated forward reconciliation supersedes only the prospective C1 monitoring gate and execution path.
+
+Tasks26–28 now require exactly literal False, actual overlay false, empty monitored-backup lists and explicit dated user waiver evidence. Runbook §11 and Task28 Step16 only check OFF evidence; the live flow has six actual user/job commits and no M, sync or monitoring rollback. Both future record narratives require the bounded waiver plus actual OFF evidence and state monitoring not deployed, delivery/alert health not measured. Missing/nonboolean/True/mismatched/nonempty states, fake M, missing waiver and false alert-health claims must fail. The 29 exact selector markers replace the former 31 (three monitoring markers become one). Synthetic enabled chart tests retain alert capability/selector coverage only; the four exporter metric families, loaded-rule health and Grafana delivery are not executed or claimed under this waiver.
+
+Parent ruling: this waiver is C1-only; an eventual waived `P1_END` proves no downstream monitoring prerequisite. Cost: P1 lacks automated alert/delivery coverage. All backup writers/readers, grants and full corpus, GCS mechanics, restore drills, no-restart/epoch checks and promotion budgets remain binding. The complete ledger tool and Appendix C bytes are unchanged; no `P1_MECHANICS` or `P1_END` is produced by this amendment. No S3-B/Track B/C2–F or other-plan ledger change, live/cloud/Docker operation or forbidden credential-file access is part of this reconciliation. Local policy verification is scoped separately from full Task26 source implementation/render validation and future runtime proof. The amendment's extracted local checks verify the 29 markers and the 66-Bash/34-confirmed/4-fish runbook, strict False/off/empty/waiver positive and negative states, both truthful future record narratives, no-write refusals and refusal before a synthetic end marker. These are fixture results only, not actual `P1_MECHANICS`/`P1_END`, monitoring delivery, chart deployment or GCS evidence; the local report retains exact commands and results.
+
+
 ## Appendix C: execution record
 
 Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after the recording task has produced and verified its values. Empty cells and run-record items below are intentional; no part of this plan has executed.
