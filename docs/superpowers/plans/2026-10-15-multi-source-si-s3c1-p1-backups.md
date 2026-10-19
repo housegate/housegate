@@ -21074,8 +21074,8 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure, after 
 | `HG_TAG_P1` | `v0.21.0` | Task 22 |
 | `CORE_TAG_P1` | `v0.16.0` | Task 24 |
 | `P1_BACKUP_DELETE` | `lock` | Task 24 |
-| `SN_COMMIT_P1` | | Task 25 |
-| `SN_DIGEST_P1` | | Task 25 |
+| `SN_COMMIT_P1` | `09c839b4098606cd6c1e2fecf58bae7002faa708` | Task 25 |
+| `SN_DIGEST_P1` | `sha256:57088e79b9fd94b724353ae80bf74b65ab32e5835852c781a9ceaaae8172a896` | Task 25 |
 | `P1_PR` | | Task 27 |
 | `P1_MECHANICS` | | Task 28 |
 | `P1_END` | | Task 28 |
@@ -21089,6 +21089,6 @@ Run records (one item per recording task; each is filled in the same commit as a
 - arbiter-core release and the S3 mechanics (Task 24): sentioxyz/arbiter-core#51 (Tasks 23-24) squash-merged on 2026-10-19 at 07:19:39 UTC as f5d41b487e2a3ec4c09f0113f930c2a8c2e24671; Cut Release run 39233769869 cut v0.16.0 at that commit, with go.mod requiring housegate v0.21.0 and arbiter-proto v0.12.0. Its mechanics step passed 16/16 mechanics, the SNode restart test and 7/7 objstore S3 tests, measured backup delete right lock, and found no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3. The user-terminal repeat on the same merged commit on 2026-10-19 (08:27:50-08:32:01 UTC), using deployed 26.3-lts-decimal512-release-2026-09-16 (ClickHouse 26.3.12.1), passed the same mechanics, restart, S3 and masking checks with no skipped tests and the same lock right. This records measured release facts and does not approve the K24 own-lock policy amendment or live operations.
   - release run: mechanics: 16 test(s) passed on clickhouse/clickhouse-server:26.3.37.3; mechanics: S3 backup delete right: lock; objstore: 7 S3 test(s) passed on clickhouse/clickhouse-server:26.3.37.3; mechanics: no S3 secret in the server logs on clickhouse/clickhouse-server:26.3.37.3
   - deployed image: mechanics: 16 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16; mechanics: S3 backup delete right: lock; objstore: 7 S3 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16; mechanics: no S3 secret in the server logs on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16
-- sentio-node release (Task 25):
+- sentio-node release (Task 25): sentioxyz/sentio-node#198 squash-merged as `09c839b4098606cd6c1e2fecf58bae7002faa708` on 2026-10-19 at 10:55:00 UTC; `CI Build` run `39240869081` completed successfully with build, integration-clickhouse and docker-push all success. Published `ghcr.io/sentioxyz/sentio-node:sha-09c839b4098606cd6c1e2fecf58bae7002faa708`, OCI index digest `sha256:57088e79b9fd94b724353ae80bf74b65ab32e5835852c781a9ceaaae8172a896`; registry inspection of the pinned linux/amd64 image confirmed revision label `09c839b4098606cd6c1e2fecf58bae7002faa708`. Its merged go.mod requires housegate `v0.21.0`, arbiter-core `v0.16.0` and arbiter-proto `v0.12.0`. The actual digest-pinned linux/amd64 image ran `/sentio-node storage-integrity --help` under OrbStack with networking disabled, exited 0 and listed `backup`, `enrollment-statement` and `restore-drill`.
 - P1 PR (Task 27):
 - P1 run (Task 28):
