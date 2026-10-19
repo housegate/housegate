@@ -15980,7 +15980,7 @@ func TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch(t *testi
 		{&pb.MemberCheckpointCmd{ReplicaJws: "a.b.c"}, "checkpoint is required"},
 		{&pb.MemberCheckpointCmd{Checkpoint: &pb.MemberCheckpoint{OwnerIndexerId: 1}, ReplicaJws: "a.b.c"}, "checkpoint.node_id is required"},
 		{&pb.MemberCheckpointCmd{Checkpoint: cp, ReplicaJws: "not-a-jws"}, "replica_jws must be a JWS compact serialization with 3 dot-separated parts"},
-		{&pb.MemberCheckpointCmd{Checkpoint: &pb.MemberCheckpoint{NodeId: "member-2", Groups: []*pb.CheckpointGroup{{DatabaseId: "db",
+		{&pb.MemberCheckpointCmd{Checkpoint: &pb.MemberCheckpoint{NodeId: "member-2", Entry: cp.Entry, Groups: []*pb.CheckpointGroup{{DatabaseId: "db",
 			Excluded: []*pb.ExcludedTable{{TableId: "db.t"}}}}}, ReplicaJws: "a.b.c"},
 			"wire: member checkpoint excludes db.t with reason CHECKPOINT_EXCLUSION_REASON_UNSPECIFIED, which is not a known CheckpointExclusionReason"},
 	} {
@@ -18263,6 +18263,11 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 
 - the spec-coverage row for §11 `replica_hosts` no longer pairs the host side with `ready_generation`: Plan S3-E4 contract §56 (its review finding 2) lists every current member's served `host_indexer_id`, never filtered by `MemberReady`. This plan still serves `ready_generation`; nothing else changes.
 
+
+
+### Review fixes (AgentConnect PR #249, checkpoint fixture)
+
+- **Review fixes (AgentConnect, PR #249 current review), P2 — checkpoint exclusion fixture presence:** Task75 Step17's unknown-exclusion request omitted `Entry`; the current inherited Task60 decoder correctly refuses missing entry before traversing exclusion reasons, so the request could not reach its exact expected unknown-reason diagnostic. Added only `Entry: cp.Entry`, reusing the earlier valid frontier read-only, in that one request. All other cases, exact status/message assertions, final switch-off request and no-proposal check remain unchanged. Task60's existing `TestMemberCheckpointRequiresExplicitBodyAndEntry` separately retains missing-body/missing-entry refusal through body/request/Raft and the present owner0 zero-frontier positive; its unknown-reason fixtures already supply Entry. Both canonical and selected706 Task75 variants receive the same17-byte fixture edit while retaining their other differences. Static whole-task/fence inverse, decoder/gateway ordering and sibling checks pass; no Go/product/actual75 tests ran. Future actual75 proof remains required on the normal accepted predecessor chain; no source approval, runtime efficacy or CI-green claim is inferred.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
