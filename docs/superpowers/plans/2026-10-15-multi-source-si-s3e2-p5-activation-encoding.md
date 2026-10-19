@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-16): draft.** Tasks 64, 65, 66, 67, 68, 69, 70 are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet, and the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
+All seven complete accepted owning/procedural task payloads are selected and byte-bound below; the resolved PREP/text-integration banner is removed from this local candidate only. Root536479ab accepts bounded fixed-tool70 source continuation and root6892 accepts its final owning text. Root has adopted the task reviews and E2 documentary consistency after E1, as recorded in Appendix B; publication remains pending. Global cross-plan closure and execution authorization remain separate. Actual Task71 still needs its independently reviewed concrete runner, accepted638 custody and a fresh grant. Historical69 failure/UNKNOWN risk and original70 tool-drift HOLD are retained separately; no release, live action or ledger value is inferred.
 
 **Goal:** Give the arbiter everything the v21 activation and the first three switches of spec §10.4 need, all inert until an authority-signed update turns them on: the `stage3` consensus parameter with its one-way switches and its rules, the host-bound `verifiers` entry rules, and the activation itself (an update that sets `stage3` with every switch off, judged by the stage-2 drain gate, a leader gate that probes every voter and every data-plane node for `stage3_v1`, and a registration refusal afterwards); snapshot v21 with a body-kind byte, a plain body and a lossless interned body that `Persist` writes only after it has verified it, falling back to the plain body (and counting the fallback) on any mismatch; eviction voiding (switch 2); incarnation-scoped Keeper path marking and the pool-plus-members purge-required set (switch 1); and owner-aware, pool-only selection with the `VERIFIERS_UNAVAILABLE` admission refusal and unmarkable blocks leaving the WorkSet (switch 3). Before `stage3` is committed the P5 binary is byte-identical to `ARBITER_TAG_P4` (same Apply results, same v20 containers); after the activation with every switch off only the snapshot container changes. Nothing is released and nothing runs on devnet2 in this plan.
 
-**Architecture:** Every task is arbiter code on the one P5 branch `urwt/claude/multi-source-s3e` (K65 of Plan S3-E1), which Plans S3-E3 and S3-E4 continue and S3-E4 Task 78 releases as `ARBITER_TAG_P5`.
+**Architecture:** Every task is arbiter code on the one P5 branch retained by Task64's actual URWT JSON (this Codex controller uses `urwt/codex/multi-source-s3e`) (K65 of Plan S3-E1), which Plans S3-E3 and S3-E4 continue and S3-E4 Task 78 releases as `ARBITER_TAG_P5`.
 - Task 64 pins `PROTO_TAG_P5`, `HG_TAG_P5` and `CORE_TAG_P5`; adds `Params.Stage3` and `State.Stage3` (`Stage3State`: the activation point and one cutover record per switch); the Params-only `stage3` rules in `verifyConsensusTransition`, which restore replays (one-way switches turned on one per update in §10.4 order, carry-once-set, non-decreasing `min_safe_copies` and `group_size`, `min_safe_copies > 1` and `strict_copies` only after `checkpoints` and `narrowed_drain`, a failure domain for every enrolled indexer from `placement` on); the host-bound `verifiers` entry rules (consent, replica signer, weight, failure domain, `shared_rmt`, refused until `owner_aware_selection` is committed, K68); the every-field `cloneVerifiers` fix (the scoping proposal's defect D3, whose other two rebuild sites are Plan S3-E1's Tasks 59 and 60); the Apply-only half `stage3MembershipRefusalLocked` (a member node id unused by every registered node; Plan S3-E3 Task 71 adds the per-group verifier floor there); and the activation Apply, which needs no empty open block and no global prefix (unlike `tracksActivationRefusalLocked`).
 - Task 65 adds `server/stage3_gate.go` on the tracks gate's pattern (no non-voter, the FSM's activation refusal, `stage3_v1` from every registered, non-evicted data-plane node except the SNode of a quarantined track, every voter probed through `arbiter-stage3-voters`), the post-activation registration refusal, `stage3` in `consensusMutableParams`, and the `arbiter-admin consensus update` flags `--stage3`, `--stage3-*`, `--stage3-switch`, `--indexer-failure-domain` and the extended `--verifier`, with an activation-gate exemption hook for the SNodes of quarantined tracks.
 - Task 66 adds snapshot v21 (`AFSM`, version 21, a body-kind byte, length, body, spent-ids), writes v20 until `Params.Stage3` is committed and v21 with the plain body afterwards, refuses every stage-3 field under an older version byte (`stage3FieldsPresent`), adds `fsm/stage3_restore.go` (`validateStage3State`, which every later stage-3 task extends), and freezes the plain v21 container golden.
 - Task 67 adds the interned body (`arbiter-snapshot-interned-v1`, generic JSON value interning, K70), the write-then-verify in `Persist` outside the FSM lock on Plan S3-A Task 9's snapshot path, the node-local writer setting `raft.snapshot_body: auto|plain`, `arbiter_snapshot_encoding_fallback_total` and `arbiter_snapshot_body_bytes{kind}`, a forced-mismatch test, the frozen interned container golden, and an offline replay and size measurement over local copies of the devnet2 voters' logs.
-- Task 68 adds eviction voiding as explicit checks at each signer's call site (result claims, attestations, byte-side scans, promotion, cleanup and rejected-cleanup acknowledgements, parked claims), never inside `snodeSignatureLocked`, which registration shares; `reevaluateBlock` skips an evicted verifier's evidence unless quorum latched or a statement is challenged; `EvictNode` and the switch-on re-evaluate the blocks that name evicted verifiers; the WorkSet treats voided evidence as missing.
+- Task 68 adds eviction voiding as explicit checks at each signer's call site (result claims, attestations, byte-side scans, promotion, cleanup and rejected-cleanup acknowledgements, parked claims), never inside `snodeSignatureLocked`, which registration shares; `reevaluateBlock` skips an evicted verifier's evidence unless quorum latched or a statement is challenged; `EvictNode`, authenticated verifier-delisting through `evictNodesLocked` and the switch-on re-evaluate the blocks that name evicted verifiers; the WorkSet treats voided evidence as missing.
 - Task 69 marks every chain incarnation recorded after the `purge` switch `scoped_keeper_path`, gives `TableIncarnation` its `purge_members` list (filled by Plan S3-E3 Task 71), makes the purge-required set the owner's SNode, the network pool and `purge_members` once the switch is on, serves both fields in the registry view, and adds their restore rules.
 - Task 70 adds owner-aware selection: with the switch on, `MarkReplaying` draws from the eligible ring (pool-only in this plan; Plan S3-E3 Task 73 adds the group half) with today's block-seeded start, and stores the ring, the ring position and the registry cursor block in `BlockVerification`; admission answers `VERIFIERS_UNAVAILABLE` right after `SOURCE_UNAVAILABLE`; a sealed block whose ring is below three leaves the WorkSet, so the orchestrator stops proposing it; the read RPC serves the ring; with the switch off selection is byte-identical.
 
@@ -19,21 +19,22 @@
 
 **Spec:** housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` (housegate#236, with every review fix) — binding: §6.1 (the `verifiers` entry fields and rules and the `stage3` parameter rules; the per-group verifier floor is Plan S3-E3's), §7.3 (owner-aware selection for databases without a group, the owner-hosted exclusion, `VERIFIERS_UNAVAILABLE`, unmarkable blocks; the group half is Plan S3-E3's), §8.8 (the FSM half of the `purge` switch: scoped marking and the purge-required set; the data-plane half is Plan S3-E1's), §10.3 (the activation, the v21 container with both bodies, write-then-verify, the fallback metric, the operational writer setting; the rehearsal and the live activation are Plan S3-E4's), §10.4 (the switch rules and steps 1–3), §13.2 (the lossless encoding), §14 bullet 5 (eviction voiding), and the §17 FSM tests for these items, as clarified by Plan S3-A's K1–K10, Plan S3-B's K11–K22, Plan S3-E1's K58–K67 and this plan's K68–K72. **Prerequisites:** Plan S3-E1 (`2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`): its releases `PROTO_TAG_P5`, `HG_TAG_P5` and `CORE_TAG_P5` and its contract §38–§43 (the proto numbers of §39 verbatim, the canonical types and authority purposes, the wire converters, `stage3_v1`); Plan S3-D (`2026-10-15-multi-source-si-s3d-p4-settle-rebuild-hardening.md`): `ARBITER_TAG_P4` cut from arbiter `main` before this plan's branch starts, and `PROTO_TAG_P4`, produced unconditionally (decision D26) and the base against which `PROTO_TAG_P5` passes `buf breaking`; Plan S3-A's Appendix A §0–§6 (the reads, holds, state-size gauges and snapshot observer this plan extends) and Plan S3-B's §7–§15 apply unchanged where this plan does not replace them; Plan S3-C1's contract §19 defines the ledger tool. This plan's Appendix A continues the numbering (§44–§48); Plans S3-E3 (§49–§52) and S3-E4 (§53–§57) build on it.
 
-**Base revisions.** Line anchors refer to arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169` and production `75514e3de` (its storage-integrity paths byte-identical to Plan S3-B's base `9d3d0326b`), the spec's revisions. The branch itself starts from arbiter `main` at or after `ARBITER_TAG_P4`, which carries Plan S3-A's Tasks 7–11 (`fsm/reads_*.go`, `fsm/state_size.go`, `fsm/snapshot.go`'s observer path, `server/safestate_stage3.go`, `server/consensus_hold*.go`, `orchestrator/*`, `raftnode/snapshot_observer.go`, `cmd/arbiter-admin/main.go`'s `--hold`), Plan S3-C2's commit `ARBITER_PIN_P2` (the `CORE_TAG_P2` pin and the `chpipeline` member harness) and Plan S3-D's Task 51 (leader-local settle); every hunk of this plan on those files is re-anchored there under the hunk rule. devnet2 is not touched by this plan; when it starts, the earlier plans' exit records leave it as Plan S3-B's `E run and the steady state after E` describes it, changed by no consensus format through `P4_END` (the activation model of the cross-plan conventions, whose only exception is Plan S3-D's `PROTO_TAG_P4` settle surface: `SettleTrack` and the additive, non-Raft `SNodeHello.settle` / `PromotionCommand.settle` stream fields, decision D26): tracks enabled with cutover 60/52, `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, verifiers `verifier-1..3`, `max_writers` 3, epoch `ENROLMENT_EPOCH` or later, snapshot v20, no `stage3` parameter, voters on `ARBITER_DIGEST` or `ARBITER_DIGEST_P4`, the si-members `MEMBER_IDS` running off consensus and unregistered. Task 67's replay reads only local copies made by earlier plans (contract §48).
+**Base revisions.** Local bounded reviews use arbiter main `526a721657983920f19539801b91fcbd222e6f06`, arbiter-core main `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455`, arbiter-proto main `7a73f256865c333332f0ac28b17806b1e2bfcbd1` and housegate main `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, plus complete reviewed predecessor sources, not old drafting stand-ins. Task64 starts at actual post51 arbiter611 with the separately accepted journal-oracle test correction and actual63 core469/58HG935/57proto. Stages64→65→66→67→68→69 reach615→625→628→631→633→637 files. Task69 source manifest `654091883850a73d3434a2229b4631dd0bfd29195b116b8470c2f1fd176848b6` remains bounded-risk accepted under e970, with original whole-race FAIL/cause UNKNOWN. Fixed-tool70 qualified source638 is manifest `89fc5753762b80e07794075601ec5aa66bccc9c4d54afb86c1448a4f32efb89f`, root536479ab; comparison to held source permits only three main go.mod local dependency path substitutions and637 other raw-identical files. This is source continuation, not literal fresh TDD, historical31-mutant reattribution, signed/pushed HEAD or released P4/P5 versions. The original70 Go1.27.1→1.27.2 HOLD and historical SDK/tool switch-time UNKNOWN remain. The final12-call qualification has fixed CellarGo1.27.2/cached Bazel9.1.0/selectedSDK1.26.3 evidence, narrowly configured294-action/ten-leaf SDK scope and27x22 fixed-file custody; no universal action/input closure. Execution still starts at the actually recorded P4 release, carries C2/D predecessors and reads producing P5 pins through R4. Source hunk context/names bind, old line numbers are navigation only. C4 documentary consistency is root-adopted under dd9b2409 (27/68 reviews and4/10 plan consistency at that receipt cut). Task45 corrected34 private-memo381core/923HG source review is complete under4fc391 in bounded P1 current-source BUILD/TEST/three actual CH-test scope; this is not full P3, Task46, release or live acceptance. The exact D25 append-only clarification is user-approved. Ordered root adoption of E1 then E2 is recorded in Appendix B; publication and global cross-plan review remain separate. devnet2 is untouched; D26 remains the sole pre-P5 additive non-Raft settle exception and live activation remains separately confirmed/irreversible.
 
 ## Global Constraints
 
 - **Earlier plans apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies (and through them those of Plans S1-A, S1-B, S2-A and S2-B: strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions), together with the cross-plan conventions of Plans S3-C1 … S3-F and Plan S3-E1's contract.
 - **Cross-plan decisions D25–D40** (the conventions' list, binding) apply where they name this plan: D25 (the `conformance/stage3_reads_test.go` exception, below), D26 (`PROTO_TAG_P4` is the unconditional proto base; `RebalanceGroup` and `MarkMemberLagging` are `ConsensusAdmin` methods 16 and 17, contract §48), D27 (the registry view's `GroupMember.host_indexer_id` rests on K68's fixed host), D33 (the purge cutover's `IncarnationSeq` stays unserved, contract §45), D34 (the ledger copy, contract §48) and D37 (the one P5 rehearsal directory `$R5` is created by Plan S3-E4 Task 78; Task 67 replays in its own work directory `$T` and removes it, contract §48).
 - **Activation model (contract §44).** Before `Params.Stage3` is committed the P5 binary replays every history to the same Apply results and state digests as `ARBITER_TAG_P4` and writes the same v20 containers, which `ARBITER_TAG_P4` restores; after the v21 activation with every switch off only the snapshot container differs. Every new Apply branch tests its switch first and returns a fixed refusal, or today's behaviour, before it; each task pins its switch-off identity with a named test.
+- **Validation gates remain distinct.** K38's arbiter chpipeline full500 gate requires the requested count of at least500 blocks per owner and zero mismatches; missed scans and unverdicted counts are reported separately and do not fail it solely for being nonzero. A short50 run never records the full500 gate. The two historical500 failures remain failures; local E2 unit/race/Bazel or static consistency proof does not close them. C3's independent fully-scanned shadow coverage, devnet2 soak/window and promotion-budget requirements are unchanged.
 - **Ordering.** Switches are turned on one per update, each after every earlier switch of §10.4 is committed: `purge` < `eviction_voiding` < `owner_aware_selection` < `placement` < `reselection` < `checkpoints` < `narrowed_drain` (K69); a host-bound `verifiers` entry is refused until `owner_aware_selection` is committed (K68). Tasks land in numeric order on one branch (§48).
 - **Irreversible steps.** None runs in this plan. The code introduces one irreversible format (snapshot v21, live from the activation) and seven one-way switches; Plan S3-E4 executes the activation and Plan S3-F the switches, each as its own confirmed step.
 - **Release rule (K65).** No arbiter release from Task 64's pin through Task 78: `CORE_TAG_P5` puts `stage3_v1` into `GetProtocolInfo` the moment it is pinned. This plan opens no PR and merges nothing to `main`; its last step pushes the branch (explicit confirmation). Plan S3-E4 Task 78 merges and releases.
 - **Production rule.** This plan changes no production file and runs no live command. The v21 writer value, the encoding-fallback alert and the voter budget re-check are Plan S3-E4 Task 80's, under the user's production rule (direct push only for convergent single-value changes; a PR for everything else).
 - **Runbook conventions.** No runbook is written here. The only shell work outside the worktree is Task 67's throwaway work directory `$T` and its two evidence files beside the worktree (contract §48): bash blocks, `Confirm before running.` before every block that writes outside `$T` and those two files, removes `$T` or reaches a remote, evidence teed into the two files, nothing committed; commands handed to the user in chat are fish. The one P5 rehearsal directory `$R5` (`$HOME/si-devnet2-multisource-s3e-rehearsal`) is created by Plan S3-E4 Task 78 and only read by the P5 runbook (decision D37); no task of this plan creates, writes or reads it.
 - **Passwords and keys.** None is handled. Tests sign only with `authoritytest` keys; the live authority key never leaves the voter pods and no plan step reads it; the offline replay exports a throwaway random `ARBITER_ANCHOR_EVM_PRIVATE_KEY_HEX` because `config.Load` requires one (Plan S3-B runbook §3.3's rule).
-- **Never edit golden or vector files:** everything Plans S2-A and S3-A list, plus `fsm/testdata/pre_tracks_golden.json`, the `fsm/l3_track_golden_test.go` constants and arbiter-proto's `conformance/stage3_reads_test.go` (decision D25: only its count literals change, by Plans S3-D and S3-E1, every existing entry byte-identical; this plan changes nothing in arbiter-proto); the existing golden tests (`TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestL3CommitmentPreimagesAreFrozen`, `TestL3TrackHeaderPreimagesAreFrozen`, `TestL3TransitionHeaderPreimageIsFrozen`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the shared vector tests) pass unchanged. New frozen fixtures: `fsm/testdata/stage3_v21_plain.snapshot` (Task 66) and `fsm/testdata/stage3_v21_interned.snapshot` (Task 67), captured once and never rewritten.
-- **Consumed names.** Names of Plans S3-A, S3-B, S3-C1 and S3-D are spelled as their contracts give them; names of Plan S3-E1 are spelled as contract §48 lists them, reconciled with Plan S3-E1 §39–§42 by the cross-plan consistency pass; Plan S3-E1 binds if a name ever differs, never the other way.
+- **Never edit golden or vector files:** everything Plans S2-A and S3-A list, plus `fsm/testdata/pre_tracks_golden.json`, the `fsm/l3_track_golden_test.go` constants and arbiter-proto's `conformance/stage3_reads_test.go` (decision D25: the user-approved exact count/range/comment/diagnostic surface and Task57 nine-token append after the original thirteen names/types/order, by Plans S3-D and S3-E1; every other existing entry/freeze rule stays byte-identical; this plan changes nothing in arbiter-proto); the existing golden tests (`TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestL3CommitmentPreimagesAreFrozen`, `TestL3TrackHeaderPreimagesAreFrozen`, `TestL3TransitionHeaderPreimageIsFrozen`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the shared vector tests) pass unchanged. New frozen fixtures: `fsm/testdata/stage3_v21_plain.snapshot` (Task 66) and `fsm/testdata/stage3_v21_interned.snapshot` (Task 67), captured once and never rewritten.
+- **Consumed names.** Names of Plans S3-A, S3-B, S3-C1 and S3-D are spelled as their contracts give them; names of Plan S3-E1 are spelled as this plan's §48 lists them (from E1 §39–§43), reconciled with Plan S3-E1 §39–§42 by the cross-plan consistency pass; Plan S3-E1 binds if a name ever differs, never the other way.
 - **Hunks are anchored on the base revisions.** Tasks were drafted in parallel; when a later task's hunk overlaps an earlier task's edit (Tasks 64, 66, 68, 69 and 70 all edit `fsm/state.go`, `fsm/snapshot.go` or `fsm/stage3_restore.go`; Tasks 68 and 70 both edit `fsm/apply.go` and `fsm/reads_work.go`), apply the later intent on top of the earlier change. The contract and the named tests are binding; line anchors are guidance.
 - **Repository commands, worktrees, commits:** contract §48. Remote actions (fetches included) require explicit user confirmation in chat; commands handed to the user are fish.
 - **References.** `contract §N` points to Plan S3-A's Appendix A for §0–§6, Plan S3-B's for §7–§15, each Stage 3 plan's own range for §16–§61 (this plan: §44–§48); a task group's "Facts" point to Appendix B; Appendix C of this plan has no ledger row (this plan records nothing).
@@ -69,9 +70,11 @@ Every consumed value is read from the ledger copy with `s3-ledger.py get` (contr
 4. **An evicted node keeps speaking.** Inputs, with `eviction_voiding` on: an evicted SNode's result claim and its promotion, cleanup and rejected-cleanup acknowledgements, an evicted verifier's attestation and byte-side scan, a parked claim of an evicted SNode; evidence an evicted verifier recorded before its eviction in an unlatched block, a latched block and a challenged block; a re-registration with a higher `registration_seq`. Expected: every new message refused with `%s from %s: the node is evicted (stage3 eviction_voiding)` and state unchanged; an unlatched, unchallenged verdict loses the evidence and the WorkSet lists its block as `EvidenceIncomplete`, never `QuorumFailed`; a latched verdict survives a snapshot and restore; a challenged block keeps its evidence; registration and MarkActive keep their checks and a re-registered node speaks again; with the switch off nothing changes. Tests: Task 68 `TestEvictionVoidingRefusesEveryMessageOfAnEvictedNode`, `TestEvictionVoidingOffKeepsTodaysAdmission`, `TestEvictionVoidingKeepsALatchedVerdictAcrossSnapshotRestore`, `TestEvictionVoidingDropsAnEvictedVerifiersEvidenceFromAnUnlatchedVerdict`, `TestEvictionVoidingKeepsTheEvidenceOfAChallengedBlock`, `TestWorkSetTreatsAnEvictedVerifiersEvidenceAsMissing`, `TestAdoptParkedClaimsDiscardsAClaimOfAnEvictedSNode`, `TestReRegisteredNodeIsNoLongerVoided`.
 5. **A block that cannot find three verifiers.** Inputs, with `owner_aware_selection` on: the Active pool drops below three (an eviction, a verifier back in Syncing), a statement arrives for an owner, a sealed block waits while the pool recovers. Expected: admission answers `VERIFIERS_UNAVAILABLE` right after `SOURCE_UNAVAILABLE`, with the coordinate unspent and no seal prepared; `MarkReplaying` refuses with `eligible verifier ring below 3 (spec §7.3 floor)`; the WorkSet lists the block under `Unmarkable`, not `SealedUnmarked`, so the orchestrator proposes nothing; the first pass after the ring reaches three marks it with the block-seeded set, and the ring, position and cursor are stored. Tests: Task 70 `TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible`, `TestVerifiersUnavailableIsCheckedRightAfterSourceUnavailable`, `TestVerifiersUnavailableLeavesTheCoordinateUnspent`, `TestMarkReplayingRefusesAnEligibleRingBelowThree`, `TestWorkSetDropsAnUnmarkableBlockUntilTheEligibleCountChanges`, `TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock`, `TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor`.
 
+6. **Actual source custody and independent defences.** Preserve the full coherent51→64→65→66→67 source and dependencies before replaying68–70. Task64 `TestManifestOwnerPendingStage3FieldsAreExactlyZero` pins the intermediate18-field-FSM/20-field-wire ownership (proto tags19/20) without admitting nonzero or allocated-empty future values; Task69 owns full20-field FSM mapping. `TestStage3ValueRulesHaveIndependentDefences` covers malformed replay values. Task65 `TestStage3GateRejectsPreviousTermFeatureProof`, `TestStage3QuarantineDoesNotExemptAVerifier` and `TestStage3RegistryChangeComparisonCoversEveryParameterField` preserve term/voter/SNode-only exemption and all18 parameter fields. Task66 `TestStage3V21PlainGoldenCaptureDoesNotOverwriteExistingPath` proves actual exclusive creation and five filesystem cases, and `TestValidateStage3StateRefusesRegressingCutoverPromotions` separates promotion bounds from block bounds; the existing pre-v21 test covers bootstrap/current/history verifier fields. The formal plain blob is175302 bytes, SHA256 `89707ed2f9a9ebb7017e23ce9c3be9390dbb2369d197b356a63b29285c1dbb96`, captured exclusively once and independently tested. Actual67 separately captured the45482-byte interned blob once with SHA256 `56577f7de4e6e45bee775cda97cd28fe01e37a73e517329a5792ff54f11656f5`; both remain immutable inherited evidence, not released-P4 attestation.
+
 ## Task order and dependencies
 
-Plan S3-E1 complete (`PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` on the ledger copy) and `ARBITER_TAG_P4` recorded by Plan S3-D → 64 → 65 → 66 → 67 → 68 → 69 → 70, applied in this order on the one branch `urwt/claude/multi-source-s3e` (contract §48), each task's commits on top of the previous task's. Data dependencies: 65 needs 64 (`Stage3Active`, `Stage3ActivationRefusal`, `Stage3ActivationNodes`, `Stage3Switches`); 66 needs 64 (`Stage3State`); 67 needs 66 (the v21 framing and kind byte); 68 needs 64 (`stage3SwitchOnLocked`, `onStage3SwitchOnLocked`); 69 and 70 need 64 (switches, cutover records, `poolVerifierLocked`) and 66 (`stage3FieldsPresent`, `validateStage3State`). Drafting: 65, 67 and 68 may be drafted in parallel with 66 once §44–§46 are fixed; 69 and 70 once §46 is; every overlap is resolved by the hunk rule. Plan S3-E3 continues on the same worktree after Task 70's push and may be drafted once §44–§47 are fixed; Plan S3-E4 Task 78 releases the branch. No arbiter release, PR or merge happens between Task 64's pin and Task 78 (K65).
+Plan S3-E1 complete (`PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` on the ledger copy) and `ARBITER_TAG_P4` recorded by Plan S3-D → 64 → 65 → 66 → 67 → 68 → 69 → 70, applied in this order on the one branch retained by Task64's actual JSON (contract §48), each task's commits on top of the previous task's. Data dependencies: 65 needs 64 (`Stage3Active`, `Stage3ActivationRefusal`, `Stage3ActivationNodes`, `Stage3Switches`); 66 needs 64 (`Stage3State`); 67 needs 66 (the v21 framing and kind byte); 68 needs 64 (`stage3SwitchOnLocked`, `onStage3SwitchOnLocked`); 69 and 70 need 64 (switches, cutover records, `poolVerifierLocked`) and 66 (`stage3FieldsPresent`, `validateStage3State`). Drafting: 65, 67 and 68 may be drafted in parallel with 66 once §44–§46 are fixed; 69 and 70 once §46 is; every overlap is resolved by the hunk rule. Plan S3-E3 continues on the same worktree after Task 70's push and may be drafted once §44–§47 are fixed; Plan S3-E4 Task 78 releases the branch. No arbiter release, PR or merge happens between Task 64's pin and Task 78 (K65).
 
 ## Task list
 
@@ -89,16 +92,16 @@ Plan S3-E1 complete (`PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` on the ledger co
 
 Line anchors in the tasks refer to the base revisions of the header, re-anchored on the branch base under the hunk rule.
 
-**arbiter** (Tasks 64–70; branch `urwt/claude/multi-source-s3e`)
-- Task 64: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (pins); `fsm/state.go` (`Params.Stage3`, `State.Stage3`); `fsm/stage3.go` (new: `Stage3State`, `Stage3SwitchCutover`, switch names, `verifyStage3Transition`, `verifyHostBoundVerifiers`, `stage3MembershipRefusalLocked`, `stage3ActivationRefusalLocked`, `activateStage3Locked`, `recordStage3SwitchesLocked`, `onStage3SwitchOnLocked`, `poolVerifierLocked`, `verifierEntryLocked`, `Stage3ActivationNodes`); `fsm/consensus_updates.go`, `fsm/signed_claims.go` (`cloneVerifiers`), `fsm/params_identity.go`, `fsm/consensus_reads.go` (`cloneParams`); `fsm/stage3_fixture_test.go`, `fsm/stage3_params_test.go`, `fsm/stage3_activation_test.go` (new); the server and fsm mirror tests that the pin fallout touches (`server/table_registry_test.go`, `server/safestate_l3block_test.go`, `server/safestate_stage3_test.go`: `stage3PendingProtoFields`, `requireEveryFieldExcept`); `fsm/BUILD.bazel`. Additional owning file: `fsm/manifest_owner_wire_test.go` (intermediate18-FSM/20-wire exact-zero guard).
-- Task 65: `server/stage3_gate.go`, `server/stage3_gate_test.go` (new); `server/tracks_gate.go` (`probeFeatureVoters`), `server/consensus_admin.go` (barrier condition, gate call, `consensusMutableParams`), `server/membership.go`, `server/signed_claims_test.go`, `server/membership_test.go`; `cmd/arbiter-admin/stage3.go`, `cmd/arbiter-admin/stage3_test.go` (new), `cmd/arbiter-admin/main.go` (flags, usage text, `activationGate.exempt`, `keyValuesOptional`, `--verifier`), `cmd/arbiter-admin/BUILD.bazel`.
-- Task 66: `fsm/snapshot.go` (versions, writer, reader, `stage3FieldsPresent`), `fsm/snapshot_count.go` (`snapshotEnvelopeBytes`), `fsm/consensus_history.go` (the bootstrap `stage3` refusal), `fsm/state_size.go` (Plan S3-A's: the v21 envelope); `fsm/stage3_restore.go` (new); `fsm/snapshot_v21_test.go` (new), `fsm/state_size_test.go` (the edited component list); `fsm/testdata/stage3_v21_plain.snapshot` (new, frozen); `README.md` (component list).
-- Task 67: `fsm/snapshot_interned.go`, `fsm/snapshot_interned_test.go` (new); `fsm/snapshot.go` (`fsmSnapshot`, `Persist`, `SnapshotBodyMode`, `SetSnapshotBodyMode`, `SnapshotEncodingStats`, the kind-1 reader), `fsm/state_size.go`; `fsm/testdata/stage3_v21_interned.snapshot` (new, frozen); `config/config.go`, `config/raw.go`, `config/config_test.go` (`raft.snapshot_body`); `cmd/arbiter/services.go`; `metrics/snapshot.go`, `metrics/snapshot_test.go`; `README.md` (series and the example alert).
-- Task 68: `fsm/eviction_voiding.go`, `fsm/eviction_voiding_test.go` (new); `fsm/apply.go` (`applyRegisterRC`, `applyRecordAttestation`, `applyRecordByteSideScan`, `applyRecordPromotionAck`, `applyRecordCleanupAck`, `applyEvictNode`), `fsm/rejected_cleanup.go`, `fsm/signed_claims.go` (`adoptParkedClaimsLocked`), `fsm/threeway.go`, `fsm/reads_work.go` (`evidencePresence`), `fsm/stage3.go` (the switch hook). The existing `fsm/signed_claims.go` edit also includes `evictNodesLocked` rule6 reevaluation; the complete test file includes its three adversarial regressions.
-- Task 69: `fsm/table_registry.go` (fields, view copy), `fsm/apply_table_registry.go` (`applyAddTable`, `purgeRequiredLocked`), `fsm/stage3.go` (the switch hook), `fsm/stage3_restore.go`, `fsm/snapshot.go` (`stage3FieldsPresent`); `server/table_registry.go`; `fsm/purge_stage3_test.go` (new), `server/table_registry_test.go`. Additional owning files: `fsm/manifest_owner_wire_test.go`, `fsm/purge_stage3_adapter_test.go`, `fsm/purge_stage3_adversarial_test.go`, `server/purge_stage3_transport_test.go`, `fsm/BUILD.bazel` and `server/BUILD.bazel`.
-- Task 70: `fsm/state.go` (`BlockVerification` fields), `fsm/select.go` (`poolRingLocked`, `eligibleRingLocked`, `ringStart`, `initialVerifierSet`), `fsm/apply.go` (`applyMarkReplaying`), `fsm/admission.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go` (`Unmarkable`), `fsm/reads_verification.go` (Plan S3-A's view), `fsm/stage3_restore.go`, `fsm/snapshot.go` (`stage3FieldsPresent`); `server/safestate_stage3.go`; `fsm/selection_stage3_test.go` (new), `orchestrator/dispatch_test.go`, `server/safestate_stage3_test.go`.
+**arbiter** (Tasks64–70; actual branch/path retained by Task64, reused through Task78)
+- Task 64 (accepted actual task text): `MODULE.bazel`, `MODULE.bazel.lock`, `fsm/BUILD.bazel`, `fsm/consensus_reads.go`, `fsm/consensus_updates.go`, `fsm/manifest_owner_wire_test.go`, `fsm/params_identity.go`, `fsm/signed_claims.go`, `fsm/stage3.go`, `fsm/stage3_activation_test.go`, `fsm/stage3_fixture_test.go`, `fsm/stage3_params_test.go`, `fsm/state.go`, `go.mod`, `go.sum`, `server/safestate_l3block_test.go`, `server/safestate_stage3_test.go`, `server/table_registry_test.go`.
+- Task 65 (accepted actual task text): `README.md`, `cmd/arbiter-admin/BUILD.bazel`, `cmd/arbiter-admin/main.go`, `cmd/arbiter-admin/stage3.go`, `cmd/arbiter-admin/stage3_integration_test.go`, `cmd/arbiter-admin/stage3_test.go`, `fsm/BUILD.bazel`, `fsm/consensus_reads.go`, `fsm/consensus_updates.go`, `fsm/stage3_reads.go`, `fsm/stage3_reads_test.go`, `fsm/table_registry.go`, `server/BUILD.bazel`, `server/consensus_admin.go`, `server/membership.go`, `server/safestate_stage3_test.go`, `server/stage3_fixture_test.go`, `server/stage3_gate.go`, `server/stage3_gate_test.go`, `server/stage3_params_test.go`, `server/table_registry.go`, `server/tracks_fixture_test.go`, `server/tracks_gate.go`, `server/voter_probe_test.go`.
+- Task 66 (accepted actual task text): `README.md`, `fsm/BUILD.bazel`, `fsm/apply_artifact_disposition_test.go`, `fsm/artifact_capacity_test.go`, `fsm/consensus_history.go`, `fsm/snapshot.go`, `fsm/snapshot_count.go`, `fsm/snapshot_test.go`, `fsm/snapshot_tracks_test.go`, `fsm/snapshot_v21_test.go`, `fsm/stage3_restore.go`, `fsm/state_size.go`, `fsm/state_size_test.go`, `fsm/testdata/stage3_v21_plain.snapshot`.
+- Task 67 (root-accepted actual task text; procedural overlay only): `README.md`, `docs/specs/issue-31-metrics.md`, `cmd/arbiter/main_test.go`, `cmd/arbiter/services.go`, `cmd/arbiter/services_test.go`, `config/config.go`, `config/config_test.go`, `config/raw.go`, `fsm/BUILD.bazel`, `fsm/fsm.go`, `fsm/snapshot.go`, `fsm/snapshot_interned.go`, `fsm/snapshot_interned_test.go`, `fsm/snapshot_test.go`, `fsm/state_size.go`, `fsm/testdata/stage3_v21_interned.snapshot`, `integration/chpipeline/cluster_test.go`, `integration/cluster_test.go`, `metrics/metrics.go`, `metrics/snapshot.go`, `metrics/snapshot_test.go`.
+- Task 68 (accepted complete owning task, including rule6 delisting and three adversarial tests): `README.md`, `fsm/BUILD.bazel`, `fsm/apply.go`, `fsm/eviction_voiding.go`, `fsm/eviction_voiding_test.go`, `fsm/rc_owner_parking_test.go`, `fsm/reads_work.go`, `fsm/reads_work_test.go`, `fsm/rejected_cleanup.go`, `fsm/rejected_cleanup_test.go`, `fsm/signed_claims.go`, `fsm/signed_messages_test.go`, `fsm/source_ack_test.go`, `fsm/stage3.go`, `fsm/threeway.go`, `fsm/threeway_test.go`, `orchestrator/dispatch_test.go`.
+- Task 69 (accepted bounded-risk owning text, complete20-field adapter and boundary/transport tests): `README.md`, `fsm/BUILD.bazel`, `fsm/apply_table_registry.go`, `fsm/manifest_owner_wire_test.go`, `fsm/purge_stage3_adapter_test.go`, `fsm/purge_stage3_adversarial_test.go`, `server/purge_stage3_transport_test.go`, `server/BUILD.bazel`, `fsm/purge_stage3_test.go`, `fsm/snapshot.go`, `fsm/stage3.go`, `fsm/stage3_restore.go`, `fsm/table_registry.go`, `server/safestate_stage3_test.go`, `server/table_registry.go`, `server/table_registry_test.go`.
+- Task 70 (root-accepted qualified owning text, including actual-Persist Step14a): `fsm/BUILD.bazel`, `fsm/admission.go`, `fsm/apply.go`, `fsm/reads_verification.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `fsm/select.go`, `fsm/selection_stage3_test.go`, `fsm/snapshot.go`, `fsm/stage3_restore.go`, `fsm/state.go`, `orchestrator/dispatch_test.go`, `server/safestate_stage3.go`, `server/safestate_stage3_test.go`.
 
-**Local only, never committed** (Task 67): the work directory `$HOME/si-devnet2-multisource-s3e2-replay` (removed at the end of Task 67) and the evidence files `~/src/remotesrc/claude/arbiter/multi-source-s3e.replay-e2.txt` and `~/src/remotesrc/claude/arbiter/multi-source-s3e.v21size-e2.txt` (contract §48). The P5 rehearsal directory `$HOME/si-devnet2-multisource-s3e-rehearsal` is Plan S3-E4 Task 78's (decision D37).
+**Local only, never committed:** Task64 retains its actual `worktree.json`, complete `env.sh` and typed ledger observations under `$HOME/.cache/s3e2-task64/`; all later tasks source that environment. Task67 owns `$T`, its ownership marker and the beside-worktree files `$W.replay-e2.txt` and `$W.v21size-e2.txt`, validates the exact evidence roster and removes only its own completed `$T`. Task67 produces the observed signed final-source receipt `$HOME/.cache/s3e2-task67/final-head.txt`, consumed by Task68. Task70 alone produces `$HOME/.cache/s3e2-task70/final-head.txt` after full checks and exact checked-SHA push/readback; Task71 consumes it. No receipt contains a predicted SHA, and none is a release-ledger name. D37 keeps the sole P5 `$R5` rehearsal directory owned by Task78; E2 never creates/reads/writes it.
 
 **arbiter-proto, arbiter-core, housegate, sentio-node, production:** no change in this plan (housegate is read for the ledger only).
 
@@ -130,7 +133,18 @@ Line anchors in the tasks refer to the base revisions of the header, re-anchored
 - An operator RPC for `ReselectVerifiers` and a `GetStage3State` read are not added (Plan S3-E1 K64; Plan S3-E3 decides the former).
 - The purge cutover's `IncarnationSeq` stays out of `Stage3StateView` (decision D33, contract §45): no runbook or live task reads it; a later task that needs it adds it to the view in its own task and records it.
 - A metric of unmarkable blocks: the WorkSet carries them and `arbiter_admission_rejects_total{code="ADMISSION_CODE_VERIFIERS_UNAVAILABLE"}` counts the admission refusals; a gauge, if the P6 soak needs one, belongs to Plan S3-E4 Task 80.
-- Plan S3-E1's contract spells every consumed name as contract §48 now lists it (reconciled by the cross-plan consistency pass); a later change there is renamed here.
+- Local owning text integration and bounded fixed-tool70 source qualification are resolved by the selected payloads/root receipts. Future signed branch receipts, real six-voter replay inputs, recorded release pins, actual Task71 runner/grant and E3/E4 pending-proto closure remain separate gates. Ordered root E2 adoption is recorded in Appendix B; the global cross-plan pass remains required and this publication preparation performs no execution.
+
+**Procedural overlay provenance (2026-10-18).** Task64 and Tasks65–67 use the root-indexed fix-git-read-e2 payloads;64 equals the newly published part. Published68/69 equal the complete accepted owning reconciliation payloads.70 is sealed qualified owning SHA256 `2b6218190e63235f9c27149b1a044da00ee6c4eea030d495f48a0d2f5266697b` under root6892. No task payload is spliced or rewritten by this consistency job. Existing poetry/G/Claude, returned-path, explicit-failure, checked-SHA push/receipt and future-confirmation procedures remain intact. Published65–67/70 still contain older draft procedures and are not selected in preference to these accepted payloads.
+
+**Current evidence qualification (document-only, 2026-10-18).** Accepted64–68 local source proofs and owning texts are carried forward, including68 authenticated rule6 delisting.69 retains full20-field adapter/BUILD/tests, original Drain race timeout, UNKNOWN cause and unquantified asynchronous-liveness risk; later isolated PASS is one observation, not reliability or controlled nonregression. Root536479ab now accepts fixed-tool70 source638 after complete plain/ONErace3990 identities each (3971PASS/19exactSKIP/0FAIL),22 uncached Bazel targets per mode and36 focused allPASS including real auto/plain Persist. This does not retag original70 HOLD/31 mutants or create a final signed-head/push receipt. Root6892 accepts the complete70 payload for this final local candidate; independent71 review/grant remains mandatory.
+
+**Independent upstream evidence remains distinct.** Task36 baseline rootf892 accepts63PASS/5exactSKIP/0FAIL on source2b6. Affected root74f918 accepts same-source764 top-level PASS/16exactSKIP/0FAIL,1123 nestedPASS,one Bazel invocation,2004 post-source files without mismatch and exact final binary; local source-review receipt75d776 closes that bounded review only. Outer Bazel/ps raw absence, baseline283 absent intermediates, historical failures and causality UNKNOWN remain qualified. Old rootf34c full500 is separately accepted on memo-repaired product plus test-only observer-v3 originalf272:500blocks/0mismatches/6missed/0unverdicted,all4tests. It is neither rerun nor retagged to2b6. No result here supplies D38 release-path ledger, C3/live coverage, producing releases or a promotion-budget decision.
+
+**Final ownership inventory and downstream boundary.** Selected69 includes `fsm/manifest_owner_wire_test.go`, `fsm/purge_stage3_adapter_test.go`, `fsm/purge_stage3_adversarial_test.go`, `server/purge_stage3_transport_test.go` and `server/BUILD.bazel`;68 includes rule6 and its three adversarial tests;70 contains the exact bee55 actual-Persist Step14a. E3 static71 declares all three readiness primitives,72 consumes,73 populates and signature/epoch-validates,75 appends checkpoint pointers. Current/past-group pruning never deletes durable purge obligations. No E3 implementation, signing/push, release, live or ledger outcome is produced by these document selections.
+
+**Current additional review coverage.** Task68 `TestTask68AdversarialBothBodiesAndReadViews`, `TestTask68AdversarialDelistingReevaluatesUnlatchedVerdicts`, `TestTask68AdversarialSignaturesAndDuplicateBoundaries`; Task69 `TestManifestOwnerAdapterCarriesAllTwentyFields`, `TestPurgeFieldsAreRefusedUnderEachPreV21Version`, `TestPurgeFieldsRestoreFromBothActualPersistBodies`, `TestPurgeMemberDelistingCompletesThroughRuleSix`, `TestPurgeRequiredSetPinsRegistrationRoleStatusAndHostZero`, `TestTableRegistryTransportCarriesAllTwentyIncarnationFields`; Task70 `TestStage3SelectionRecordRestoresBothPersistedBodies`. These exact declarations belong to the selected owning tasks and their retained source evidence; this job does not rerun them.
+
 
 ---
 
@@ -3094,25 +3108,25 @@ Expected: the status lists the nine staged files only; one commit. `git -C "$W" 
 
 ## Task 65: arbiter — the stage-3 gate, the post-activation registration refusal, the stage-3 reads and `arbiter-admin consensus update --stage3` (S3-E2)
 
-Spec §10.3 (the v21 activation is one authority-signed update that sets `stage3` with every switch off; it requires the stage-2 drain gate, the leader's voter probe over the exact Raft voter set, and `stage3_v1` from every registered, non-evicted data-plane node not on a quarantined track), §10.4 (each switch an authority-signed update; one-way; each after every earlier one) and §6.1 (the host-bound `verifiers` entry fields, `stage3` carried once set). Contract §45 fixes the gate (`arbiter-stage3-voters`, `stage3Gate`, `probeFeatureVoters`, the refusal texts), the registration refusal, `consensusMutableParams`, the served `ConsensusParamsState.stage3_state` and `TableRegistrySnapshot.stage3` with the registry-version bump, and every `arbiter-admin` flag, Go name and refusal; clarifications K68 (host-bound entries refused until `owner_aware_selection`, enforced by Task 64's FSM) and K69 (the activation only after the tracks activation; one switch per update). Everything here is leader-local or read-only: no Raft command, no FSM rule and no snapshot byte changes, except that every Apply which commits a changed `Params.Stage3` bumps the table registry version once (contract §45). Before the activation nothing new runs: the gate passes every update without `stage3`, the registration refusal and the bump need `Params.Stage3`, and both reads serve nothing.
+Spec §10.3 (the v21 activation is one authority-signed update that sets `stage3` with every switch off; it requires the stage-2 drain gate, the leader's voter probe over the exact Raft voter set, and `stage3_v1` from every registered, non-evicted verifier and SNode except a quarantined track's SNode), §10.4 (each switch an authority-signed update; one-way; each after every earlier one) and §6.1 (the host-bound `verifiers` entry fields, `stage3` carried once set). Contract §45 fixes the gate (`arbiter-stage3-voters`, `stage3Gate`, `probeFeatureVoters`, the refusal texts), the registration refusal, `consensusMutableParams`, the served `ConsensusParamsState.stage3_state` and `TableRegistrySnapshot.stage3` with the registry-version bump, and every `arbiter-admin` flag, Go name and refusal; clarifications K68 (host-bound entries refused until `owner_aware_selection`, enforced by Task 64's FSM) and K69 (the activation only after the tracks activation; one switch per update). Everything here is leader-local or read-only: no Raft command, no FSM rule and no snapshot byte changes, except that every Apply which commits a changed `Params.Stage3` bumps the table registry version once (contract §45). Before the activation nothing new runs: the gate passes every update without `stage3`, the registration refusal and the bump need `Params.Stage3`, and both reads serve nothing.
 
-Worktree (contract §48): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e` on branch `urwt/claude/multi-source-s3e`, the worktree Task 64 created and committed to; prefix every Bash call with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;`. Line anchors are arbiter `origin/main` `526a721` (`v0.13.0`), which already carries Plan S3-A (the stage-3 reads, `--hold`, and `UpdateConsensusParams` split into the held-update wrapper and `updateConsensusParams`). Task 64's commits move lines of `fsm/consensus_updates.go`, `fsm/consensus_reads.go` and the server test files that hold `stage3PendingProtoFields`, and the branch base at or after `ARBITER_TAG_P4` adds Plan S3-C2's pin and Plan S3-D Task 51 (`indexer settle`, the settle RPCs), so re-anchor each hunk on the branch under the hunk rule (header, Global Constraints): the quoted text binds, the line numbers guide. This task makes no remote call and runs nothing on devnet2.
+Worktree (contract §48): reuse the actual absolute path retained by Task64 in `$HOME/.cache/s3e2-task64/worktree.json`, on this host's `urwt/codex/multi-source-s3e` branch. Every standalone block loads Task64's complete `$HOME/.cache/s3e2-task64/env.sh`, which validates that JSON, repository, branch, observed ledger rows and worktree poetry/signing configuration. Preserve returned symlink/space spelling; never reconstruct a path template, create another branch or silently replace a failed/saved attempt. Commands below are Bash; if handed to the user, save the complete block and use fish-compatible `bash -eo pipefail /absolute/path/task65-step.sh`. The actual baseline is arbiter `origin/main` `526a721` (`v0.13.0`) plus the complete reviewed upstream C2/D/Task64 changes, including Task51's settle attempt/timeout fixes and its exact journal-acknowledgement test oracle. Exact named functions and complete old hunks below bind against that state; drafting-main line offsets are deliberately omitted. Read Task64's pin-fallout map and preserve its exact-zero future-field gates until their owning task. Re-anchor only under the header's hunk rule, without replacing an earlier task's complete implementation. This task makes no remote call and runs nothing on devnet2.
 
 **Files:**
 - Create: `server/voter_probe_test.go` (`voterProbeCase`, `voterProbeCases`, `requireVoterProbeRefusal`, `TestTracksGateRefusalsAreUnchanged`)
-- Modify: `server/tracks_gate.go` (`tracksVoterAddresses` and `probeTracksVoters` `:110-196` become `voterAddresses`, `probeTracksVoters` and `probeFeatureVoters`)
+- Modify: `server/tracks_gate.go` (`tracksVoterAddresses` and `probeTracksVoters` become `voterAddresses`, `probeTracksVoters` and `probeFeatureVoters`)
 - Create: `server/stage3_gate.go` (`Stage3VotersMetadataKey`, `(*Server).stage3Gate`)
-- Modify: `server/consensus_admin.go` (`GetConsensusParams` `:50`; `stage3StateToPB` after `trackStateToPB` `:83`; `consensusMutableParams` `:107`; in `updateConsensusParams` `:158` the barrier condition `:175` and the gate calls `:185`)
-- Modify: `server/membership.go` (after the tracks refusal `:53`), `server/table_registry.go` (`tableRegistryToPB` `:100`)
+- Modify: `server/consensus_admin.go` (`GetConsensusParams`; `stage3StateToPB` after `trackStateToPB`; `consensusMutableParams`; in `updateConsensusParams` the barrier condition and the gate calls)
+- Modify: `server/membership.go` (after the tracks refusal), `server/table_registry.go` (`tableRegistryToPB`)
 - Create: `fsm/stage3_reads.go` (`(*FSM).Stage3StateView`, `stage3StateViewLocked`, `stage3ParamsChanged`)
-- Modify: `fsm/consensus_reads.go` (`ConsensusParamsView` `:11`, `ConsensusParamsView()` `:20`), `fsm/table_registry.go` (`TableRegistryView` `:270`, `TableRegistryView()` `:317`), `fsm/consensus_updates.go` (`applyUpdateConsensusParams` `:90`, `:122`)
+- Modify: `fsm/consensus_reads.go` (`ConsensusParamsView`, `ConsensusParamsView()`), `fsm/table_registry.go` (`TableRegistryView`, `TableRegistryView()`), `fsm/consensus_updates.go` (`applyUpdateConsensusParams`,)
 - Create: `fsm/stage3_reads_test.go`, `server/stage3_fixture_test.go`, `server/stage3_gate_test.go`, `server/stage3_params_test.go`
-- Modify: `server/tracks_fixture_test.go` (`serverUpdateRequest` `:100` carries the committed `stage3`)
+- Modify: `server/tracks_fixture_test.go` (`serverUpdateRequest` carries the committed `stage3`)
 - Modify (only if Task 64's pin commit added it): the `stage3PendingProtoFields` entry `"TableRegistrySnapshot.stage3"` in `server/safestate_stage3_test.go`
 - Create: `cmd/arbiter-admin/stage3.go` (`stage3VotersMetadataKey`, `stage3Activation`, `stage3GateFor`, `stage3ExemptSNodes`, `checkStage3NotActive`, `failureDomainFlags`, `stage3SwitchFlags`, `uint32Flag`, `stage3Flags`, `stage3ActivationRequired`, `setStage3Switch`, `verifierHostKeys`, `parseVerifierFlag`, `parseHostBoundVerifier`, `keyValuesOptional`)
-- Modify: `cmd/arbiter-admin/main.go` (usage `:89`, `:157`; `verifierFlags.Set` `:219`; `keyValues` `:265`; the update flags `:387`, `:402`, `:404`; the flag checks `:482`; after the tracks prerequisite `:634`; after the tracks gate `:696`; the `planned` literal `:709`; the pre-submit re-check `:774`; the post-commit re-check `:812`; `activationGate` `:1408`; `observeGate` `:1604` and its three callers `runActivationGate` `:1517`, `recheckActivationGate` `:1533`, `warnGateAfterCommit` `:1551`; `gateObservation` `:1595`; `problems` `:1628`; `lines` `:1708`)
+- Modify: `cmd/arbiter-admin/main.go` (usage,; `verifierFlags.Set`; `keyValues`; the update flags,,; the flag checks; after the tracks prerequisite; after the tracks gate; the `planned` literal; the pre-submit re-check; the post-commit re-check; `activationGate`; `observeGate` and its three callers `runActivationGate`, `recheckActivationGate`, `warnGateAfterCommit`; `gateObservation`; `problems`; `lines`)
 - Create: `cmd/arbiter-admin/stage3_test.go`, `cmd/arbiter-admin/stage3_integration_test.go`
-- Modify: `server/BUILD.bazel`, `fsm/BUILD.bazel`, `cmd/arbiter-admin/BUILD.bazel` (gazelle), `README.md` (a new section before `## Artifact disposition admission` `:396`)
+- Modify: `server/BUILD.bazel`, `fsm/BUILD.bazel`, `cmd/arbiter-admin/BUILD.bazel` (gazelle), `README.md` (a new section before `## Artifact disposition admission`)
 
 **Interfaces:**
 - Consumes:
@@ -3127,19 +3141,44 @@ Worktree (contract §48): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
   - Tests (contract §45): server `TestStage3GatePassesEveryUpdateButTheActivation`, `TestStage3GateRefusesNonVoters`, `TestStage3GateRefusesTheFSMActivationRefusal`, `TestStage3GateRequiresStage3V1FromEveryDataPlaneNode`, `TestStage3GateExemptsTheSNodeOfAQuarantinedTrack`, `TestStage3GateProbesEveryVoter`, `TestTracksGateRefusalsAreUnchanged`, `TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation`, `TestConsensusMutableParamsCarryStage3`, `TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation`, `TestGetConsensusParamsServesTheStage3StateView`, `TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion`; arbiter-admin `TestConsensusUpdateStage3SetsEveryParameterWithEverySwitchOff`, `TestConsensusUpdateStage3KeepsTheCommittedValuesWhenFlagsAreOmitted`, `TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers`, `TestConsensusUpdateStage3SwitchTurnsOnOneSwitch`, `TestConsensusUpdateStage3FlagRefusals`, `TestVerifierFlagParsesHostBoundEntries`, `TestVerifierFlagRefusesHostBoundKeysWithoutHost`, `TestIndexerFailureDomainFlag`, `TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks`, `TestStage3VotersMetadataKeyMatchesTheServer`. Added: fsm `TestStage3StateViewIsADetachedCopy`, `TestRegistryVersionBumpsOnceForEveryCommittedStage3Change`, `TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent`; arbiter-admin `TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead` (the jq paths Plans S3-E4 and S3-F read), `TestCLIStage3ActivationThroughServerAndFSM` (the CLI, the real server and the production FSM, the activation under the default drain hold); server test helpers `stageTwoFeatures`, `stageThreeVoter`, `stageTwoOnlyVoter`, `stage3VotersContext`, `stageThreeVotersContext`, `stage3GateText`, `serverStage3Params`, `serverStage3ActivationRequest`, `serverPurgeSwitchRequest`, `applyServerRequest`, `activateServerStage3`, `prepareStage3Gate`, `refusedStage3BeforeRaft`; arbiter-admin test helpers `stageTwoFeatures`, `stage3Admin`, `stage3GateFixture`, `stage3ActivationArgs`, `activatedStage3`, `stage3WithSwitches`, `writeConsent`, `memberFlag`, `lastUpdate`.
 
 Notes:
+- **Verification provenance.** The earlier Appendix B drafting measurements used stand-ins; they are historical, not current full-chain, released-tag or integration proof. The adversarial review must replay the complete accepted Task51→64 source and actual Task63/core, Task58/housegate and Task57/proto inputs. No activation or remote/live action occurs here.
 - **One probe, two gates.** The tracks gate's voter probe becomes `probeFeatureVoters(ctx, voters, metadataKey, feature, gate, release)`; `probeTracksVoters` calls it with `TracksVotersMetadataKey`, `track_manifests_v1`, `"tracks gate"` and `"stage-2 release"`, so every tracks refusal is byte-identical. `TestTracksGateRefusalsAreUnchanged` is written and run first, on the unchanged code, then pins the texts across the refactor; `TestStage3GateProbesEveryVoter` runs the same cases through the stage-3 wording.
 - **The leader's gate (contract §45).** `stage3Gate` runs after `tracksGate` in `updateConsensusParams`, under `membershipMu` and after the read barrier, which `updateConsensusParams` now also takes when `update.Stage3 != nil && !FSM.Stage3Active()`. It passes every update except the activation, a switch-on included. For the activation, in order: no non-voter; `FSM.Stage3ActivationRefusal()` empty (Task 64's: the tracks activation committed and the stage-2 drain gate passing; no empty open block and no global prefix); every node of `FSM.Stage3ActivationNodes()` advertised `stage3_v1` to this leader in the current term (the SNode of a quarantined track is not among them); every voter probed at the addresses named in `arbiter-stage3-voters`. The FSM's refusal is tested with one update that sets `tracks_enabled` and `stage3` together (Plan S3-E1's normalizer requires `tracks_enabled` beside `stage3`): the tracks gate passes it, and the stage-3 gate refuses with `stage3 gate refused: stage3 activation requires the tracks activation` before it reads the feature book (a drain-gate refusal needs a promoted, unacknowledged block, which the server fixtures do not build; Task 64 tests the drain branch in the FSM). A gate refusal of a held update is a definite outcome (`heldUpdateOutcome`: nothing was submitted), so it ends the hold.
 - **After the activation.** `RegisterNode` refuses a data-plane registration without `stage3_v1` (`stage3 is active; this binary does not support stage-3 consensus`), read from applied state under `membershipMu`, like the tracks refusal; a registration issued while the activation holds the lock is judged after the commit (`TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation`).
 - **Reads (contract §45, decision D33).** `consensusMutableParams` renders `Params.Stage3`; `GetConsensusParams` serves `stage3_state` from `ConsensusParamsView.Stage3State`, the copy `Stage3StateView()` makes, taken under the same lock as the parameters so a switch in `current.stage3` is never served beside another epoch's cutovers; the purge cutover's `IncarnationSeq` is not served. `TableRegistryView.Stage3` copies the committed parameter and `tableRegistryToPB` serves it as `TableRegistrySnapshot.stage3`. `Stage3StateView` copies only the four members of contract §45, so a member Plan S3-E3 or S3-E4 appends to `Stage3State` is never shared with a reader.
-- **The registry bump.** `applyUpdateConsensusParams` sets `registryChanged` when `stage3ParamsChanged(previous, next)` holds: the activation, every switch-on and every other `stage3` change, for example a new `max_lag_publications`, after which Plan S3-E3 publishes trimmed `lag_advances`. `stage3ParamsChanged` compares every field and treats an empty failure-domain list as an absent one: a snapshot stores neither (`omitempty`), so a replica restored from a snapshot can never decide a later bump differently from one that applied the whole log (the version is replicated state; Plan S3-E1's normalizer already makes an empty list nil, so this is defence in depth). The change folds into the one `registryChangedLocked` call per Apply, is a deterministic function of the applied update (replay and restore are unaffected) and does nothing before the activation, when both are nil. The version the activation raises is part of the activation's own effect (contract §45); Task 64's `TestStage3ActivationWithEverySwitchOffChangesNoBehaviour` compares Apply results and the effect of later commands. If that test also compares `TableRegistry.Version` across the activation, Step 13 fails there: compare the registry with `Version` set equal in that test (one line of `fsm/stage3_activation_test.go`), commit it with Step 14, and record the change in Appendix B.
+- **Independent gate and invalidation regressions.** `TestStage3GateRejectsPreviousTermFeatureProof` rejects otherwise valid advertisements from a previous term. `TestStage3QuarantineDoesNotExemptAVerifier` models a current-term feature-book observation for an already registered verifier and proves that only its quarantined track's SNode is exempt; it makes no new registration/signature claim. `TestStage3RegistryChangeComparisonCoversEveryParameterField` checks every scalar and domain-map field in both directions, because registry followers must learn every parameter change. The independent review demonstrated the coverage gap: ignoring GroupSize passed the original three comparison/read tests and failed this regression; the final implementation is unchanged.
+- **The registry bump.** `applyUpdateConsensusParams` sets `registryChanged` when `stage3ParamsChanged(previous, next)` holds: the activation, every switch-on and every other `stage3` change, for example a new `max_lag_publications`, after which Plan S3-E3 publishes trimmed `lag_advances`. `stage3ParamsChanged` compares every field and treats an empty failure-domain list as an absent one: a snapshot stores neither (`omitempty`), so a replica restored from a snapshot can never decide a later bump differently from one that applied the whole log (the version is replicated state; Plan S3-E1's normalizer already makes an empty list nil, so this is defence in depth). The change folds into the one `registryChangedLocked` call per Apply, is a deterministic function of the applied update (replay and restore are unaffected) and does nothing before the activation, when both are nil. The version the activation raises is part of the activation's own effect (contract §45); Task 64's `TestStage3ActivationWithEverySwitchOffChangesNoBehaviour` compares Apply results and the effect of later commands. Against the complete reviewed Task64 source, this test and the former golden tests pass unchanged with this registry bump; no earlier test correction is needed here.
 - **The CLI.** `--stage3` builds the activation: group_size 3, network_fill_default true and min_safe_copies 1 unless given, every switch off, the five values contract §45 makes required, and `--indexer-failure-domain` as the complete map (the normalizer sorts it). It needs the tracks activation committed (a later update, K69) and `--voter`. Before signing it reads the leader's track state once to exempt the SNodes of quarantined tracks (`stage3ExemptSNodes`), runs the shared activation gate with `stage3GateFor(exempt)`, then re-reads the parameters (`checkStage3NotActive`); after the hold it re-checks with the same exemptions and names the sorted `--voter` addresses in `arbiter-stage3-voters`; after the commit it re-checks again and only warns. An exempt node is listed in the observation (`exempt (quarantined track): <id>`). The leader's own gate decides again from its applied track state at submit, so a track released after the CLI's read is refused there. After the activation every update carries the committed `stage3` and each given `--stage3-*` value or map replaces only itself; `--stage3-switch NAME` turns on one switch and runs no gate. `--verifier` takes the host-bound keys only with `host=N`; `host` needs `replica-signer`, `consent` (a file, trimmed, like `enrollment=`) and `domain`; `weight` defaults to 1 and each flag to `true`; the CLI does not verify the consent (the FSM does, Task 64).
 - **Holds.** The activation keeps Plan S3-A's default `--hold drain`, as the P5 runbook runs it (Plan S3-E4 contract): the hold is taken with the draft after the gate and `checkStage3NotActive` and before the re-check, exactly as for the tracks activation, and the leader's `PrepareConsensusUpdate` authorizes the draft without running any gate. `TestCLIStage3ActivationThroughServerAndFSM` commits the activation that way against the real server and FSM; the other new arbiter-admin tests build their arguments on `tracksUpdateArgs`, which ends with `--hold none`, because the fake leaders serve no hold RPC.
 - **Fixtures satisfy Plan S3-E1's normalizer.** The stage-3 parameters name failure domains only for enrolled indexers, keep `lag_low` below `max_lag_publications`, turn switches on as prefixes of the §10.4 order, and the host-bound entry `member-b` (host 1, failure domain `node:n1`, every flag true, a non-zero lowercase replica signer, a consent) matches its host's domain, so `authority.NormalizeConsensusParamsUpdate` passes every update the tests sign.
 
 - [ ] **Step 1: Base check**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" status --porcelain; git -C "$W" log -1 --format=%s; grep -h -E -o 'func \(f \*FSM\) (Stage3ActivationNodes|Stage3ActivationRefusal|Stage3Active)\(' "$W"/fsm/*.go | sort -u; grep -c 'stage3PendingProtoFields = map' "$W"/server/safestate_stage3_test.go`
-Expected: no status output; the subject ends with `(Task 64)`; the grep prints the three Task 64 readers, sorted: `func (f *FSM) Stage3ActivationNodes(`, `func (f *FSM) Stage3ActivationRefusal(` and `func (f *FSM) Stage3Active(`; the count is `1` (Task 64's pin-fallout map). Anything else stops this task.
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "worktree is dirty before Task65; stop" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s)" || exit 1
+case "$subject" in *'(Task 64)') ;; *) echo "HEAD is not the final Task64 commit; stop" >&2; exit 1 ;; esac
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "unexpected predecessor author/signature; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
+python3 -I - "$W" <<'TASK65_BASE'
+import pathlib,re,sys
+root=pathlib.Path(sys.argv[1])
+source="\n".join(p.read_text() for p in (root/"fsm").glob("*.go") if not p.name.endswith("_test.go"))
+for name in ("Stage3ActivationNodes","Stage3ActivationRefusal","Stage3Active"):
+    assert len(re.findall(r"func \(f \*FSM\) "+name+r"\(",source))==1, "missing or repeated Task64 reader: "+name
+    print("func (f *FSM) "+name+"(")
+assert (root/"server/safestate_stage3_test.go").read_text().count("stage3PendingProtoFields = map")==1, "missing or repeated pin-fallout map"
+print("Task64 interfaces verified")
+TASK65_BASE
+base="$(git -C "$W" rev-parse HEAD)" || exit 1
+printf '%s\n' "$base" > "$T64/task65-base-sha" || exit 1
+```
+Expected: no status output; the subject ends with `(Task 64)`; the Python check prints the three Task64 readers in the fixed order: `func (f *FSM) Stage3ActivationNodes(`, `func (f *FSM) Stage3ActivationRefusal(` and `func (f *FSM) Stage3Active(`; then `Task64 interfaces verified` (the unique pin-fallout map is checked). The exact signed predecessor HEAD is retained as `task65-base-sha`; anything else stops this task.
 
 - [ ] **Step 2: Write the characterization test of the tracks gate's voter probe**
 
@@ -3237,17 +3276,21 @@ func TestTracksGateRefusalsAreUnchanged(t *testing.T) {
 
 - [ ] **Step 3: Run it on the unchanged probe and see it pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./server/ -run 'TestTracksGateRefusalsAreUnchanged' -race -count=1 -v`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && go test ./server/ -run 'TestTracksGateRefusalsAreUnchanged' -race -count=1 -v || exit 1`
 Expected: PASS with its eight subtests (`no_address_named`, `an_address_named_twice`, `fewer_addresses_than_voters`, `an_address_that_does_not_answer`, `an_answer_without_a_node_id`, `two_addresses_answering_as_one_voter`, `a_node_outside_the_voter_configuration`, `a_voter_on_a_stage-1_release`) and `ok  	github.com/sentioxyz/arbiter/server`: the texts are today's.
 
 - [ ] **Step 4: Commit the characterization test**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git status --short`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle && git status --short || exit 1`
 Expected: gazelle adds `"voter_probe_test.go",` to the `srcs` of `go_test(name = "server_test")` in `server/BUILD.bazel` (after `"tracks_read_api_test.go",`); `git status` lists ` M server/BUILD.bazel` and `?? server/voter_probe_test.go` only.
 
 ```bash
-git -C "$W" add server/voter_probe_test.go server/BUILD.bazel
-git -C "$W" commit -m "test(stage3): pin every voter-probe refusal of the tracks gate (Task 65)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+git -C "$W" add server/voter_probe_test.go server/BUILD.bazel || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "test(stage3): pin every voter-probe refusal of the tracks gate (Task 65)
 
 Characterizes the tracks gate's voter probe before the stage-3 gate
 shares it: no address, an address twice, a count mismatch, an
@@ -3255,12 +3298,19 @@ unreachable address, an answer without a node id, two addresses as one
 voter, a foreign node and a voter without track_manifests_v1, each with
 its exact text (plan S3-E2 contract §45).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; stop and unlock the repository signing key if cancelled" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit did not advance HEAD; stop" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "unexpected author/signature; stop" >&2; exit 1; }
+git -C "$W" verify-commit "$new_head" || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "worktree is dirty after commit; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 5: Share the voter probe**
 
-In `server/tracks_gate.go:110-196`, replace `tracksVoterAddresses` and `probeTracksVoters` (from the comment `// tracksVoterAddresses lists the admin addresses the request names in` through the closing brace of `probeTracksVoters`, the blank line after it kept) with:
+In `server/tracks_gate.go`, replace `tracksVoterAddresses` and `probeTracksVoters` (from the comment `// tracksVoterAddresses lists the admin addresses the request names in` through the closing brace of `probeTracksVoters`, the blank line after it kept) with:
 
 ```go
 // voterAddresses lists the admin addresses the request names in the gRPC
@@ -3363,7 +3413,7 @@ func (s *Server) probeFeatureVoters(ctx context.Context, voters []string, metada
 
 - [ ] **Step 6: Run the tracks tests and see them still pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server)" && go test ./server/ -run 'TestTracksGate|TestTracksActivation|TestRegistrationCannotSlip' -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && formatting="$(gofmt -l server)" && test -z "$formatting" && go test ./server/ -run 'TestTracksGate|TestTracksActivation|TestRegistrationCannotSlip' -race -count=1 || exit 1`
 Expected: gofmt lists nothing and `ok  	github.com/sentioxyz/arbiter/server`: `TestTracksGateRefusalsAreUnchanged` and every existing tracks-gate test (`TestTracksGateProbesEveryVoterItself`, `TestTracksGateRefusesUnprovableVoterAnswers` and `TestTracksGateFailsClosedOnAHungVoter` among them) pass unchanged.
 
 - [ ] **Step 7: Write the failing server and FSM tests**
@@ -3485,7 +3535,7 @@ func prepareStage3Gate(t *testing.T, s *Server, vn voterNode, s1Features ...stri
 }
 ```
 
-In `server/tracks_fixture_test.go:110-111`, in `serverUpdateRequest` (every committed value is carried, so a post-activation update carries `stage3`, which Task 64's FSM requires), replace
+In `server/tracks_fixture_test.go`, in `serverUpdateRequest` (every committed value is carried, so a post-activation update carries `stage3`, which Task 64's FSM requires), replace
 
 ```go
 		SIIndexers: view.Current.SIIndexers, Verifiers: view.Current.Verifiers, TracksEnabled: view.Current.TracksEnabled,
@@ -3789,6 +3839,38 @@ func TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation(t 
 		t.Fatal("an update after the activation crossed a read barrier")
 	}
 }
+
+// TestStage3GateRejectsPreviousTermFeatureProof: a freshly elected leader
+// cannot reuse the previous term's otherwise valid stage3 advertisements.
+func TestStage3GateRejectsPreviousTermFeatureProof(t *testing.T) {
+	vn := newVoterNode(t, "arb-0")
+	s := gateServer(vn)
+	prepareStage3Gate(t, s, vn, arbiter.LocalNodeFeatures()...)
+	ctx := stageThreeVotersContext(t, s, "arb-0")
+	vn.term.Add(1)
+	before := vn.appliedCount()
+	_, err := (&consensusAdminService{s: s}).UpdateConsensusParams(ctx, serverStage3ActivationRequest(t, vn.fakeNode))
+	refusedStage3BeforeRaft(t, vn, before, err, "stage3 gate refused: data-plane nodes s1, v1, v2, v3 have not registered with this leader advertising stage3_v1; restart them on a stage-3 release")
+}
+
+// TestStage3QuarantineDoesNotExemptAVerifier: quarantining an indexer exempts
+// its SNode only. A registered verifier still needs current stage3 features.
+func TestStage3QuarantineDoesNotExemptAVerifier(t *testing.T) {
+	vn := newVoterNode(t, "arb-0")
+	s := gateServer(vn)
+	prepareStage3Gate(t, s, vn, stageTwoFeatures...)
+	mustDirectApply(t, vn.fakeNode, quarantineCommand(t, vn.f, 1, 0, "SNode exemption only"))
+	// Model a current-term feature observation for the already registered
+	// verifier; this gate test makes no new registration/signature claim.
+	s.features.mu.Lock()
+	e := s.features.entries["v2"]
+	e.features = slices.Clone(stageTwoFeatures)
+	s.features.entries["v2"] = e
+	s.features.mu.Unlock()
+	before := vn.appliedCount()
+	_, err := (&consensusAdminService{s: s}).UpdateConsensusParams(stageThreeVotersContext(t, s, "arb-0"), serverStage3ActivationRequest(t, vn.fakeNode))
+	refusedStage3BeforeRaft(t, vn, before, err, "stage3 gate refused: data-plane nodes v2 have not registered with this leader advertising stage3_v1; restart them on a stage-3 release")
+}
 ```
 
 Create `server/stage3_params_test.go`:
@@ -4024,11 +4106,38 @@ func TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent(t *testing.T)
 		}
 	}
 }
+
+// TestStage3RegistryChangeComparisonCoversEveryParameterField protects the
+// invalidation boundary: every scalar and domain-map change must wake registry
+// followers, including fields not selected by the original three examples.
+func TestStage3RegistryChangeComparisonCoversEveryParameterField(t *testing.T) {
+	base := stage3ActivationParams()
+	typ := reflect.TypeOf(*base)
+	for i := 0; i < typ.NumField(); i++ {
+		t.Run(typ.Field(i).Name, func(t *testing.T) {
+			next := cloneStage3Params(base)
+			field := reflect.ValueOf(next).Elem().Field(i)
+			switch field.Kind() {
+			case reflect.Bool:
+				field.SetBool(!field.Bool())
+			case reflect.Uint32, reflect.Uint64:
+				field.SetUint(field.Uint() + 1)
+			case reflect.Slice:
+				next.IndexerFailureDomains[0].FailureDomain += "-changed"
+			default:
+				t.Fatalf("uncovered stage3 parameter kind %v", field.Kind())
+			}
+			if !stage3ParamsChanged(base, next) || !stage3ParamsChanged(next, base) {
+				t.Fatal("parameter change did not invalidate the registry")
+			}
+		})
+	}
+}
 ```
 
 - [ ] **Step 8: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./server/ ./fsm/ -run 'TestStage3Gate|TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation|TestConsensusMutableParamsCarryStage3|TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation|TestGetConsensusParamsServesTheStage3StateView|TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion|TestStage3StateViewIsADetachedCopy|TestRegistryVersionBumpsOnceForEveryCommittedStage3Change|TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent' -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && go test ./server/ ./fsm/ -run 'TestStage3Gate|TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation|TestConsensusMutableParamsCarryStage3|TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation|TestGetConsensusParamsServesTheStage3StateView|TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion|TestStage3StateViewIsADetachedCopy|TestRegistryVersionBumpsOnceForEveryCommittedStage3Change|TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent|TestStage3QuarantineDoesNotExemptAVerifier|TestStage3RegistryChangeComparisonCoversEveryParameterField' -race -count=1 || exit 1`
 Expected: `FAIL	github.com/sentioxyz/arbiter/server [build failed]` and `FAIL	github.com/sentioxyz/arbiter/fsm [build failed]`; the server build reports `undefined: Stage3VotersMetadataKey` (in `stage3_fixture_test.go` and `stage3_gate_test.go`), `state.Stage3StateView undefined (type *fsm.FSM has no field or method Stage3StateView)` and `undefined: stage3StateToPB` (in `stage3_params_test.go`); the fsm build reports `f.Stage3StateView undefined (type *FSM has no field or method Stage3StateView)`, `view.Stage3State undefined (type ConsensusParamsView has no field or method Stage3State)` and `undefined: stage3ParamsChanged` (in `stage3_reads_test.go`).
 
 - [ ] **Step 9: Implement the FSM reads and the registry bump**
@@ -4087,7 +4196,7 @@ func stage3ParamsChanged(previous, next *arbiter.Stage3Params) bool {
 }
 ```
 
-In `fsm/consensus_reads.go:16-18`, at the end of `ConsensusParamsView`, replace
+In `fsm/consensus_reads.go`, at the end of `ConsensusParamsView`, replace
 
 ```go
 	PromotionSeq      uint64
@@ -4107,7 +4216,7 @@ with
 }
 ```
 
-In `fsm/consensus_reads.go:33-34`, in the literal `ConsensusParamsView()` returns, replace
+In `fsm/consensus_reads.go`, in the literal `ConsensusParamsView()` returns, replace
 
 ```go
 		Epoch: f.st.ConsensusEpoch, ParamsDigest: digest, PromotionSeq: f.st.PromotionSeq, GenesisSnapshotID: genesisID,
@@ -4122,7 +4231,7 @@ with
 	}, nil
 ```
 
-In `fsm/table_registry.go:292-293`, at the end of `TableRegistryView`, replace
+In `fsm/table_registry.go`, at the end of `TableRegistryView`, replace
 
 ```go
 	QuarantinedIndexers []uint64
@@ -4141,7 +4250,7 @@ with
 }
 ```
 
-In `fsm/table_registry.go:347-348`, at the end of `TableRegistryView()`, replace
+In `fsm/table_registry.go`, at the end of `TableRegistryView()`, replace
 
 ```go
 	out.QuarantinedIndexers = f.quarantinedIndexersLocked()
@@ -4156,7 +4265,7 @@ with
 	return out, true
 ```
 
-In `fsm/consensus_updates.go:90-91`, in `applyUpdateConsensusParams` (right before the new parameters are installed; Task 64's `previousStage3` local, declared a few lines above, stays as it is), replace
+In `fsm/consensus_updates.go`, in `applyUpdateConsensusParams` (right before the new parameters are installed; Task 64's `previousStage3` local, declared a few lines above, stays as it is), replace
 
 ```go
 	previousSI := f.st.Params.SIIndexers
@@ -4171,7 +4280,7 @@ with
 	f.st.Params = next
 ```
 
-In `fsm/consensus_updates.go:122`, right after the `si_indexers` bump (`} else if !slices.Equal(previousSI, next.SIIndexers) { … }`) and before the evictions, so the change folds into the one `registryChangedLocked` call of the Apply, replace
+In `fsm/consensus_updates.go`, right after the `si_indexers` bump (`} else if !slices.Equal(previousSI, next.SIIndexers) { … }`) and before the evictions, so the change folds into the one `registryChangedLocked` call of the Apply, replace
 
 ```go
 	// The nodes the update leaves out are evicted now (rule 6, CONTRACT §3c),
@@ -4279,7 +4388,7 @@ func (s *Server) stage3Gate(ctx context.Context, update arbiter.ConsensusParamsU
 }
 ```
 
-In `server/consensus_admin.go:66-68`, at the end of `GetConsensusParams`, replace
+In `server/consensus_admin.go`, at the end of `GetConsensusParams`, replace
 
 ```go
 		PromotionSeq:      view.PromotionSeq,
@@ -4296,7 +4405,7 @@ with
 }
 ```
 
-In `server/consensus_admin.go:107`, between `trackStateToPB` and `consensusMutableParams`, replace
+In `server/consensus_admin.go`, between `trackStateToPB` and `consensusMutableParams`, replace
 
 ```go
 	return out
@@ -4331,7 +4440,7 @@ func stage3StateToPB(st *fsm.Stage3State) *pb.Stage3StateView {
 func consensusMutableParams(p fsm.Params) *pb.ConsensusMutableParams {
 ```
 
-In `server/consensus_admin.go:120-122`, at the end of `consensusMutableParams`, replace
+In `server/consensus_admin.go`, at the end of `consensusMutableParams`, replace
 
 ```go
 		TracksEnabled:                 p.TracksEnabled,
@@ -4348,7 +4457,7 @@ with
 }
 ```
 
-In `server/consensus_admin.go:174-175`, the barrier condition of `updateConsensusParams` (the body of the `if` is unchanged), replace
+In `server/consensus_admin.go`, the barrier condition of `updateConsensusParams` (the body of the `if` is unchanged), replace
 
 ```go
 	// after the activation, where RegisterNode refuses a stage-1 binary.
@@ -4365,7 +4474,7 @@ with
 		(update.Stage3 != nil && !svc.s.d.FSM.Stage3Active()) {
 ```
 
-In `server/consensus_admin.go:185-187`, the gate calls of `updateConsensusParams`, right after `tracksGate`, replace
+In `server/consensus_admin.go`, the gate calls of `updateConsensusParams`, right after `tracksGate`, replace
 
 ```go
 	if err := svc.s.tracksGate(ctx, update); err != nil {
@@ -4384,7 +4493,7 @@ with
 	}
 ```
 
-In `server/membership.go:54-55`, the tracks refusal of `RegisterNode`, replace
+In `server/membership.go`, the tracks refusal of `RegisterNode`, replace
 
 ```go
 		return nil, status.Error(codes.FailedPrecondition, "tracks are active; this binary does not support track-aware manifests")
@@ -4407,7 +4516,7 @@ with
 	}
 ```
 
-In `server/table_registry.go:114-115`, the `TableRegistrySnapshot` literal of `tableRegistryToPB`, replace
+In `server/table_registry.go`, the `TableRegistrySnapshot` literal of `tableRegistryToPB`, replace
 
 ```go
 		QuarantinedIndexers: slices.Clone(v.QuarantinedIndexers),
@@ -4426,24 +4535,28 @@ with
 
 - [ ] **Step 11: Drop the pin-fallout entry this task serves**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; grep -n '"TableRegistrySnapshot.stage3"' "$W"/server/*_test.go`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; grep -n '"TableRegistrySnapshot.stage3"' "$W"/server/*_test.go || { grep_status=$?; [ "$grep_status" -eq 1 ] || exit 1; }`
 Expected: no output: at `526a721` no mirror or every-field test reads `TableRegistrySnapshot` (`TestTableRegistryMirrorsProto` compares `TableIncarnation` and the cursor only), so Task 64's pin added no entry for it and there is nothing to do. If the grep instead prints the one line `"TableRegistrySnapshot.stage3": "Task 65",` of `stage3PendingProtoFields` (a test Plan S3-C2 or S3-D added made Task 64 add it), delete exactly that line (contract §44: the owning task deletes its entries) and run the grep again, which then prints nothing.
 
 - [ ] **Step 12: Run them and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server fsm)" && go vet ./server/ ./fsm/ && go test ./server/ ./fsm/ -run 'TestStage3Gate|TestTracksGateRefusalsAreUnchanged|TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation|TestConsensusMutableParamsCarryStage3|TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation|TestGetConsensusParamsServesTheStage3StateView|TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion|TestTableRegistryMirrorsProto|TestStage3StateViewIsADetachedCopy|TestRegistryVersionBumpsOnceForEveryCommittedStage3Change|TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent' -race -count=1 -v`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && formatting="$(gofmt -l server fsm)" && test -z "$formatting" && go vet ./server/ ./fsm/ && go test ./server/ ./fsm/ -run 'TestStage3Gate|TestTracksGateRefusalsAreUnchanged|TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation|TestConsensusMutableParamsCarryStage3|TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation|TestGetConsensusParamsServesTheStage3StateView|TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion|TestTableRegistryMirrorsProto|TestStage3StateViewIsADetachedCopy|TestRegistryVersionBumpsOnceForEveryCommittedStage3Change|TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent|TestStage3QuarantineDoesNotExemptAVerifier|TestStage3RegistryChangeComparisonCoversEveryParameterField' -race -count=1 -v || exit 1`
 Expected: gofmt and vet are silent; the twelve server tests and the three fsm tests PASS (`TestStage3GateProbesEveryVoter` and `TestTracksGateRefusalsAreUnchanged` with their eight subtests each), `TestTableRegistryMirrorsProto` still passes, and both packages print `ok  	github.com/sentioxyz/arbiter/server` and `ok  	github.com/sentioxyz/arbiter/fsm`.
 
 - [ ] **Step 13: Run the server, fsm and arbiter-admin suites**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git status --short && go test ./server/ ./fsm/ ./cmd/arbiter-admin/ -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle && git status --short && go test ./server/ ./fsm/ ./cmd/arbiter-admin/ -race -count=1 || exit 1`
 Expected: gazelle adds `"stage3_reads.go",` to `go_library(name = "fsm")` and `"stage3_reads_test.go",` to `go_test(name = "fsm_test")` in `fsm/BUILD.bazel` (each after Task 64's `"stage3.go",` and `"stage3_params_test.go",`), `"stage3_gate.go",` to `go_library(name = "server")` and `"stage3_fixture_test.go",`, `"stage3_gate_test.go",`, `"stage3_params_test.go",` to `go_test(name = "server_test")` in `server/BUILD.bazel`, and no dependency; `git status` lists ` M fsm/BUILD.bazel`, ` M fsm/consensus_reads.go`, ` M fsm/consensus_updates.go`, ` M fsm/table_registry.go`, ` M server/BUILD.bazel`, ` M server/consensus_admin.go`, ` M server/membership.go`, ` M server/table_registry.go`, ` M server/tracks_fixture_test.go`, ` M server/tracks_gate.go`, `?? fsm/stage3_reads.go`, `?? fsm/stage3_reads_test.go`, `?? server/stage3_fixture_test.go`, `?? server/stage3_gate.go`, `?? server/stage3_gate_test.go` and `?? server/stage3_params_test.go` only (and ` M server/safestate_stage3_test.go` if Step 11 deleted its line); the three packages print `ok`, Task 64's stage-3 FSM tests and the frozen golden tests included.
 
 - [ ] **Step 14: Commit the leader side**
 
 ```bash
-git -C "$W" add server fsm
-git -C "$W" commit -m "feat(stage3): the leader's stage-3 gate, the registration refusal and the stage-3 reads (Task 65)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+git -C "$W" add server fsm || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(stage3): the leader's stage-3 gate, the registration refusal and the stage-3 reads (Task 65)
 
 The tracks gate's voter probe becomes probeFeatureVoters, which the new
 stage3 gate shares with its own key arbiter-stage3-voters, feature
@@ -4461,7 +4574,14 @@ serves stage3, and every Apply that commits a changed stage3 bumps the
 registry version once (housegate spec 2026-10-14 §10.3, §10.4; plan
 S3-E2 contract §45).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; stop and unlock the repository signing key if cancelled" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit did not advance HEAD; stop" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "unexpected author/signature; stop" >&2; exit 1; }
+git -C "$W" verify-commit "$new_head" || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "worktree is dirty after commit; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 15: Write the failing arbiter-admin tests**
@@ -5295,7 +5415,7 @@ func TestCLIStage3ActivationThroughServerAndFSM(t *testing.T) {
 
 - [ ] **Step 16: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateStage3|TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers|TestVerifierFlag|TestIndexerFailureDomainFlag|TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks|TestStage3VotersMetadataKeyMatchesTheServer|TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead|TestCLIStage3ActivationThroughServerAndFSM' -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateStage3|TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers|TestVerifierFlag|TestIndexerFailureDomainFlag|TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks|TestStage3VotersMetadataKeyMatchesTheServer|TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead|TestCLIStage3ActivationThroughServerAndFSM' -race -count=1 || exit 1`
 Expected: `FAIL	github.com/sentioxyz/arbiter/cmd/arbiter-admin [build failed]` with `undefined: failureDomainFlags`, `undefined: stage3ExemptSNodes`, `undefined: stage3GateFor`, `unknown field exempt in struct literal of type gateObservation` and `undefined: stage3VotersMetadataKey` (all in `stage3_test.go`).
 
 - [ ] **Step 17: Implement the stage-3 flags and the CLI gate**
@@ -5676,7 +5796,7 @@ func keyValuesOptional(value string, required, optional []string) (map[string]st
 
 In `cmd/arbiter-admin/main.go` make these edits.
 
-The `consensus update` usage line: in `cmd/arbiter-admin/main.go:89`, in the line `  arbiter-admin consensus update --address LEADER_GRPC …` (the rest of the line, from ` [--voter VOTER_GRPC ...]` on, is unchanged), replace
+The `consensus update` usage line: in `cmd/arbiter-admin/main.go`, in the line `  arbiter-admin consensus update --address LEADER_GRPC …` (the rest of the line, from ` [--voter VOTER_GRPC ...]` on, is unchanged), replace
 
 ```text
 [--verifier 'node=NODE_ID,pubkey=HEX' ...] [--evict-unnamed] [--tracks-enabled]
@@ -5688,7 +5808,7 @@ with
 [--verifier 'node=NODE_ID,pubkey=HEX[,host=N,replica-signer=0x...,consent=PATH,domain=D,weight=W,verify=B,replicate=B,counts=B,shared-rmt=B]' ...] [--evict-unnamed] [--tracks-enabled] [--stage3 --stage3-max-lag-publications N --stage3-lag-low N --stage3-evidence-timeout-l2-blocks N --stage3-max-uncleaned-parts-per-partition N --stage3-max-uncleaned-parts-per-table N] [--stage3-group-size N] [--stage3-network-fill-default=B] [--stage3-min-safe-copies N] [--stage3-strict-copies] [--stage3-exclude-quarantined-hosts=B] [--indexer-failure-domain 'id=N,domain=D' ...] [--stage3-switch NAME]
 ```
 
-The usage paragraphs: in `cmd/arbiter-admin/main.go:156-157`, at the end of the `--tracks-enabled` paragraph, replace
+The usage paragraphs: in `cmd/arbiter-admin/main.go`, at the end of the `--tracks-enabled` paragraph, replace
 
 ```text
 the committed value is carried; once set every update carries it. Run the
@@ -5724,7 +5844,7 @@ host's failure domain; weight defaults to 1 and each flag to true. Host-bound
 entries are refused until the owner_aware_selection switch is committed.
 ```
 
-`verifierFlags.Set`: in `cmd/arbiter-admin/main.go:219-234`, replace
+`verifierFlags.Set`: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 func (v *verifierFlags) Set(value string) error {
@@ -5758,7 +5878,7 @@ func (v *verifierFlags) Set(value string) error {
 }
 ```
 
-`keyValues`, which now shares `keyValuesOptional` (same texts): in `cmd/arbiter-admin/main.go:264-287`, replace
+`keyValues`, which now shares `keyValuesOptional` (same texts): in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 // keyValues splits "k=v,k=v" and requires exactly the keys named, once each.
@@ -5797,7 +5917,7 @@ func keyValues(value string, keys ...string) (map[string]string, error) {
 }
 ```
 
-The update flags: in `cmd/arbiter-admin/main.go:387-388`, in the flag variables of `run`, replace
+The update flags: in `cmd/arbiter-admin/main.go`, in the flag variables of `run`, replace
 
 ```go
 	var tracksEnabled bool
@@ -5812,7 +5932,7 @@ with
 	var holdName string
 ```
 
-In `cmd/arbiter-admin/main.go:402`, the help text of `--verifier`, replace
+In `cmd/arbiter-admin/main.go`, the help text of `--verifier`, replace
 
 ```go
 		fs.Var(&verifiers, "verifier", "verifiers entry node=NODE_ID,pubkey=HEX; repeat for the complete list (omitted keeps the committed list)")
@@ -5824,7 +5944,7 @@ with
 		fs.Var(&verifiers, "verifier", "verifiers entry node=NODE_ID,pubkey=HEX, for a host-bound entry with host=N,replica-signer=0x...,consent=PATH,domain=D[,weight=W,verify=B,replicate=B,counts=B,shared-rmt=B]; repeat for the complete list (omitted keeps the committed list)")
 ```
 
-In `cmd/arbiter-admin/main.go:404-405`, registering the stage-3 flags after `--tracks-enabled` and extending the help text of `--voter`, replace
+In `cmd/arbiter-admin/main.go`, registering the stage-3 flags after `--tracks-enabled` and extending the help text of `--voter`, replace
 
 ```go
 		fs.BoolVar(&tracksEnabled, "tracks-enabled", false, "set tracks_enabled, the irreversible tracks activation (needs --voter); omitted keeps the current value, and once set every update carries it")
@@ -5839,7 +5959,7 @@ with
 		fs.Var(&voters, "voter", "direct gRPC address of a Raft voter; repeat for every voter (required to set or raise client lanes, for the signed-claims activation, the tracks activation and the stage-3 activation)")
 ```
 
-The flag checks: in `cmd/arbiter-admin/main.go:482-484`, replace
+The flag checks: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		if len(voters) != 0 && !clientLanesSet && !siIndexersSet && !tracksEnabled {
@@ -5858,7 +5978,7 @@ with
 		}
 ```
 
-The target, after the tracks prerequisite: in `cmd/arbiter-admin/main.go:634-635`, replace
+The target, after the tracks prerequisite: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		return errors.New("--tracks-enabled needs the signed-claims activation first: si_indexers is not committed, and the tracks activation must be a later update (clarification C11)")
@@ -5883,7 +6003,7 @@ with
 	}
 ```
 
-The gate, after the tracks gate: in `cmd/arbiter-admin/main.go:696-700`, right before the `planned` update is built, replace
+The gate, after the tracks gate: in `cmd/arbiter-admin/main.go`, right before the `planned` update is built, replace
 
 ```go
 		if err := checkTracksNotEnabled(ctx, client); err != nil {
@@ -5921,7 +6041,7 @@ with
 	planned := arbiter.ConsensusParamsUpdate{
 ```
 
-The `planned` literal: in `cmd/arbiter-admin/main.go:709-710`, replace
+The `planned` literal: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		TracksEnabled:                 tracksTarget,
@@ -5936,7 +6056,7 @@ with
 	}
 ```
 
-The pre-submit re-check: in `cmd/arbiter-admin/main.go:774-775`, at the end of the tracks re-check, right before `submitCtx := ctx`, replace
+The pre-submit re-check: in `cmd/arbiter-admin/main.go`, at the end of the tracks re-check, right before `submitCtx := ctx`, replace
 
 ```go
 		ctx = metadata.AppendToOutgoingContext(ctx, tracksVotersMetadataKey, tracksVotersMetadata([]string(voters)))
@@ -5959,7 +6079,7 @@ with
 	}
 ```
 
-The post-commit re-check: in `cmd/arbiter-admin/main.go:811-813`, replace
+The post-commit re-check: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 	if tracksSeen != nil {
@@ -5978,7 +6098,7 @@ with
 	}
 ```
 
-The gate's exemption hook: in `cmd/arbiter-admin/main.go:1422-1423`, at the end of `activationGate`, replace
+The gate's exemption hook: in `cmd/arbiter-admin/main.go`, at the end of `activationGate`, replace
 
 ```go
 	roleConflicts func(snodes, verifiers []string) []string
@@ -5997,7 +6117,7 @@ with
 }
 ```
 
-`runActivationGate` passes its gate to `observeGate`: in `cmd/arbiter-admin/main.go:1521`, replace
+`runActivationGate` passes its gate to `observeGate`: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 	observed, err := observeGate(ctx, leader, voters, dial)
@@ -6009,12 +6129,13 @@ with
 	observed, err := observeGate(ctx, g, leader, voters, dial)
 ```
 
-`recheckActivationGate` does too: in `cmd/arbiter-admin/main.go:1534-1536`, replace
+`recheckActivationGate` does too: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 	now, err := observeGate(ctx, leader, voters, dial)
 	if err != nil {
-		return nil, fmt.Errorf("%s re-check before submit refused
+		return nil, fmt.Errorf("%s re-check before submit refused; nothing was submitted: %w", g.name, err)
+	}
 ```
 
 with
@@ -6022,15 +6143,18 @@ with
 ```go
 	now, err := observeGate(ctx, g, leader, voters, dial)
 	if err != nil {
-		return nil, fmt.Errorf("%s re-check before submit refused
+		return nil, fmt.Errorf("%s re-check before submit refused; nothing was submitted: %w", g.name, err)
+	}
 ```
 
-and so does `warnGateAfterCommit`: in `cmd/arbiter-admin/main.go:1554-1556`, replace
+and so does `warnGateAfterCommit`: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 	now, err := observeGate(ctx, leader, voters, dial)
 	if err != nil {
-		fmt.Fprintf(stderr, "WARNING: the %s update committed
+		fmt.Fprintf(stderr, "WARNING: the %s update committed (irreversible), but the post-commit re-check could not run: %v\nWARNING: run consensus features against the current leader and probe every voter now.\n", g.name, err)
+		return
+	}
 ```
 
 with
@@ -6038,10 +6162,12 @@ with
 ```go
 	now, err := observeGate(ctx, g, leader, voters, dial)
 	if err != nil {
-		fmt.Fprintf(stderr, "WARNING: the %s update committed
+		fmt.Fprintf(stderr, "WARNING: the %s update committed (irreversible), but the post-commit re-check could not run: %v\nWARNING: run consensus features against the current leader and probe every voter now.\n", g.name, err)
+		return
+	}
 ```
 
-The observation: in `cmd/arbiter-admin/main.go:1601-1602`, at the end of `gateObservation`, replace
+The observation: in `cmd/arbiter-admin/main.go`, at the end of `gateObservation`, replace
 
 ```go
 	snodes, verifiers []string
@@ -6058,7 +6184,7 @@ with
 }
 ```
 
-In `cmd/arbiter-admin/main.go:1604`, the signature of `observeGate`, replace
+In `cmd/arbiter-admin/main.go`, the signature of `observeGate`, replace
 
 ```go
 func observeGate(ctx context.Context, leader pb.ConsensusAdminClient, voters []string, dial dialFunc) (*gateObservation, error) {
@@ -6070,7 +6196,7 @@ with
 func observeGate(ctx context.Context, g activationGate, leader pb.ConsensusAdminClient, voters []string, dial dialFunc) (*gateObservation, error) {
 ```
 
-and, at the end of `observeGate`, in `cmd/arbiter-admin/main.go:1621-1624`, replace
+and, at the end of `observeGate`, in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		observed.probes = append(observed.probes, probe)
@@ -6094,7 +6220,7 @@ with
 }
 ```
 
-In `problems`: in `cmd/arbiter-admin/main.go:1674-1675`, replace
+In `problems`: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		id := e.GetNodeId()
@@ -6111,7 +6237,7 @@ with
 		if g.bound != nil && !g.bound(id) {
 ```
 
-In `lines`: in `cmd/arbiter-admin/main.go:1722-1724`, replace
+In `lines`: in `cmd/arbiter-admin/main.go`, replace
 
 ```go
 		out = append(out, fmt.Sprintf("registered roles: snode [%s], verifier [%s]", strings.Join(o.snodes, " "), strings.Join(o.verifiers, " ")))
@@ -6132,12 +6258,12 @@ with
 
 - [ ] **Step 18: Run them and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l cmd/arbiter-admin)" && go vet ./cmd/arbiter-admin/ && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateStage3|TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers|TestVerifierFlag|TestIndexerFailureDomainFlag|TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks|TestStage3VotersMetadataKeyMatchesTheServer|TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead|TestCLIStage3ActivationThroughServerAndFSM|TestSIIndexerAndVerifierFlagsAreCheckedLocally' -race -count=1 -v && go test ./cmd/arbiter-admin/ -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && formatting="$(gofmt -l cmd/arbiter-admin)" && test -z "$formatting" && go vet ./cmd/arbiter-admin/ && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateStage3|TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers|TestVerifierFlag|TestIndexerFailureDomainFlag|TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks|TestStage3VotersMetadataKeyMatchesTheServer|TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead|TestCLIStage3ActivationThroughServerAndFSM|TestSIIndexerAndVerifierFlagsAreCheckedLocally' -race -count=1 -v && go test ./cmd/arbiter-admin/ -race -count=1 || exit 1`
 Expected: gofmt and vet are silent; the eleven tests of `stage3_test.go` and `TestCLIStage3ActivationThroughServerAndFSM` PASS (`TestConsensusUpdateStage3SwitchTurnsOnOneSwitch` with one subtest per switch, seven in all, `TestConsensusUpdateStage3FlagRefusals` with sixteen), `TestSIIndexerAndVerifierFlagsAreCheckedLocally` still passes (the pool `--verifier` texts are unchanged), and the whole arbiter-admin suite prints `ok  	github.com/sentioxyz/arbiter/cmd/arbiter-admin`, the tracks, signed-claims, client-lanes and Plan S3-A hold tests included.
 
 - [ ] **Step 19: Document the stage-3 activation**
 
-In `README.md:396`, insert this section before the line `## Artifact disposition admission` (after Plan S3-A's `## Stage-3 reads and consensus holds` section):
+In `README.md`, insert this section before the line `## Artifact disposition admission` (after Plan S3-A's `## Stage-3 reads and consensus holds` section):
 
 ```markdown
 ## Multi-source storage integrity (stage-3 activation)
@@ -6153,14 +6279,40 @@ In `README.md:396`, insert this section before the line `## Artifact disposition
 
 - [ ] **Step 20: Full verification**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git status --short && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && go test ./... -race -count=1 && bazel build //... && bazel test //... --test_output=errors && bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; git diff --exit-code --diff-filter=MDR HEAD~2 -- fsm/testdata accumulator/testdata`
-Expected: gazelle adds `"stage3.go",` to `go_library(name = "arbiter-admin_lib")` (whose `srcs` becomes a list with `"main.go"`) and `"stage3_integration_test.go",`, `"stage3_test.go",` to `go_test(name = "arbiter-admin_test")` in `cmd/arbiter-admin/BUILD.bazel`, no dependency; `git status` lists ` M README.md`, ` M cmd/arbiter-admin/BUILD.bazel`, ` M cmd/arbiter-admin/main.go`, `?? cmd/arbiter-admin/stage3.go`, `?? cmd/arbiter-admin/stage3_integration_test.go` and `?? cmd/arbiter-admin/stage3_test.go` only; gofmt lists nothing; `go test ./...` prints `ok` for every package with tests (`fsm`, `server`, `cmd/arbiter-admin`, `orchestrator` and `integration` among them); the Bazel build and suite PASS, every frozen golden test included (`TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestL3CommitmentPreimagesAreFrozen`, `TestL3TrackHeaderPreimagesAreFrozen`, `TestL3TransitionHeaderPreimageIsFrozen`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`), and Task 64's stage-3 FSM tests; the `bazel query` count is `0` and the `time.Now` grep prints nothing; no golden or fixture changed since Task 64's last commit (`HEAD~2`; the diff is empty).
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle
+formatting="$(gofmt -l .)" || exit 1
+[ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; echo "Go formatting differs; stop" >&2; exit 1; }
+go vet ./...
+go test ./... -race -count=1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //...
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... --test_output=errors
+bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)' > "$T64/task65-fsm-direct-deps.txt"
+python3 -I - "$T64/task65-fsm-direct-deps.txt" "$W/fsm" <<'TASK65_RED_LINES'
+import pathlib,sys
+labels=pathlib.Path(sys.argv[1]).read_text().splitlines()
+assert not any("com_github_sentioxyz_arbiter_proto" in x for x in labels), "FSM directly imports arbiter-proto; stop"
+assert not any("time.Now" in p.read_text() for p in pathlib.Path(sys.argv[2]).rglob("*.go")), "FSM reads wall-clock time; stop"
+print("FSM has no direct proto dependency or wall-clock read")
+TASK65_RED_LINES
+git diff --exit-code --diff-filter=MDR HEAD~2 -- fsm/testdata accumulator/testdata
+git status --short
+```
+Expected: gazelle adds `"stage3.go",` to `go_library(name = "arbiter-admin_lib")` (whose `srcs` becomes a list with `"main.go"`) and `"stage3_integration_test.go",`, `"stage3_test.go",` to `go_test(name = "arbiter-admin_test")` in `cmd/arbiter-admin/BUILD.bazel`, no dependency; `git status` lists ` M README.md`, ` M cmd/arbiter-admin/BUILD.bazel`, ` M cmd/arbiter-admin/main.go`, `?? cmd/arbiter-admin/stage3.go`, `?? cmd/arbiter-admin/stage3_integration_test.go` and `?? cmd/arbiter-admin/stage3_test.go` only; gofmt lists nothing; `go test ./...` prints `ok` for every package with tests (`fsm`, `server`, `cmd/arbiter-admin`, `orchestrator` and `integration` among them); the Bazel build and suite PASS, every frozen golden test included (`TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestL3CommitmentPreimagesAreFrozen`, `TestL3TrackHeaderPreimagesAreFrozen`, `TestL3TransitionHeaderPreimageIsFrozen`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`), and Task 64's stage-3 FSM tests; the explicit FSM red-line check passes; no golden or fixture changed since Task 64's last commit (`HEAD~2`; the diff is empty).
 
 - [ ] **Step 21: Commit the CLI**
 
 ```bash
-git -C "$W" add README.md cmd/arbiter-admin
-git -C "$W" commit -m "feat(stage3): arbiter-admin consensus update --stage3, --stage3-switch and host-bound --verifier (Task 65)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+git -C "$W" add README.md cmd/arbiter-admin || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(stage3): arbiter-admin consensus update --stage3, --stage3-switch and host-bound --verifier (Task 65)
 
 --stage3 builds the v21 activation (group_size 3, network fill on,
 min_safe_copies 1 unless given, every switch off, the five required
@@ -6177,29 +6329,36 @@ domain; weight 1 and every flag true by default). The README documents
 the activation, the switches, the reads and the CLI (housegate spec
 2026-10-14 §6.1, §10.3, §10.4; plan S3-E2 contract §45, K68, K69).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; stop and unlock the repository signing key if cancelled" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$previous_head" ] || { echo "commit did not advance HEAD; stop" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "unexpected author/signature; stop" >&2; exit 1; }
+git -C "$W" verify-commit "$new_head" || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "worktree is dirty after commit; stop" >&2; exit 1; }
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" status --porcelain; git -C "$W" log --format=%s -3`
-Expected: no status output; the three commits of this task on top of Task 64's, newest first `feat(stage3): arbiter-admin consensus update --stage3, --stage3-switch and host-bound --verifier (Task 65)`, `feat(stage3): the leader's stage-3 gate, the registration refusal and the stage-3 reads (Task 65)`, `test(stage3): pin every voter-probe refusal of the tracks gate (Task 65)`. Nothing is pushed: Task 70's last step pushes the branch.
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; git -C "$W" status --porcelain; git -C "$W" log --format=%s -3`
+Expected: no status output; the three signed poetry/G commits of this task on top of Task64's, newest first `feat(stage3): arbiter-admin consensus update --stage3, --stage3-switch and host-bound --verifier (Task 65)`, `feat(stage3): the leader's stage-3 gate, the registration refusal and the stage-3 reads (Task 65)`, `test(stage3): pin every voter-probe refusal of the tracks gate (Task 65)`. Nothing is pushed: Task 70's last step pushes the branch.
 
 ---
 
 ## Task 66: arbiter — snapshot v21, the stage-3 restore rules and the frozen plain container (S3-E2)
 
-Spec §10.3 makes the stage-3 activation write a new snapshot container that an older binary refuses, and clarification K70 fixes its framing: `AFSM` (4 bytes), version byte 21, a body-kind byte (0 plain, 1 interned), the body length (8 bytes, big-endian), the body and the spent-ids dump; v3–v20 keep their 13-byte envelope. After Tasks 64 and 65 the branch commits `Params.Stage3` and `State.Stage3`, but the container cannot hold them: `writeSnapshot` (`fsm/snapshot.go:168-189`) writes v20 whenever `tracks_enabled` is committed (`snapshotWriteVersion`, `:198-220`) and `State.Stage3` is no `snapshotDoc` member (`:68-108`), so a stage-3 state goes into a v20 container: this binary loses its cutover records on restore, and nothing in the container stops `ARBITER_TAG_P4`, which knows none of the stage-3 fields, from decoding it with them silently dropped. This task moves the writer to v21 exactly when `Params.Stage3` is committed and keeps v20 byte for byte before it, writes the plain body (the v20 document plus the member `stage3`) behind the kind byte, teaches the reader v21 with the plain body (Task 67 admits the interned body and adds its write-then-verify in `Persist`), refuses every stage-3 field under an older version byte on the pattern of `tracksFieldsPresent` (`:501-503`, `:695-721`), adds `fsm/stage3_restore.go` with the skeleton every later stage-3 task extends (`validateStage3State`, running this task's `validateStage3Activation`), refuses `stage3` in the bootstrap parameters, moves the capacity counter and Plan S3-A's state-size sample to the 14-byte envelope, and freezes the plain v21 container of a reproducible stage-3 network.
+Spec §10.3 makes the stage-3 activation write a new snapshot container that an older binary refuses, and clarification K70 fixes its framing: `AFSM` (4 bytes), version byte 21, a body-kind byte (0 plain, 1 interned), the body length (8 bytes, big-endian), the body and the spent-ids dump; v3–v20 keep their 13-byte envelope. After Tasks 64 and 65 the branch commits `Params.Stage3` and `State.Stage3`, but the container cannot hold them: `writeSnapshot` (`fsm/snapshot.go`) writes v20 whenever `tracks_enabled` is committed (`snapshotWriteVersion`, the named functions) and `State.Stage3` is no `snapshotDoc` member (the named functions), so a stage-3 state goes into a v20 container: this binary loses its cutover records on restore, and nothing in the container stops `ARBITER_TAG_P4`, which knows none of the stage-3 fields, from decoding it with them silently dropped. This task moves the writer to v21 exactly when `Params.Stage3` is committed and keeps v20 byte for byte before it, writes the plain body (the v20 document plus the member `stage3`) behind the kind byte, teaches the reader v21 with the plain body (Task 67 admits the interned body and adds its write-then-verify in `Persist`), refuses every stage-3 field under an older version byte on the pattern of `tracksFieldsPresent` (the named functions, the named functions), adds `fsm/stage3_restore.go` with the skeleton every later stage-3 task extends (`validateStage3State`, running this task's `validateStage3Activation`), refuses `stage3` in the bootstrap parameters, moves the capacity counter and Plan S3-A's state-size sample to the 14-byte envelope, and freezes the plain v21 container of a reproducible stage-3 network.
 
-Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, the `path` Task 64's Step 1 printed, branch `urwt/claude/multi-source-s3e`, contract §48); the Bash tool keeps no variables between calls, so every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own Bash call. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this was drafted: Plan S3-A merged as arbiter#133, so its Task 9 code in `fsm/state_size.go` and `fsm/snapshot.go` is quoted as it landed). Tasks 64 and 65 change none of the fsm files this task edits; Task 65 adds the README section `## Multi-source storage integrity (stage-3 activation)` in front of `## Artifact disposition admission`, which Step 12's paragraph closes. The branch base (`ARBITER_TAG_P4`, with Plan S3-C2's `ARBITER_PIN_P2` and Plan S3-D Task 51) is met by the hunk rule of the Global Constraints: every hunk below quotes the exact text it replaces and is applied on top of what is there. This task runs no remote or live action: nothing is fetched, pushed, released or deployed (the branch push is Task 70's last step, under its own confirmation).
+Worktree (contract §48): reuse the actual absolute path retained by Task64 in `$HOME/.cache/s3e2-task64/worktree.json`, on this host's `urwt/codex/multi-source-s3e` branch. Every standalone block loads Task64's complete `$HOME/.cache/s3e2-task64/env.sh`, which validates that JSON, repository, branch, observed ledger rows and worktree poetry/signing configuration. Preserve returned symlink/space spelling; never reconstruct a path template, create another branch or silently overwrite an earlier attempt's evidence. Commands below are Bash; commands handed to the user use fish-compatible `bash -eo pipefail /absolute/path/task66-step.sh`. Line anchors are the drafting baseline arbiter `526a721` (`v0.13.0`); re-anchor against the final reviewed Tasks64–65 and their actual base before applying hunks. Task65 adds the README section `## Multi-source storage integrity (stage-3 activation)` before `## Artifact disposition admission`; Step12 closes it. The branch base (`ARBITER_TAG_P4`, with Plan S3-C2's `ARBITER_PIN_P2` and Plan S3-D Task51) is met by the Global Constraints' hunk rule: the exact replaced text binds, line numbers guide. This task runs no remote or live action: nothing is fetched, pushed, released or deployed (the branch push belongs to Task70 under its own confirmation).
 
 **Files:**
 - Create: `fsm/stage3_restore.go`, `fsm/snapshot_v21_test.go`
 - Create (frozen, captured once in Step 11, never rewritten): `fsm/testdata/stage3_v21_plain.snapshot`
-- Modify: `fsm/snapshot.go` (imports `:8-9`; the version comment and constants `:21-25`, `:37-42`, `:59-61`; `snapshotDoc` `:106-108`; `writeSnapshot` `:177-180`; `snapshotWriteVersion` `:191-192`, `:198-199`; `snapshotDocument` `:244-246`; the reader's version whitelist `:285-287` and its predicates `:303`, `:318`, `:426`; after `validateTrackState` `:504-507`; Plan S3-A Task 9's restore sample `:656`; before `tableRegistryHasV17Fields` `:723-724`)
-- Modify: `fsm/snapshot_count.go` (`:17-19`, `:39-42`, `:66-68`, `:98`)
-- Modify: `fsm/state_size.go` (Plan S3-A Task 9: the `StateSizeSample.ContainerBytes` comment `:56-57`, `containerStateSize` and `stateSizeSample` `:114-142`)
-- Modify: `fsm/consensus_history.go` (`:31-33`)
-- Test: `fsm/apply_artifact_disposition_test.go` (`rewriteSnapshotDocument`, `:721-747`), `fsm/artifact_capacity_test.go` (`:207-213`), `fsm/snapshot_test.go` (`:192`, `:255`), `fsm/snapshot_tracks_test.go` (`:310-318`), `fsm/state_size_test.go` (Plan S3-A Task 9: the list of `TestStateComponentsListEverySnapshotDocMember` `:27-28` and the read-cap case of `TestFailedRestoreKeepsThePreviousSample` `:236`)
-- Modify: `README.md` (the **Snapshot versions:** paragraph `:300`; right before `## Artifact disposition admission`, `:396` at `526a721`, after Task 65's section on the branch; Plan S3-A Task 9's **State size and snapshots** paragraph, `:429` at `526a721`)
+- Modify: `fsm/snapshot.go` (imports the named functions; the version comment and constants the named functions, the named functions, the named functions; `snapshotDoc` the named functions; `writeSnapshot` the named functions; `snapshotWriteVersion` the named functions, the named functions; `snapshotDocument` the named functions; the reader's version whitelist the named functions and its predicates the named functions, the named functions, the named functions; after `validateTrackState` the named functions; Plan S3-A Task 9's restore sample the named functions; before `tableRegistryHasV17Fields` the named functions)
+- Modify: `fsm/snapshot_count.go` (the named functions, the named functions, the named functions, the named functions)
+- Modify: `fsm/state_size.go` (Plan S3-A Task 9: the `StateSizeSample.ContainerBytes` comment the named functions, `containerStateSize` and `stateSizeSample` the named functions)
+- Modify: `fsm/consensus_history.go` (the named functions)
+- Test: `fsm/apply_artifact_disposition_test.go` (`rewriteSnapshotDocument`, the named functions), `fsm/artifact_capacity_test.go` (the named functions), `fsm/snapshot_test.go` (the named functions, the named functions), `fsm/snapshot_tracks_test.go` (the named functions), `fsm/state_size_test.go` (Plan S3-A Task 9: the list of `TestStateComponentsListEverySnapshotDocMember` the named functions and the read-cap case of `TestFailedRestoreKeepsThePreviousSample` the named functions)
+- Modify: `README.md` (the **Snapshot versions:** paragraph the named functions; right before `## Artifact disposition admission`, the named functions at `526a721`, after Task 65's section on the branch; Plan S3-A Task 9's **State size and snapshots** paragraph, the named functions at `526a721`)
 - Modify (gazelle): `fsm/BUILD.bazel`
 
 **Interfaces:**
@@ -6207,30 +6366,59 @@ Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, th
   - Task 64 (contract §45): `Params.Stage3 *arbiter.Stage3Params` (`json:"stage3,omitempty"`), `State.Stage3 *Stage3State`, `Stage3State{ActivationEpoch, ActivationBlockSeq, ActivationPromotionSeq uint64; Switches []Stage3SwitchCutover}` and `Stage3SwitchCutover{Switch string; Epoch, BlockSeq, PromotionSeq, IncarnationSeq uint64}` with their JSON tags, `Stage3Switches()`, `stage3SwitchValue`, `Stage3SwitchPurge`, `Stage3SwitchEvictionVoiding`, `Stage3SwitchOwnerAwareSelection`, `(*FSM).Stage3Active`; the records `activateStage3Locked` and `recordStage3SwitchesLocked` write (`ActivationEpoch` the epoch the activation produces, the 1-based position of its `ConsensusUpdates` entry; a cutover's `Epoch` the epoch its update produces, `BlockSeq` and `PromotionSeq` `len(Blocks)` and `PromotionSeq`; the purge cutover's `IncarnationSeq` `uint64(len(TableRegistry.Incarnations)) + 1`); the refusal `consensus update setting stage3 must leave every switch off, strict_copies false and min_safe_copies 1`; the fixture `stage3ActivationParams`, `activateStage3`, `stage3FSM`, `turnOnStage3Switch` (`fsm/stage3_fixture_test.go`).
   - Task 65 (contract §45): the registry-version bump of every Apply that commits a changed `Params.Stage3` (part of the golden network's state) and its README section.
   - Plan S3-E1 (contract §48, through `CORE_TAG_P5`): `arbiter.Stage3Params`; `arbiter.VerifierEntry`'s `HostIndexerID *uint64`, `ReplicaSigner`, `ConsentJWS`, `Weight`, `FailureDomain`, `Verify`, `Replicate`, `Counts`, `SharedRMT`; `arbiter.ConsensusParamsUpdate.Stage3`.
-  - Plan S3-A Task 9 (contract §4, merged in `526a721`): `containerStateSize` (`fsm/state_size.go:115`), `stateSizeSample` (`:132`), `readSnapshotMeasured` (`fsm/snapshot.go:273`), `snapshotDocComponents`, `StateComponents`, `(*FSM).StateSizeSample`, `StateSizeSourceSnapshot`, `StateSizeSourceRestore`, `(*fsmSnapshot).recordSize` (`fsm/snapshot.go:762`), `TestStateComponentsListEverySnapshotDocMember` (`fsm/state_size_test.go:21`), `TestFailedRestoreKeepsThePreviousSample` (`:222`), and its README paragraph **State size and snapshots**.
-  - Existing fsm code: `writeSnapshot`, `readSnapshot`, `snapshotDocument`, `snapshotWriteVersion`, `tracksFieldsPresent`, `validateTrackState`, `validateConsensusHistory` (`fsm/consensus_history.go:12`), `CountSnapshotEncoding`; test helpers `snapshotBytes`, `restoreInto` (`fsm/snapshot_test.go:30`, `:44`), `restoreErr` (`fsm/apply_snapshot_query_abort_test.go:566`), `restoreConfigured` (`fsm/table_set_transition_restore_test.go:31`), `publishedTransitionFSM` (`:13`), `rewriteSnapshotDocument` (`fsm/apply_artifact_disposition_test.go:721`), `keepSnapshotDocument` (`fsm/snapshot_lanes_test.go:18`), `lifecycleScript` (`fsm/determinism_test.go:20`), `v20Params` (`fsm/snapshot_tracks_test.go:20`), `tmV20Fixture` (`:74`), `newTrackManifestFixture` (`fsm/track_manifest_fixture_test.go:56`), `tracksFSM`, `tracksUpdate`, `activateTracks`, `admitTrack`, `bindTrackClaim`, `verifyBlock`, `promoteTrack` (`fsm/tracks_fixture_test.go:81`, `:63`, `:71`, `:106`, `:117`, `:126`, `:136`), `ownerFSMWithAuthority`, `fixedClient` (`fsm/admission_source_test.go:38`, `:18`), `lanesFSM` (`fsm/admission_lanes_test.go:36`), `seededRegistryFSM`, `seed`, `ev` (`fsm/apply_table_registry_test.go:109`, `:18`, `:14`), `loadLegacyConsensusFixture` (`fsm/consensus_history_test.go:29`), `snodeSigner`, `fixedEnrollmentEntry`, `partPromotionAck` (`fsm/pre_tracks_golden_test.go:30`, `:44`, `:148`), `legacyGoldenAuthorityHex` (`fsm/legacy_lane_golden_test.go:23`), `messageContextFor` (`fsm/signed_messages_fixture_test.go:28`), `registryUpdate`, `testRegistryParams`, `signedConsensusUpdate`, `rejectConsensusUnchanged` (`fsm/consensus_updates_test.go`), `claimsUpdate`, `testVerifiers` (`fsm/signed_claims_params_test.go:70`, `:59`), `baseTransitionOn`, `mustSeal` (`fsm/table_set_transition_seal_test.go:43`, `:54`), `registerActive`, `mustApply`, `mustNewFSM`, `newTestFSM`, `testParams` (`fsm/fsm_test.go`), `advanceTo`, `seedIndexerCmd`, `ownedAddCmd` (`fsm/table_registry_owners_test.go`), `verifyTransition`, `anchorFinal` (`fsm/table_set_transition_pipeline_test.go:47`, `:57`), `publishManifestInputs` (`fsm/table_set_transition_manifest_test.go:98`); `authoritytest.Iat`, `(*authority.Signer).SignSNodeMessageAt`, `authority.SNodeMessagePromotionAck`, `authority.NewSignerFromHex`.
+  - Plan S3-A Task 9 (contract §4, merged in `526a721`): `containerStateSize` (`fsm/state_size.go`), `stateSizeSample` (the named functions), `readSnapshotMeasured` (`fsm/snapshot.go`), `snapshotDocComponents`, `StateComponents`, `(*FSM).StateSizeSample`, `StateSizeSourceSnapshot`, `StateSizeSourceRestore`, `(*fsmSnapshot).recordSize` (`fsm/snapshot.go`), `TestStateComponentsListEverySnapshotDocMember` (`fsm/state_size_test.go`), `TestFailedRestoreKeepsThePreviousSample` (the named functions), and its README paragraph **State size and snapshots**.
+  - Existing fsm code: `writeSnapshot`, `readSnapshot`, `snapshotDocument`, `snapshotWriteVersion`, `tracksFieldsPresent`, `validateTrackState`, `validateConsensusHistory` (`fsm/consensus_history.go`), `CountSnapshotEncoding`; test helpers `snapshotBytes`, `restoreInto` (`fsm/snapshot_test.go`, the named functions), `restoreErr` (`fsm/apply_snapshot_query_abort_test.go`), `restoreConfigured` (`fsm/table_set_transition_restore_test.go`), `publishedTransitionFSM` (the named functions), `rewriteSnapshotDocument` (`fsm/apply_artifact_disposition_test.go`), `keepSnapshotDocument` (`fsm/snapshot_lanes_test.go`), `lifecycleScript` (`fsm/determinism_test.go`), `v20Params` (`fsm/snapshot_tracks_test.go`), `tmV20Fixture` (the named functions), `newTrackManifestFixture` (`fsm/track_manifest_fixture_test.go`), `tracksFSM`, `tracksUpdate`, `activateTracks`, `admitTrack`, `bindTrackClaim`, `verifyBlock`, `promoteTrack` (`fsm/tracks_fixture_test.go`, the named functions, the named functions, the named functions, the named functions, the named functions, the named functions), `ownerFSMWithAuthority`, `fixedClient` (`fsm/admission_source_test.go`, the named functions), `lanesFSM` (`fsm/admission_lanes_test.go`), `seededRegistryFSM`, `seed`, `ev` (`fsm/apply_table_registry_test.go`, the named functions, the named functions), `loadLegacyConsensusFixture` (`fsm/consensus_history_test.go`), `snodeSigner`, `fixedEnrollmentEntry`, `partPromotionAck` (`fsm/pre_tracks_golden_test.go`, the named functions, the named functions), `legacyGoldenAuthorityHex` (`fsm/legacy_lane_golden_test.go`), `messageContextFor` (`fsm/signed_messages_fixture_test.go`), `registryUpdate`, `testRegistryParams`, `signedConsensusUpdate`, `rejectConsensusUnchanged` (`fsm/consensus_updates_test.go`), `claimsUpdate`, `testVerifiers` (`fsm/signed_claims_params_test.go`, the named functions), `baseTransitionOn`, `mustSeal` (`fsm/table_set_transition_seal_test.go`, the named functions), `registerActive`, `mustApply`, `mustNewFSM`, `newTestFSM`, `testParams` (`fsm/fsm_test.go`), `advanceTo`, `seedIndexerCmd`, `ownedAddCmd` (`fsm/table_registry_owners_test.go`), `verifyTransition`, `anchorFinal` (`fsm/table_set_transition_pipeline_test.go`, the named functions), `publishManifestInputs` (`fsm/table_set_transition_manifest_test.go`); `authoritytest.Iat`, `(*authority.Signer).SignSNodeMessageAt`, `authority.SNodeMessagePromotionAck`, `authority.NewSignerFromHex`.
 - Produces (contract §46, verbatim):
   - `fsm/snapshot.go`: `snapshotVersionV21 = 21`, `snapshotVersion = 21`; `snapshotBodyPlain byte = 0`, `snapshotBodyInterned byte = 1` (the latter read by Task 67); `snapshotDoc.Stage3 *Stage3State` (`json:"stage3,omitempty"`, after `Tracks`), set by `snapshotDocument`; `snapshotWriteVersion` returning 21 exactly when `st.Params.Stage3 != nil`; `writeSnapshot` writing `snapshotBodyPlain` after the v21 version byte; `func stage3FieldsPresent(doc *snapshotDoc) bool`, `func verifierEntryHasStage3Fields(v arbiter.VerifierEntry) bool`; reader refusals `unsupported snapshot version %d (require 3, 4, …, 20 or 21); pre-v3 state requires a backup and coordinated re-genesis`, `unsupported snapshot v21 body kind %d`, `stage3 state is present in a pre-v21 container`, and `snapshot: %w` around `validateStage3State`.
   - `fsm/snapshot_count.go`: `snapshotEnvelopePrefixBytes = 13` (unchanged, v3–v20), `snapshotV21EnvelopePrefixBytes = 14`, `func snapshotEnvelopeBytes(version byte) uint64`; `CountSnapshotEncoding`'s `SnapshotEnvelopeBytes` is the document plus `snapshotEnvelopeBytes(snapshotWriteVersion(st))`.
   - `fsm/stage3_restore.go` (new): `func validateStage3State(st *State) error` (this task: `validateStage3Activation`; Task 69 appends `validateStage3Incarnations`, Task 70 `validateStage3Selection`, Plans S3-E3 and S3-E4 theirs), `func validateStage3Activation(st *State) error` with the refusals `stage3 state must exist exactly when stage3 is committed`; `stage3 activation epoch %d is not the epoch of the first update that set stage3 (%d)`; `stage3 activation block %d or promotion %d is beyond the state's (%d, %d)`; `stage3 records a cutover for switch %s, which is off`; `stage3 switch %s is on without a cutover record`; `stage3 switch cutovers are not in the order of spec §10.4`; `stage3 switch %s cutover epoch %d is not the epoch of the update that turned it on (%d)`; `stage3 switch %s cutover (block %d, promotion %d) precedes the previous cutover or the activation`; `stage3 switch %s cutover carries an incarnation seq`; `stage3 purge cutover incarnation seq %d is outside 1..%d`.
   - `fsm/consensus_history.go`: `snapshot bootstrap consensus params: stage3 is set only by a consensus update, not at genesis`.
-  - `fsm/testdata/stage3_v21_plain.snapshot` (frozen), written once by `TestStage3V21PlainContainerGolden` under `ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1` from `stage3V21GoldenFSM(t *testing.T) *FSM`; named tests `TestSnapshotWritesV20UntilStage3IsCommitted`, `TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted`, `TestStage3V21PlainContainerGolden`, `TestRestoreReadsEveryEarlierVersionUnchanged`, `TestRestoreRefusesStage3FieldsInAPreV21Container`, `TestRestoreRefusesAnUnknownV21BodyKind`, `TestValidateStage3StateRequiresStateExactlyWithTheParameter`, `TestValidateStage3StateRefusesAnActivationEpochThatIsNotTheHistorys`, `TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys`, `TestContainerStateSizeMeasuresAV21PlainContainer`, `TestCountSnapshotEncodingMatchesTheV21Writer`, the edited `TestStateComponentsListEverySnapshotDocMember`.
+  - `fsm/testdata/stage3_v21_plain.snapshot` (frozen), written once by `TestStage3V21PlainContainerGolden` under `ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1` from `stage3V21GoldenFSM(t *testing.T) *FSM`; named tests `TestSnapshotWritesV20UntilStage3IsCommitted`, `TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted`, `TestStage3V21PlainContainerGolden`, `TestRestoreReadsEveryEarlierVersionUnchanged`, `TestRestoreRefusesStage3FieldsInAPreV21Container`, `TestRestoreRefusesAnUnknownV21BodyKind`, `TestValidateStage3StateRequiresStateExactlyWithTheParameter`, `TestValidateStage3StateRefusesAnActivationEpochThatIsNotTheHistorys`, `TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys`, `TestValidateStage3StateRefusesRegressingCutoverPromotions`, `TestStage3V21PlainGoldenCaptureDoesNotOverwriteExistingPath`, `TestContainerStateSizeMeasuresAV21PlainContainer`, `TestCountSnapshotEncodingMatchesTheV21Writer`, the edited `TestStateComponentsListEverySnapshotDocMember`.
   - Added by this task beyond §46 (recorded in Appendix B): the refusals `stage3 switch %s cutover (block %d, promotion %d) is beyond the state's (%d, %d)` (`validateStage3Activation`) and `snapshot v21 body kind: %w` (a container cut after its version byte); the tests `TestRestoreRejectsAnOversizedV21LengthPrefix`, `TestBootstrapParamsNeverCarryStage3`; the test helpers `plainSnapshotBytes(t *testing.T, f *FSM) []byte`, `v21Document(t *testing.T, data []byte) []byte`, `v21Stage3`, `v21Cutover`, `v21Update`, `stage3SwitchedFSM(t *testing.T) *FSM`, `fixedPromotionAck(t *testing.T, f *FSM, p uint64) wire.Command`, `const stage3V21PlainGoldenPath`; Plan S3-A's unexported `stateSizeSample` gaining an `envelopeBytes uint64` parameter (`stateSizeSample(source string, envelopeBytes, docBytes, spentIDsBytes uint64, components []StateComponentSize) StateSizeSample`); `rewriteSnapshotDocument` reading and writing the envelope of each side's version (a v21 output with the plain kind byte).
 
 Notes:
-- **Before the activation nothing changes.** `snapshotWriteVersion` tests `Params.Stage3` first and is otherwise the base function, `snapshotDoc.Stage3` is `omitempty` and nil, and `stage3FieldsPresent` holds for no container a pre-stage3 history writes, so every v14–v20 container stays byte-identical and restores as before (`TestSnapshotWritesV20UntilStage3IsCommitted`, `TestRestoreReadsEveryEarlierVersionUnchanged`, the frozen goldens). The one visible difference is the reader's: it accepts the version byte 21, which no pre-stage3 container carries. `ARBITER_TAG_P4` refuses a v21 container at its version byte with `unsupported snapshot version 21 (require 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 or 20); pre-v3 state requires a backup and coordinated re-genesis` (checked while drafting with an export of `526a721`); Task 67's offline replay checks both directions over the devnet2 voter copies.
+- **Verification provenance.** Runtime review applies the complete literal hunks to the controller-approved Task65 source (625 files), with the complete reviewed core Task63 (469 files), housegate Task58 (935 files) and proto Task57 (57 files). No API stand-in is used. The earlier drafting measurements are historical only; this task does not establish any released tag, formal ClickHouse/500-block gate or production acceptance.
+- **Before the activation nothing changes.** `snapshotWriteVersion` tests `Params.Stage3` first and is otherwise the base function, `snapshotDoc.Stage3` is `omitempty` and nil, and `stage3FieldsPresent` holds for no container a pre-stage3 history writes, so every v14–v20 container stays byte-identical and restores as before (`TestSnapshotWritesV20UntilStage3IsCommitted`, `TestRestoreReadsEveryEarlierVersionUnchanged`, the frozen goldens). The one visible difference is the reader's: it accepts the version byte 21, which no pre-stage3 container carries. `ARBITER_TAG_P4` refuses a v21 container at its version byte with `unsupported snapshot version 21 (require 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 or 20); pre-v3 state requires a backup and coordinated re-genesis` (independently checked against the actual main `526a721` export with this review's exact frozen plain container; the future released P4 binary remains an execution gate); Task 67's offline replay checks both directions over the devnet2 voter copies.
 - **Plain body only.** The writer always frames the plain body. `Persist` streams `Snapshot`'s bytes in this task; Task 67 makes it write the verified interned body in `auto` mode. Every v21 test of this task therefore reads the plain container through `writeSnapshot` (`plainSnapshotBytes`), never through `Persist`, and tests kinds 2 and 255 as unknown (kind 1 is Task 67's), so Task 67 edits none of them; `restoreInto` keeps working on either body.
 - **Restore order.** `validateStage3State` runs inside `readSnapshotMeasured` right after `validateTrackState`, before `validateRestoredState`, so its refusals name the stage-3 rule; `validateConsensusHistory` later replays the signed updates and Task 64's Params-only rules. `validateStage3Activation` checks, in this order: state exactly with the parameter; the activation epoch against the first update that set `stage3` (none sets it: no epoch, 0 included, is the history's); the activation block and promotion within the state; every cutover names a switch that is on (a name that is no switch of spec §10.4 is not a switch that is on, so `stage3SwitchValue` never sees it and never panics); every switch that is on has a cutover; strict §10.4 order (which also refuses a repeated cutover); then per cutover its epoch (the first update whose `stage3` has the switch on; none: no epoch is the history's), its block and promotion not below the previous cutover's (the activation's for the first) and not beyond the state, and the incarnation seq rule (`1..len(Incarnations)+1`, the sequence the registry would assign next, for `purge` only). The upper bound is not in contract §46; it is added so that a forged cutover beyond the chain cannot disable the later restore rules that compare blocks with a cutover (Task 70's `validateStage3Selection`, Plan S3-E3's).
-- **Why a dedicated golden network.** `stage3FSM` inherits `authorityFixture`'s random authority key (`fsm/promotion_test.go:16`), `siEntry`'s enrolment signed at the current time (`fsm/signed_claims_params_test.go:34-49`), and after the tracks activation the FSM keeps each source acknowledgement's token (`PendingPromotion.AckJWS`, `fsm/apply.go:932`), which `sourceAck` signs at the current time. `stage3V21GoldenFSM` therefore builds the same network as `stage3FSM` (claimsFSM's registry and seed, indexer 1's SNode `s1` and indexer 0's `s0` at activation block 150, verifiers `v1..v3`, `db0.x` added through the published transition block 1, the tracks activation, the stage-3 activation with `stage3ActivationParams`) under `legacyGoldenAuthorityHex`, `fixedEnrollmentEntry` and `fixedClient`, and signs each acknowledgement at `authoritytest.Iat`; it then passes one block of indexer 1 and one of indexer 0 (admitted, sealed, claimed, verified, final, promoted, acknowledged, published). The file is captured on the branch after Tasks 64 and 65, so whatever they commit for the activation (Task 65's registry-version bump included) is part of it; with every switch off Tasks 67–70 and Plans S3-E3 and S3-E4 must leave it byte-identical, which is why it is frozen. Drafted against stand-ins of Tasks 64 and 65, the container was 175302 bytes, and a capture and a later run were byte-identical.
+- **Why a dedicated golden network.** `stage3FSM` inherits `authorityFixture`'s random authority key (`fsm/promotion_test.go`), `siEntry`'s enrolment signed at the current time (`fsm/signed_claims_params_test.go`), and after the tracks activation the FSM keeps each source acknowledgement's token (`PendingPromotion.AckJWS`, `fsm/apply.go`), which `sourceAck` signs at the current time. `stage3V21GoldenFSM` therefore builds the same network as `stage3FSM` (claimsFSM's registry and seed, indexer 1's SNode `s1` and indexer 0's `s0` at activation block 150, verifiers `v1..v3`, `db0.x` added through the published transition block 1, the tracks activation, the stage-3 activation with `stage3ActivationParams`) under `legacyGoldenAuthorityHex`, `fixedEnrollmentEntry` and `fixedClient`, and signs each acknowledgement at `authoritytest.Iat`; it then passes one block of indexer 1 and one of indexer 0 (admitted, sealed, claimed, verified, final, promoted, acknowledged, published). The file is captured on the branch after Tasks 64 and 65, so whatever they commit for the activation (Task 65's registry-version bump included) is part of it; with every switch off Tasks 67–70 and Plans S3-E3 and S3-E4 must leave it byte-identical, which is why it is frozen. Drafted against stand-ins of Tasks 64 and 65, the container was 175302 bytes, and a capture and a later run were byte-identical.
 - **Existing tests this task edits** (none is a golden or vector file): `rewriteSnapshotDocument` becomes envelope-aware, so Tasks 67–70 and Plan S3-E3 can forge v21 documents with it; `TestArtifactDispositionCapacityDuplicateAllowanceKeyRejectsBeforeStateMutation` hand-builds a 13-byte envelope for `snapshotVersion` and now builds each version's envelope (v20 added to its list); `TestRestoreRejectsOversizedLengthPrefix` moves from `snapshotVersion` to `snapshotVersionV20`, because under 21 its sixth byte is a kind byte (`TestRestoreRejectsAnOversizedV21LengthPrefix` covers v21); `TestSnapshotRefusesFrontierlessDrainingRecordAndAcceptsV9` pins the newest version, now 21; `TestSnapshotRefusesTheNextVersion` moves one version up, to 22. Each of these fails without its edit once `snapshotVersion` is 21 (checked while drafting). The read-cap case of Plan S3-A's `TestFailedRestoreKeepsThePreviousSample` moves to `snapshotVersionV20` too: under 21 it would still be refused, by the unknown body kind 255, so it would pass but no longer test the read cap.
 - **Budget estimators.** The cross-plan budget rule and Plan S3-B §13.4's estimator read `AFSM`, the version byte and an 8-byte length at offset 5; from the activation a voter's `state.bin` has the kind byte at offset 5 and the length at offset 6. This plan runs no runbook; Plan S3-E4 Task 81's v21 runbook reads `snapshotEnvelopeBytes`'s framing.
-- **Checked while drafting** (2026-10-16, Appendix B): every hunk and file below was applied, in step order, to a `git archive` export of arbiter `526a721` carrying stand-ins of Tasks 64 and 65 (their drafted fsm code, Task 64's pin-fallout test map and Task 65's README section), built against stand-ins of `PROTO_TAG_P5` (contract §39, regenerated) and `CORE_TAG_P5` (contract §41's types, wire converters and verifier normalization) through `replace` directives, with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`. A script applied every Replace/with pair of Steps 3, 5, 6, 7, 9 and 12 to the base files and reproduced the tested tree byte for byte. Observed: Step 4's build failure, Step 10's single golden failure (21 other tests passing), Step 11's capture (`65 70 83 77 21 0`) and its later pass, `gofmt` and `go vet ./...` clean, `go test -race ./...` passing, no `time.Now` in `fsm/` and no arbiter-proto import in the fsm library; 20 single-point mutations each failing a named test (the verifiers-field predicate, the bootstrap and signed-update halves of `stage3FieldsPresent`, the pre-v21 refusal, the kind check, the writer's version choice, `snapshotDocument`'s `Stage3`, `snapshotEnvelopeBytes`, the state-exactly-with-parameter rule, both epoch-0 cases, the switch-is-on rule, the order, the precedes, upper-bound and activation-bound checks, the incarnation-seq lower bound, the bootstrap refusal, and both state-size envelopes); the `526a721` export refuses the captured container with the text above. Gazelle ran offline (Go modules served from the local module cache) and wrote exactly Step 13's `fsm/BUILD.bazel` lines; `bazel build` and `bazel test` were not run, because the P5 modules exist only as local stand-ins.
+- **Runtime review (2026-10-18).** Exact tests before implementation fail for missing v21 APIs; after the literal implementation the named tests fail only for the absent new golden. The plain golden is then captured exclusively once (175302 bytes; SHA256 `89707ed2f9a9ebb7017e23ce9c3be9390dbb2369d197b356a63b29285c1dbb96`), independently passes without capture, and refuses a repeated capture without changing its hash. An actual `526a721` main export refuses that exact container at version 21. Final whole Go race passes with 22 tested packages, three no-test packages and 19 explicit environmental test skips; these skips are not live validation. The review closes two test coverage gaps: every stage-3 verifier field in the bootstrap list as well as current/signed-update parameters, and promotion cutover bounds independently of block bounds using real promoted and cleaned state. Thirty-five distinct runtime mutants have explicit target-assertion failures; compiler failures and an initial incomplete fixture are excluded. The Go golden helper uses exclusive create with explicit write/close checks, and the base receipt refuses existing/dangling paths and uses noclobber for the final write. Canonical offline Bazel builds 50 targets and reports 22/22 passing ordinary and race targets (10 executed, 12 cached in each run); the FSM tests execute with the new capture controls. Gazelle and the direct-dependency query pass, and replay of every final hunk plus the canonical generated Gazelle runner reproduces all 628 source files byte for byte. No Docker, live endpoint, release or ledger action is part of that local proof.
 
 - [ ] **Step 1: Base check**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" rev-parse --abbrev-ref HEAD && git -C "$W" status --porcelain && git -C "$W" log -1 --format=%s && test ! -e "$W/fsm/testdata/stage3_v21_plain.snapshot" && test ! -e "$W/fsm/stage3_restore.go" && test ! -e "$W/fsm/snapshot_v21_test.go" && cd "$W" && grep -c '^func containerStateSize' fsm/state_size.go && grep -c '^func activateStage3(' fsm/stage3_fixture_test.go && grep -c '^func turnOnStage3Switch(' fsm/stage3_fixture_test.go && grep -c 'snapshotVersion       = 20$' fsm/snapshot.go && GOWORK=off go test ./fsm/ -count=1`
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "dirty worktree before Task66; stop" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s)" || exit 1
+case "$subject" in 'feat(stage3): arbiter-admin consensus update --stage3, --stage3-switch and host-bound --verifier (Task 65)') ;; *) echo "HEAD is not the final Task65 commit; stop" >&2; exit 1 ;; esac
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "unexpected predecessor author/signature; stop" >&2; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
+[ ! -e "$T64/task66-base-sha" ] && [ ! -L "$T64/task66-base-sha" ] || { echo "Task66 evidence already exists; stop and reconcile the saved attempt" >&2; exit 1; }
+for path in fsm/testdata/stage3_v21_plain.snapshot fsm/stage3_restore.go fsm/snapshot_v21_test.go; do
+  [ ! -e "$W/$path" ] && [ ! -L "$W/$path" ] || { echo "Task66 output already exists; stop" >&2; exit 1; }
+done
+cd "$W" || exit 1
+count="$(grep -c '^func containerStateSize' fsm/state_size.go)" || exit 1
+[ "$count" = 1 ] || exit 1
+count="$(grep -c '^func activateStage3(' fsm/stage3_fixture_test.go)" || exit 1
+[ "$count" = 1 ] || exit 1
+count="$(grep -c '^func turnOnStage3Switch(' fsm/stage3_fixture_test.go)" || exit 1
+[ "$count" = 1 ] || exit 1
+count="$(grep -c 'snapshotVersion       = 20$' fsm/snapshot.go)" || exit 1
+[ "$count" = 1 ] || exit 1
+go test ./fsm/ -count=1 || exit 1
+base="$(git -C "$W" rev-parse HEAD)" || exit 1
+( set -o noclobber; printf '%s\n' "$base" > "$T64/task66-base-sha" ) || exit 1
+printf '%s\n' "Task65 signed predecessor and Task66 interfaces verified"
+```
 
-Expected: `urwt/claude/multi-source-s3e`, an empty status, the subject of Task 65's last commit (it ends with `(Task 65)`), `1`, `1`, `1`, `1`, and `ok  	github.com/sentioxyz/arbiter/fsm`. Stop if HEAD is not Task 65's last commit, the status is not empty, any of the three files already exists, or `snapshotVersion` is not 20.
+Expected: no status output; the signed poetry/G predecessor subject is exactly Task65's final CLI commit (the intermediate Task65 commits are refused); all four interface/version counts equal 1; the fsm package passes; then `Task65 signed predecessor and Task66 interfaces verified`. Any mismatch stops before Task66 edits. The observed predecessor SHA is retained for the final commit/golden checks; never invent or overwrite it.
 
 - [ ] **Step 2: Write the failing v21 tests**
 
@@ -6246,6 +6434,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -6460,11 +6650,22 @@ func TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted(t *testing.T) {
 func TestStage3V21PlainContainerGolden(t *testing.T) {
 	got := plainSnapshotBytes(t, stage3V21GoldenFSM(t))
 	if os.Getenv("ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN") == "1" {
-		if _, err := os.Stat(stage3V21PlainGoldenPath); err == nil {
-			t.Fatalf("%s exists; it is captured once and never rewritten", stage3V21PlainGoldenPath)
+		// Atomically refuse every existing leaf, including a dangling link or
+		// a path created after an earlier absence check. Never truncate it.
+		file, err := os.OpenFile(stage3V21PlainGoldenPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			t.Fatalf("%s must be newly captured once: %v", stage3V21PlainGoldenPath, err)
 		}
-		if err := os.WriteFile(stage3V21PlainGoldenPath, got, 0o644); err != nil {
-			t.Fatal(err)
+		n, writeErr := file.Write(got)
+		closeErr := file.Close()
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if n != len(got) {
+			t.Fatal(io.ErrShortWrite)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
 		}
 		t.Skip("captured; commit the file")
 	}
@@ -6608,6 +6809,14 @@ func TestRestoreRefusesStage3FieldsInAPreV21Container(t *testing.T) {
 					return v20Params(doc)["verifiers"].([]any)[0].(map[string]any)
 				},
 				"signed update": func(doc map[string]any) map[string]any { return last(doc)["verifiers"].([]any)[0].(map[string]any) },
+				"bootstrap": func(doc map[string]any) map[string]any {
+					entry := map[string]any{}
+					for key, value := range v20Params(doc)["verifiers"].([]any)[0].(map[string]any) {
+						entry[key] = value
+					}
+					doc["bootstrap_params"].(map[string]any)["verifiers"] = []any{entry}
+					return entry
+				},
 			} {
 				forged := rewriteSnapshotDocument(t, data, data[4], func(doc map[string]any) { entryOf(doc)[name] = value })
 				if _, err := readSnapshot(bytes.NewReader(forged)); err == nil || !strings.Contains(err.Error(), want) {
@@ -6799,12 +7008,55 @@ func TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys(t *testin
 		}, fmt.Sprintf("stage3 switch eviction_voiding cutover (block 0, promotion %d) precedes the previous cutover or the activation", voiding.PromotionSeq)},
 		{"a cutover beyond the chain", func(doc map[string]any) { v21Cutover(doc, 1)["block_seq"] = 99 },
 			fmt.Sprintf("stage3 switch eviction_voiding cutover (block 99, promotion %d) is beyond the state's (%d, %d)", voiding.PromotionSeq, blocks, f.st.PromotionSeq)},
+		{"a promotion beyond the sequence", func(doc map[string]any) { v21Cutover(doc, 1)["promotion_seq"] = 99 },
+			fmt.Sprintf("stage3 switch eviction_voiding cutover (block %d, promotion 99) is beyond the state's (%d, %d)", voiding.BlockSeq, blocks, f.st.PromotionSeq)},
 		{"an incarnation seq on another switch", func(doc map[string]any) { v21Cutover(doc, 1)["incarnation_seq"] = 1 },
 			"stage3 switch eviction_voiding cutover carries an incarnation seq"},
 		{"a purge cutover without an incarnation seq", func(doc map[string]any) { delete(v21Cutover(doc, 0), "incarnation_seq") },
 			fmt.Sprintf("stage3 purge cutover incarnation seq 0 is outside 1..%d", incarnations+1)},
 		{"a purge cutover beyond the next incarnation", func(doc map[string]any) { v21Cutover(doc, 0)["incarnation_seq"] = incarnations + 2 },
 			fmt.Sprintf("stage3 purge cutover incarnation seq %d is outside 1..%d", incarnations+2, incarnations+1)},
+	} {
+		forged := rewriteSnapshotDocument(t, plain, snapshotVersionV21, tc.mutate)
+		if _, err := readSnapshot(bytes.NewReader(forged)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: readSnapshot = %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// TestValidateStage3StateRefusesRegressingCutoverPromotions uses actual
+// published promotions, so the promotion predicate is tested independently
+// of the block predicate, against both activation and previous cutovers.
+func TestValidateStage3StateRefusesRegressingCutoverPromotions(t *testing.T) {
+	f := stage3V21GoldenFSM(t)
+	a, err := authority.NewSignerFromHex(legacyGoldenAuthorityHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p := uint64(1); p <= f.st.PromotionSeq; p++ {
+		cleanTrackPromotion(t, f, a, p)
+	}
+	turnOnStage3Switch(t, f, a, Stage3SwitchPurge)
+	turnOnStage3Switch(t, f, a, Stage3SwitchEvictionVoiding)
+	plain := plainSnapshotBytes(t, f)
+	if _, err := readSnapshot(bytes.NewReader(plain)); err != nil {
+		t.Fatalf("unedited promoted container refused: %v", err)
+	}
+	if f.st.PromotionSeq != 2 || f.st.Stage3.Switches[0].PromotionSeq != 2 || f.st.Stage3.Switches[1].PromotionSeq != 2 {
+		t.Fatalf("fixture must have two real promotions before both cutovers: %+v", f.st.Stage3)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{"before activation", func(doc map[string]any) {
+			v21Stage3(doc)["activation_promotion_seq"] = 1
+			v21Cutover(doc, 0)["promotion_seq"] = 0
+		},
+			fmt.Sprintf("stage3 switch purge cutover (block %d, promotion 0) precedes the previous cutover or the activation", f.st.Stage3.Switches[0].BlockSeq)},
+		{"before previous cutover", func(doc map[string]any) { v21Cutover(doc, 1)["promotion_seq"] = 1 },
+			fmt.Sprintf("stage3 switch eviction_voiding cutover (block %d, promotion 1) precedes the previous cutover or the activation", f.st.Stage3.Switches[1].BlockSeq)},
 	} {
 		forged := rewriteSnapshotDocument(t, plain, snapshotVersionV21, tc.mutate)
 		if _, err := readSnapshot(bytes.NewReader(forged)); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -6875,11 +7127,95 @@ func TestCountSnapshotEncodingMatchesTheV21Writer(t *testing.T) {
 		t.Fatalf("v20 dimensions = %+v, document %d", dims, n)
 	}
 }
+
+// TestStage3V21PlainGoldenCaptureDoesNotOverwriteExistingPath runs the real
+// capture test in an owned temporary working directory. Existing files and
+// either kind of symlink must refuse, never SKIP as if a capture succeeded.
+func TestStage3V21PlainGoldenCaptureDoesNotOverwriteExistingPath(t *testing.T) {
+	for _, kind := range []string{"fresh", "regular", "symlink", "dangling", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "testdata"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, stage3V21PlainGoldenPath)
+			target := filepath.Join(root, "untouched-target")
+			sentinel := []byte("owned synthetic capture sentinel\n")
+			switch kind {
+			case "regular":
+				if err := os.WriteFile(path, sentinel, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling":
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStage3V21PlainContainerGolden$", "-test.v")
+			cmd.Dir = root
+			// Keep Bazel runfiles/filter variables out of the child so the
+			// actual capture executes in this owned working directory.
+			cmd.Env = []string{"ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1"}
+			output, err := cmd.CombinedOutput()
+			if kind == "fresh" {
+				if err != nil || !bytes.Contains(output, []byte("--- SKIP: TestStage3V21PlainContainerGolden")) {
+					t.Fatalf("fresh owned capture did not complete: %v\n%s", err, output)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || !bytes.HasPrefix(data, []byte{'A', 'F', 'S', 'M', 21, 0}) {
+					t.Fatalf("fresh capture did not write its owned plain path: %v", err)
+				}
+				return
+			}
+			if err == nil || !bytes.Contains(output, []byte("--- FAIL: TestStage3V21PlainContainerGolden")) || bytes.Contains(output, []byte("--- SKIP:")) {
+				t.Fatalf("capture over %s did not fail closed: %v\n%s", kind, err, output)
+			}
+			switch kind {
+			case "regular":
+				data, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(data, sentinel) {
+					t.Fatalf("existing golden changed: %v", err)
+				}
+			case "symlink":
+				data, err := os.ReadFile(target)
+				if err != nil || !bytes.Equal(data, sentinel) {
+					t.Fatalf("symlink target changed: %v", err)
+				}
+			case "dangling":
+				if _, err := os.Lstat(target); !os.IsNotExist(err) {
+					t.Fatalf("dangling target was created: %v", err)
+				}
+			case "directory":
+				info, err := os.Stat(path)
+				if err != nil || !info.IsDir() {
+					t.Fatalf("existing directory changed: %v", err)
+				}
+			}
+			if kind == "symlink" || kind == "dangling" {
+				got, err := os.Readlink(path)
+				if err != nil || got != target {
+					t.Fatalf("capture link changed: %q %v", got, err)
+				}
+			}
+		})
+	}
+}
 ```
 
 - [ ] **Step 3: Adapt the existing tests that frame containers by hand**
 
-In `fsm/apply_artifact_disposition_test.go` (`:721-747`), make `rewriteSnapshotDocument` read and write each side's envelope.
+In `fsm/apply_artifact_disposition_test.go` (the named functions), make `rewriteSnapshotDocument` read and write each side's envelope.
 
 Replace
 
@@ -6959,7 +7295,7 @@ func rewriteSnapshotDocument(t *testing.T, data []byte, version byte, mutate fun
 }
 ```
 
-In `fsm/artifact_capacity_test.go` (`:207-213`), build each version's envelope and list v20 explicitly.
+In `fsm/artifact_capacity_test.go` (the named functions), build each version's envelope and list v20 explicitly.
 
 Replace
 
@@ -6988,7 +7324,7 @@ with
 			copy(data[header:], doc)
 ```
 
-In `fsm/snapshot_test.go`, `TestRestoreRejectsOversizedLengthPrefix` (`:192`) keeps testing the 13-byte envelope:
+In `fsm/snapshot_test.go`, `TestRestoreRejectsOversizedLengthPrefix` (the named functions) keeps testing the 13-byte envelope:
 
 Replace
 
@@ -7002,7 +7338,7 @@ with
 	buf := []byte{'A', 'F', 'S', 'M', snapshotVersionV20, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 ```
 
-and `TestSnapshotRefusesFrontierlessDrainingRecordAndAcceptsV9` (`:255`) pins the newest version:
+and `TestSnapshotRefusesFrontierlessDrainingRecordAndAcceptsV9` (the named functions) pins the newest version:
 
 Replace
 
@@ -7016,7 +7352,7 @@ with
 	if data[4] != snapshotVersionV14 || snapshotVersion != 21 {
 ```
 
-In `fsm/snapshot_tracks_test.go` (`:310-318`), `TestSnapshotRefusesTheNextVersion` moves one version up:
+In `fsm/snapshot_tracks_test.go` (the named functions), `TestSnapshotRefusesTheNextVersion` moves one version up:
 
 Replace
 
@@ -7046,7 +7382,7 @@ func TestSnapshotRefusesTheNextVersion(t *testing.T) {
 }
 ```
 
-In `fsm/state_size_test.go`, `TestStateComponentsListEverySnapshotDocMember` (`:27-28`) lists the new member:
+In `fsm/state_size_test.go`, `TestStateComponentsListEverySnapshotDocMember` (the named functions) lists the new member:
 
 Replace
 
@@ -7062,7 +7398,7 @@ with
 		"stage3", "spent_ids",
 ```
 
-and the read-cap case of `TestFailedRestoreKeepsThePreviousSample` (`:236`) keeps the 13-byte envelope:
+and the read-cap case of `TestFailedRestoreKeepsThePreviousSample` (the named functions) keeps the 13-byte envelope:
 
 Replace
 
@@ -7078,7 +7414,7 @@ with
 
 - [ ] **Step 4: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run 'TestSnapshotWritesV20UntilStage3IsCommitted|TestValidateStage3State' -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && go test ./fsm/ -run 'TestSnapshotWritesV20UntilStage3IsCommitted|TestValidateStage3State' -count=1 || exit 1`
 
 Expected: the package fails to build:
 
@@ -7103,7 +7439,7 @@ FAIL
 
 - [ ] **Step 5: Implement the v21 envelope length**
 
-In `fsm/snapshot_count.go`, the `SnapshotEncodingDimensions` comment (`:17-19`):
+In `fsm/snapshot_count.go`, the `SnapshotEncodingDimensions` comment (the named functions):
 
 Replace
 
@@ -7121,7 +7457,7 @@ with
 // but deliberately excludes the separately encoded SpentIDs tail.
 ```
 
-The constants (`:39-42`):
+The constants (the named functions):
 
 Replace
 
@@ -7152,7 +7488,7 @@ func snapshotEnvelopeBytes(version byte) uint64 {
 }
 ```
 
-In `CountSnapshotEncoding`, the overflow check (`:66-68`):
+In `CountSnapshotEncoding`, the overflow check (the named functions):
 
 Replace
 
@@ -7171,7 +7507,7 @@ with
 	}
 ```
 
-and the result (`:98`):
+and the result (the named functions):
 
 Replace
 
@@ -7187,7 +7523,7 @@ with
 
 - [ ] **Step 6: Implement the v21 writer and reader**
 
-In `fsm/snapshot.go`, the imports (`:8-9`; Plan S3-A Task 9 added `sync/atomic` after `io`):
+In `fsm/snapshot.go`, the imports (the named functions; Plan S3-A Task 9 added `sync/atomic` after `io`):
 
 Replace
 
@@ -7204,7 +7540,7 @@ with
 	"sync/atomic"
 ```
 
-The version comment (`:21-25`):
+The version comment (the named functions):
 
 Replace
 
@@ -7228,7 +7564,7 @@ with
 // Params.ClientLanes is committed
 ```
 
-The end of that comment and the first constants (`:37-42`):
+The end of that comment and the first constants (the named functions):
 
 Replace
 
@@ -7256,7 +7592,7 @@ const (
 	snapshotVersionV20    = 20
 ```
 
-After the version constants (`:59-61`), the body kinds:
+After the version constants (the named functions), the body kinds:
 
 Replace
 
@@ -7284,7 +7620,7 @@ const (
 )
 ```
 
-The last member of `snapshotDoc` (`:106-108`):
+The last member of `snapshotDoc` (the named functions):
 
 Replace
 
@@ -7307,7 +7643,7 @@ with
 }
 ```
 
-In `writeSnapshot` (`:177-180`), the kind byte after the version byte:
+In `writeSnapshot` (the named functions), the kind byte after the version byte:
 
 Replace
 
@@ -7335,7 +7671,7 @@ with
 	var lenBuf [8]byte
 ```
 
-The `snapshotWriteVersion` comment (`:191-192`):
+The `snapshotWriteVersion` comment (the named functions):
 
 Replace
 
@@ -7352,7 +7688,7 @@ with
 // once si_indexers is committed,
 ```
 
-and its first rule (`:198-199`):
+and its first rule (the named functions):
 
 Replace
 
@@ -7371,7 +7707,7 @@ func snapshotWriteVersion(st *State) byte {
 	if st.Params.TracksEnabled {
 ```
 
-In `snapshotDocument` (`:244-246`):
+In `snapshotDocument` (the named functions):
 
 Replace
 
@@ -7390,7 +7726,7 @@ with
 }
 ```
 
-In `readSnapshotMeasured`, the version whitelist and its refusal (`:285-287`), followed by the kind byte:
+In `readSnapshotMeasured`, the version whitelist and its refusal (the named functions), followed by the kind byte:
 
 Replace
 
@@ -7420,7 +7756,7 @@ with
 	}
 ```
 
-The duplicate-allowance predicate (`:303`):
+The duplicate-allowance predicate (the named functions):
 
 Replace
 
@@ -7434,7 +7770,7 @@ with
 	if ver[0] == snapshotVersion || ver[0] == snapshotVersionV20 || ver[0] == snapshotVersionV19 || ver[0] == snapshotVersionV18 || ver[0] == snapshotVersionV17 || ver[0] == snapshotVersionV16 || ver[0] == snapshotVersionV15 || ver[0] == snapshotVersionV14 || ver[0] == snapshotVersionV13 || ver[0] == snapshotVersionV12 || ver[0] == snapshotVersionV11 || ver[0] == snapshotVersionV10 || ver[0] == snapshotVersionV9 || ver[0] == snapshotVersionV8 || ver[0] == snapshotVersionV7 {
 ```
 
-The bootstrap-params predicate (`:318`):
+The bootstrap-params predicate (the named functions):
 
 Replace
 
@@ -7448,7 +7784,7 @@ with
 	if (ver[0] == snapshotVersion || ver[0] == snapshotVersionV20 || ver[0] == snapshotVersionV19 || ver[0] == snapshotVersionV18 || ver[0] == snapshotVersionV17 || ver[0] == snapshotVersionV16 || ver[0] == snapshotVersionV15 || ver[0] == snapshotVersionV14 || ver[0] == snapshotVersionV13 || ver[0] == snapshotVersionV12 || ver[0] == snapshotVersionV11 || ver[0] == snapshotVersionV10 || ver[0] == snapshotVersionV9 || ver[0] == snapshotVersionV8 || ver[0] == snapshotVersionV7 || ver[0] == snapshotVersionV6 || ver[0] == snapshotVersionV5 || ver[0] == snapshotVersionV4) && doc.BootstrapParams == nil {
 ```
 
-The artifact-disposition predicate (`:426`):
+The artifact-disposition predicate (the named functions):
 
 Replace
 
@@ -7462,7 +7798,7 @@ with
 	if ver[0] == snapshotVersion || ver[0] == snapshotVersionV20 || ver[0] == snapshotVersionV19 || ver[0] == snapshotVersionV18 || ver[0] == snapshotVersionV17 || ver[0] == snapshotVersionV16 || ver[0] == snapshotVersionV15 || ver[0] == snapshotVersionV14 || ver[0] == snapshotVersionV13 || ver[0] == snapshotVersionV12 || ver[0] == snapshotVersionV11 || ver[0] == snapshotVersionV10 || ver[0] == snapshotVersionV9 || ver[0] == snapshotVersionV8 || ver[0] == snapshotVersionV7 || ver[0] == snapshotVersionV6 || ver[0] == snapshotVersionV5 {
 ```
 
-After `validateTrackState` (`:504-507`), the stage-3 forged-field refusal and the restore rules:
+After `validateTrackState` (the named functions), the stage-3 forged-field refusal and the restore rules:
 
 Replace
 
@@ -7496,7 +7832,7 @@ with
 	}
 ```
 
-Before `tableRegistryHasV17Fields` (`:723-724`), the stage-3 field predicates:
+Before `tableRegistryHasV17Fields` (the named functions), the stage-3 field predicates:
 
 Replace
 
@@ -7544,7 +7880,7 @@ func verifierEntryHasStage3Fields(v arbiter.VerifierEntry) bool {
 
 - [ ] **Step 7: Read the v21 envelope in the state-size sample**
 
-In `fsm/state_size.go` (Plan S3-A Task 9), the `ContainerBytes` comment (`:56-57`):
+In `fsm/state_size.go` (Plan S3-A Task 9), the `ContainerBytes` comment (the named functions):
 
 Replace
 
@@ -7560,7 +7896,7 @@ with
 	// the envelope (13 bytes, 14 for v21), the document and the dump.
 ```
 
-`containerStateSize` and `stateSizeSample` (`:114-142`):
+`containerStateSize` and `stateSizeSample` (the named functions):
 
 Replace
 
@@ -7636,7 +7972,7 @@ func stateSizeSample(source string, envelopeBytes, docBytes, spentIDsBytes uint6
 }
 ```
 
-In `fsm/snapshot.go`, Plan S3-A Task 9's restore sample at the end of `readSnapshotMeasured` (`:656`):
+In `fsm/snapshot.go`, Plan S3-A Task 9's restore sample at the end of `readSnapshotMeasured` (the named functions):
 
 Replace
 
@@ -7763,7 +8099,7 @@ func validateStage3Activation(st *State) error {
 
 - [ ] **Step 9: Refuse stage3 in the bootstrap parameters**
 
-In `fsm/consensus_history.go`, `validateConsensusHistory` (`:31-33`):
+In `fsm/consensus_history.go`, `validateConsensusHistory` (the named functions):
 
 Replace
 
@@ -7786,7 +8122,7 @@ with
 
 - [ ] **Step 10: Run the tests; only the golden file is missing**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l fsm)" && GOWORK=off go vet ./fsm/ && GOWORK=off go test ./fsm/ -run 'TestSnapshotWritesV20UntilStage3IsCommitted|TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreReadsEveryEarlierVersionUnchanged|TestRestoreRefusesStage3FieldsInAPreV21Container|TestRestoreRefusesAnUnknownV21BodyKind|TestRestoreRejectsAnOversizedV21LengthPrefix|TestBootstrapParamsNeverCarryStage3|TestValidateStage3State|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncoding|TestStateComponentsListEverySnapshotDocMember|TestFailedRestoreKeepsThePreviousSample|TestSnapshotRefusesTheNextVersion|TestRestoreRejectsOversizedLengthPrefix|TestSnapshotRefusesFrontierlessDrainingRecordAndAcceptsV9|TestArtifactDispositionCapacityDuplicateAllowanceKey' -race -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && formatting="$(gofmt -l fsm)" && test -z "$formatting" && go vet ./fsm/ && go test ./fsm/ -run 'TestSnapshotWritesV20UntilStage3IsCommitted|TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreReadsEveryEarlierVersionUnchanged|TestRestoreRefusesStage3FieldsInAPreV21Container|TestRestoreRefusesAnUnknownV21BodyKind|TestRestoreRejectsAnOversizedV21LengthPrefix|TestBootstrapParamsNeverCarryStage3|TestValidateStage3State|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncoding|TestStateComponentsListEverySnapshotDocMember|TestFailedRestoreKeepsThePreviousSample|TestSnapshotRefusesTheNextVersion|TestRestoreRejectsOversizedLengthPrefix|TestSnapshotRefusesFrontierlessDrainingRecordAndAcceptsV9|TestArtifactDispositionCapacityDuplicateAllowanceKey' -race -count=1 || exit 1`
 
 Expected: gofmt lists nothing and vet is clean; the only failure is
 
@@ -7802,15 +8138,15 @@ Rerun with `-v` (`… -count=1 -v 2>&1 | grep -E '^--- '`) to see the other 21 t
 
 - [ ] **Step 11: Capture the plain v21 golden, once**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test ! -e fsm/testdata/stage3_v21_plain.snapshot && env ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1 GOWORK=off go test ./fsm/ -run '^TestStage3V21PlainContainerGolden$' -count=1 -v && od -An -tu1 -N6 fsm/testdata/stage3_v21_plain.snapshot && shasum -a 256 fsm/testdata/stage3_v21_plain.snapshot`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && test ! -e fsm/testdata/stage3_v21_plain.snapshot && test ! -L fsm/testdata/stage3_v21_plain.snapshot && env ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1 go test ./fsm/ -run '^TestStage3V21PlainContainerGolden$' -count=1 -v && od -An -tu1 -N6 fsm/testdata/stage3_v21_plain.snapshot && shasum -a 256 fsm/testdata/stage3_v21_plain.snapshot > "$T64/task66-plain-golden.sha256" && cat "$T64/task66-plain-golden.sha256" || exit 1`
 
-Expected: `snapshot_v21_test.go:230: captured; commit the file` and `--- SKIP: TestStage3V21PlainContainerGolden`, then `65 70 83 77 21 0` (`AFSM`, version 21, plain body), then the file's SHA-256 (Step 14 prints it again after the commit; the two must match). Then, in a new Bash call at least a few seconds later (a token signed with the clock would differ by then), run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^TestStage3V21PlainContainerGolden$' -count=1 -v`
+Expected: `snapshot_v21_test.go:230: captured; commit the file` and `--- SKIP: TestStage3V21PlainContainerGolden`, then `65 70 83 77 21 0` (`AFSM`, version 21, plain body), then the file's SHA-256 (Step 14 prints it again after the commit; the two must match). Then, in a new Bash call at least a few seconds later (a token signed with the clock would differ by then), run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" && go test ./fsm/ -run '^TestStage3V21PlainContainerGolden$' -count=1 -v > "$T64/task66-golden-pass.log" 2>&1 && cat "$T64/task66-golden-pass.log" && grep -Eq '^--- PASS: TestStage3V21PlainContainerGolden ' "$T64/task66-golden-pass.log" && ! grep -Eq '^--- (FAIL|SKIP): TestStage3V21PlainContainerGolden ' "$T64/task66-golden-pass.log" || exit 1`
 
 Expected: `--- PASS: TestStage3V21PlainContainerGolden`. If it fails, the fixture is not reproducible: delete the file (`rm -- "$W/fsm/testdata/stage3_v21_plain.snapshot"`, a file this task created and nothing committed), find the unfixed signature, and repeat this step; never commit a golden that does not pass a later run.
 
 - [ ] **Step 12: Document snapshot v21**
 
-In `README.md`, the end of the **Snapshot versions:** paragraph (`:300`):
+In `README.md`, the end of the **Snapshot versions:** paragraph (the named functions):
 
 Replace
 
@@ -7824,13 +8160,13 @@ with
 and **v20** once `tracks_enabled` is committed (see Multi-source storage integrity (tracks and quarantine) below), and **v21** once `stage3` is committed (see Snapshot v21 below).
 ```
 
-Immediately before `## Artifact disposition admission` (`:396` at `526a721`; on the branch the heading follows Task 65's `## Multi-source storage integrity (stage-3 activation)` section, so this paragraph closes that section), insert this paragraph (a single line) followed by a blank line:
+Immediately before `## Artifact disposition admission` (the named functions at `526a721`; on the branch the heading follows Task 65's `## Multi-source storage integrity (stage-3 activation)` section, so this paragraph closes that section), insert this paragraph (a single line) followed by a blank line:
 
 ```markdown
 **Snapshot v21** (housegate spec 2026-10-14 §10.3, Plan S3-E2). The container moves to v21 only once `stage3` is committed, by the stage-3 activation; until then the writer keeps v14 to v20 byte for byte, so every voter can return to the stage-2 release until the activation. v21 frames its body with a body-kind byte after the version byte: `AFSM`, `21`, the kind, the 8-byte big-endian body length, the body and the spent-ids dump (a 14-byte envelope; v3 to v20 have 13 bytes). Kind 0 is the plain body, exactly the JSON document v20 lays out plus its last member `stage3` (the activation epoch, block and promotion, and one cutover per switch turned on, in spec §10.4 order); v21 also carries the `stage3` parameter and the host-bound `verifiers` fields. A pre-v21 binary refuses a v21 container at its version byte, stage-3 state under an older version byte is refused as forged (`stage3 state is present in a pre-v21 container`), an unknown body kind is refused (`unsupported snapshot v21 body kind N`), `stage3` in the bootstrap parameters is refused, and restore checks the stage-3 state against the signed history (`stage3 state must exist exactly when stage3 is committed` and the cutover rules of `fsm/stage3_restore.go`). The activation is irreversible.
 ```
 
-In Plan S3-A Task 9's **State size and snapshots** paragraph (`:429` at `526a721`; further down on the branch, below Task 65's section):
+In Plan S3-A Task 9's **State size and snapshots** paragraph (the named functions at `526a721`; further down on the branch, below Task 65's section):
 
 Replace
 
@@ -7847,35 +8183,97 @@ with
 Run:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-cd "$W" && grep -c '^\*\*Snapshot v21\*\*' README.md && grep -c 'and \*\*v21\*\* once `stage3` is committed (see Snapshot v21 below)' README.md && grep -c '`challenge_counters` through `stage3`' README.md && grep -c '`challenge_counters` through `tracks`' README.md
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+python3 -I - README.md <<'TASK66_README' || exit 1
+import pathlib,sys
+text=pathlib.Path(sys.argv[1]).read_text()
+checks=[("**Snapshot v21**",1), ("and **v21** once `stage3` is committed (see Snapshot v21 below)",1), ("`challenge_counters` through `stage3`",1), ("`challenge_counters` through `tracks`",0)]
+for needle,want in checks:
+    got=text.count(needle)
+    if got!=want: raise SystemExit("README snapshot anchor count mismatch; stop")
+print("snapshot v21 README anchors verified")
+TASK66_README
 ```
 
-Expected: `1`, `1`, `1`, then `0` (and that last `grep -c` exits 1).
+Expected: `snapshot v21 README anchors verified` (counts 1, 1, 1, 0). Missing/unreadable README, missing/duplicate new anchors or a stale old anchor stops this step.
 
 - [ ] **Step 13: Full verification** (contract §48)
 
-Bazel and gazelle reuse the downloads of Task 64's pins; if either reports fetching anything, stop and ask for explicit confirmation in chat first (remote read).
+Bazel and gazelle reuse the downloads of Task64's pins with repository downloads disabled and every Go proxy/private bypass disabled. A missing offline dependency stops this task; obtain explicit user confirmation in chat before any separate remote read. The full Go race exit status is checked directly, never inferred from a grep pipeline or an unconditional success echo.
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go') fsm/stage3_restore.go fsm/snapshot_v21_test.go)" && echo gofmt-clean
-cd "$W" && GOWORK=off go vet ./... && echo vet-clean
-cd "$W" && GOWORK=off go test ./... -race -count=1 2>&1 | grep -E '^(--- FAIL|FAIL|panic)' || echo no-failures
-cd "$W" && bazel run //:gazelle && git diff -- fsm/BUILD.bazel && git status --short
-cd "$W" && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
-cd "$W" && git add -A fsm README.md && git diff --cached --exit-code --diff-filter=MDR -- fsm/testdata accumulator/testdata && git diff --exit-code --diff-filter=MDR "$(git merge-base HEAD origin/main)" HEAD -- fsm/testdata accumulator/testdata && echo goldens-untouched
-cd "$W" && bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; echo red-lines-checked
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatting="$(gofmt -l .)" || exit 1
+[ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; echo "Go formatting differs; stop" >&2; exit 1; }
+echo gofmt-clean
+go vet ./... || exit 1
+echo vet-clean
+go test ./... -race -count=1 > "$T64/task66-race.log" 2>&1 || { cat "$T64/task66-race.log"; exit 1; }
+cat "$T64/task66-race.log" || exit 1
+echo race-passed
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+git diff -- fsm/BUILD.bazel || exit 1
+git status --short || exit 1
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --build_tests_only --@rules_go//go/config:race //... --test_output=errors || exit 1
+bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)' > "$T64/task66-fsm-direct-deps.txt" || exit 1
+python3 -I - "$T64/task66-fsm-direct-deps.txt" "$W/fsm" <<'TASK66_RED_LINES' || exit 1
+import pathlib,sys
+labels=pathlib.Path(sys.argv[1]).read_text().splitlines()
+if not labels or not any(x.strip()=="//fsm:fsm" for x in labels): raise SystemExit("incomplete FSM dependency listing; stop")
+if any("com_github_sentioxyz_arbiter_proto" in x for x in labels): raise SystemExit("FSM directly imports arbiter-proto; stop")
+files=list(pathlib.Path(sys.argv[2]).rglob("*.go"))
+if not files: raise SystemExit("missing FSM Go sources; stop")
+if any("time.Now" in p.read_text() for p in files): raise SystemExit("FSM reads wall-clock time; stop")
+print("red-lines-checked")
+TASK66_RED_LINES
+git add -A fsm README.md || exit 1
+python3 -I - "$W" "$T64/task66-base-sha" <<'TASK66_GOLDENS' || exit 1
+import pathlib,re,subprocess,sys
+w=sys.argv[1]
+base=pathlib.Path(sys.argv[2]).read_text().strip()
+if re.fullmatch("[0-9a-f]{40}",base) is None: raise SystemExit("invalid retained Task65 SHA; stop")
+def git(*args): return subprocess.check_output(["git","-C",w,*args])
+if git("rev-parse","HEAD").decode().strip()!=base: raise SystemExit("HEAD changed since Task66 base check; stop")
+# Every existing golden/fixture is immutable; only this task's new plain file is added.
+changes=git("diff","--cached","--name-status","-z","--","fsm/testdata","accumulator/testdata").split(b"\0")
+if changes!=[b"A",b"fsm/testdata/stage3_v21_plain.snapshot",b""]: raise SystemExit("unexpected staged golden/fixture change; stop")
+# Keep the existing main-baseline frozen-file check, including type changes and copies.
+main=git("merge-base","HEAD","origin/main").decode().strip()
+subprocess.run(["git","-C",w,"diff","--exit-code","--diff-filter=CDMRTUXB",main,"HEAD","--","fsm/testdata","accumulator/testdata"],check=True)
+print("goldens-untouched")
+TASK66_GOLDENS
 ```
 
-Expected: `gofmt-clean`; `vet-clean`; `no-failures` (the frozen goldens `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the L3 preimage tests and Tasks 64–65's stage-3 tests included); the `fsm/BUILD.bazel` diff adds exactly `"stage3_restore.go",` to the `go_library` srcs (among the `stage3*.go` files Tasks 64 and 65 added, before `"state.go",`) and `"snapshot_v21_test.go",` to the `go_test` srcs (after `"snapshot_tracks_test.go",`), with no deps change (`data = glob(["testdata/**"])` already ships the golden), and `git status --short` lists ` M README.md`, ` M fsm/BUILD.bazel`, ` M fsm/apply_artifact_disposition_test.go`, ` M fsm/artifact_capacity_test.go`, ` M fsm/consensus_history.go`, ` M fsm/snapshot.go`, ` M fsm/snapshot_count.go`, ` M fsm/snapshot_test.go`, ` M fsm/snapshot_tracks_test.go`, ` M fsm/state_size.go`, ` M fsm/state_size_test.go`, `?? fsm/snapshot_v21_test.go`, `?? fsm/stage3_restore.go` and `?? fsm/testdata/stage3_v21_plain.snapshot`; Bazel builds and every test target passes under race (CI's command, `.github/workflows/ci.yml`); `goldens-untouched` (the only testdata change is the new file, staged as an addition); the red-line commands print only `red-lines-checked` (the fsm library imports no arbiter-proto and reads no wall clock).
+Expected: `gofmt-clean`; `vet-clean`; `race-passed` after the complete successful Go output (the frozen goldens `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the L3 preimage tests and Tasks 64–65's stage-3 tests included); the `fsm/BUILD.bazel` diff adds exactly `"stage3_restore.go",` to the `go_library` srcs (among the `stage3*.go` files Tasks 64 and 65 added, before `"state.go",`) and `"snapshot_v21_test.go",` to the `go_test` srcs (after `"snapshot_tracks_test.go",`), with no deps change (`data = glob(["testdata/**"])` already ships the golden), and `git status --short` lists ` M README.md`, ` M fsm/BUILD.bazel`, ` M fsm/apply_artifact_disposition_test.go`, ` M fsm/artifact_capacity_test.go`, ` M fsm/consensus_history.go`, ` M fsm/snapshot.go`, ` M fsm/snapshot_count.go`, ` M fsm/snapshot_test.go`, ` M fsm/snapshot_tracks_test.go`, ` M fsm/state_size.go`, ` M fsm/state_size_test.go`, `?? fsm/snapshot_v21_test.go`, `?? fsm/stage3_restore.go` and `?? fsm/testdata/stage3_v21_plain.snapshot`; Bazel builds and every test target passes under race (CI's command, `.github/workflows/ci.yml`); `goldens-untouched` (the only testdata change is the new file, staged as an addition); the explicit dependency/source gate prints `red-lines-checked` (the fsm library imports no arbiter-proto and reads no wall clock).
 
 - [ ] **Step 14: Commit**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" add fsm/snapshot.go fsm/snapshot_count.go fsm/state_size.go fsm/consensus_history.go fsm/stage3_restore.go fsm/snapshot_v21_test.go fsm/testdata/stage3_v21_plain.snapshot fsm/state_size_test.go fsm/apply_artifact_disposition_test.go fsm/artifact_capacity_test.go fsm/snapshot_test.go fsm/snapshot_tracks_test.go fsm/BUILD.bazel README.md
-git -C "$W" commit -m "feat(stage3): snapshot v21, the stage-3 restore rules and the frozen plain container (Task 66)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+base="$(cat "$T64/task66-base-sha")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$base" ] || { echo "HEAD changed since Task66 base check; stop" >&2; exit 1; }
+configured="$(git -C "$W" config --worktree user.name)" || exit 1
+[ "$configured" = poetry ] || exit 1
+configured="$(git -C "$W" config --worktree user.email)" || exit 1
+[ "$configured" = chen@sentio.xyz ] || exit 1
+configured="$(git -C "$W" config --worktree commit.gpgsign)" || exit 1
+[ "$configured" = true ] || exit 1
+saved_golden="$(cat "$T64/task66-plain-golden.sha256")" || exit 1
+current_golden="$(shasum -a 256 fsm/testdata/stage3_v21_plain.snapshot)" || exit 1
+[ "$saved_golden" = "$current_golden" ] || { echo "captured golden hash changed; stop" >&2; exit 1; }
+git -C "$W" add fsm/snapshot.go fsm/snapshot_count.go fsm/state_size.go fsm/consensus_history.go fsm/stage3_restore.go fsm/snapshot_v21_test.go fsm/testdata/stage3_v21_plain.snapshot fsm/state_size_test.go fsm/apply_artifact_disposition_test.go fsm/artifact_capacity_test.go fsm/snapshot_test.go fsm/snapshot_tracks_test.go fsm/BUILD.bazel README.md || exit 1
+git -C "$W" commit -S -m "feat(stage3): snapshot v21, the stage-3 restore rules and the frozen plain container (Task 66)
 
 Housegate spec 2026-10-14 §10.3 and clarification K70: once stage3 is
 committed the writer frames v21 (AFSM, 21, a body-kind byte, the body
@@ -7891,11 +8289,24 @@ v21 envelope, rewriteSnapshotDocument frames either envelope, and
 fsm/testdata/stage3_v21_plain.snapshot freezes the plain container of a
 reproducible stage-3 network.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" status --porcelain && git -C "$W" log --oneline -1 && git -C "$W" show --stat --format= HEAD | tail -1 && shasum -a 256 "$W/fsm/testdata/stage3_v21_plain.snapshot"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed Task66 commit failed; stop. If pinentry cancelled, ask the user to unlock the signing key in their own terminal; never disable signing" >&2; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$new_head" != "$base" ] || { echo "commit did not advance HEAD; stop" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || exit 1
+git -C "$W" verify-commit "$new_head" || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "worktree is dirty after Task66 commit; stop" >&2; exit 1; }
+current_golden="$(shasum -a 256 fsm/testdata/stage3_v21_plain.snapshot)" || exit 1
+[ "$saved_golden" = "$current_golden" ] || { echo "committed golden hash differs; stop" >&2; exit 1; }
+git -C "$W" log --oneline -1 || exit 1
+git -C "$W" show --stat --format= HEAD || exit 1
+printf '%s\n' "$current_golden"
+echo "Task66 signed commit and frozen golden verified"
 ```
 
-Expected: an empty status; the new commit `feat(stage3): snapshot v21, the stage-3 restore rules and the frozen plain container (Task 66)`; `14 files changed`; and the SHA-256 Step 11 printed. Nothing is pushed (Task 70's last step pushes the branch, contract §48). Task 67 starts from this commit.
+Expected: one new signed `poetry <chen@sentio.xyz> G` commit, successful `verify-commit`, clean worktree, the exact Step11 golden SHA-256, then `Task66 signed commit and frozen golden verified`. A failed add/commit/signature/identity/cleanliness/hash check stops the flow. No push occurs here.
+
 
 ---
 
@@ -7903,7 +8314,7 @@ Expected: an empty status; the new commit `feat(stage3): snapshot v21, the stage
 
 Spec §10.3 makes the v21 container hold "either an interned body (§13.2) or a plain body", requires `Persist`, outside the FSM lock, to encode the interned body, rehydrate it and compare a digest with one taken under the read lock, to persist the plain body and raise `arbiter_snapshot_encoding_fallback_total` on a mismatch without ever cancelling a snapshot, and asks for an operational writer setting outside the one-way switches; §13.2 asks for a lossless encoding that "rehydrates the state byte-exactly, so every existing validator ... runs unchanged". Task 66 left the writer producing only the plain v21 body and the reader refusing every body kind but 0. This task adds the interned body as a generic, byte-exact JSON interning codec (clarification K70: `fsm/snapshot_interned.go`), the write-then-verify in `Persist` on Plan S3-A Task 9's `fsmSnapshot` (K71), the node-local `raft.snapshot_body: auto|plain`, the reader for body kind 1, the series `arbiter_snapshot_encoding_fallback_total` and `arbiter_snapshot_body_bytes{kind}`, the forced-mismatch test, the frozen `fsm/testdata/stage3_v21_interned.snapshot`, and, local only, the offline replay of devnet2 voter copies under `ARBITER_TAG_P4` and the branch head together with the size measurement of the interned body (contract §46, §48).
 
-Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, never re-created); every command below runs in its own Bash call that starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` (the Bash tool keeps no variables between calls). Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this was drafted: Plan S3-A merged as arbiter#133, so its Task 9 code is anchored where it stands: `fsm/state_size.go`, `fsmSnapshot.size`, `recordSize`, `readSnapshotMeasured`, `metrics/snapshot.go`, the README state-size paragraph and alert block). For the files below that the header's `fb42260` also has, the hunks are the same; only the line numbers moved. Task 64 (`Params.Stage3`, the fixture), Task 66 (the v21 framing, `stage3V21GoldenFSM`, the reader's kind-byte block, the 14-byte envelope in `containerStateSize`) and, on the branch base, Plan S3-D Task 51 (`consensus_admin.max_track_settle` in `config`, the hand-built test configurations and `metrics.New`, on lines next to the ones this task edits) changed several of the anchored places first: apply each hunk on top of their change (the hunk rule of the Global Constraints); the code and the named tests are binding, the anchors are guidance.
+Worktree: Task64's retained actual JSON path, restored by `$HOME/.cache/s3e2-task64/env.sh` (branch `urwt/codex/multi-source-s3e`, never re-created); every command below runs in its own Bash call that starts with `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1;` (the Bash tool keeps no variables between calls). Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this was drafted: Plan S3-A merged as arbiter#133, so its Task 9 code is anchored where it stands: `fsm/state_size.go`, `fsmSnapshot.size`, `recordSize`, `readSnapshotMeasured`, `metrics/snapshot.go`, the README state-size paragraph and alert block). For the files below that the header's `fb42260` also has, the hunks are the same; only the line numbers moved. Task 64 (`Params.Stage3`, the fixture), Task 66 (the v21 framing, `stage3V21GoldenFSM`, the reader's kind-byte block, the 14-byte envelope in `containerStateSize`) and, on the branch base, Plan S3-D Task 51 (`consensus_admin.max_track_settle` in `config`, the hand-built test configurations and `metrics.New`, on lines next to the ones this task edits) changed several of the anchored places first: apply each hunk on top of their change (the hunk rule of the Global Constraints); the code and the named tests are binding, the anchors are guidance.
 
 **Files:**
 - Create: `fsm/snapshot_interned.go`, `fsm/snapshot_interned_test.go`
@@ -7917,7 +8328,7 @@ Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, br
 - Modify: `metrics/snapshot.go` (Plan S3-A Task 9's file: imports `:3-10`; collector appended), `metrics/metrics.go` (`New`, right before its final `return m` `:151`), `metrics/snapshot_test.go` (Plan S3-A Task 9's file: one test appended)
 - Modify: `README.md` (after Plan S3-A Task 9's **State size and snapshots** paragraph `:429`; after the closing fence `:593` of its `arbiter-state-size` YAML block), `docs/specs/issue-31-metrics.md` (after Plan S3-A Task 9's `arbiter_raft_snapshot_store_bytes` row `:48`; the sentence on absent series `:50`)
 - Modify (gazelle): `fsm/BUILD.bazel` (the two new files; no new dependency: `crypto/sha256` is the standard library, and `metrics` already depends on `//fsm`)
-- Local only, never committed (contract §48, decision D37): the work directory `$HOME/si-devnet2-multisource-s3e2-replay` (`$T`: `helpers.sh`, `statedigest/`, `v20check/`, `snapdump/`, `v21check/`, `v21size/`, `tools.sha256`, `ledger.env`, `old_tag.txt`, `src/{old,new}`, `bin/{old,new}`, `inputs/`, `out/`), removed in Step 41; the evidence `~/src/remotesrc/claude/arbiter/multi-source-s3e.replay-e2.txt` and `~/src/remotesrc/claude/arbiter/multi-source-s3e.v21size-e2.txt`, which stay
+- Local only, never committed (contract §48, decision D37): the work directory `$HOME/si-devnet2-multisource-s3e2-replay` (`$T`: `helpers.sh`, `statedigest/`, `v20check/`, `snapdump/`, `v21check/`, `v21size/`, `tools.sha256`, `ledger.env`, `old_tag.txt`, `src/{old,new}`, `bin/{old,new}`, `inputs/`, `out/`), removed in Step 41; the evidence `$W.replay-e2.txt` and `$W.v21size-e2.txt` at the retained actual JSON path, which stay
 
 **Interfaces:**
 - Consumes:
@@ -7932,7 +8343,7 @@ Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, br
   - `metrics`: `arbiter_snapshot_encoding_fallback_total` (counter), `arbiter_snapshot_body_bytes{kind="plain|interned"}` (gauge), both exported from the start for a source that implements `snapshotEncodingReader interface{ SnapshotEncodingStats() fsm.SnapshotEncodingStats }` (`*fsm.FSM` does); README example alert `ArbiterSnapshotEncodingFallback`.
   - Frozen fixture `fsm/testdata/stage3_v21_interned.snapshot` (`TestStage3V21InternedContainerGolden`, `ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1`).
   - Named tests of contract §46: `TestInternedBodyRehydratesByteExactly`, `TestInternedBodyInternsEachRepeatedValueOnce`, `TestStage3V21InternedContainerGolden`, `TestPersistWritesTheInternedBodyWhenItVerifies`, `TestPersistFallsBackToThePlainBodyOnAMismatch`, `TestPersistFallsBackWhenThePlainDocumentHoldsAReservedKey`, `TestPersistWritesThePlainBodyWhenForcedPlain`, `TestPersistStreamsAV20ContainerUnchanged`, `TestRestoreReadsBothV21Bodies`, `TestRehydrateRefusesAForwardReference`, `TestRehydrateRefusesAnExpansionAboveTheCap`, `TestStateBytesStayThePlainLengthUnderTheInternedBody`, `TestSetSnapshotBodyModeRefusesAnUnknownMode`; `TestLoadConfigReadsRaftSnapshotBody`, `TestLoadConfigRefusesAnUnknownRaftSnapshotBody`; `TestMetricsExportSnapshotEncodingFallbackAndBodyBytes`.
-  - Names this task adds (Appendix B): `maxInternedDepth = 10000`, `internedBodyPrefix`, `snapshotInterner` (`value`, `container`), `appendInternedRef`, `snapshotRehydrator` (`measure`, `measureValue`, `measureRef`, `emit`, `emitValue`), `parseInternedBody`, `internedArray`, `parseInternedRef`, `addRehydrated`, `skipJSONValue`, `scanJSONString`, `scanJSONLiteral`, `isHexDigit`, `internedMalformed`; `snapshotEncodingState{mu, mode, stats}` with `bodyMode()`, the field `FSM.encoding`, `snapshotPersisted`, `(*fsmSnapshot).encode`, `verifiedInternedBody`, `(*fsmSnapshot).recordEncoding`, `snapshotBodyKindV20`, `snapshotBodyKindPlain`, `snapshotBodyKindInterned`; `config.stringOrDefault`; `metrics.snapshotEncodingCollector`, `newSnapshotEncodingCollector`; test helpers `persistedSnapshotBytes`, `v21Parts`, `internedCorpus`, `stage3V21InternedGoldenPath`, `encodingSnapshot`; extra tests `TestRehydrateRefusesMalformedBodies`, `TestInternSnapshotBodyRefusesWhatItCannotRepresent`, `TestSnapshotEncodingStatsAreRaceFreeAgainstPersist`, `TestNewFSMAppliesTheRaftSnapshotBodySetting`; local only: `$T/helpers.sh` (`rehearsal_build`, `digest_lines`, `rehearsal_replay`, `rehearsal_v21size`), `$T/v21check/main.go`, `$T/v21size/main.go`, the evidence line formats of Steps 37–39.
+  - Names this task adds (Appendix B): `maxInternedDepth = 10000`, `internedBodyPrefix`, `snapshotInterner` (`value`, `container`), `appendInternedRef`, `snapshotRehydrator` (`measure`, `measureValue`, `measureRef`, `emit`, `emitValue`), `parseInternedBody`, `internedArray`, `parseInternedRef`, `addRehydrated`, `skipJSONValue`, `scanJSONString`, `scanJSONLiteral`, `isHexDigit`, `internedMalformed`; `snapshotEncodingState{mu, mode, stats}` with `bodyMode()`, the field `FSM.encoding`, `snapshotPersisted`, `(*fsmSnapshot).encode`, `verifiedInternedBody`, `(*fsmSnapshot).recordEncoding`, `snapshotBodyKindV20`, `snapshotBodyKindPlain`, `snapshotBodyKindInterned`; `config.stringOrDefault`; `metrics.snapshotEncodingCollector`, `newSnapshotEncodingCollector`; test helpers `persistedSnapshotBytes`, `v21Parts`, `internedCorpus`, `stage3V21InternedGoldenPath`, `encodingSnapshot`; extra tests `TestRehydrateRefusesMalformedBodies`, `TestInternSnapshotBodyRefusesWhatItCannotRepresent`, `TestSnapshotEncodingStatsAreRaceFreeAgainstPersist`, `TestStage3V21InternedGoldenCaptureDoesNotOverwriteExistingPath`, `TestRehydrateRefusesReservedKeysInEveryObjectPosition`, `TestPersistRejectsShortWritesAndDoesNotRecordFailedSnapshots`, `internedFailSink`, `TestInternedLengthAndReferenceBoundsBeforeAllocation`, `TestPersistFallsBackOnEncodingAndRehydrationErrors`, `TestNewFSMAppliesTheRaftSnapshotBodySetting`; local only: `$T/helpers.sh` (`rehearsal_build`, `digest_lines`, `rehearsal_replay`, `rehearsal_v21size`), `$T/v21check/main.go`, `$T/v21size/main.go`, the evidence line formats of Steps 37–39.
 
 Notes:
 - **Generic interning, not a structural codec (K70).** The interner walks the compact `encoding/json` document once: every string token of at least 64 bytes (quotes included) becomes `{"$s":i}`, every object or array whose compact encoding is at least 256 bytes becomes `{"$v":i}`, children first, the outermost value never a reference; keys, numbers, `true`, `false` and `null` are copied verbatim. A value is deduplicated by its interned form, which is equivalent to deduplicating its plain bytes (equal plain bytes intern to equal forms because their children were interned at first occurrence, and rehydration is a function), so a repeated LtHash accumulator (a 4096-character hex string), a part triple or an unchanged partition entry is one table entry. Plans S3-E3 and S3-E4 add state without touching the codec. A plain document that holds an object key beginning with `$` is refused (a reference could not be told apart from it) and so is anything that is not compact JSON; `Persist` then writes the plain body and counts the fallback.
@@ -7943,12 +8354,27 @@ Notes:
 - **Measured while drafting.** On the local copy of a devnet2 v20 voter container (`$HOME/si-devnet2-multisource-tracks/v20-state.bin`, the spec's measured document at promotion 53), this codec turns the 11,385,138-byte plain document into a 1,070,604-byte interned body (9.4 %, 10.6 times smaller; the spec estimated about 1.4 MB) that rehydrates byte-identically, in under half a second for intern, rehydrate and compare together; the 11,868,252-byte document of Plan S2-B's `arbiter-0` copy after the tracks activation interns to 1,089,643 bytes. Step 39 repeats this on the current copies.
 - **No consensus byte changes before the activation.** Interning applies only to a v21 container, which exists only once `Params.Stage3` is committed; every pre-v21 container is persisted byte-identically, and the existing golden tests (`TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the L3 golden tests) run unchanged. Steps 37–38 prove it on devnet2's own logs against `ARBITER_TAG_P4`. `fsm` still neither reads the clock nor imports arbiter-proto (`crypto/sha256` only).
 - **On top of Task 66.** The code uses only contract §46's Task 66 names: `snapshotVersionV21`, `snapshotBodyPlain`, `snapshotBodyInterned`, the untyped envelope constants (13 and 14, compared with `len` and used in slice bounds) and the reader's `jb` and `n`; it replaces Task 66's kind-byte block whole, comment included, so its shape there does not matter. The tests call `stage3V21GoldenFSM(t)` as `func(*testing.T) *FSM`, Task 66's signature and the form contract §46 uses ("the container `Persist` writes … for `stage3V21GoldenFSM(t)`"). Task 66's own v21 tests read the plain container through `writeSnapshot` (its helper `plainSnapshotBytes`), never through `Persist`, and forge body kinds 2 and 255 as unknown, so none of them changes; Step 10 says what to do if one does after all.
-- **Checked while drafting** (2026-10-16, no worktree: `git archive` exports in the drafting session's scratchpad): arbiter `526a721` with Task 64's and Task 66's drafted code applied as stand-ins, on arbiter-proto at Plan S3-E1's drafted contract §39 and an arbiter-core stub of its contract §41 (both `replace` modules), then every code block of this task applied in step order with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`: each failing run printed the stated errors; Task 66's v21 tests passed unchanged; the capture, the refused second capture and the header bytes of Step 11 were as stated; `go test ./... -count=1` passed, and so did `-race` for `fsm`, `metrics`, `config`, `cmd/arbiter`, `integration` and `integration/chpipeline`; `gofmt` and `go vet ./...` were clean and `fsm/` names no `time.Now`. Nine single-point mutations each failed their tests: the digest comparison dropped, plain mode counting a fallback, the reader keeping the stored body length, a self-reference admitted, the root interned, the expansion cap dropped, the statistics not recorded, the reserved-key check dropped, the mode not taken from the FSM. Offline Bazel did not run: gazelle did (this task adds exactly the two files to `fsm/BUILD.bazel`), but the local repository cache lacks `526a721`'s module versions, so `bazel test` needs a download. Every bash block of Steps 30–41 passed `bash -n` and `shellcheck` (with `helpers.sh` prepended; only SC1091, the sourced file) and ran end to end under a scratch `HOME` with stand-in inputs (Plan S2-B's copies standing in for the P0 copies and the samples) and `v0.13.0` (`526a721`) as the old build: identical `statedigest` lines, the 11,868,827-byte v20 container from both builds, every cross restore `restore_ok`, the old build refusing both v21 goldens at the version byte, eight `rehydrated_identical true` lines, 24 evidence lines, and the removal.
+- **Historical drafting proof only; WAIT66 for current replay** (2026-10-16, no worktree: `git archive` exports in the drafting session's scratchpad): arbiter `526a721` with Task 64's and Task 66's drafted code applied as stand-ins, on arbiter-proto at Plan S3-E1's drafted contract §39 and an arbiter-core stub of its contract §41 (both `replace` modules), then every code block of this task applied in step order with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`: each failing run printed the stated errors; Task 66's v21 tests passed unchanged; the capture, the refused second capture and the header bytes of Step 11 were as stated; `go test ./... -count=1` passed, and so did `-race` for `fsm`, `metrics`, `config`, `cmd/arbiter`, `integration` and `integration/chpipeline`; `gofmt` and `go vet ./...` were clean and `fsm/` names no `time.Now`. Nine single-point mutations each failed their tests: the digest comparison dropped, plain mode counting a fallback, the reader keeping the stored body length, a self-reference admitted, the root interned, the expansion cap dropped, the statistics not recorded, the reserved-key check dropped, the mode not taken from the FSM. Offline Bazel did not run: gazelle did (this task adds exactly the two files to `fsm/BUILD.bazel`), but the local repository cache lacks `526a721`'s module versions, so `bazel test` needs a download. Every bash block of Steps 30–41 passed `bash -n` and `shellcheck` (with `helpers.sh` prepended; only SC1091, the sourced file) and ran end to end under a scratch `HOME` with stand-in inputs (Plan S2-B's copies standing in for the P0 copies and the samples) and `v0.13.0` (`526a721`) as the old build: identical `statedigest` lines, the 11,868,827-byte v20 container from both builds, every cross restore `restore_ok`, the old build refusing both v21 goldens at the version byte, eight `rehydrated_identical true` lines, 24 evidence lines, and the removal.
 
 - [ ] **Step 1: Base check**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" rev-parse --abbrev-ref HEAD && git -C "$W" status --porcelain && git -C "$W" log --format=%s -1 && cd "$W" && grep -c 'unsupported snapshot v21 body kind' fsm/snapshot.go && ls fsm/testdata/stage3_v21_plain.snapshot && ! ls fsm/testdata/stage3_v21_interned.snapshot 2>/dev/null && go test ./fsm/ -run 'TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreRefusesAnUnknownV21BodyKind|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncodingMatchesTheV21Writer|TestStateSizeSampleIsRaceFreeAgainstReads' -race -count=1`
-Expected: `urwt/claude/multi-source-s3e`, an empty status, a subject ending in `(Task 66)`, `1`, `fsm/testdata/stage3_v21_plain.snapshot`, and `ok  github.com/sentioxyz/arbiter/fsm`. Anything else: Task 66 is not complete; stop.
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "Task66 checkout is dirty; stop" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s)" || exit 1
+case "$subject" in *"(Task 66)") ;; *) echo "Task66 signed final commit is missing; stop" >&2; exit 1 ;; esac
+e2_read_9_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_9_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+cd "$W" || exit 1
+[ "$(grep -c 'unsupported snapshot v21 body kind' fsm/snapshot.go)" = 1 ] || exit 1
+[ -s fsm/testdata/stage3_v21_plain.snapshot ] && [ ! -e fsm/testdata/stage3_v21_interned.snapshot ] && [ ! -L fsm/testdata/stage3_v21_interned.snapshot ] || exit 1
+go test ./fsm/ -run 'TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreRefusesAnUnknownV21BodyKind|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncodingMatchesTheV21Writer|TestStateSizeSampleIsRaceFreeAgainstReads' -race -count=1 || exit 1
+```
+
+Expected: the retained Codex worktree/branch and clean signed Task66 final head pass their assertions, its plain golden exists, its interned golden does not, then `ok  github.com/sentioxyz/arbiter/fsm`. Anything else: Task 66 is not complete; stop.
 
 - [ ] **Step 2: Write the failing codec tests**
 
@@ -8198,7 +8624,7 @@ func TestInternSnapshotBodyRefusesWhatItCannotRepresent(t *testing.T) {
 
 - [ ] **Step 3: Run the codec tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run 'TestInternedBody|TestRehydrate|TestInternSnapshotBody' -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run 'TestInternedBody|TestRehydrate|TestInternSnapshotBody' -count=1`
 Expected: FAIL to compile — `undefined: InternSnapshotBody`, `undefined: RehydrateSnapshotBody`, `undefined: maxInternedDepth` (then `too many errors`), `FAIL github.com/sentioxyz/arbiter/fsm [build failed]`.
 
 - [ ] **Step 4: Implement the interned codec**
@@ -8601,6 +9027,9 @@ func (r *snapshotRehydrator) measureValue(b []byte, pos, depth, self int) (end i
 				if keyEnd >= len(b) || b[keyEnd] != ':' {
 					return 0, 0, 0, internedMalformed("colon expected in value %d", self)
 				}
+				if b[pos+1] == '$' {
+					return 0, 0, 0, internedMalformed("reserved key that is not a reference at byte %d", pos)
+				}
 				n += uint64(keyEnd + 1 - pos)
 				pos = keyEnd + 1
 			}
@@ -8884,15 +9313,17 @@ func internedMalformed(format string, args ...any) error {
 
 - [ ] **Step 5: Run the codec tests and register the files**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && gofmt -l fsm && go vet ./fsm/ && go test ./fsm/ -run 'TestInternedBody|TestRehydrate|TestInternSnapshotBody' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel run //:gazelle && git -C "$W" status --short`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && format_output="$(gofmt -l fsm)" || exit 1; [ -z "$format_output" ] || exit 1; go vet ./fsm/ && go test ./fsm/ -run 'TestInternedBody|TestRehydrate|TestInternSnapshotBody' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && bazel run //:gazelle && git -C "$W" status --short`
 Expected: no `gofmt` output; `--- PASS` for `TestInternedBodyRehydratesByteExactly` (its 28 documents as subtests), `TestInternedBodyInternsEachRepeatedValueOnce`, `TestRehydrateRefusesAForwardReference`, `TestRehydrateRefusesAnExpansionAboveTheCap`, `TestRehydrateRefusesMalformedBodies` and `TestInternSnapshotBodyRefusesWhatItCannotRepresent`, then `ok`; the status lists exactly `M fsm/BUILD.bazel`, `?? fsm/snapshot_interned.go` and `?? fsm/snapshot_interned_test.go` (gazelle adds the two files to `fsm/BUILD.bazel`, nothing else).
 
 - [ ] **Step 6: Commit the codec**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" add fsm/snapshot_interned.go fsm/snapshot_interned_test.go fsm/BUILD.bazel
-git -C "$W" commit -m "feat(stage3): lossless interned snapshot body codec (Task 67)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add fsm/snapshot_interned.go fsm/snapshot_interned_test.go fsm/BUILD.bazel || exit 1
+git -C "$W" commit -S -m "feat(stage3): lossless interned snapshot body codec (Task 67)
 
 The v21 interned body (housegate spec 2026-10-14 §13.2, clarification
 K70) is a generic interning of the compact JSON document: every string
@@ -8905,7 +9336,15 @@ strings, expansion beyond 4 GiB and nesting beyond 10000, so a forged
 body costs a linear scan. A plain document with a key beginning with
 \"\$\" is refused; the writer then keeps the plain body.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; preserve staged work and ask the user to unlock the repository actual key in their own terminal; no unsigned fallback" >&2; exit 1; }
+e2_read_10_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_10_3}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e2_read_10_3}" != "$previous_head" ] || exit 1
+e2_read_11_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_11_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || { echo "uncommitted Task67 files remain; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 7: Write the failing Persist tests**
@@ -8934,7 +9373,7 @@ func snapshotBytes(t *testing.T, f *FSM) []byte {
 }
 ```
 
-In `fsm/snapshot_interned_test.go`, add `"os"` and `"reflect"` to the import block (after `"math/rand/v2"`), then append:
+In `fsm/snapshot_interned_test.go`, add `"io"` after `"fmt"`, then `"os"`, `"os/exec"`, `"path/filepath"` and `"reflect"` after `"math/rand/v2"` in the import block, then append:
 
 ```go
 const stage3V21InternedGoldenPath = "testdata/stage3_v21_interned.snapshot"
@@ -8967,11 +9406,22 @@ func persistedSnapshotBytes(t *testing.T, f *FSM) []byte {
 func TestStage3V21InternedContainerGolden(t *testing.T) {
 	got := persistedSnapshotBytes(t, stage3V21GoldenFSM(t))
 	if os.Getenv("ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN") == "1" {
-		if _, err := os.Stat(stage3V21InternedGoldenPath); err == nil {
-			t.Fatalf("%s exists; it is captured once and never rewritten", stage3V21InternedGoldenPath)
+		// Atomically refuse every existing leaf, including a dangling link or
+		// a path created after an earlier absence check. Never truncate it.
+		file, err := os.OpenFile(stage3V21InternedGoldenPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			t.Fatalf("%s exists or cannot be exclusively created; it is captured once and never rewritten: %v", stage3V21InternedGoldenPath, err)
 		}
-		if err := os.WriteFile(stage3V21InternedGoldenPath, got, 0o644); err != nil {
-			t.Fatal(err)
+		n, writeErr := file.Write(got)
+		closeErr := file.Close()
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if n != len(got) {
+			t.Fatal(io.ErrShortWrite)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
 		}
 		t.Skip("captured; commit the file")
 	}
@@ -9228,11 +9678,248 @@ func TestSnapshotEncodingStatsAreRaceFreeAgainstPersist(t *testing.T) {
 	}
 	<-done
 }
+
+// TestStage3V21InternedGoldenCaptureDoesNotOverwriteExistingPath runs the real
+// capture test in an owned temporary working directory. Existing files and
+// either kind of symlink must refuse, never SKIP as if a capture succeeded.
+func TestStage3V21InternedGoldenCaptureDoesNotOverwriteExistingPath(t *testing.T) {
+	for _, kind := range []string{"fresh", "regular", "symlink", "dangling", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "testdata"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, stage3V21InternedGoldenPath)
+			target := filepath.Join(root, "untouched-target")
+			sentinel := []byte("owned synthetic capture sentinel\n")
+			switch kind {
+			case "regular":
+				if err := os.WriteFile(path, sentinel, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling":
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStage3V21InternedContainerGolden$", "-test.v")
+			cmd.Dir = root
+			// Keep Bazel runfiles/filter variables out of the child so the
+			// actual capture executes in this owned working directory.
+			cmd.Env = []string{"ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1"}
+			output, err := cmd.CombinedOutput()
+			if kind == "fresh" {
+				if err != nil || !bytes.Contains(output, []byte("--- SKIP: TestStage3V21InternedContainerGolden")) {
+					t.Fatalf("fresh owned capture did not complete: %v\n%s", err, output)
+				}
+				data, err := os.ReadFile(path)
+				if err != nil || !bytes.HasPrefix(data, []byte{'A', 'F', 'S', 'M', 21, 1}) {
+					t.Fatalf("fresh capture did not write its owned interned path: %v", err)
+				}
+				return
+			}
+			if err == nil || !bytes.Contains(output, []byte("--- FAIL: TestStage3V21InternedContainerGolden")) || bytes.Contains(output, []byte("--- SKIP:")) {
+				t.Fatalf("capture over %s did not fail closed: %v\n%s", kind, err, output)
+			}
+			switch kind {
+			case "regular":
+				data, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(data, sentinel) {
+					t.Fatalf("existing golden changed: %v", err)
+				}
+			case "symlink":
+				data, err := os.ReadFile(target)
+				if err != nil || !bytes.Equal(data, sentinel) {
+					t.Fatalf("symlink target changed: %v", err)
+				}
+			case "dangling":
+				if _, err := os.Lstat(target); !os.IsNotExist(err) {
+					t.Fatalf("dangling target was created: %v", err)
+				}
+			case "directory":
+				info, err := os.Stat(path)
+				if err != nil || !info.IsDir() {
+					t.Fatalf("existing directory changed: %v", err)
+				}
+			}
+			if kind == "symlink" || kind == "dangling" {
+				got, err := os.Readlink(path)
+				if err != nil || got != target {
+					t.Fatalf("capture link changed: %q %v", got, err)
+				}
+			}
+		})
+	}
+}
+
+// TestRehydrateRefusesReservedKeysInEveryObjectPosition rejects reserved keys
+// that are not the one complete reference object, including after an ordinary
+// key. No canonical interner output contains those keys in an ordinary object.
+func TestRehydrateRefusesReservedKeysInEveryObjectPosition(t *testing.T) {
+	for name, body := range map[string]string{
+		"root later unknown": `{"format":"arbiter-snapshot-interned-v1","strings":[],"values":[],"root":{"a":0,"$x":1}}`,
+		"root later ref key": `{"format":"arbiter-snapshot-interned-v1","strings":["x"],"values":[],"root":{"a":0,"$s":0}}`,
+		"nested later":       `{"format":"arbiter-snapshot-interned-v1","strings":[],"values":[],"root":{"a":[{"b":0,"$v":0}]}}`,
+		"unused table later": `{"format":"arbiter-snapshot-interned-v1","strings":[],"values":[{"a":0,"$x":1}],"root":{}}`,
+	} {
+		if _, err := RehydrateSnapshotBody([]byte(body)); err == nil || !strings.HasPrefix(err.Error(), "interned body: malformed: reserved key that is not a reference") {
+			t.Fatalf("%s: reserved object key was not refused: %v", name, err)
+		}
+	}
+}
+
+type internedFailSink struct {
+	bytes.Buffer
+	writes, shortAt    int
+	writeErr, closeErr error
+	canceled, closed   bool
+}
+
+func (*internedFailSink) ID() string { return "interned-failure" }
+func (s *internedFailSink) Write(p []byte) (int, error) {
+	s.writes++
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	if s.writes == s.shortAt {
+		return s.Buffer.Write(p[:len(p)-1])
+	}
+	return s.Buffer.Write(p)
+}
+func (s *internedFailSink) Cancel() error { s.canceled = true; return nil }
+func (s *internedFailSink) Close() error  { s.closed = true; return s.closeErr }
+
+// TestPersistRejectsShortWritesAndDoesNotRecordFailedSnapshots covers every
+// interned chunk and the legacy/forced-plain lanes. A sink's short nil-error
+// write cannot become a successful truncated snapshot or publish size/metrics.
+func TestPersistRejectsShortWritesAndDoesNotRecordFailedSnapshots(t *testing.T) {
+	for _, mode := range []string{"v20", "plain", "interned"} {
+		t.Run(mode, func(t *testing.T) {
+			f := stage3V21GoldenFSM(t)
+			if mode == "v20" {
+				f = newTrackManifestFixture(t).f
+			}
+			if mode == "plain" {
+				if err := f.SetSnapshotBodyMode(SnapshotBodyPlain); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count := 1
+			if mode == "interned" {
+				count = 3
+			}
+			beforeStats := f.SnapshotEncodingStats()
+			beforeSize, beforeOK := f.StateSizeSample()
+			for n := 1; n <= count; n++ {
+				snap, err := f.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				sink := &internedFailSink{shortAt: n}
+				err = snap.Persist(sink)
+				snap.Release()
+				if err != io.ErrShortWrite || !sink.canceled || sink.closed || sink.writes != n {
+					t.Fatalf("short chunk%d: err=%v canceled=%v closed=%v writes=%d", n, err, sink.canceled, sink.closed, sink.writes)
+				}
+				got, ok := f.StateSizeSample()
+				if ok != beforeOK || !reflect.DeepEqual(got, beforeSize) || f.SnapshotEncodingStats() != beforeStats {
+					t.Fatal("failed persist recorded size/encoding statistics")
+				}
+			}
+			for _, closeError := range []bool{false, true} {
+				failure := fmt.Errorf("owned synthetic sink failure")
+				sink := &internedFailSink{}
+				if closeError {
+					sink.closeErr = failure
+				} else {
+					sink.writeErr = failure
+				}
+				snap, err := f.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = snap.Persist(sink)
+				snap.Release()
+				if err != failure || sink.closed != closeError || sink.canceled == closeError {
+					t.Fatalf("sink error: %v canceled=%v closed=%v", err, sink.canceled, sink.closed)
+				}
+				got, ok := f.StateSizeSample()
+				if ok != beforeOK || !reflect.DeepEqual(got, beforeSize) || f.SnapshotEncodingStats() != beforeStats {
+					t.Fatal("failed sink published size/encoding statistics")
+				}
+			}
+		})
+	}
+}
+
+// TestInternedLengthAndReferenceBoundsBeforeAllocation pins arithmetic and
+// depth boundaries without allocating an over-cap document or recursing into
+// a cyclic malicious reference. End-to-end expansion tests cover the reader.
+func TestInternedLengthAndReferenceBoundsBeforeAllocation(t *testing.T) {
+	cap := uint64(maxSnapshotRehydratedDocBytes)
+	if got, err := addRehydrated(cap, 0); err != nil || got != cap {
+		t.Fatalf("exact expansion cap: %d %v", got, err)
+	}
+	for _, pair := range [][2]uint64{{cap, 1}, {0, cap + 1}, {^uint64(0), 1}, {1, ^uint64(0)}} {
+		if _, err := addRehydrated(pair[0], pair[1]); err == nil {
+			t.Fatalf("over-cap expansion accepted: %v", pair)
+		}
+	}
+	r := snapshotRehydrator{strings: [][]byte{[]byte(`"x"`)}, values: [][]byte{[]byte(`[1]`)}, lengths: []uint64{3}, depths: []int{maxInternedDepth}}
+	if _, _, _, err := r.measureRef('v', 0, 7, 0, 0); err == nil || !strings.Contains(err.Error(), "not an earlier one") {
+		t.Fatalf("self reference before emission: %v", err)
+	}
+	if _, _, _, err := r.measureRef('v', 1, 7, 0, 0); err == nil || !strings.Contains(err.Error(), "not an earlier one") {
+		t.Fatalf("forward reference before emission: %v", err)
+	}
+	if _, _, _, err := r.measureRef('s', 1, 7, 0, 1); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("string bound before emission: %v", err)
+	}
+	if _, _, _, err := r.measureRef('v', 0, 7, 1, 1); err == nil || !strings.Contains(err.Error(), "nests deeper") {
+		t.Fatalf("expanded depth before emission: %v", err)
+	}
+	if _, n, depth, err := r.measureRef('v', 0, 7, 0, 1); err != nil || n != 3 || depth != maxInternedDepth {
+		t.Fatalf("valid earlier reference at depth cap: %d %d %v", n, depth, err)
+	}
+}
+
+// TestPersistFallsBackOnEncodingAndRehydrationErrors pins the error paths as
+// well as the forced digest mismatch: every failure keeps the captured plain
+// container and counts one fallback after the sink succeeds.
+func TestPersistFallsBackOnEncodingAndRehydrationErrors(t *testing.T) {
+	f := stage3V21GoldenFSM(t)
+	plain := snapshotBytes(t, f)
+	original := internSnapshotBodyFunc
+	t.Cleanup(func() { internSnapshotBodyFunc = original })
+	for i, encode := range []func([]byte) ([]byte, error){
+		func([]byte) ([]byte, error) { return nil, fmt.Errorf("owned synthetic encoder failure") },
+		func([]byte) ([]byte, error) { return []byte(`{"malformed":true}`), nil },
+	} {
+		internSnapshotBodyFunc = encode
+		if got := persistedSnapshotBytes(t, f); !bytes.Equal(got, plain) {
+			t.Fatalf("error path%d did not keep the plain container", i)
+		}
+		if stats := f.SnapshotEncodingStats(); stats.Fallbacks != uint64(i+1) || stats.LastBodyKind != "plain" || stats.LastInternedBodyBytes != 0 {
+			t.Fatalf("error path%d stats %+v", i, stats)
+		}
+	}
+}
 ```
 
 - [ ] **Step 8: Run the Persist tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run 'TestPersist|TestRestoreReadsBothV21Bodies|TestStateBytesStay|TestSetSnapshotBodyMode|TestSnapshotEncodingStats|TestStage3V21InternedContainerGolden' -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run 'TestPersist|TestRestoreReadsBothV21Bodies|TestStateBytesStay|TestSetSnapshotBodyMode|TestSnapshotEncodingStats|TestStage3V21InternedContainerGolden' -count=1`
 Expected: FAIL to compile — `undefined: SnapshotEncodingStats`, `f.SnapshotEncodingStats undefined (type *FSM has no field or method SnapshotEncodingStats)`, `undefined: internSnapshotBodyFunc` (then `too many errors`).
 
 - [ ] **Step 9: Implement write-then-verify and the kind-1 reader**
@@ -9400,7 +10087,11 @@ type snapshotPersisted struct {
 func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 	chunks, persisted := s.encode()
 	for _, chunk := range chunks {
-		if _, err := sink.Write(chunk); err != nil {
+		written, err := sink.Write(chunk)
+		if err == nil && written != len(chunk) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
 			sink.Cancel()
 			return err
 		}
@@ -9505,9 +10196,16 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 }
 ```
 
-In `fsm/state_size.go`, replace the comment of `StateSizeSample.ContainerBytes` (Plan S3-A's, as Task 66 left it) with:
+In `fsm/state_size.go`, replace the `StateSizeSample.DocBytes` comment through the `ContainerBytes` comment (keep the following `ContainerBytes uint64` field) with:
 
 ```go
+	// DocBytes plus SpentIDsBytes.
+	StateBytes uint64
+	// DocBytes is the rehydrated plain JSON document length. The read cap
+	// bounds the stored body; interned expansion has its own bound.
+	DocBytes uint64
+	// SpentIDsBytes is the spent-ids dump's length.
+	SpentIDsBytes uint64
 	// ContainerBytes is the plain container: the envelope (13 bytes, 14 for
 	// v21), the document and the dump. It is a Raft snapshot's state.bin
 	// unless the snapshot was persisted with the v21 interned body, whose
@@ -9517,26 +10215,59 @@ In `fsm/state_size.go`, replace the comment of `StateSizeSample.ContainerBytes` 
 
 - [ ] **Step 10: Run the Persist tests and Task 66's v21 tests**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && gofmt -l fsm && go vet ./fsm/ && go test ./fsm/ -run 'TestPersist|TestRestoreReadsBothV21Bodies|TestStateBytesStay|TestSetSnapshotBodyMode|TestSnapshotEncodingStats|TestStage3V21InternedContainerGolden|TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreRefusesAnUnknownV21BodyKind|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncodingMatchesTheV21Writer' -race -count=1 -v 2>&1 | grep -E '^(--- |    snapshot_interned_test|ok|FAIL)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && format_output="$(gofmt -l fsm)" || exit 1; [ -z "$format_output" ] || exit 1; go vet ./fsm/ && go test ./fsm/ -run 'TestPersist|TestRestoreReadsBothV21Bodies|TestStateBytesStay|TestSetSnapshotBodyMode|TestSnapshotEncodingStats|TestStage3V21InternedContainerGolden|TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted|TestStage3V21PlainContainerGolden|TestRestoreRefusesAnUnknownV21BodyKind|TestContainerStateSizeMeasuresAV21PlainContainer|TestCountSnapshotEncodingMatchesTheV21Writer' -race -count=1 -v 2>&1 | grep -E '^(--- |    snapshot_interned_test|ok|FAIL)'`
 Expected: `--- PASS` for every named test except `--- FAIL: TestStage3V21InternedContainerGolden` with `snapshot_interned_test.go:<line>: open testdata/stage3_v21_interned.snapshot: no such file or directory` (the golden is captured in Step 11). Task 66's v21 tests pass unchanged (they read the plain container through `writeSnapshot` and forge kinds 2 and 255). Should one of them fail only because it persisted a v21 state through `Snapshot()` and `Persist` itself and now receives body kind 1 (auto mode), switch it to `snapshotBytes` (the plain container); should one forge kind 1 as unknown, use 2 (Review Focus 3 names kind 2), since kind 1 is now the interned body; Step 13's `git add -u fsm` takes either change. Any other failure: stop.
 
 - [ ] **Step 11: Capture the frozen interned golden**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1 go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=1 -v 2>&1 | grep -E 'captured|SKIP' && go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=3 -v 2>&1 | grep -E '^(--- |ok)' && ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1 go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=1 2>&1 | grep -c 'it is captured once and never rewritten'; head -c 6 fsm/testdata/stage3_v21_interned.snapshot | xxd -p`
-Expected: `captured; commit the file` and `--- SKIP`, then three `--- PASS: TestStage3V21InternedContainerGolden` and `ok` (the interned body is a pure function of the frozen plain body, so every run writes the same bytes), then `1` (a second capture is refused), then `4146534d1501` (`AFSM`, version 21, body kind 1). The file is never rewritten after this step.
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+cd "$W" || exit 1
+[ ! -e fsm/testdata/stage3_v21_interned.snapshot ] && [ ! -L fsm/testdata/stage3_v21_interned.snapshot ] || { echo "golden already exists; never capture again" >&2; exit 1; }
+capture="$(ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1 go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=1 -v 2>&1)" || exit 1
+printf '%s\n' "$capture" | grep -F 'captured; commit the file' || exit 1
+printf '%s\n' "$capture" | grep -F -- '--- SKIP: TestStage3V21InternedContainerGolden' || exit 1
+repeated="$(go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=3 -v 2>&1)" || exit 1
+[ "$(printf '%s\n' "$repeated" | grep -c '^--- PASS: TestStage3V21InternedContainerGolden')" = 3 ] || exit 1
+before="$(shasum -a 256 fsm/testdata/stage3_v21_interned.snapshot)" || exit 1
+refused=0; second="$(ARBITER_CAPTURE_STAGE3_V21_INTERNED_GOLDEN=1 go test ./fsm/ -run '^TestStage3V21InternedContainerGolden$' -count=1 2>&1)" || refused=$?
+[ "$refused" != 0 ] || { echo "second capture was not refused" >&2; exit 1; }
+printf '%s\n' "$second" | grep -F 'it is captured once and never rewritten' || exit 1
+[ "$(shasum -a 256 fsm/testdata/stage3_v21_interned.snapshot)" = "$before" ] || exit 1
+[ "$(head -c 6 fsm/testdata/stage3_v21_interned.snapshot | xxd -p)" = 4146534d1501 ] || exit 1
+```
+
+Expected: `captured; commit the file` and `--- SKIP`, then three `--- PASS: TestStage3V21InternedContainerGolden` and `ok` (the interned body is a pure function of the frozen plain body, so every run writes the same bytes), then a nonzero second-capture refusal with the exact once-only message, unchanged fixture SHA256 and an asserted header `4146534d1501` (`AFSM`, version21, kind1). The file is never rewritten after this step.
 
 - [ ] **Step 12: Run the fsm package, its goldens and the red lines**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -race -count=1 && go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStateComponentsListEverySnapshotDocMember|TestSnapshotRecordsAStateSizeSample|TestRestoreRecordsAStateSizeSample' -count=1 -v 2>&1 | grep -c '^--- PASS' && git -C "$W" status --short && grep -rn 'time\.Now' fsm/; bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto`
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+cd "$W" || exit 1
+go test ./fsm/ -race -count=1 || exit 1
+golden_log="$(go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStateComponentsListEverySnapshotDocMember|TestSnapshotRecordsAStateSizeSample|TestRestoreRecordsAStateSizeSample' -count=1 -v 2>&1)" || exit 1
+[ "$(printf '%s\n' "$golden_log" | grep -c '^--- PASS')" = 9 ] || exit 1
+git status --short || exit 1
+rc=0; grep -rn 'time\.Now' fsm/ || rc=$?
+[ "$rc" = 1 ] || { echo "clock red line or failed scan; stop" >&2; exit 1; }
+deps="$(bazel query 'deps(//fsm:fsm, 1)')" || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) echo "FSM imports proto; stop" >&2; exit 1 ;; esac
+echo 0
+```
+
 Expected: `ok  github.com/sentioxyz/arbiter/fsm`; `9`; the status lists `M fsm/fsm.go`, `M fsm/snapshot.go`, `M fsm/snapshot_interned_test.go`, `M fsm/snapshot_test.go`, `M fsm/state_size.go`, `?? fsm/testdata/stage3_v21_interned.snapshot` (and any Task 66 test adjusted in Step 10); the `grep` prints nothing; `0`.
 
 - [ ] **Step 13: Commit write-then-verify and the golden**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" add fsm/fsm.go fsm/snapshot.go fsm/state_size.go fsm/snapshot_test.go fsm/snapshot_interned_test.go fsm/testdata/stage3_v21_interned.snapshot
-git -C "$W" add -u fsm
-git -C "$W" commit -m "feat(stage3): write-then-verify the v21 interned body in Persist (Task 67)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add fsm/fsm.go fsm/snapshot.go fsm/state_size.go fsm/snapshot_test.go fsm/snapshot_interned_test.go fsm/testdata/stage3_v21_interned.snapshot || exit 1
+git -C "$W" add -u fsm || exit 1
+git -C "$W" commit -S -m "feat(stage3): write-then-verify the v21 interned body in Persist (Task 67)
 
 Snapshot still writes the plain v21 container under the read lock.
 Persist, outside the lock, interns the body, rehydrates it and compares
@@ -9551,7 +10282,15 @@ arbiter_state_bytes, keeps describing the plain container. snapshotBytes
 now persists the plain container for every test that reads a document.
 Frozen: fsm/testdata/stage3_v21_interned.snapshot.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; preserve staged work and ask the user to unlock the repository actual key in their own terminal; no unsigned fallback" >&2; exit 1; }
+e2_read_12_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_12_3}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e2_read_12_3}" != "$previous_head" ] || exit 1
+e2_read_13_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_13_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || { echo "uncommitted Task67 files remain; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 14: Write the failing config tests**
@@ -9594,7 +10333,7 @@ func TestLoadConfigRefusesAnUnknownRaftSnapshotBody(t *testing.T) {
 
 - [ ] **Step 15: Run the config tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./config/ -run 'TestLoadConfigReadsRaftSnapshotBody|TestLoadConfigRefusesAnUnknownRaftSnapshotBody' -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./config/ -run 'TestLoadConfigReadsRaftSnapshotBody|TestLoadConfigRefusesAnUnknownRaftSnapshotBody' -count=1`
 Expected: FAIL to compile — `c.Raft.SnapshotBody undefined (type RaftConfig has no field or method SnapshotBody)` (twice), `FAIL github.com/sentioxyz/arbiter/config [build failed]`.
 
 - [ ] **Step 16: Implement `raft.snapshot_body` in config**
@@ -9646,7 +10385,7 @@ func stringOrDefault(v *string, fallback string) string {
 
 - [ ] **Step 17: Run the config tests**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && gofmt -l config && go test ./config/ -count=1 -v -run 'TestLoadConfigReadsRaftSnapshotBody|TestLoadConfigRefusesAnUnknownRaftSnapshotBody|TestLoad_RejectsExplicitZeroDefaults|TestLoad_DefaultsApplied' 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && format_output="$(gofmt -l config)" || exit 1; [ -z "$format_output" ] || exit 1; go test ./config/ -count=1 -v -run 'TestLoadConfigReadsRaftSnapshotBody|TestLoadConfigRefusesAnUnknownRaftSnapshotBody|TestLoad_RejectsExplicitZeroDefaults|TestLoad_DefaultsApplied' 2>&1 | grep -E '^(--- |ok|FAIL)'`
 Expected: four `--- PASS` lines and `ok  github.com/sentioxyz/arbiter/config`. (`cmd/arbiter` and `integration` now fail `config.Validate` with `raft.snapshot_body must be auto or plain, got ""` for the configs their helpers build without `Load`; Step 18 gives them the value.)
 
 - [ ] **Step 18: Write the failing wiring test and set the value in the code-built test configs**
@@ -9694,7 +10433,7 @@ In `integration/cluster_test.go` (`:137`) and `integration/chpipeline/cluster_te
 
 - [ ] **Step 19: Run the wiring test and see it fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./cmd/arbiter/ -run 'TestNewFSMAppliesTheRaftSnapshotBodySetting' -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./cmd/arbiter/ -run 'TestNewFSMAppliesTheRaftSnapshotBodySetting' -count=1`
 Expected: `--- FAIL: TestNewFSMAppliesTheRaftSnapshotBodySetting` with `services_test.go:<line>: raft.snapshot_body interned: newFSM = <nil>`: `newFSM` does not hand the setting to the FSM yet.
 
 - [ ] **Step 20: Wire `newFSM`**
@@ -9711,15 +10450,17 @@ In `cmd/arbiter/services.go`'s `newFSM`, right after `state, err := fsm.NewWithN
 
 - [ ] **Step 21: Run config, cmd/arbiter and the integration harnesses**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && gofmt -l cmd integration && go vet ./cmd/... ./integration/... && go test ./config/ ./cmd/arbiter/ ./integration/ ./integration/chpipeline/ -count=1 2>&1 | grep -E '^(ok|FAIL|---)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && format_output="$(gofmt -l cmd integration)" || exit 1; [ -z "$format_output" ] || exit 1; go vet ./cmd/... ./integration/... && go test ./config/ ./cmd/arbiter/ ./integration/ ./integration/chpipeline/ -count=1 2>&1 | grep -E '^(ok|FAIL|---)'`
 Expected: four `ok` lines (`config`, `cmd/arbiter`, `integration`, `integration/chpipeline`) and no `FAIL`.
 
 - [ ] **Step 22: Commit the writer setting**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" add config/config.go config/raw.go config/config_test.go cmd/arbiter/services.go cmd/arbiter/services_test.go cmd/arbiter/main_test.go integration/cluster_test.go integration/chpipeline/cluster_test.go
-git -C "$W" commit -m "feat(stage3): raft.snapshot_body writer setting (Task 67)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add config/config.go config/raw.go config/config_test.go cmd/arbiter/services.go cmd/arbiter/services_test.go cmd/arbiter/main_test.go integration/cluster_test.go integration/chpipeline/cluster_test.go || exit 1
+git -C "$W" commit -S -m "feat(stage3): raft.snapshot_body writer setting (Task 67)
 
 raft.snapshot_body (auto, the default, or plain) is the node-local v21
 writer setting of housegate spec 2026-10-14 §10.3: plain forces the
@@ -9729,7 +10470,15 @@ binary reads both bodies. newFSM hands it to the FSM; config.Validate
 refuses any other value, an explicit empty one included, so the test
 configs built without Load name auto.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; preserve staged work and ask the user to unlock the repository actual key in their own terminal; no unsigned fallback" >&2; exit 1; }
+e2_read_14_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_14_3}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e2_read_14_3}" != "$previous_head" ] || exit 1
+e2_read_15_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_15_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || { echo "uncommitted Task67 files remain; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 23: Write the failing metrics test**
@@ -9787,7 +10536,7 @@ arbiter_snapshot_encoding_fallback_total %d
 
 - [ ] **Step 24: Run the metrics test and see it fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./metrics/ -run TestMetricsExportSnapshotEncodingFallbackAndBodyBytes -count=1`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./metrics/ -run TestMetricsExportSnapshotEncodingFallbackAndBodyBytes -count=1`
 Expected: FAIL to compile — `undefined: snapshotEncodingReader`, `FAIL github.com/sentioxyz/arbiter/metrics [build failed]`.
 
 - [ ] **Step 25: Implement the encoding collector**
@@ -9844,14 +10593,16 @@ In `metrics/metrics.go`'s `New`, right before its final `return m` (`:151`, afte
 
 - [ ] **Step 26: Run the metrics tests**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && gofmt -l metrics && go vet ./metrics/ && go test ./metrics/ -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && format_output="$(gofmt -l metrics)" || exit 1; [ -z "$format_output" ] || exit 1; go vet ./metrics/ && go test ./metrics/ -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
 Expected: `--- PASS: TestMetricsExportSnapshotEncodingFallbackAndBodyBytes` among the unchanged `TestStateSizeMetricsAppearOnlyAfterASample`, `TestReadCapGaugeIsAlwaysEmitted`, `TestSnapshotFailureCountersStartAtZero`, `TestSnapshotTimingMetrics`, `TestExpositionUsesCurrentStateAndBoundedLabels` and the other existing tests, then `ok` (the existing fakes implement no `SnapshotEncodingStats`, so their expositions are unchanged).
 
 - [ ] **Step 27: Documentation**
 
-`README.md`, right after Plan S3-A Task 9's paragraph that starts `**State size and snapshots** (housegate spec 2026-10-14 §13.1).` (`:429`), insert a blank line and this paragraph (one line):
+`README.md`, replace the complete paragraph that starts `**State size and snapshots** (housegate spec 2026-10-14 §13.1).` with these two paragraphs. They distinguish the plain state-size gauge from the stored-body read cap:
 
 ```markdown
+**State size and snapshots** (housegate spec 2026-10-14 §13.1). `arbiter_state_bytes` is the uncompacted canonical encoding length of this replica's state, the snapshot JSON document plus the spent-ids dump, and `arbiter_state_component_bytes{component}` splits it by snapshot-document member (`challenge_counters` through `stage3`, each counted as its key, colon and value, 0 when omitted) plus `spent_ids`; `arbiter_snapshot_doc_bytes` is the rehydrated plain document length and `arbiter_snapshot_bytes` the corresponding plain container length (`state.bin` before v21 interning). `arbiter_snapshot_doc_read_cap_bytes` (1 GiB) bounds the stored body; an interned body has a separate 4 GiB expansion bound. The writer never refuses a larger document, and encoding does not reduce the plain state used by the voter memory/volume budget. They are sampled from each snapshot this process persists and each snapshot it restores (at startup or from an install), outside the FSM lock, so they refresh only that often (every `raft.snapshot_threshold` entries, checked every `raft.snapshot_interval`) and are absent until the first sample: alert on them with a `for:` window. `arbiter_snapshot_serialize_seconds` (the Apply stall of a snapshot), `arbiter_snapshot_persist_seconds`, `arbiter_snapshot_restore_seconds{trigger="startup|install"}`, `arbiter_snapshot_install_seconds` (from the incoming snapshot's creation in the store through its restore) and `arbiter_snapshot_failures_total{operation="serialize|persist|restore|install"}` are process-local; a refused restore, the read cap included, counts under `restore`, and under `install` too when the leader sent the snapshot. A startup restore that refuses every local snapshot stops the process before `/metrics` listens (Raft does not start), so it shows as a crash loop with the restore error in the log, never in the counter: alert on the voters' restarts as well. `arbiter_raft_log_store_bytes` (`raft.db`, which bolt never shrinks) and `arbiter_raft_snapshot_store_bytes` (`snapshots/`) are read from `raft.data_dir` at scrape time. `component`, `trigger` and `operation` are fixed enums. There is no state-size RPC (Plan S3-A clarification K8).
+
 **Snapshot encoding (v21)** (housegate spec 2026-10-14 §10.3, §13.2). Once `stage3` is committed every snapshot is a v21 container, which holds either the plain body (the JSON document as v20 lays it out, plus `stage3`) or the interned body: the same document with every JSON string of at least 64 bytes and every object or array of at least 256 bytes stored once in a table and referenced by index, so repeated LtHash accumulators, part triples and unchanged partition entries cost one entry each. `FSM.Snapshot` still writes the plain container under the read lock; `Persist`, outside the lock, interns its body, rehydrates the result and compares the SHA-256 of the rehydrated bytes with that of the plain body, and persists the interned body only on a match. Otherwise it persists the plain body and counts `arbiter_snapshot_encoding_fallback_total`; a fallback never cancels a snapshot, so compaction continues. `raft.snapshot_body` is the node-local writer setting: `auto` (the default) as described, `plain` always the plain body (counting nothing); it is not a consensus parameter, voters may differ, and every v21 binary reads both bodies, so it can be changed at any restart. `arbiter_snapshot_body_bytes{kind="plain|interned"}` are the newest persisted snapshot's plain document length and interned body length (`interned` 0 when it persisted plain). `arbiter_state_bytes`, `arbiter_state_component_bytes`, `arbiter_snapshot_doc_bytes` and `arbiter_snapshot_bytes` keep describing the plain container whichever body was persisted; the 1 GiB read cap applies to the stored body, and a body that would rehydrate beyond 4 GiB is refused as corrupt. `arbiter_snapshot_persist_seconds` includes the encoding and its check. Older binaries refuse every v21 container at its version byte.
 ```
 
@@ -9882,15 +10633,17 @@ groups:
 
 and in the paragraph below the table (`:50`) replace `All series except the read cap and the failure counters are absent until their first observation.` with `All series except the read cap, the failure counters and the two v21 encoding series are absent until their first observation.` (both encoding series are exported from the start).
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -c 'arbiter_snapshot_encoding_fallback_total' README.md docs/specs/issue-31-metrics.md && grep -c 'ArbiterSnapshotEncodingFallback' README.md && grep -c 'the two v21 encoding series are absent' docs/specs/issue-31-metrics.md && git -C "$W" diff --check`
+Run: `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -c 'arbiter_snapshot_encoding_fallback_total' README.md docs/specs/issue-31-metrics.md && grep -c 'ArbiterSnapshotEncodingFallback' README.md && grep -c 'the two v21 encoding series are absent' docs/specs/issue-31-metrics.md && git -C "$W" diff --check`
 Expected: `README.md:2`, `docs/specs/issue-31-metrics.md:1`, then `2`, then `1`, and no `git diff --check` output.
 
 - [ ] **Step 28: Commit the metrics and the documentation**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
-git -C "$W" add metrics/snapshot.go metrics/metrics.go metrics/snapshot_test.go README.md docs/specs/issue-31-metrics.md
-git -C "$W" commit -m "feat(stage3): snapshot encoding fallback and body-size metrics (Task 67)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add metrics/snapshot.go metrics/metrics.go metrics/snapshot_test.go README.md docs/specs/issue-31-metrics.md || exit 1
+git -C "$W" commit -S -m "feat(stage3): snapshot encoding fallback and body-size metrics (Task 67)
 
 arbiter_snapshot_encoding_fallback_total counts the v21 snapshots
 persisted plain because the interned body did not verify, and
@@ -9902,48 +10655,111 @@ documents the v21 encoding, raft.snapshot_body and the example alert
 ArbiterSnapshotEncodingFallback; arbiter_state_bytes and the other size
 gauges keep describing the plain container.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed; preserve staged work and ask the user to unlock the repository actual key in their own terminal; no unsigned fallback" >&2; exit 1; }
+e2_read_16_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_16_3}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e2_read_16_3}" != "$previous_head" ] || exit 1
+e2_read_17_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_17_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || { echo "uncommitted Task67 files remain; stop" >&2; exit 1; }
 ```
 
 - [ ] **Step 29: Full verification**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && bazel run //:gazelle && git -C "$W" status --short && bazel build //... && bazel test //... --test_output=errors && bazel test --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //metrics:metrics_test //config:config_test //cmd/arbiter:arbiter_test //integration:integration_test --test_output=errors && git -C "$W" log --format='%h %s' --diff-filter=MDR --grep='(Task 67)' -- fsm/testdata accumulator/testdata && git -C "$W" log --format='%s' --diff-filter=A --grep='(Task 67)' -- fsm/testdata; bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/`
-Expected: gazelle makes no change and the status is empty; the whole suite and the five race targets PASS; the first `git log` prints nothing (no Task 67 commit modifies, deletes or renames a golden or vector file) and the second prints only `feat(stage3): write-then-verify the v21 interned body in Persist (Task 67)`; `0`; the `grep` prints nothing.
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+cd "$W" || exit 1
+format_files="$(git ls-files --cached --others --exclude-standard '*.go')" || exit 1
+[ -n "$format_files" ] || exit 1
+# Repository Go paths contain no whitespace; include new untracked files too.
+# shellcheck disable=SC2086
+format_output="$(gofmt -l $format_files)" || exit 1
+[ -z "$format_output" ] || { printf '%s\n' "$format_output"; exit 1; }
+go vet ./... || exit 1
+go test ./... -count=1 || exit 1
+bazel run //:gazelle || exit 1
+state="$(git status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "gazelle or verification left source changes; stop" >&2; exit 1; }
+bazel build //... || exit 1
+bazel test //... --test_output=errors || exit 1
+bazel test --build_tests_only --@rules_go//go/config:race //fsm:fsm_test //metrics:metrics_test //config:config_test //cmd/arbiter:arbiter_test //integration:integration_test --test_output=errors || exit 1
+changed="$(git log --format='%h %s' --diff-filter=MDR --grep='(Task 67)' -- fsm/testdata accumulator/testdata)" || exit 1
+[ -z "$changed" ] || { echo "Task67 changed a protected golden/vector; stop" >&2; exit 1; }
+added="$(git log --format='%s' --diff-filter=A --grep='(Task 67)' -- fsm/testdata)" || exit 1
+[ "$added" = 'feat(stage3): write-then-verify the v21 interned body in Persist (Task 67)' ] || exit 1
+deps="$(bazel query 'deps(//fsm:fsm, 1)')" || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) echo "FSM directly imports proto; stop" >&2; exit 1 ;; esac
+rc=0; grep -rn 'time\.Now' fsm/ || rc=$?
+[ "$rc" = 1 ] || { echo "FSM clock red line or failed scan; stop" >&2; exit 1; }
+T67="$HOME/.cache/s3e2-task67"
+mkdir -p "$T67" && chmod 700 "$T67" || exit 1
+[ ! -e "$T67/final-head.txt" ] && [ ! -L "$T67/final-head.txt" ] || { echo "saved Task67 receipt exists; reconcile before resume" >&2; exit 1; }
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e2_read_18_3="$(git -C "$W" log -1 --format=%s)" || exit 1
+[ "${e2_read_18_3}" = 'feat(stage3): snapshot encoding fallback and body-size metrics (Task 67)' ] || exit 1
+e2_read_19_3="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e2_read_19_3}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+(set -C; printf '%s\n' "$head" > "$T67/final-head.txt") || exit 1
+echo 'Task67 full verification gates passed'
+```
+
+Expected: actual format/vet/Go/Bazel checks pass, gazelle leaves no source change, no protected golden/vector changed and only the one named new interned golden commit was added. The FSM dependency/clock assertions pass, then `Task67 full verification gates passed`. Any command failure or malformed/dirty evidence exits before later diagnostics can mask it.
 
 **Offline replay (Steps 30–41).** Steps 30–41 are local only: they replay local copies of devnet2 voters under `ARBITER_TAG_P4` (the voters' rollback release before the activation) and the branch head, prove that both write the same pre-v21 containers and restore each other's, that `ARBITER_TAG_P4` refuses both frozen v21 containers at the version byte while the branch restores both bodies, and measure the interned body on every copy. They change nothing in the worktree, write only `$T` (`$HOME/si-devnet2-multisource-s3e2-replay`) and the two evidence files beside the worktree, and remove `$T` at the end (contract §48, decision D37; no task reads `$T` afterwards, and the P5 rehearsal directory `$R5` is Plan S3-E4 Task 78's). The agent runs each bash block from a new block file in this session's scratchpad (`<scratchpad>/s3e2-t67/<nn>-<what>.sh`, written with the Write tool, never edited after it ran) with `bash -eo pipefail <file> < /dev/null`, because the Bash tool's own shell is zsh. Blocks marked `Confirm before running.` need explicit user confirmation in chat first.
 
 - [ ] **Step 30: Create the work directory**
 
 ```bash
-T="$HOME/si-devnet2-multisource-s3e2-replay"; W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
-[ ! -e "$T" ] || { echo "$T exists: move it aside; a replay directory is never reused"; exit 1; }
-for f in "$W.replay-e2.txt" "$W.v21size-e2.txt"; do [ ! -e "$f" ] || { echo "$f exists: move it aside; evidence is never overwritten"; exit 1; }; done
-mkdir -m 700 "$T" && mkdir -p "$T/statedigest" "$T/v20check" "$T/snapdump" "$T/v21check" "$T/v21size" "$T/inputs" "$T/out" && echo "created $T"
+set -eo pipefail
+T="$HOME/si-devnet2-multisource-s3e2-replay"; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+[ ! -e "$T" ] && [ ! -L "$T" ] || { echo "$T exists: move it aside; a replay directory is never reused"; exit 1; }
+for f in "$W.replay-e2.txt" "$W.v21size-e2.txt"; do [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "$f exists: move it aside; evidence is never overwritten"; exit 1; }; done
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$(cat "$HOME/.cache/s3e2-task67/final-head.txt")" = "$head" ] || { echo "source differs from the completed Task67 verification head" >&2; exit 1; }
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+mkdir -m 700 "$T" && printf '%s\n%s\n' "$W" "$head" > "$T/.task67-owner" && mkdir -p "$T/statedigest" "$T/v20check" "$T/snapdump" "$T/v21check" "$T/v21size" "$T/inputs" "$T/out" && echo "created $T"
 ```
 
-Expected: `created /Users/uranuswch/si-devnet2-multisource-s3e2-replay`. If `$T` or an evidence file exists, stop and ask the user: a directory or evidence file is never reused.
+Expected: `created <the actual HOME>/si-devnet2-multisource-s3e2-replay`. If `$T` or an evidence file exists, stop and ask the user: a directory or evidence file is never reused.
 
 - [ ] **Step 31: Write `$T/helpers.sh`**
 
 Write `/Users/uranuswch/si-devnet2-multisource-s3e2-replay/helpers.sh` with the Write tool, with exactly this content:
 
 ```bash
+# shellcheck disable=SC2034 # callers read helper-session variables
+set -eo pipefail
 # Plan S3-E2 Task 67: offline replay and v21 size measurement over local
 # copies of devnet2 voters (never committed). Source it at the top of every
 # block; no shell state survives between Bash calls.
 # shellcheck disable=SC2034 # the blocks that source this file read these
 T="$HOME/si-devnet2-multisource-s3e2-replay"
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 R="$HOME/si-devnet2-multisource-s3a-rehearsal"
 S2R="$HOME/si-devnet2-multisource-s2-rehearsal"
 LIVE="$HOME/si-devnet2-multisource-tracks"
 P0="$HOME/si-devnet2-stage3-p0"
 REPLAY="$W.replay-e2.txt"
 SIZES="$W.v21size-e2.txt"
+[ -d "$T" ] && [ ! -L "$T" ] && [ -f "$T/.task67-owner" ] && [ ! -L "$T/.task67-owner" ] || { echo "replay ownership missing; stop" >&2; exit 1; }
+[ "$(sed -n 1p "$T/.task67-owner")" = "$W" ] || exit 1
+measured_head="$(sed -n 2p "$T/.task67-owner")" || exit 1
+e2_read_20_3="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_20_3}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e2_read_20_3}" = "$measured_head" ] || { echo "replay source head changed; stop" >&2; exit 1; }
+
 # Both trees' go.mod toolchain, never the host's newer go; modules come from
 # the local cache only (a missing module stops the build instead of reaching
 # the network).
-export GOTOOLCHAIN=go1.26.3 GOWORK=off GOPROXY=off
+export GOTOOLCHAIN=go1.26.3 GOWORK=off GOPROXY=off GOSUMDB=off GOPRIVATE=none GONOPROXY=none
 
 # rehearsal_build old|new exports the tag in $T/old_tag.txt (old) or the
 # branch head (new) with git archive into $T/src/<build>, copies the five
@@ -9953,7 +10769,7 @@ rehearsal_build() {
   local ref tools
   case "$1" in
     old) ref="$(cat "$T/old_tag.txt")" || return 1 ;;
-    new) ref="$(git -C "$W" rev-parse HEAD)" || return 1 ;;
+    new) ref="$measured_head" ;;
     *) echo "usage: rehearsal_build old|new"; return 2 ;;
   esac
   rm -rf "${T:?}/src/$1" "${T:?}/bin/$1" && mkdir -p "$T/src/$1" "$T/bin/$1" || return 1
@@ -9976,15 +10792,18 @@ digest_lines() {
 # rehearsal_replay NAME RAFT_DIR CONFIG replays one copied raft data dir under
 # both builds: the statedigest lines and the written containers must be
 # identical, the container a pre-v21 one, and each build must restore the
-# other's. It appends one result line to $REPLAY; an input recorded there
-# already is skipped, so a block can be rerun after a failure.
+# other's. It appends one result line to $REPLAY; a recorded input is
+# refused: an interrupted or changed attempt requires explicit reconciliation.
 rehearsal_replay() {
   local name="$1" dir="$T/out/$1" b version old_check new_check
-  if grep -q "^$name: " "$REPLAY"; then echo "$name: recorded already"; return 0; fi
-  mkdir -p "$dir" || return 1
+  if grep -q "^$name: " "$REPLAY"; then echo "$name: recorded attempt exists; reconcile, never silently reuse" >&2; return 1; fi
+  mkdir -p "$T/out" || return 1
+  # Claim the attempt before the first tool. Any leftover directory means an
+  # interrupted/unknown outcome; preserve it and reconcile instead of replaying.
+  mkdir "$dir" || { echo "$name: attempt already started; reconcile, never replay it" >&2; return 1; }
   for b in old new; do
     "$T/bin/$b/statedigest" -data-dir "$2" -config "$3" > "$dir/digest.$b.txt" 2> "$dir/digest.$b.err" || { echo "$name: statedigest $b failed:"; cat "$dir/digest.$b.err"; return 1; }
-    digest_lines "$dir/digest.$b.txt" > "$dir/digest.$b.cmp"
+    digest_lines "$dir/digest.$b.txt" > "$dir/digest.$b.cmp" || return 1
     if grep -q '^apply_error ' "$dir/digest.$b.cmp"; then echo "$name: apply_error under $b"; return 1; fi
     "$T/bin/$b/snapdump" -data-dir "$2" -config "$3" -out "$dir/written.$b.container" > "$dir/snapdump.$b.txt" || { echo "$name: snapdump $b failed"; return 1; }
   done
@@ -9996,19 +10815,19 @@ rehearsal_replay() {
   cmp -s "$dir/written.old.container" "$dir/written.new.container" || { echo "$name: the written containers differ; stop"; return 1; }
   version="$(od -An -j4 -N1 -tu1 "$dir/written.new.container" | tr -d ' ')"
   [ "$version" -ge 3 ] && [ "$version" -le 20 ] || { echo "$name: written version $version is not a pre-v21 container; stop"; return 1; }
-  old_check="$("$T/bin/old/v20check" "$dir/written.new.container")"
-  new_check="$("$T/bin/new/v21check" "$dir/written.old.container")"
+  old_check="$("$T/bin/old/v20check" "$dir/written.new.container")" || return 1
+  new_check="$("$T/bin/new/v21check" "$dir/written.old.container")" || return 1
   [ "$old_check" = "restore_ok version $version" ] || { echo "$name: old build: $old_check"; return 1; }
   [ "$new_check" = "restore_ok version $version body none" ] || { echo "$name: new build: $new_check"; return 1; }
   echo "$name: $(grep -c . "$dir/digest.new.cmp") statedigest lines identical ($(grep '^written_version' "$dir/digest.new.cmp"), $(grep '^snapshot_sha256' "$dir/digest.new.cmp")); the same v$version container ($(wc -c < "$dir/written.new.container" | tr -d ' ') bytes) from both builds; old restores new's: $old_check; new restores old's: $new_check" | tee -a "$REPLAY"
 }
 
 # rehearsal_v21size NAME CONTAINER measures one plain-body container with
-# the new build's codec and appends one line to $SIZES (skipped when NAME is
+# the new build's codec and appends one line to $SIZES (refused when NAME is
 # recorded already); the rehydrated body must equal the plain body.
 rehearsal_v21size() {
   local line
-  if grep -q "^$1 " "$SIZES"; then echo "$1: recorded already"; return 0; fi
+  if grep -q "^$1 " "$SIZES"; then echo "$1: recorded attempt exists; reconcile, never silently reuse" >&2; return 1; fi
   line="$("$T/bin/new/v21size" "$2")" || { echo "$1: v21size failed"; return 1; }
   case "$line" in
     *" rehydrated_identical true") ;;
@@ -10126,6 +10945,9 @@ func plainBody(path string) ([]byte, error) {
 	if len(data) < 13 || string(data[:4]) != "AFSM" {
 		return nil, fmt.Errorf("%s is not a snapshot container", path)
 	}
+	if data[4] < 3 {
+		return nil, fmt.Errorf("%s: unsupported snapshot version %d", path, data[4])
+	}
 	envelope := 13
 	if data[4] >= 21 {
 		if data[4] != 21 || len(data) < 14 || data[5] != 0 {
@@ -10144,9 +10966,12 @@ func plainBody(path string) ([]byte, error) {
 - [ ] **Step 34: Copy Plan S3-A's tools and check the inputs**
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 for tool in statedigest v20check snapdump; do cp "$R/$tool/main.go" "$T/$tool/main.go" || { echo "missing $R/$tool/main.go: Plan S3-A Task 11's tools are gone; stop"; exit 1; }; done
 (cd "$T" && shasum -a 256 statedigest/main.go v20check/main.go snapdump/main.go v21check/main.go v21size/main.go) | tee "$T/tools.sha256"
+[ "$(shasum -a 256 "$T/statedigest/main.go" | cut -d' ' -f1)" = c5168a19360228da9be001633cb5cf1c2f5a0f49c45c8f90df3dc176c37ac7e4 ] || { echo "original statedigest hash differs; stop" >&2; exit 1; }
+[ "$(shasum -a 256 "$T/v20check/main.go" | cut -d' ' -f1)" = fccc6a876b79ba43f9211afb10e0448d432ee37f1c570b36560ded04c5d004ab ] || { echo "original v20check hash differs; stop" >&2; exit 1; }
 for f in "$S2R/sample14/raft" "$S2R/sample14/local.yaml" "$S2R/sample19/data" "$S2R/sample19/local.yaml" "$LIVE/arbiter-0-raft-after.tgz" "$LIVE/arbiter-0-after.yaml" "$LIVE/v20-state.bin" "$P0/arbiter-0-raft.tgz" "$P0/arbiter-1-raft.tgz" "$P0/arbiter-2-raft.tgz" "$P0/arbiter-0.yaml" "$P0/arbiter-1.yaml" "$P0/arbiter-2.yaml"; do
   [ -e "$f" ] || { echo "missing input $f; stop"; exit 1; }
 done
@@ -10162,24 +10987,37 @@ Remote read (the housegate fetch): needs explicit user confirmation in chat befo
 Confirm before running.
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-for f in "$REPLAY" "$SIZES"; do [ ! -e "$f" ] || { echo "$f exists: the evidence is opened once; stop"; exit 1; }; done
+for f in "$REPLAY" "$SIZES"; do [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "$f exists: the evidence is opened once; stop"; exit 1; }; done
 git -C "$h" fetch -q origin || exit 1
 python3 -I "$L/s3-ledger.py" get "$h" ARBITER_TAG_P4 > "$T/ledger.env" || exit 1
-old_tag="$(sed -n 's/^ARBITER_TAG_P4=//p' "$T/ledger.env")"
+old_tag="$(sed -n 's/^ARBITER_TAG_P4=//p' "$T/ledger.env")" || exit 1
+[ "$(wc -l < "$T/ledger.env" | tr -d ' ')" = 1 ] && [ "$old_tag" = "$ARBITER_TAG_P4" ] || { echo "P4 ledger row differs from validated Task64 input; stop" >&2; exit 1; }
 git -C "$W" rev-parse -q --verify "refs/tags/$old_tag^{commit}" > /dev/null || { echo "tag $old_tag is not in the local arbiter clone (Task 64's fetch brought the tags); stop"; exit 1; }
 git -C "$W" merge-base --is-ancestor "$old_tag" HEAD || { echo "$old_tag is not an ancestor of the branch head; stop"; exit 1; }
 echo "$old_tag" > "$T/old_tag.txt"
-{ echo "old $old_tag $(git -C "$W" rev-parse "$old_tag^{commit}")"; echo "new $(git -C "$W" rev-parse HEAD) $(git -C "$W" rev-parse --abbrev-ref HEAD)"; cat "$T/tools.sha256"; } | tee "$REPLAY"
-echo "new $(git -C "$W" rev-parse HEAD) $(git -C "$W" rev-parse --abbrev-ref HEAD)" > "$SIZES"
+e2_read_21_21="$(git -C "$W" rev-parse "$old_tag^{commit}")" || exit 1
+[[ "${e2_read_21_21}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e2_read_21_78="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_21_78}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e2_read_21_108="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ -n "${e2_read_21_108}" ] || exit 1
+{ echo "old $old_tag ${e2_read_21_21}"; echo "new ${e2_read_21_78} ${e2_read_21_108}"; cat "$T/tools.sha256"; } | tee "$REPLAY"
+e2_read_22_10="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "${e2_read_22_10}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e2_read_22_40="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ -n "${e2_read_22_40}" ] || exit 1
+echo "new ${e2_read_22_10} ${e2_read_22_40}" > "$SIZES"
 ```
 
-Expected: `old <ARBITER_TAG_P4> <its commit>`, `new <branch head> urwt/claude/multi-source-s3e` and the five checksum lines (the opening of `$W.replay-e2.txt`; `$W.v21size-e2.txt` opens with the `new` line). `s3-ledger: … ; stop` or a missing tag: stop; Task 64 read the same value before its first edit, and its `git fetch origin --tags` brought the tag.
+Expected: `old <ARBITER_TAG_P4> <its commit>`, `new <branch head> urwt/codex/multi-source-s3e` and the five checksum lines (the opening of `$W.replay-e2.txt`; `$W.v21size-e2.txt` opens with the `new` line). `s3-ledger: … ; stop` or a missing tag: stop; Task 64 read the same value before its first edit, and its `git fetch origin --tags` brought the tag.
 
 - [ ] **Step 36: Build both trees**
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 rehearsal_build old && rehearsal_build new && ls "$T/bin/old" "$T/bin/new"
 ```
@@ -10189,6 +11027,7 @@ Expected: `$T/bin/old` lists `snapdump`, `statedigest`, `v20check`, `v21check`; 
 Confirm before running.
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 export GOPROXY=https://proxy.golang.org,direct
 rehearsal_build old && rehearsal_build new && ls "$T/bin/old" "$T/bin/new"
@@ -10199,6 +11038,7 @@ Expected: the same two listings.
 - [ ] **Step 37: Replay every copy under both builds**
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 ARBITER_ANCHOR_EVM_PRIVATE_KEY_HEX="$(openssl rand -hex 32)"; export ARBITER_ANCHOR_EVM_PRIVATE_KEY_HEX  # config.Load needs one; the replay signs nothing
 mkdir -p "$T/inputs/sample14" "$T/inputs/sample19" "$T/inputs/s2b-arbiter-0" || exit 1
@@ -10216,16 +11056,18 @@ done
 grep -h '^live_check' "$T/out/p0-arbiter-0/digest.new.cmp"
 ```
 
-Expected, appended to `$W.replay-e2.txt`, six lines of the form `<name>: <n> statedigest lines identical (written_version <v>, snapshot_sha256 <hash>); the same v<v> container (<bytes> bytes) from both builds; old restores new's: restore_ok version <v>; new restores old's: restore_ok version <v> body none`, with `written_version 14` for `sample14`, `19` for `sample19`, `20` for `s2b-arbiter-0` (its container 11868827 bytes, Plan S3-A Task 11's record) and `20` for `p0-arbiter-0`, `-1` and `-2`; then the two `live_check` lines of `p0-arbiter-0` (`network_id=devnet2 genesis_snapshot_id=0x63700cf134ce037961d9acf4ab5ff120dde6c6b1d2ba258fa321d581139d1c06 epoch=<n> …`, the values of Plan S3-B's copy). Any `DIFFERENTLY`, differing containers, a written version above 20, `apply_error` or a failed restore: stop; the branch changed a consensus byte before the activation (contract §44). After a stop, fix the cause and run the block again from a new block file: an input already recorded in `$W.replay-e2.txt` prints `<name>: recorded already` and is not replayed again (the same holds for Steps 38 and 39).
+Expected, appended to `$W.replay-e2.txt`, six lines of the form `<name>: <n> statedigest lines identical (written_version <v>, snapshot_sha256 <hash>); the same v<v> container (<bytes> bytes) from both builds; old restores new's: restore_ok version <v>; new restores old's: restore_ok version <v> body none`, with `written_version 14` for `sample14`, `19` for `sample19`, `20` for `s2b-arbiter-0` (its container 11868827 bytes, Plan S3-A Task 11's record) and `20` for `p0-arbiter-0`, `-1` and `-2`; then the two `live_check` lines of `p0-arbiter-0` (`network_id=devnet2 genesis_snapshot_id=0x63700cf134ce037961d9acf4ab5ff120dde6c6b1d2ba258fa321d581139d1c06 epoch=<n> …`, the values of Plan S3-B's copy). Any `DIFFERENTLY`, differing containers, a written version above 20, `apply_error` or a failed restore: stop; the branch changed a consensus byte before the activation (contract §44). After a stop, preserve the partial attempt and reconcile its exact source/input custody. Do not silently skip recorded names or combine changed attempts; a fresh complete replay uses a newly authorized clean work directory/evidence set.
 
 - [ ] **Step 38: Check both builds against the frozen v21 containers**
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 for body in plain interned; do
-  if grep -q "^golden v21 $body container: " "$REPLAY"; then echo "golden v21 $body: recorded already"; continue; fi
+  if grep -q "^golden v21 $body container: " "$REPLAY"; then echo "golden v21 $body recorded attempt exists; reconcile" >&2; exit 1; fi
   c="$W/fsm/testdata/stage3_v21_$body.snapshot"
-  old_check="$("$T/bin/old/v20check" "$c")"
+  old_rc=0; old_check="$("$T/bin/old/v20check" "$c")" || old_rc=$?
+  [ "$old_rc" = 0 ] || { echo "frozen v20check failed; its typed restore refusal must return0; stop" >&2; exit 1; }
   new_check="$("$T/bin/new/v21check" "$c")" || { echo "$new_check"; exit 1; }
   case "$old_check" in
     "restore_refused version 21: unsupported snapshot version 21 "*) ;;
@@ -10241,6 +11083,7 @@ Expected, appended to `$W.replay-e2.txt`: `golden v21 plain container: old refus
 - [ ] **Step 39: Measure the interned body**
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
 for name in sample14 sample19 s2b-arbiter-0 p0-arbiter-0 p0-arbiter-1 p0-arbiter-2; do
   rehearsal_v21size "$name" "$T/out/$name/written.new.container" || exit 1
@@ -10251,16 +11094,51 @@ rehearsal_v21size golden-v21-plain "$W/fsm/testdata/stage3_v21_plain.snapshot" |
 
 Expected, appended to `$W.v21size-e2.txt`: eight lines `<name> plain_bytes <n> interned_bytes <m> rehydrated_identical true`, among them `s2b-arbiter-0 plain_bytes 11868252 interned_bytes 1089643 rehydrated_identical true` and `live-v20-state plain_bytes 11385138 interned_bytes 1070604 rehydrated_identical true` (measured while drafting; the codec is deterministic, so these two repeat exactly), and for the three P0 copies an interned body of about a tenth of the plain document. `rehydrated_identical false` or a failure: stop; the codec is wrong, and on a voter it would only ever have cost a fallback.
 
-- [ ] **Step 40: Check the evidence**
+- [ ] **Step 40: Check the exact evidence roster**
+
+Write `$T/check-evidence.py` exactly below (local only). It binds the complete six-input replay/two-golden/eight-size roster to the retained current branch head and original tool hashes; duplicates, unknown/missing names or count-only lookalikes cannot qualify.
+
+```python
+"""Exact Task67 offline evidence roster; text/source custody only, never a replay."""
+from pathlib import Path
+import re,sys
+replay=Path(sys.argv[1]).read_text().splitlines();sizes=Path(sys.argv[2]).read_text().splitlines();head=sys.argv[3]
+assert re.fullmatch(r'[0-9a-f]{40}',head)
+assert len(replay)==15 and len(sizes)==9,'expected exactly15 replay and9 size lines'
+assert re.fullmatch(r'old v[0-9]+\.[0-9]+\.[0-9]+ [0-9a-f]{40}',replay[0])
+assert replay[1]==sizes[0]=='new '+head+' urwt/codex/multi-source-s3e','different measured branch head'
+tools=['statedigest','v20check','snapdump','v21check','v21size']
+fixed=['c5168a19360228da9be001633cb5cf1c2f5a0f49c45c8f90df3dc176c37ac7e4','fccc6a876b79ba43f9211afb10e0448d432ee37f1c570b36560ded04c5d004ab']
+for i,name in enumerate(tools):
+    match=re.fullmatch(r'([0-9a-f]{64})  '+name+r'/main.go',replay[2+i]);assert match,'bad tool checksum line'
+    if i<2:assert match[1]==fixed[i],'changed original tool'
+versions={'sample14':14,'sample19':19,'s2b-arbiter-0':20,'p0-arbiter-0':20,'p0-arbiter-1':20,'p0-arbiter-2':20}
+seen=set()
+for line in replay[7:13]:
+    match=re.fullmatch(r'([a-z0-9-]+): ([1-9][0-9]*) statedigest lines identical \(written_version ([0-9]+), snapshot_sha256 ([0-9a-f]{64})\); the same v([0-9]+) container \(([1-9][0-9]*) bytes\) from both builds; old restores new\x27s: restore_ok version ([0-9]+); new restores old\x27s: restore_ok version ([0-9]+) body none',line)
+    assert match,'malformed replay result'
+    name=match[1];assert name in versions and name not in seen
+    assert all(int(match[i])==versions[name]for i in (3,5,7,8));seen.add(name)
+assert seen==set(versions)
+assert set(replay[13:])=={'golden v21 '+body+' container: old refuses it at the version byte; new: restore_ok version 21 body '+body for body in ['plain','interned']}
+seen=set();names=set(versions)|{'live-v20-state','golden-v21-plain'}
+for line in sizes[1:]:
+    match=re.fullmatch(r'([a-z0-9-]+) plain_bytes ([1-9][0-9]*) interned_bytes ([1-9][0-9]*) rehydrated_identical true',line)
+    assert match and match[1]in names and match[1]not in seen,'wrong/duplicate/malformed size result'
+    seen.add(match[1])
+assert seen==names
+print('Task67 exact24-line evidence roster and retained head verified')
+```
 
 ```bash
+set -eo pipefail
 source "$HOME/si-devnet2-multisource-s3e2-replay/helpers.sh"
-[ "$(grep -c ' statedigest lines identical ' "$REPLAY")" -eq 6 ] && [ "$(grep -c '^golden v21 ' "$REPLAY")" -eq 2 ] || { echo "the replay evidence is incomplete; stop"; exit 1; }
-[ "$(grep -c ' rehydrated_identical true$' "$SIZES")" -eq 8 ] || { echo "the size evidence is incomplete; stop"; exit 1; }
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+python3 -I "$T/check-evidence.py" "$REPLAY" "$SIZES" "$head" || exit 1
 cat "$REPLAY" "$SIZES"
 ```
 
-Expected: the whole of both evidence files, 24 lines: the `old` and `new` lines, five checksums, six replay lines and two golden lines; then the `new` line and eight size lines. An incomplete file: rerun the step that is missing from a new block file (recorded inputs are skipped).
+Expected: `Task67 exact24-line evidence roster and retained head verified`, then exactly24 lines. A partial, duplicate or changed attempt stops for reconciliation; do not infer completion or combine an earlier attempt after changing its source/input.
 
 - [ ] **Step 41: Remove the work directory**
 
@@ -10269,12 +11147,14 @@ Removes `$T`: needs explicit user confirmation in chat before running.
 Confirm before running.
 
 ```bash
-T="$HOME/si-devnet2-multisource-s3e2-replay"; W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
-[ -s "$W.replay-e2.txt" ] && [ -s "$W.v21size-e2.txt" ] || { echo "the evidence files are missing; keep $T"; exit 1; }
+set -eo pipefail
+T="$HOME/si-devnet2-multisource-s3e2-replay"; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+source "$T/helpers.sh" || exit 1
+python3 -I "$T/check-evidence.py" "$REPLAY" "$SIZES" "$measured_head" || { echo "evidence incomplete; keep owned replay directory" >&2; exit 1; }
 rm -rf -- "$T" && [ ! -e "$T" ] && echo "removed $T; the evidence stays in $W.replay-e2.txt and $W.v21size-e2.txt"
 ```
 
-Expected: `removed /Users/uranuswch/si-devnet2-multisource-s3e2-replay; the evidence stays in /Users/uranuswch/src/remotesrc/claude/arbiter/multi-source-s3e.replay-e2.txt and /Users/uranuswch/src/remotesrc/claude/arbiter/multi-source-s3e.v21size-e2.txt`. Task 68 starts from the commit of Step 28 with an empty `git -C "$W" status --porcelain`; the evidence files stay beside the worktree for Plan S3-E4's PR body and rehearsal and are never committed.
+Expected: `removed <owned T>; the evidence stays in <actual W>.replay-e2.txt and <actual W>.v21size-e2.txt`. Task68 consumes the actual `$HOME/.cache/s3e2-task67/final-head.txt` emitted only after Step29 passes, requires HEAD equality, clean signed poetry/G and exact final subject `feat(stage3): snapshot encoding fallback and body-size metrics (Task 67)`; no SHA is predicted here. It starts from the commit of Step28; the evidence files stay beside the worktree for Plan S3-E4's PR body and rehearsal and are never committed.
 
 ---
 
@@ -13463,9 +14343,15 @@ Expected: the status before the commit lists exactly the five transport-half pat
 
 ## Task 70: arbiter — owner-aware selection (switch 3): the pool's eligible ring, `VERIFIERS_UNAVAILABLE`, unmarkable blocks, the branch push (S3-E2)
 
+> **Qualified local source owning text (formal0; root adoption pending).** Root receipt536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d accepts the fixed-tool qualified638-file source for bounded downstream review. Original70 tool-drift HOLD and69 unattributed full-race failure risk remain unchanged historical records. Task71 still needs independent runner review and a fresh root grant; no signed branch/push/release/live/ledger or production result follows.
+
 Spec §7.3 (the eligible ring, the stored ring, position and registry cursor block, `VERIFIERS_UNAVAILABLE` computed with `MarkReplaying`'s filter, a block that cannot find three verifiers leaving the WorkSet), §10.4 step 3 (`owner_aware_selection`: a database without a group gets a pool-only ring, and entries hosted by the block's owner are excluded) and §17 (FSM: `VERIFIERS_UNAVAILABLE`, selection excluding owner-hosted verifiers), as fixed by contract §47 and clarification K68. With the switch on, `MarkReplaying` draws the verifier set from `eligibleRingLocked(owner, sources)`, which in this plan is the Active network pool minus the block's sources (no database has a group before the placement switch, and K68 keeps every host-bound entry, the owner's own included, out of every ring), at today's block-seeded start, and stores the ring, the last ring position used and the committed registry cursor block in `BlockVerification`; admission answers `VERIFIERS_UNAVAILABLE` right after `SOURCE_UNAVAILABLE` when that ring holds fewer than three verifiers; the WorkSet moves such a sealed, claim-complete block from `SealedUnmarked` to the new `Unmarkable`, so the unchanged orchestrator proposes nothing for it; restore checks every stored record (`validateStage3Selection`) and refuses one under a pre-v21 version byte; `GetBlockVerification` serves the three fields. With the switch off every path is byte for byte today's (`TestOwnerAwareSelectionOffSelectsByteIdentically`). The task ends with the push of the P5 branch, the only remote action of this plan.
 
-Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, contract §48), with `HEAD` at Task 69's last commit; every command below starts with `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e";` in its own Bash call. Line anchors are arbiter `526a721` (`v0.13.0`, Plan S3-A's release, which the branch base carries; for `fsm/state.go`, `fsm/select.go`, `fsm/apply.go`, `fsm/admission.go` and `orchestrator/dispatch_test.go` they are also the header's `fb42260` lines). `fsm/stage3_restore.go` and `stage3FieldsPresent` (in `fsm/snapshot.go`) are Task 66's, extended by Task 69, so this task inserts into them by position (before their final `return`), not by line; Task 68's hunks in `fsm/apply.go` (the signers' call sites) and `fsm/reads_work.go` (`evidencePresence` and its one call) touch none of the lines quoted here. Every hunk is applied on top of Tasks 64–69 under the hunk rule (Global Constraints).
+Worktree: the exact actual path and executing-host branch retained by Task64 in `$HOME/.cache/s3e2-task64/worktree.json`, loaded through its complete `env.sh` in every Bash call. Start only after root approves the complete final post69 source and its immutable manifest; require the exact signed clean final Task69 subject and save the observed predecessor once. The source evidence below is locally qualified; the signed-branch implementation/publication workflow written here remains separately gated and is not an observed push receipt. Historical drafting anchors below refer to arbiter526a721 and pending Tasks64–69 intent; all positions/seams require reconciliation on that final coherent source, without stand-ins. Preserve Tasks64/65 actual changes, final66 golden capture and67–69 implementation/hunk ordering; an apparent unchanged line number is not source acceptance. All Go/Bazel calls run offline with missing inputs stopping for a separately confirmed remote read.
+
+**Accepted scratch-source provenance (not a runtime grant).** Root source-disposition receipt SHA256 `e970632377be966ddce43f1dbdf6314549e614923c3b7263dcab77fcfe4a9876` separately accepts the frozen post69 candidate for bounded downstream source-review preparation: arbiter637 manifest `654091883850a73d3434a2229b4631dd0bfd29195b116b8470c2f1fd176848b6`, owned core469/housegate935/proto57 and the actually bound inherited proto57. Preserve the original full-Go-race FAIL and unattributed/unquantified liveness risk; one later unchanged full isolated PASS does not establish cause, reliability or nonregression. Any private source copy, literal replay, TDD, Go/Bazel or index work requires a separate concrete root dispatch. No actual signed-head/branch/release/ledger receipt is inferred from this scratch-source decision. Numeric anchors below remain historical; the literal hunk and actual-source location table in the accompanying proposal bind the future replay.
+
+**Final bounded fixed-tool source qualification (2026-10-18; evidence, not a new execution grant).** Root receipt `task70-fixed-tool-qualified-source-root-acceptance.json`, SHA256 `536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d`, accepts source manifest `89fc5753762b80e07794075601ec5aa66bccc9c4d54afb86c1448a4f32efb89f` (638 files) for bounded downstream source review, after outer session31440 exit0 and independent observer manifest `cac87896f1be7a824635f2c3964dec539723b0be61a7a3391649d903f16969fe` / report `7d1e18e6bde6c9c71b217a96d56ccf78ab0aae256bbda236f6597bb679b465d4`. All12 separately classified calls completed. Full plain and ONE full race each matched3990 RUN and3990 terminal identities (3971PASS,19 exact inherited SKIP, zeroFAIL;22 passing packages and three exact no-test terminals). Bazel plain/race each covered22 exact uncached targets. Fixed Cellar Go1.27.2 plus cached Bazel9.1.0 and the selected SDK1.26.3 were pinned by27 retained22-file snapshots; the configured SDK evidence covers only294 selected Go actions of deps(//fsm:fsm_test) and ten resolved SDK leaves per mode, not universal action/input closure. Held/private/fresh custody matched: the candidate and independent fresh638 trees were byte/mode/directory equal; only three exact main go.mod private dependency paths differ from the held tree, with637 other files raw-identical. Fresh focused race matched36 RUN/terminal identities, allPASS across FSM/orchestrator/server, including the Step14a actual-Persist auto/plain cases. Fresh equality is source custody, not a new literal TDD replay. The old mutable-opt campaign is still HOLD with stable historical tool attribution UNKNOWN; its31 observed mutants retain that original scope and were not rerun or retagged as fixed-tool kills. Neither the later successful source qualification nor this owning text attributes old69's failure, proves reliability/nonregression, certifies a live deployment or produces a release/ledger row. Root owns formal acceptance; Task71Grant=false until a concrete independently reviewed runner receives a fresh grant. No observed signed final branch-head/push receipt is supplied by the638-file scratch-source decision.
 
 **Files:**
 - Modify: `fsm/state.go` (`BlockVerification` `:269-279`: three fields after `LastMergeable` `:278`)
@@ -13481,14 +14367,14 @@ Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, br
 - Modify: `orchestrator/dispatch_test.go` (imports `:3-12`; one test appended after `:137`)
 - Modify: `server/safestate_stage3.go` (`blockVerificationToPB` `:133-157`: the end of its literal `:144-146`)
 - Modify: `server/safestate_stage3_test.go` (`stage3BlockVerificationView` `:94-97`; `TestBlockVerificationToPBCarriesEveryField` `:157-158`; Task 64's `stage3PendingProtoFields` loses its three `BlockVerification` entries owned by this task)
-- Remote: `git push -u origin HEAD` of branch `urwt/claude/multi-source-s3e` (Step 23, explicit confirmation)
+- Remote: explicit checked-SHA push to the retained branch (Step23), not a reconstructed path; no force. Branch `urwt/codex/multi-source-s3e` (Step 23, explicit confirmation)
 
 **Interfaces:**
 - Consumes:
   - Task 64 (contract §45): `Stage3SwitchEvictionVoiding`, `Stage3SwitchOwnerAwareSelection`; `func stage3SwitchValue(p *arbiter.Stage3Params, name string) bool`; `func (f *FSM) stage3SwitchOnLocked(name string) bool`; `func (f *FSM) poolVerifierLocked(nodeID string) bool` (a registered, non-evicted VERIFIER whose listed entry has no `host_indexer_id`); `func (f *FSM) verifierEntryLocked(nodeID string) (arbiter.VerifierEntry, bool)`; `State.Stage3 *Stage3State` with `Switches []Stage3SwitchCutover` (`Switch`, `BlockSeq`: `len(Blocks)` at the switch-on Apply); the fixture `stage3FSM(t) (*FSM, *authority.Signer)`, `stage3Update(t, f) arbiter.ConsensusParamsUpdate`, `turnOnStage3Switch(t, f, a, name string)`, `stage3TestMember(host uint64) string`, `memberEntry(t, f, host uint64, node, domain string) arbiter.VerifierEntry`, `rejectStage3Unchanged(t, f, cmd, reason)` and `stage3ActivationParams()` (failure domains `node:n0`, `node:n1`); Task 64's own beyond-contract test helpers (its Appendix B) `turnOnStage3SwitchesThrough(t, f, a, last string)` (`fsm/stage3_fixture_test.go`) and `ownerAwareFSM(t) (*FSM, *authority.Signer)` (`fsm/stage3_params_test.go`: `stage3FSM` with switches 1–3 committed), which this task's tests share rather than redefine; the server test map `stage3PendingProtoFields map[string]string` and `requireEveryFieldExcept(t *testing.T, m proto.Message)` (`server/safestate_stage3_test.go`), with the entries `BlockVerification.eligible_ring`, `BlockVerification.ring_position` and `BlockVerification.marked_cursor_block` (value `Task 70`).
   - Task 66 (contract §46): `func stage3FieldsPresent(doc *snapshotDoc) bool` (a stage-3 field under a pre-v21 version byte is refused with `stage3 state is present in a pre-v21 container`), `func validateStage3State(st *State) error` (run by `readSnapshot` right after `validateTrackState`, wrapped `snapshot: %w`; its `validateStage3Activation` runs first and refuses a switch that is on without its cutover record), the v21 writer and reader; Task 69: the `validateStage3Incarnations(st)` call in `validateStage3State` and the incarnation arm of `stage3FieldsPresent`; Task 67: `Persist` in `auto` mode (the tests here are body-kind agnostic); Task 68: eviction voiding on in the fixture (no Task 68 function is called here).
   - Plan S3-A Task 7 (contract §4): `fsm.BlockVerificationView`, `(*FSM).BlockVerificationView`, `blockVerificationToPB`, `stage3BlockVerificationView`, `requireEveryField`, `TestBlockVerificationToPBCarriesEveryField`, `TestGetBlockVerificationServesTheSealedBlock`.
-  - Plan S3-E1 (contract §48): `arbiter.AdmissionCodeVerifiersUnavailable` (12) of `CORE_TAG_P5`; `pb.BlockVerification.EligibleRing []string`, `.RingPosition uint32`, `.MarkedCursorBlock uint64` (fields 14–16) of `PROTO_TAG_P5`.
+  - Plan S3-E1 (contract §39–§41): `arbiter.AdmissionCodeVerifiersUnavailable` (12) of `CORE_TAG_P5`; `pb.BlockVerification.EligibleRing []string`, `.RingPosition uint32`, `.MarkedCursorBlock uint64` (fields 14–16) of `PROTO_TAG_P5`.
   - Existing arbiter: `selectVerifiers`, `activeNodesWithRole`, `u64FromDigest`, `blockTrackLocked` (`fsm/tracks.go:178`), `cloneStrings`, `VerifierSelectN`, `arbiter.VerifierSelectSeedPrefix`, `replay.DigestString`, `TableRegistry.Cursor.BlockNumber`; fsm test helpers `tracksFSM`, `admitTrack`, `trackEnvelope`, `trackSNode`, `bindTrackClaim` (`fsm/tracks_fixture_test.go`), `rejectTracksUnchanged`, `mustSeal`, `submit`, `fixedClient`, `testVerifiers`, `verifierRegistration`, `verifierMarkActive`, `authorityContextFor`, `signedConsensusUpdate`, `mustApply`, `advanceTo`, `snapshotBytes`, `restoreInto`, `restoreErr`, `restoreConfigured`, `restoreRefusedBothWays`, `rewriteSnapshotDocument`, `v20RoundTrip`, `refusedOwnerSwitch`, `quarantineQ`, `testClientLaneA`, `testClientLaneB`, `newTestFSM`, `registerActive`, `mustWorkSet`; orchestrator test helpers `newHarness`, `testParamsO`, `seedGenesisWriterAndVerifiers`, `submitViaNode`, `statementFixture`, `testAccountO`, `sealViaNode`, `registerRCViaNode`, `verifierSetOf`, `fakeNode.rejectApply`, and `(*Loop).handleDispatchRows`.
 - Produces (contract §47, verbatim):
   - `BlockVerification.EligibleRing []string` (`json:"eligible_ring,omitempty"`), `RingPosition uint32` (`json:"ring_position,omitempty"`), `MarkedCursorBlock uint64` (`json:"marked_cursor_block,omitempty"`), after `LastMergeable`.
@@ -13498,6 +14384,8 @@ Worktree: Task 64's (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, br
   - Named tests: fsm `TestOwnerAwareSelectionOffSelectsByteIdentically`, `TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet`, `TestOwnerAwareSelectionDrawsFromTheActivePoolOnly`, `TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor`, `TestMarkReplayingRefusesAnEligibleRingBelowThree`, `TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible`, `TestVerifiersUnavailableIsCheckedRightAfterSourceUnavailable`, `TestVerifiersUnavailableLeavesTheCoordinateUnspent`, `TestWorkSetDropsAnUnmarkableBlockUntilTheEligibleCountChanges`, `TestRestoreRefusesAnEligibleRingThatDoesNotYieldTheVerifierSet`, `TestRestoreRefusesAnEligibleRingBeforeTheOwnerAwareSelectionSwitch`, `TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing`, `TestBlockVerificationServesTheEligibleRing`; orchestrator `TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock`; server the edited `TestBlockVerificationToPBCarriesEveryField`.
 
 Notes:
+- **Qualified local source, separate workflow authority:** root536479ab accepts final638 source continuation after the fixed-tool qualification described below. This documentary update executes no runtime or source operation. All owning runtime/proto/test and procedural fences remain unchanged; future signed branch/commit/push and actual downstream work retain their independent custody, predecessor and grant gates. Preserve actual64/65, final66 capture, final67/68/69 and coherent core/HG/proto custody; no numeric drafting anchor becomes a freshly observed source location merely through this note.
+- **Workflow/signing boundary:** load retained Task64 JSON/env on each call. Signed commits must create a new HEAD, verify poetry/G and verify-commit, then be clean; cancellation preserves staged work and stops for the user to unlock the actual key in their own fish terminal. No unsigned fallback. No PR/REST reader is needed for this branch-only push; Task78 owns the exact canonical FINALv2 REST reader SHA6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97 and atomic PR merge. This push checks every local branch commit and publishes the checked SHA explicitly.
 - **Switch off is today's code.** `applyMarkReplaying` tests the switch first and otherwise runs today's `selectVerifiers` branch with today's refusal text; admission's new check returns `""` before computing anything while the switch is off; the WorkSet reads the switch once per call and, off, keeps today's two branches; none of the three new `BlockVerification` fields is written (all `omitempty`), so every container written before the switch is byte-identical. `selectVerifiers` is not refactored: `TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet` pins that `initialVerifierSet(ring, blockSeededPosition(seq, n))` equals it over rings of 3 to 7 and blocks 1 to 200, so the two formulas cannot drift.
 - **Why the pool ring is today's ring when no host-bound entry exists.** `poolRingLocked` is `selectVerifiers`' ring (`activeNodesWithRole(VERIFIER, sources)`) restricted to `poolVerifierLocked`, a VERIFIER whose listed entry has no `host_indexer_id`. After the signed-claims activation every registered, non-evicted VERIFIER is listed under its registered key (rule 6 of `signedClaimsMembershipLocked`, `fsm/signed_claims.go:277-288`, and a post-activation registration requires listing), and owner-aware selection needs the tracks activation, which needs the signed-claims activation, so the two rings coincide until a host-bound entry is listed, which K68 refuses before this switch is committed. From then on they differ exactly by the host-bound entries: the owner-hosted exclusion of §10.4 step 3 and, until Plan S3-E3's group half, the exclusion of every member.
 - **One filter for admission, `MarkReplaying` and the WorkSet.** After the signed-claims activation a statement's source is its owner's SNode (`ownerSourceLocked`), and after the tracks activation a block holds one owner's statements, so a block's `SourceNodes` is `[source]` of its statements: `verifiersUnavailableLocked(owner, source)` computes `eligibleRingLocked(owner, [source])`, the ring `blockRingLocked` computes at the marking and in the WorkSet. Every block sealed after the tracks activation carries a track (statement blocks from the open block's owner, transition blocks from their plan's owner, `fsm/table_set_transition.go:449-453`); every earlier block was safe at that activation (`tracksActivationRefusalLocked`, `fsm/tracks.go:118`) and so marked, so no unmarked block lacks a track once the switch is on, and `blockRingLocked` gives such a block the pool rather than inventing an owner.
@@ -13507,34 +14395,40 @@ Notes:
 - **The WorkSet is recomputed on every read.** An unmarkable block is listed under `Unmarkable` on every pass while its ring is below three and returns to `SealedUnmarked` on the first pass after the count changes; nothing is stored, so restore has nothing to check. `orchestrator.handleDispatchRows` is unchanged: it ranges over `SealedUnmarked` only (`orchestrator/dispatch.go:15-23`).
 - **Frozen fixtures.** Task 66's `stage3_v21_plain.snapshot` and Task 67's `stage3_v21_interned.snapshot` are captured from `stage3V21GoldenFSM`, whose switches are all off, so no record there carries a selection field and both goldens stay byte-identical; Step 15 re-runs them. No golden or vector file is edited.
 - **White-box member nodes.** `TestOwnerAwareSelectionDrawsFromTheActivePoolOnly` lists two host-bound entries with Task 64's `memberEntry` (consent signed by the host's enrolment key) after the switch is committed, as K68 requires, and then writes their two Active node records directly: a member's registration and activation are Plan S3-E3's subject, and the test needs only that Active host-bound VERIFIER nodes stay out of the ring and out of admission's count although `activeNodesWithRole` lists them. `TestRefusedOwnerSwitchSealsNothing` sets a node's status the same way (`fsm/owner_switch_test.go:110`).
-- **The forged containers.** `forgedVerificationOA` restores the honest container into a bare replica, edits one `BlockVerification` and snapshots it again, so the forgery is independent of the v21 body kind that `Persist` writes (Task 67's `auto` mode writes the interned body); the pre-v21 case uses the existing 13-byte `rewriteSnapshotDocument` on a tracks-fixture v20 container.
+- **The forged containers.** On the actual67–69 source, `snapshotBytes` explicitly forces `SnapshotBodyPlain`. Consequently `forgedVerificationOA` and the original restore tests here exercise plain containers; they do not establish auto/interned Persist coverage. The separate Step14a test uses the existing `persistedSnapshotBytes`, asserts kind1/auto and kind0/plain, and proves both honest selection-record preservation and forged-record refusal under bare/configured restores. Its literal is exactly bee55f66; qualified fresh focused execution below includes both actual-Persist body identities. The pre-v21 case still uses the existing 13-byte `rewriteSnapshotDocument` on a tracks-fixture v20 container. The original plain-only helper tests are not reclassified as dual-body coverage.
 - **Shared fixture.** Task 64's `fsm/stage3_params_test.go` already defines `ownerAwareFSM`, so this task's tests use it and define only `ownerAwareOffFSM` (switches 1–2) and helpers with the suffix `OA`; a second definition would not compile in package `fsm`.
 - **No README change.** The P5 behaviour is documented by Plan S3-E4 (release notes and the v21 runbook, Task 81); this plan's README edits are Tasks 66–67's component list and series.
-- **Checked while drafting.** Every code block of this task, applied from this text (each replace, insert and append as its step words it) to a `git archive` export of arbiter `526a721` on top of scratch stand-ins of Tasks 64–66 and 69 (Task 64's pin, fallout map, fixture and stage-3 rules, Task 65's FSM half, Task 66's v21 framing, restore skeleton and plain golden, Task 69's incarnation fields, pre-v21 arm and restore call) and contract-shaped scratch replace modules for Plan S3-E1's arbiter-proto fields and arbiter-core types, compiles with `go vet` clean and `gofmt` silent; the fourteen fsm and orchestrator tests fail to build as Step 4 states and pass after Steps 5–13, also under `-race`; the server test fails as Step 18 states and passes after Step 19; the shell blocks and `Run:` lines pass `bash -n` and `shellcheck`; `go test ./...` of the export passes (2026-10-16). Each of 33 single-point mutations (selection without the ring, host-bound entries or sources in the ring, the start instead of the last position, an unsorted set, no ring or no cursor stored, the ring stored before the floor check, a field written with the switch off, no admission check, the check ignoring the switch, counting the source, the check moved before the quarantine or source check, after the lane budget or after the insert, no unmarkable rule, the rule with the switch off, the view dropping or sharing the ring, no pre-v21 arm, no restore call, each of the eight restore conditions dropped, the cutover bound off by one, the server dropping the ring or the cursor) is caught by at least one named test. Bazel was not run (no offline module cache for the stubbed modules); Step 22 runs it on the branch.
+- **Historical drafting check (stand-in evidence only, not current Task70 acceptance).** Every code block of this task, applied from this text (each replace, insert and append as its step words it) to a `git archive` export of arbiter `526a721` on top of scratch stand-ins of Tasks 64–66 and 69 (Task 64's pin, fallout map, fixture and stage-3 rules, Task 65's FSM half, Task 66's v21 framing, restore skeleton and plain golden, Task 69's incarnation fields, pre-v21 arm and restore call) and contract-shaped scratch replace modules for Plan S3-E1's arbiter-proto fields and arbiter-core types, compiles with `go vet` clean and `gofmt` silent; the fourteen fsm and orchestrator tests fail to build as Step 4 states and pass after Steps 5–13, also under `-race`; the server test fails as Step 18 states and passes after Step 19; the shell blocks and `Run:` lines pass `bash -n` and `shellcheck`; `go test ./...` of the export passes (2026-10-16). Each of 33 single-point mutations (selection without the ring, host-bound entries or sources in the ring, the start instead of the last position, an unsorted set, no ring or no cursor stored, the ring stored before the floor check, a field written with the switch off, no admission check, the check ignoring the switch, counting the source, the check moved before the quarantine or source check, after the lane budget or after the insert, no unmarkable rule, the rule with the switch off, the view dropping or sharing the ring, no pre-v21 arm, no restore call, each of the eight restore conditions dropped, the cutover bound off by one, the server dropping the ring or the cursor) is caught by at least one named test. Bazel was not run (no offline module cache for the stubbed modules); Step 22 runs it on the branch.
 
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-git rev-parse --abbrev-ref HEAD
-git status --porcelain
-git log -1 --format=%s
-CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)"
-PROTO="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)"
-for p in 'func (f *FSM) poolVerifierLocked(' 'func (f *FSM) verifierEntryLocked(' 'func (f *FSM) stage3SwitchOnLocked(' 'func stage3SwitchValue(' 'func (f *FSM) blockTrackLocked(' 'func stage3FieldsPresent(' 'func validateStage3State(' 'func validateStage3Incarnations(' 'func stage3FSM(' 'func stage3Update(' 'func turnOnStage3Switch(' 'func turnOnStage3SwitchesThrough(' 'func ownerAwareFSM(' 'func memberEntry(' 'func stage3TestMember(' 'func rejectStage3Unchanged(' 'func mustWorkSet(' 'func (f *FSM) BlockVerificationView('; do
-  grep -rqF -- "$p" fsm || echo "missing in fsm: $p"
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "dirty predecessor; stop" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s)" || exit 1
+[ "$subject" = 'feat(stage3): serve scoped_keeper_path and purge_members in the table registry (Task 69)' ] || { echo "not the final Task69 commit; stop" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+for path in "$T64/task70-base-sha" "$T64/task70-fsm-head-sha" "$T64/task70-verified-head" "$W/fsm/selection_stage3_test.go"; do
+ [ ! -e "$path" ] && [ ! -L "$path" ] || { echo "Task70 output/saved attempt exists; reconcile before reuse" >&2; exit 1; }
 done
-grep -rqE 'Stage3SwitchOwnerAwareSelection +=' fsm || echo "missing in fsm: Stage3SwitchOwnerAwareSelection"
-for p in 'stage3PendingProtoFields = map' 'func requireEveryFieldExcept(' 'func blockVerificationToPB(' 'func stage3BlockVerificationView('; do
-  grep -rqF -- "$p" server || echo "missing in server: $p"
-done
-grep -rqE 'AdmissionCodeVerifiersUnavailable +AdmissionCode += 12' "$CORE" || echo "missing in arbiter-core: AdmissionCodeVerifiersUnavailable"
-grep -qF 'MarkedCursorBlock' "$PROTO/gen/pb/arbiter.pb.go" || echo "missing in arbiter-proto: BlockVerification.marked_cursor_block"
-grep -rhE '"BlockVerification\.(eligible_ring|ring_position|marked_cursor_block)":' server | wc -l
-grep -rn 'func (f \*FSM) poolRingLocked\|func (f \*FSM) eligibleRingLocked\|func ringStart\|func initialVerifierSet\|func validateStage3Selection\|Unmarkable *\[\]uint64\|EligibleRing *\[\]string' fsm server orchestrator
+python3 -I -c 'import pathlib,re;root=pathlib.Path(".");allfsm="\n".join(p.read_text()for p in(root/"fsm").glob("*.go"));allsrv="\n".join(p.read_text()for p in(root/"server").glob("*.go"));checks=["func (f *FSM) poolVerifierLocked(", "func (f *FSM) verifierEntryLocked(", "func (f *FSM) stage3SwitchOnLocked(", "func stage3SwitchValue(", "func (f *FSM) blockTrackLocked(", "func stage3FieldsPresent(", "func validateStage3State(", "func validateStage3Incarnations(", "func stage3FSM(", "func stage3Update(", "func turnOnStage3Switch(", "func turnOnStage3SwitchesThrough(", "func ownerAwareFSM(", "func memberEntry(", "func stage3TestMember(", "func rejectStage3Unchanged(", "func mustWorkSet(", "func (f *FSM) BlockVerificationView(", "stage3PendingProtoFields = map", "func requireEveryFieldExcept(", "func blockVerificationToPB(", "func stage3BlockVerificationView("];assert all((allfsm if "server"not in n and n not in ["stage3PendingProtoFields = map","func requireEveryFieldExcept(","func blockVerificationToPB(","func stage3BlockVerificationView("]else allsrv).count(n)==1 for n in checks);assert len(re.findall(r"Stage3SwitchOwnerAwareSelection\s+=",allfsm))==1;assert all(allsrv.count(chr(34)+"BlockVerification."+k+chr(34)+":")==1 for k in ["eligible_ring","ring_position","marked_cursor_block"]);assert all(n not in allfsm for n in ["func (f *FSM) poolRingLocked(","func (f *FSM) eligibleRingLocked(","func ringStart(","func initialVerifierSet(","func validateStage3Selection("]);assert re.search(r"Unmarkable\s+\[\]uint64|EligibleRing\s+\[\]string",allfsm)is None;print("Task70 predecessor interfaces verified")' || exit 1
+CORE="$(go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)" || exit 1
+PROTO="$(go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)" || exit 1
+[ -n "$CORE" ] && [ -n "$PROTO" ] || exit 1
+grep -rqE 'AdmissionCodeVerifiersUnavailable +AdmissionCode += 12' "$CORE" || exit 1
+grep -qF MarkedCursorBlock "$PROTO/gen/pb/arbiter.pb.go" || exit 1
+base="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+(set -C; printf '%s\n' "$base" > "$T64/task70-base-sha") || exit 1
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; `git status --porcelain` prints nothing; the subject of Task 69's last commit, ending in `(Task 69)`; no `missing` line; `3` (the three `BlockVerification` entries Task 64's pin fallout left for this task); and the last `grep` prints nothing (none of this task's names exists yet). If the branch, the tree or `HEAD` differs, a seam is missing or one of this task's names already exists, stop: Tasks 64–69 land in order on this branch before this task (contract §48), and a missing seam is an earlier task's step to finish, not this task's to invent.
+Expected: retained Task64 worktree/branch, signed clean final Task69 and each exact seam verified; actual base saved once. Historical draft expectations: `urwt/codex/multi-source-s3e`; `git status --porcelain` prints nothing; the subject of Task 69's last commit, ending in `(Task 69)`; no `missing` line; `3` (the three `BlockVerification` entries Task 64's pin fallout left for this task); and the last `grep` prints nothing (none of this task's names exists yet). If the branch, the tree or `HEAD` differs, a seam is missing or one of this task's names already exists, stop: Tasks 64–69 land in order on this branch before this task (contract §48), and a missing seam is an earlier task's step to finish, not this task's to invent.
 
 - [ ] **Step 2: Write the failing FSM tests**
 
@@ -13679,9 +14573,9 @@ func restoresBothWaysOA(t *testing.T, f *FSM, data []byte) {
 }
 
 // forgedVerificationOA is f's container with block's verification record
-// edited by forge: a bare replica restored from f's own container is edited
-// and snapshotted again, so every other byte is f's whatever body kind the
-// writer chose.
+// edited by forge: a bare replica restored from f's plain container is edited
+// and snapshotted as plain again. snapshotBytes forces SnapshotBodyPlain;
+// this helper does not exercise the auto/interned Persist lane.
 func forgedVerificationOA(t *testing.T, f *FSM, block uint64, forge func(*BlockVerification)) []byte {
 	t.Helper()
 	g := restoreInto(t, snapshotBytes(t, f))
@@ -14310,7 +15204,22 @@ func TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock(t *testing.T) {
 
 - [ ] **Step 4: Run the new tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && go test ./fsm/ ./orchestrator/ -run 'TestOwnerAwareSelection|TestMarkReplayingRefusesAnEligibleRingBelowThree|TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible|TestVerifiersUnavailable|TestWorkSetDropsAnUnmarkableBlock|TestRestoreRefusesAnEligibleRing|TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing|TestBlockVerificationServesTheEligibleRing|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock' -count=1`
+Run:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+set +e
+go test ./fsm/ ./orchestrator/ -run 'TestOwnerAwareSelection|TestMarkReplayingRefusesAnEligibleRingBelowThree|TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible|TestVerifiersUnavailable|TestWorkSetDropsAnUnmarkableBlock|TestRestoreRefusesAnEligibleRing|TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing|TestBlockVerificationServesTheEligibleRing|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock' -count=1 > "$T64/task70-red4.log" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || { cat "$T64/task70-red4.log"; exit 1; }
+grep -F "fsm/selection_stage3_test.go" "$T64/task70-red4.log" || exit 1
+grep -E "Unmarkable|undefined:" "$T64/task70-red4.log" || exit 1
+grep -F "orchestrator/dispatch_test.go" "$T64/task70-red4.log" || exit 1
+```
 
 Expected: both test packages fail to build. The fsm errors begin `fsm/selection_stage3_test.go:…: ws.Unmarkable undefined (type WorkSet has no field or method Unmarkable)` and continue with `undefined: initialVerifierSet`, `undefined: blockSeededPosition`, `f.eligibleRingLocked undefined (type *FSM has no field or method eligibleRingLocked)`, `bv.EligibleRing undefined (type *BlockVerification has no field or method EligibleRing)` and `f.poolRingLocked undefined (type *FSM has no field or method poolRingLocked)`, then `too many errors` and `FAIL	github.com/sentioxyz/arbiter/fsm [build failed]`; the orchestrator errors are `orchestrator/dispatch_test.go:…: ws.Unmarkable undefined (type fsm.WorkSet has no field or method Unmarkable)` (twice) and `unknown field Unmarkable in struct literal of type fsm.WorkSet`, then `FAIL	github.com/sentioxyz/arbiter/orchestrator [build failed]`. Any other error means a seam of Step 1 differs from its contract: stop and reconcile it first.
 
@@ -14731,7 +15640,7 @@ func ringIsSortedAndUnique(ring []string) bool {
 
 - [ ] **Step 13: Wire the rules into `stage3FieldsPresent` and `validateStage3State`**
 
-Run `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && grep -n 'func stage3FieldsPresent\|func validateStage3State' fsm/*.go` to find both functions. Expected: one line in `fsm/snapshot.go` (`func stage3FieldsPresent(doc *snapshotDoc) bool {`) and one in `fsm/stage3_restore.go` (`func validateStage3State(st *State) error {`), where Task 66 put them; if Task 66 put `stage3FieldsPresent` elsewhere, edit it there.
+Run `set -eo pipefail; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1; export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; cd "$W" || exit 1; grep -n 'func stage3FieldsPresent\|func validateStage3State' fsm/*.go` to find both functions. Expected: one line in `fsm/snapshot.go` (`func stage3FieldsPresent(doc *snapshotDoc) bool {`) and one in `fsm/stage3_restore.go` (`func validateStage3State(st *State) error {`), where Task 66 put them; if Task 66 put `stage3FieldsPresent` elsewhere, edit it there.
 
 In `fsm/snapshot.go`, insert immediately before the final `return false` of `func stage3FieldsPresent(` (after the incarnation check Task 69 added there):
 
@@ -14754,30 +15663,114 @@ In `fsm/stage3_restore.go`, insert immediately before the final `return nil` of 
 
 - [ ] **Step 14: Run the new tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && test -z "$(gofmt -l fsm orchestrator)" && bazel run //:gazelle && git diff --stat -- fsm/BUILD.bazel orchestrator/BUILD.bazel && go test ./fsm/ ./orchestrator/ -run 'TestOwnerAwareSelection|TestMarkReplayingRefusesAnEligibleRingBelowThree|TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible|TestVerifiersUnavailable|TestWorkSetDropsAnUnmarkableBlock|TestRestoreRefusesAnEligibleRing|TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing|TestBlockVerificationServesTheEligibleRing|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l fsm orchestrator)" || exit 1
+[ -z "$formatted" ] || exit 1
+bazel run --repository_disable_download //:gazelle || exit 1
+git diff --stat -- fsm/BUILD.bazel orchestrator/BUILD.bazel || exit 1
+go test ./fsm/ ./orchestrator/ -run 'TestOwnerAwareSelection|TestMarkReplayingRefusesAnEligibleRingBelowThree|TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible|TestVerifiersUnavailable|TestWorkSetDropsAnUnmarkableBlock|TestRestoreRefusesAnEligibleRing|TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing|TestBlockVerificationServesTheEligibleRing|TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock' -race -count=1 -json > "$T64/task70-step14.json" 2>&1 || { cat "$T64/task70-step14.json"; exit 1; }
+python3 -I -c 'import json,sys,collections;rows=[json.loads(l)for l in open(sys.argv[1])if l.strip()];names=["TestOwnerAwareSelectionOffSelectsByteIdentically", "TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet", "TestOwnerAwareSelectionDrawsFromTheActivePoolOnly", "TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor", "TestMarkReplayingRefusesAnEligibleRingBelowThree", "TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible", "TestVerifiersUnavailableIsCheckedRightAfterSourceUnavailable", "TestVerifiersUnavailableLeavesTheCoordinateUnspent", "TestWorkSetDropsAnUnmarkableBlockUntilTheEligibleCountChanges", "TestRestoreRefusesAnEligibleRingThatDoesNotYieldTheVerifierSet", "TestRestoreRefusesAnEligibleRingBeforeTheOwnerAwareSelectionSwitch", "TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing", "TestBlockVerificationServesTheEligibleRing", "TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock"];terminal=[r for r in rows if r.get("Action")in("pass","fail","skip")and r.get("Test")and "/"not in r["Test"]];assert collections.Counter(r["Test"]for r in terminal)==collections.Counter(names);assert all(r["Action"]=="pass"for r in terminal);assert not any(r.get("Action")=="fail"for r in rows);print("Task70 named outcomes verified")' "$T64/task70-step14.json" || exit 1
+```
 
 Expected: `gofmt` lists nothing (if it lists a file, run `gofmt -w` on it and repeat); gazelle adds `"selection_stage3_test.go",` to the `srcs` of `go_test(name = "fsm_test")` in `fsm/BUILD.bazel`, right after `"seal_test.go",`, and changes nothing else (the diff stat names `fsm/BUILD.bazel` with one insertion: the test imports only `//accumulator`, `@arbiter_core//:arbiter-core`, `@arbiter_core//authority` and `@arbiter_core//wire`, which `fsm_test` already depends on, and `orchestrator_test` already depends on `@arbiter_core//wire`); then `--- PASS:` for `TestOwnerAwareSelectionOffSelectsByteIdentically`, `TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet`, `TestOwnerAwareSelectionDrawsFromTheActivePoolOnly`, `TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor`, `TestMarkReplayingRefusesAnEligibleRingBelowThree`, `TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible`, `TestVerifiersUnavailableIsCheckedRightAfterSourceUnavailable`, `TestVerifiersUnavailableLeavesTheCoordinateUnspent`, `TestWorkSetDropsAnUnmarkableBlockUntilTheEligibleCountChanges`, `TestRestoreRefusesAnEligibleRingThatDoesNotYieldTheVerifierSet`, `TestRestoreRefusesAnEligibleRingBeforeTheOwnerAwareSelectionSwitch`, `TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing`, `TestBlockVerificationServesTheEligibleRing` and `TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock`, no `--- FAIL`, and `ok` for both packages.
+
+- [ ] **Step 14a: Add the accepted actual-Persist body coverage**
+
+Append this complete test to `fsm/selection_stage3_test.go` only after the original Step14 fourteen-name acceptance. It uses the existing bytes/fmt/testing imports and inherited persistedSnapshotBytes/SetSnapshotBodyMode APIs; it neither replaces snapshotBytes nor recaptures a golden. The literal test is the root-approved bee55f66 addendum and is additional coverage, not a claimed product RED/fix.
+
+```go
+// TestStage3SelectionRecordRestoresBothPersistedBodies proves actual Persist
+// kind1/auto and kind0/plain coverage for a nonempty selection record.
+func TestStage3SelectionRecordRestoresBothPersistedBodies(t *testing.T) {
+	f, a := ownerAwareFSM(t)
+	addPoolVerifiersOA(t, f, a, "v4", "v5")
+	key, account := fixedClient(t)
+	block := claimedBlockOA(t, f, key, account, 1, 1)
+	markReplayingOA(t, f, block)
+	wantRecord := verificationJSONOA(t, f, block)
+	for _, tc := range []struct {
+		name string
+		mode SnapshotBodyMode
+		kind byte
+	}{
+		{"auto", SnapshotBodyAuto, snapshotBodyInterned},
+		{"plain", SnapshotBodyPlain, snapshotBodyPlain},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := f.SetSnapshotBodyMode(tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			data := persistedSnapshotBytes(t, f)
+			if len(data) < snapshotV21EnvelopePrefixBytes || !bytes.Equal(data[:4], []byte("AFSM")) || data[4] != snapshotVersionV21 || data[5] != tc.kind {
+				t.Fatalf("Persist did not write v21 body kind %d", tc.kind)
+			}
+			restoresBothWaysOA(t, f, data)
+			g := restoreInto(t, data)
+			if got := verificationJSONOA(t, g, block); got != wantRecord {
+				t.Fatalf("restored selection record = %s, want %s", got, wantRecord)
+			}
+			bv := g.st.Verifications[block]
+			oldPosition := bv.RingPosition
+			bv.RingPosition = uint32((int(oldPosition) + 1) % len(bv.EligibleRing))
+			badPosition := bv.RingPosition
+			if err := g.SetSnapshotBodyMode(tc.mode); err != nil {
+				t.Fatal(err)
+			}
+			forged := persistedSnapshotBytes(t, g)
+			if len(forged) < snapshotV21EnvelopePrefixBytes || forged[4] != snapshotVersionV21 || forged[5] != tc.kind {
+				t.Fatalf("forged Persist did not write v21 body kind %d", tc.kind)
+			}
+			restoreRefusedBothWays(t, f, forged,
+				fmt.Sprintf("block %d ring position %d is not the block-seeded position %d", block, badPosition, oldPosition))
+		})
+	}
+}
+```
+
+Run: `go test -p=2 ./fsm/ -run '^TestStage3SelectionRecordRestoresBothPersistedBodies$' -race -count=1 -json || exit 1`. Retain the complete output and require one top-level PASS plus both auto/plain RUN/PASS identities. Byte5 must be1/0 respectively; honest bare/configured restores and selected-record equality must hold, and both forged-body restores must refuse with the exact expected rule. Include this exact literal in the final independent replay; never substitute the final test file. Existing full-package/final checks remain required.
 
 - [ ] **Step 15: Run the whole fsm and orchestrator packages, the goldens and the fsm red lines**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-go test ./fsm/ ./orchestrator/ -race -count=1
-go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestPurgeSwitchOffKeepsEveryIncarnationUnscoped|TestEvictionVoidingOffKeepsTodaysAdmission' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
-go vet ./fsm/ ./orchestrator/
-grep -rn 'time\.Now' fsm/
-git status --porcelain fsm/testdata
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+go test ./fsm/ ./orchestrator/ -race -count=1 || exit 1
+go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour|TestPurgeSwitchOffKeepsEveryIncarnationUnscoped|TestEvictionVoidingOffKeepsTodaysAdmission' -count=1 -json > "$T64/task70-goldens.json" 2>&1 || { cat "$T64/task70-goldens.json"; exit 1; }
+python3 -I -c 'import collections,json,sys;rows=[json.loads(l)for l in open(sys.argv[1])if l.strip()];assert rows and all(isinstance(r,dict)for r in rows);names=["TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims", "TestPreActivationHistoryIsByteIdenticalAcrossTracks", "TestL3CommitmentPreimagesAreFrozen", "TestL3TrackHeaderPreimagesAreFrozen", "TestL3TransitionHeaderPreimageIsFrozen", "TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease", "TestStage3V21PlainContainerGolden", "TestStage3V21InternedContainerGolden", "TestStage3ActivationWithEverySwitchOffChangesNoBehaviour", "TestPurgeSwitchOffKeepsEveryIncarnationUnscoped", "TestEvictionVoidingOffKeepsTodaysAdmission"];terminal=[r for r in rows if r.get("Action")in("pass","fail","skip")and r.get("Test")and "/"not in r["Test"]];assert collections.Counter(r["Test"]for r in terminal)==collections.Counter(names);assert all(r["Action"]=="pass"for r in terminal);assert not any(r.get("Action")=="fail"for r in rows);packages=[r for r in rows if not r.get("Test")and r.get("Action")in("pass","fail","skip")];assert len(packages)==1 and packages[0].get("Package")=="github.com/sentioxyz/arbiter/fsm"and packages[0]["Action"]=="pass";print("Task70 eleven golden and switch-off outcomes verified")' "$T64/task70-goldens.json" || exit 1
+go vet ./fsm/ ./orchestrator/ || exit 1
+if grep -rn --include='*.go' --exclude='*_test.go' 'time\.Now' fsm/; then echo "FSM wall-clock read; stop" >&2; exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit 1; fi
+base="$(cat "$T64/task70-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git diff --exit-code "$base" -- fsm/testdata fsm/l3_track_golden_test.go accumulator/testdata || exit 1
 ```
 
-Expected: `ok  	github.com/sentioxyz/arbiter/fsm` and `ok  	github.com/sentioxyz/arbiter/orchestrator` (every earlier task's tests included); `--- PASS:` for each of the eleven listed tests and `ok`; `go vet` prints nothing; the `time.Now` grep prints nothing; `git status --porcelain fsm/testdata` prints nothing (no golden was rewritten: `TestStage3V21PlainContainerGolden` and `TestStage3V21InternedContainerGolden` compare against their frozen bytes, which carry no selection field because `stage3V21GoldenFSM` turns no switch on). A failing golden or switch-off test means a new branch runs with its switch off: stop and find it.
+Expected: the whole FSM/orchestrator race run succeeds, then exactly eleven unique named golden/switch-off top-level PASS outcomes and one successful FSM package terminal are checked in `$T64/task70-goldens.json`; no missing, duplicate, extra, SKIP, FAIL or malformed outcome is accepted. The checker prints `Task70 eleven golden and switch-off outcomes verified`. Vet prints nothing; no production FSM Go file reads `time.Now`; protected testdata and frozen preimage files remain identical to the saved actual predecessor. A failing golden or switch-off result stops the task; never recapture a fixture to make the check pass.
 
 - [ ] **Step 16: Commit the FSM half**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
-git -C "$W" add fsm orchestrator
-git -C "$W" status --porcelain
-git -C "$W" commit -m "feat(stage3): owner-aware selection from the pool's eligible ring (Task 70)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+expected="$(cat "$T64/task70-base-sha")" || exit 1
+[[ "$before" =~ ^[0-9a-f]{40}$ ]] && [ "$before" = "$expected" ] || exit 1
+config_name="$(git -C "$W" config --worktree user.name)" || exit 1
+config_email="$(git -C "$W" config --worktree user.email)" || exit 1
+config_sign="$(git -C "$W" config --worktree commit.gpgsign)" || exit 1
+[ "$config_name" = poetry ] && [ "$config_email" = chen@sentio.xyz ] && [ "$config_sign" = true ] || exit 1
+git -C "$W" add fsm orchestrator || exit 1
+git -C "$W" status --porcelain || exit 1
+git -C "$W" commit -S -m "feat(stage3): owner-aware selection from the pool's eligible ring (Task 70)
 
 Switch 3 of housegate spec 2026-10-14 §10.4 (owner_aware_selection,
 §7.3). With the switch on, MarkReplaying draws the verifier set from
@@ -14793,7 +15786,16 @@ three, so the orchestrator proposes nothing for it. Restore checks
 every stored record (validateStage3Selection) and refuses one in a
 pre-v21 container. With the switch off every path is today's.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$after" =~ ^[0-9a-f]{40}$ ]] && [ "$after" != "$before" ] || exit 1
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || exit 1
+[ ! -e "$T64/task70-fsm-head-sha" ] && [ ! -L "$T64/task70-fsm-head-sha" ] || exit 1
+(set -C; printf '%s\n' "$after" > "$T64/task70-fsm-head-sha") || exit 1
 ```
 
 Expected: `git status --porcelain` lists only staged entries (`M ` for `fsm/BUILD.bazel`, `fsm/admission.go`, `fsm/apply.go`, `fsm/reads_verification.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `fsm/select.go`, `fsm/snapshot.go`, `fsm/stage3_restore.go`, `fsm/state.go`, `orchestrator/dispatch_test.go`; `A ` for `fsm/selection_stage3_test.go`), and the commit succeeds.
@@ -14803,13 +15805,16 @@ Expected: `git status --porcelain` lists only staged entries (`M ` for `fsm/BUIL
 Delete the three pin-fallout entries this task owns:
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-F="$(grep -l 'stage3PendingProtoFields = map' server/*_test.go)"; echo "$F"
-sed -i '' -E '/"BlockVerification\.(eligible_ring|ring_position|marked_cursor_block)":/d' "$F" && gofmt -w "$F"
-grep -rnE 'BlockVerification\.(eligible_ring|ring_position|marked_cursor_block)' server/
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+python3 -I -c 'import pathlib,re;p=pathlib.Path("server/safestate_stage3_test.go");s=p.read_text();keys=["eligible_ring","ring_position","marked_cursor_block"];pattern=r"^[ \t]*\"BlockVerification\.(?:"+"|".join(keys)+r")\":[^\n]*\n";rows=re.findall(pattern,s,re.M);assert len(rows)==3 and all(sum(k in r for r in rows)==1 for k in keys);p.write_text(re.sub(pattern,"",s,flags=re.M))' || exit 1
+gofmt -w server/safestate_stage3_test.go || exit 1
+if grep -nE 'BlockVerification\.(eligible_ring|ring_position|marked_cursor_block)' server/safestate_stage3_test.go; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit 1; fi
 ```
 
-Expected: one file name (`server/safestate_stage3_test.go`, contract §44), then nothing from the last `grep`.
+Expected: no stdout is required from the Python edit or `gofmt -w`; the last `grep` prints nothing, and exactly the three owned map entries are removed from `server/safestate_stage3_test.go` (contract §44).
 
 In `server/safestate_stage3_test.go`, in `stage3BlockVerificationView()`, replace (`:94-97`):
 
@@ -14850,7 +15855,22 @@ The test's top-level check stays Task 64's `requireEveryFieldExcept(t, want)`, w
 
 - [ ] **Step 18: Run it and see it fail**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && test -z "$(gofmt -l server)" && go test ./server/ -run 'TestBlockVerificationToPBCarriesEveryField' -count=1`
+Run:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+set +e
+go test ./server/ -run 'TestBlockVerificationToPBCarriesEveryField' -count=1 > "$T64/task70-red18.log" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 1 ] || { cat "$T64/task70-red18.log"; exit 1; }
+grep -F "TestBlockVerificationToPBCarriesEveryField" "$T64/task70-red18.log" || exit 1
+grep -E -- "--- FAIL: TestBlockVerificationToPBCarriesEveryField" "$T64/task70-red18.log" || exit 1
+grep -F "blockVerificationToPB =" "$T64/task70-red18.log" || exit 1
+```
 
 Expected: `--- FAIL: TestBlockVerificationToPBCarriesEveryField` with a line that begins `safestate_stage3_test.go:…: blockVerificationToPB = header:{l3_block_seq:5` and carries `want` (the converter drops the three fields, so `proto.Equal` fails; protobuf's text format may put one or two spaces between fields), then `FAIL	github.com/sentioxyz/arbiter/server`.
 
@@ -14879,24 +15899,53 @@ with:
 
 - [ ] **Step 20: Run the server package and see it pass**
 
-Run: `W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" && test -z "$(gofmt -l server)" && go test ./server/ -run 'TestBlockVerificationToPBCarriesEveryField|TestL3BlockHeaderMirrorsProto|TestTableRegistryMirrorsProto|TestGetBlockVerification' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)' && go test ./server/ -race -count=1`
+Run:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(gofmt -l server)" || exit 1
+[ -z "$formatted" ] || exit 1
+go test ./server/ -run 'TestBlockVerificationToPBCarriesEveryField|TestL3BlockHeaderMirrorsProto|TestTableRegistryMirrorsProto|TestGetBlockVerification' -race -count=1 -json > "$T64/task70-step20.json" 2>&1 || { cat "$T64/task70-step20.json"; exit 1; }
+python3 -I -c 'import json,sys,collections;rows=[json.loads(l)for l in open(sys.argv[1])if l.strip()];names=["TestL3BlockHeaderMirrorsProto", "TestBlockVerificationToPBCarriesEveryField", "TestGetBlockVerificationServesTheSealedBlock", "TestGetBlockVerificationNotFoundAndDataLoss", "TestTableRegistryMirrorsProto"];terminal=[r for r in rows if r.get("Action")in("pass","fail","skip")and r.get("Test")and "/"not in r["Test"]];assert collections.Counter(r["Test"]for r in terminal)==collections.Counter(names);assert all(r["Action"]=="pass"for r in terminal);assert not any(r.get("Action")=="fail"for r in rows);print("Task70 named outcomes verified")' "$T64/task70-step20.json" || exit 1
+go test ./server/ -race -count=1 || exit 1
+```
 
 Expected: `--- PASS:` for `TestL3BlockHeaderMirrorsProto`, `TestBlockVerificationToPBCarriesEveryField`, `TestGetBlockVerificationServesTheSealedBlock`, `TestGetBlockVerificationNotFoundAndDataLoss` and `TestTableRegistryMirrorsProto`, then `ok  	github.com/sentioxyz/arbiter/server` twice (the named tests, then the whole package).
 
 - [ ] **Step 21: Commit the server half**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
-git -C "$W" add server
-git -C "$W" status --porcelain
-git -C "$W" commit -m "feat(stage3): serve the eligible ring in GetBlockVerification (Task 70)
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+expected="$(cat "$T64/task70-fsm-head-sha")" || exit 1
+[[ "$before" =~ ^[0-9a-f]{40}$ ]] && [ "$before" = "$expected" ] || exit 1
+config_name="$(git -C "$W" config --worktree user.name)" || exit 1
+config_email="$(git -C "$W" config --worktree user.email)" || exit 1
+config_sign="$(git -C "$W" config --worktree commit.gpgsign)" || exit 1
+[ "$config_name" = poetry ] && [ "$config_email" = chen@sentio.xyz ] && [ "$config_sign" = true ] || exit 1
+git -C "$W" add server || exit 1
+git -C "$W" status --porcelain || exit 1
+git -C "$W" commit -S -m "feat(stage3): serve the eligible ring in GetBlockVerification (Task 70)
 
 blockVerificationToPB sets BlockVerification.eligible_ring,
 ring_position and marked_cursor_block (arbiter-proto fields 14-16)
 from the FSM's stored selection record, and stage3PendingProtoFields
 drops the three entries the pin left for this task.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$after" =~ ^[0-9a-f]{40}$ ]] && [ "$after" != "$before" ] || exit 1
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || exit 1
 ```
 
 Expected: `M  server/safestate_stage3.go` and `M  server/safestate_stage3_test.go` (the map is in the latter), then the commit succeeds.
@@ -14904,31 +15953,93 @@ Expected: `M  server/safestate_stage3.go` and `M  server/safestate_stage3_test.g
 - [ ] **Step 22: Full verification of the branch before the push**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"; cd "$W" || exit 1
-test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && echo gofmt-clean
-bazel run //:gazelle && git status --porcelain
-bazel build //... && bazel test //... --test_output=errors
-bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/
-BASE="$(git merge-base origin/main HEAD)"
-git diff --name-status "$BASE" HEAD -- fsm/testdata fsm/l3_track_golden_test.go accumulator/testdata
-git log --reverse --format=%s "$BASE"..HEAD
-git log --format=%s "$BASE"..HEAD | grep -vcE '\(Task (6[4-9]|70)\)$'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+formatted="$(git ls-files -z --cached --others --exclude-standard '*.go' | xargs -0 gofmt -l)" || exit 1
+[ -z "$formatted" ] || { printf '%s\n' "$formatted"; exit 1; }
+go vet ./... || exit 1
+go test ./... -race -count=1 || exit 1
+bazel run --repository_disable_download //:gazelle || exit 1
+dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$dirty" ] || exit 1
+bazel build --repository_disable_download //... || exit 1
+bazel test --repository_disable_download //... --test_output=errors || exit 1
+deps="$(bazel query --repository_disable_download 'deps(//fsm:fsm, 1)')" || exit 1
+[ -n "$deps" ] || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*|*arbiter-proto*) echo "direct proto dependency; stop" >&2; exit 1;; esac
+if grep -rn --include='*.go' --exclude='*_test.go' 'time\.Now' fsm/; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit 1; fi
+BASE="$(git merge-base origin/main HEAD)" || exit 1
+[[ "$BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+protected="$(git diff --name-status "$BASE" HEAD -- fsm/testdata fsm/l3_track_golden_test.go accumulator/testdata)" || exit 1
+expected="$(printf 'A\tfsm/testdata/stage3_v21_interned.snapshot\nA\tfsm/testdata/stage3_v21_plain.snapshot')" || exit 1
+[ "$protected" = "$expected" ] || { echo "protected fixture range differs; stop" >&2; exit 1; }
+subjects="$(git log --reverse --format=%s "$BASE"..HEAD)" || exit 1
+python3 -I -c 'import re,sys;lines=sys.argv[1].splitlines();assert lines and lines[0]=="chore(deps): pin arbiter-proto, housegate and arbiter-core for stage 3 P5 (Task 64)";assert all(re.search(r"\(Task (6[4-9]|70)\)$",l)for l in lines)' "$subjects" || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+subject="$(git log -1 --format=%s)" || exit 1
+[ "$subject" = 'feat(stage3): serve the eligible ring in GetBlockVerification (Task 70)' ] || exit 1
+[ ! -e "$T64/task70-verified-head" ] && [ ! -L "$T64/task70-verified-head" ] || exit 1
+(set -C; printf '%s\n' "$head" > "$T64/task70-verified-head") || exit 1
 ```
 
 Expected: `gofmt-clean`; gazelle changes nothing (`git status --porcelain` prints nothing); every target builds and every test passes; the red-line `grep`s print nothing; the `testdata` diff lists exactly `A	fsm/testdata/stage3_v21_interned.snapshot` and `A	fsm/testdata/stage3_v21_plain.snapshot` (the two frozen fixtures Tasks 66 and 67 added) and nothing for `fsm/l3_track_golden_test.go` or `accumulator/testdata`; the branch log lists, oldest first, `chore(deps): pin arbiter-proto, housegate and arbiter-core for stage 3 P5 (Task 64)` and every commit of Tasks 64–70, the two of this task last; the final count is `0` (every commit names its task). Any other line stops the push.
 
 - [ ] **Step 23: Push the P5 branch (requires explicit user confirmation)**
 
-Remote write (push): needs explicit user confirmation in chat before running. It publishes branch `urwt/claude/multi-source-s3e` (the commits of Tasks 64–70) to `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests, `cut-release.yml` only by `workflow_dispatch`); K65 keeps the branch unreleased until Plan S3-E4 Task 78, and Plan S3-E3 continues on this worktree.
+Remote write (push): needs explicit user confirmation in chat before running. It publishes branch `urwt/codex/multi-source-s3e` (the commits of Tasks 64–70) to `github.com/sentioxyz/arbiter`. It opens no PR, merges nothing, creates no tag and starts no workflow (`ci.yml` runs on pushes to `main` and on pull requests, `cut-release.yml` only by `workflow_dispatch`); K65 keeps the branch unreleased until Plan S3-E4 Task 78, and Plan S3-E3 continues on this worktree.
 
-Confirm before running. Then, from fish or any shell (the two lines are the same in both):
+Confirm before running. Execute this Bash block; when handing the user a command use `bash <saved-block-file>` in fish. The confirmed scope includes branch reads and the exact checked-head push below; it does not authorize a force push or a fetch to repair divergence:
 
 ```bash
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e push -u origin HEAD
-git -C ~/src/remotesrc/claude/arbiter/multi-source-s3e rev-parse HEAD '@{u}'
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+branch="$(git rev-parse --abbrev-ref HEAD)" || exit 1
+[ "$branch" = urwt/codex/multi-source-s3e ] || exit 1
+receipt_dir="$HOME/.cache/s3e2-task70"
+mkdir -p -m 700 "$receipt_dir" || exit 1
+[ ! -e "$receipt_dir/final-head.txt" ] && [ ! -L "$receipt_dir/final-head.txt" ] || exit 1
+head="$(git rev-parse HEAD)" || exit 1
+verified="$(cat "$T64/task70-verified-head")" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" = "$verified" ] || exit 1
+dirty="$(git status --porcelain)" || exit 1
+[ -z "$dirty" ] || exit 1
+BASE="$(git merge-base origin/main HEAD)" || exit 1
+commits="$(git rev-list --reverse "$BASE".."$head")" || exit 1
+[ -n "$commits" ] || exit 1
+for revision in $commits; do
+ [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+ identity="$(git log -1 --format='%an <%ae> %G?' "$revision")" || exit 1
+ [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+ git verify-commit "$revision" || exit 1
+ message="$(git show -s --format=%B "$revision")" || exit 1
+ printf '%s\n' "$message" | python3 -I -c 'import re,subprocess,sys;m=sys.stdin.read();t="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";co=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",m);parsed=subprocess.run(["git","interpret-trailers","--parse"],input=m,text=True,check=True,capture_output=True).stdout.splitlines();assert co==[t] and parsed.count(t)==1' || exit 1
+done
+origin_url="$(git remote get-url origin)" || exit 1
+case "$origin_url" in git@github.com:sentioxyz/arbiter.git|git@github.com:sentioxyz/arbiter|https://github.com/sentioxyz/arbiter.git|https://github.com/sentioxyz/arbiter) ;; *) echo "unexpected origin repository; stop" >&2; exit 1;; esac
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+if [ -n "$remote" ]; then
+ remote_head="$(printf '%s\n' "$remote" | python3 -I -c 'import re,sys;x=sys.stdin.read().splitlines();assert len(x)==1;h,ref=x[0].split("\t");assert re.fullmatch(r"[0-9a-f]{40}",h)and ref=="refs/heads/"+sys.argv[1];print(h)' "$branch")" || exit 1
+ git merge-base --is-ancestor "$remote_head" "$head" || { echo "remote branch diverged or objects unavailable; stop, reconcile with confirmation" >&2; exit 1; }
+fi
+current="$(git rev-parse HEAD)" || exit 1
+[ "$current" = "$head" ] || exit 1
+git push origin "$head:refs/heads/$branch" || exit 1
+remote="$(git ls-remote --heads origin "refs/heads/$branch")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$branch")" ] || exit 1
+git config --worktree "branch.$branch.remote" origin || exit 1
+git config --worktree "branch.$branch.merge" "refs/heads/$branch" || exit 1
+current="$(git rev-parse HEAD)" || exit 1
+[ "$current" = "$head" ] || exit 1
+python3 -I -c 'import os,re,sys;p,h=sys.argv[1:];assert re.fullmatch(r"[0-9a-f]{40}",h);fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);f=os.fdopen(fd,"w");f.write(h+"\n");f.flush();os.fsync(f.fileno());f.close()' "$receipt_dir/final-head.txt" "$head" || exit 1
+printf '%s\n' "$head" 'Task70 checked branch head published'
 ```
 
-Expected: `* [new branch]      HEAD -> urwt/claude/multi-source-s3e` and `branch 'urwt/claude/multi-source-s3e' set up to track 'origin/urwt/claude/multi-source-s3e'.`, then the same commit hash twice (the local head and its upstream). If the remote refuses the push, or the branch already exists on the remote with other commits, stop and report to the user; never force-push.
+Expected: the exact observed checked SHA is pushed without force, independently read back and saved exclusively at `$HOME/.cache/s3e2-task70/final-head.txt`. Task71 consumes that receipt, exact final Task70 server subject and unchanged signed clean HEAD; no SHA is predicted. Historical draft output: `* [new branch]      HEAD -> urwt/codex/multi-source-s3e` and `branch 'urwt/codex/multi-source-s3e' set up to track 'origin/urwt/codex/multi-source-s3e'.`, then the same commit hash twice (the local head and its upstream). If the remote refuses the push, or the branch already exists on the remote with other commits, stop and report to the user; never force-push.
 
 ---
 
@@ -14945,12 +16056,12 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-E1's (�
   - `Stage3State` (`fsm/stage3.go`): Plans S3-E3 and S3-E4 append members, each `omitempty`; the members of §45 keep their names, tags and meaning.
   - `func (f *FSM) stage3MembershipRefusalLocked(next Params) string` (the Apply-only half): Plan S3-E3 Task 71 appends the per-group verifier floor of spec §6.1.
   - `func (f *FSM) onStage3SwitchOnLocked(name string)` (called once per switch turned on, after the new parameters are in place and before the cutover is recorded): Task 69 handles `purge`, Task 68 `eviction_voiding`; Plan S3-E3 adds `placement` (backfill, seal, cutover block) and `checkpoints`, Plan S3-E4 `narrowed_drain`.
-  - `func stage3FieldsPresent(doc *snapshotDoc) bool` and `func validateStage3State(st *State) error` (`fsm/stage3_restore.go`): each later stage-3 task appends its fields to the first and its restore rule to the second.
+  - `func stage3FieldsPresent(doc *snapshotDoc) bool` (`fsm/snapshot.go`) and `func validateStage3State(st *State) error` (`fsm/stage3_restore.go`): each later stage-3 task appends its fields to the first and its restore rule to the second.
   - `func (f *FSM) eligibleRingLocked(owner uint64, sources []string) []string`: Plan S3-E3 Task 73 adds the group half (and may change the signature in its own contract); admission, `MarkReplaying` and the WorkSet always call the same function, so their filters never differ.
   - `func initialVerifierSet(ring []string, position uint32) []string` and `validateStage3Selection`: Plan S3-E3 Task 74 extends the restore rule with stored re-selections.
   - `func (f *FSM) evictedSignerRefusalLocked(kind, nodeID string) string`: Plan S3-E3 calls it for `MemberReady` (`kind` `member_ready`) and `MemberCheckpoint` (`member_checkpoint`).
-  - `TableIncarnation.PurgeMembers`: Plan S3-E3 Task 71 fills it (at record time and at every member add while the incarnation is physical, K60) and adds the restore rule that it is a subset of the group's members and past members.
-- **Pin fallout (Task 64).** Pinning `PROTO_TAG_P5` adds protobuf fields that later tasks map; a mirror or every-field test that fails only because of such a field is handled, in Task 64's pin commit, by naming the field in the server test map `stage3PendingProtoFields map[string]string` (key `<Message>.<field>`, value the owning task, e.g. `"TableIncarnation.scoped_keeper_path": "Task 69"`), which `TestTableRegistryMirrorsProto`, `TestL3BlockHeaderMirrorsProto` and the test helper `requireEveryFieldExcept(t *testing.T, m proto.Message)` (Plan S3-A's `requireEveryField` minus the map's fields of that message) consult; the entries expected at the base (each added only when a test actually fails because of it): `TableIncarnation.scoped_keeper_path`, `TableIncarnation.purge_members` (Task 69), `BlockVerification.eligible_ring`, `BlockVerification.ring_position`, `BlockVerification.marked_cursor_block` (Task 70), `BlockVerification.group_key`, `group_members`, `group_fill`, `group_databases` (Plan S3-E3 Task 72), `BlockVerification.reselections`, `reselections_at_latch` (Plan S3-E3 Task 74), `L3BlockTrack.group_key` (Plan S3-E3 Task 72), `TableRegistrySnapshot.stage3` (Task 65), `TableRegistrySnapshot.groups` (Plan S3-E3 Task 71), `TableRegistrySnapshot.member_checkpoint_seqs` (Plan S3-E3 Task 75). The owning task deletes its entries; Plan S3-E4 Task 78 adds `TestNoStage3ProtoFieldIsPending` (the map is empty). Any other failure after the pin stops Task 64. The actual C2 predecessor adds a third pin failure, `TestManifestTableOwnerMatchesWireManifestOwner`. Task64 owns its exact18-FSM/20-wire field-name/type guard and `TestManifestOwnerPendingStage3FieldsAreExactlyZero`; preserve every18-field mapping and owner-attribution assertion, and refuse nonzero or allocated-empty pending values. Task69 replaces only that intermediate exemption with complete20-field FSM/wire mapping, detached purge_members and exact field coverage; `TestManifestOwnerAdapterCarriesAllTwentyFields` pins the transition. Proto numbers remain19/20;18 is the intermediate Go field count.
+  - `TableIncarnation.PurgeMembers`: Task69 declares/serves the two fields and full20-field adapter; Plan S3-E3 Task71 fills durable obligations at record time and member additions while physical (K60). Its final invariant requires current physical-group members to be included in purge_members; historical IDs survive delisting, pruning/removal of past members or whole groups. Keep the shape/before-placement guards, never reverse the subset to reject honest retained history. This is accepted producer direction, with actual71 verification still future.
+- **Pin fallout (Task 64).** Pinning `PROTO_TAG_P5` adds protobuf fields that later tasks map; a mirror or every-field test that fails only because of such a field is handled, in Task 64's pin commit, by naming the field in the server test map `stage3PendingProtoFields map[string]string` (key `<Message>.<field>`, value the owning task, e.g. `"TableIncarnation.scoped_keeper_path": "Task 69"`), which `TestTableRegistryMirrorsProto`, `TestL3BlockHeaderMirrorsProto` and the test helper `requireEveryFieldExcept(t *testing.T, m proto.Message)` (Plan S3-A's `requireEveryField` minus the map's fields of that message) consult; the entries expected at the base (each added only when a test actually fails because of it): `TableIncarnation.scoped_keeper_path`, `TableIncarnation.purge_members` (Task 69), `BlockVerification.eligible_ring`, `BlockVerification.ring_position`, `BlockVerification.marked_cursor_block` (Task 70), `BlockVerification.group_key`, `group_members`, `group_fill`, `group_databases` (Plan S3-E3 Task 72), `BlockVerification.reselections`, `reselections_at_latch` (Plan S3-E3 Task 74), `L3BlockTrack.group_key` (Plan S3-E3 Task 72), `TableRegistrySnapshot.stage3` (Task 65), `TableRegistrySnapshot.groups` (Plan S3-E3 Task 71), `TableRegistrySnapshot.member_checkpoint_seqs` (Plan S3-E3 Task 75). The owning task deletes its entries; Task69 additionally replaces the exact-zero intermediate18-field-FSM/20-field-wire adapter (field counts; proto tags stay19/20) in `fsm/manifest_owner_wire_test.go` with the complete20-field mapping and preserves every ownership/attribution assertion (accepted complete owning69 text; bounded source root e970 retains original full-race FAIL/cause UNKNOWN); Plan S3-E4 Task 78 adds `TestNoStage3ProtoFieldIsPending` (the map is empty). Any other failure after the pin stops Task 64.
 
 ### 45. Parameters, activation and the stage3 gate (Tasks 64–65)
 
@@ -14960,7 +16071,7 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-E1's (�
   - `type Stage3SwitchCutover struct{ Switch string; Epoch, BlockSeq, PromotionSeq, IncarnationSeq uint64 }` with JSON tags `switch`, `epoch`, `block_seq`, `promotion_seq`, `incarnation_seq,omitempty`: one per switch turned on, appended in §10.4 order; `Epoch` is the epoch the switch-on update produces; `BlockSeq` and `PromotionSeq` are `len(Blocks)` and `PromotionSeq` after every mutation of that Apply (for `placement` after its seal, Plan S3-E3); `IncarnationSeq` is set only for `purge`: the sequence the next registry incarnation gets, `uint64(len(TableRegistry.Incarnations)) + 1`.
   - Switch names (exported constants, §10.4 order): `Stage3SwitchPurge = "purge"`, `Stage3SwitchEvictionVoiding = "eviction_voiding"`, `Stage3SwitchOwnerAwareSelection = "owner_aware_selection"`, `Stage3SwitchPlacement = "placement"`, `Stage3SwitchReselection = "reselection"`, `Stage3SwitchCheckpoints = "checkpoints"`, `Stage3SwitchNarrowedDrain = "narrowed_drain"`; `func Stage3Switches() []string` (a fresh slice in that order); `func stage3SwitchValue(p *arbiter.Stage3Params, name string) bool` (false for nil `p`; panics on an unknown name, a programming error).
   - Helpers: `func (f *FSM) stage3ActiveLocked() bool` (`Params.Stage3 != nil`), `func (f *FSM) Stage3Active() bool`, `func (f *FSM) stage3SwitchOnLocked(name string) bool`, `func (f *FSM) Stage3SwitchOn(name string) bool`, `func cloneStage3Params(p *arbiter.Stage3Params) *arbiter.Stage3Params` (deep copy, nil stays nil; used by `cloneParams` and `normalizeConsensusParams`), `func (f *FSM) verifierEntryLocked(nodeID string) (arbiter.VerifierEntry, bool)`, `func (f *FSM) poolVerifierLocked(nodeID string) bool` (a non-evicted node with the VERIFIER role whose listed entry has no `host_indexer_id`: the network pool).
-  - `cloneVerifiers` (`fsm/signed_claims.go:93-102`) copies every field of `arbiter.VerifierEntry`, the `HostIndexerID` pointer and the key bytes detached. `listsVerifier` stays (node id, key).
+  - `cloneVerifiers` (`fsm/signed_claims.go`) copies every field of `arbiter.VerifierEntry`, the `HostIndexerID` pointer and the key bytes detached. `listsVerifier` stays (node id, key).
 - **Params-only rules** (`verifyConsensusTransition`, after the `tracks_enabled` rule at `fsm/consensus_updates.go:240-246` and before the `max_writers` defence; replayed by `validateConsensusHistory`): `func verifyStage3Transition(previous, next Params, update *arbiter.Stage3Params) (*arbiter.Stage3Params, error)` then `func verifyHostBoundVerifiers(previous, next Params, genesisID string) error`. Refusals, verbatim, in this order:
   - `consensus update cannot set stage3 before the tracks activation`
   - `consensus update setting stage3 must leave every switch off, strict_copies false and min_safe_copies 1`
@@ -14978,21 +16089,22 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-E1's (�
   - per entry without a `host_indexer_id`: `consensus update verifier %s sets host-bound fields without host_indexer_id` (any of `replica_signer`, `consent_jws`, `weight`, `failure_domain`, `verify`, `replicate`, `counts`, `shared_rmt` set), so pool entries keep their v20 bytes and the params digest of every earlier epoch is unchanged (Plan S3-E1 K58).
 - **Apply-only half** (`applyUpdateConsensusParams`, right after `signedClaimsMembershipLocked` at `fsm/consensus_updates.go:51-54`): `stage3MembershipRefusalLocked(next)` refuses an added host-bound entry whose node id names any `Nodes` record, whatever its status: `consensus update verifier %s: a member node_id must be unused by every registered SNode and verifier`. Plan S3-E3 appends the per-group floor (§44).
 - **Activation and cutovers** (`applyUpdateConsensusParams`): `func (f *FSM) stage3ActivationRefusalLocked() string` and `func (f *FSM) Stage3ActivationRefusal() string` return `stage3 activation requires the tracks activation` while `tracks_enabled` is not committed, else the stage-2 drain gate's own refusal string (`drainGateRefusalLocked`), else `""`; Apply runs the drain gate for every update as today, so the activation needs nothing else from state (no empty open block, no global prefix, unlike `tracksActivationRefusalLocked`). After `f.st.Params = next` and the tracks block, the activation calls `func (f *FSM) activateStage3Locked()` and every later update `func (f *FSM) recordStage3SwitchesLocked(previous *arbiter.Stage3Params)`, which, for the switch the update turns on, calls `onStage3SwitchOnLocked` and then appends its cutover (for `purge` with `IncarnationSeq`); both run before `ConsensusEpoch++`. `func (f *FSM) Stage3ActivationNodes() []string`: `PurgeNodeSet()` minus the SNodes whose si_indexers track is quarantined (`IndexerTrack.Quarantined`), sorted.
-- **Named tests, Task 64** (`fsm/stage3_params_test.go`, `fsm/stage3_activation_test.go`): `TestStage3ActivationSetsEveryParameterWithEverySwitchOff`, `TestStage3ActivationRequiresTheTracksActivation`, `TestStage3ActivationRefusesASwitchStrictCopiesOrAFloorAboveOne`, `TestStage3ActivationNeedsNoEmptyOpenBlockOrGlobalPrefix`, `TestStage3ActivationRunsTheStage2DrainGate`, `TestStage3ActivationWithAQuarantinedTrack`, `TestStage3ActivationWithEverySwitchOffChangesNoBehaviour`, `TestStage3MustBeCarriedOnceSet`, `TestStage3SwitchesAndStrictCopiesAreOneWay`, `TestStage3MinSafeCopiesAndGroupSizeNeverDecrease`, `TestStage3OneSwitchPerUpdate`, `TestStage3SwitchNeedsEveryEarlierSwitchCommitted`, `TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain`, `TestStage3PlacementNeedsADomainForEveryIndexer`, `TestStage3FailureDomainsNameOnlyEnrolledIndexers`, `TestStage3RecordsEachSwitchCutover`, `TestStage3RulesReplayOnRestore`, `TestHostBoundVerifierRefusedBeforeOwnerAwareSelection`, `TestHostBoundVerifierRules`, `TestHostBoundVerifierConsentIsVerifiedOnlyOnAddOrKeyRotation`, `TestVerifierHostIndexerIDNeverChanges`, `TestPoolVerifierCarriesNoHostBoundFields`, `TestMemberNodeIDMustBeUnusedByEveryRegisteredNode`, `TestCloneVerifiersCopiesEveryField` (reflection over every field of `arbiter.VerifierEntry` through `cloneVerifiers`, `cloneParams` and `normalizeConsensusParams`), `TestCloneParamsCopiesStage3`, `TestStage3ActivationNodesExemptTheSNodeOfAQuarantinedTrack`; the existing golden tests pass unchanged.
+- **Named tests, Task 64** (`fsm/stage3_params_test.go`, `fsm/stage3_activation_test.go`, `fsm/manifest_owner_wire_test.go`): `TestStage3ActivationSetsEveryParameterWithEverySwitchOff`, `TestStage3ActivationRequiresTheTracksActivation`, `TestStage3ActivationRefusesASwitchStrictCopiesOrAFloorAboveOne`, `TestStage3ActivationNeedsNoEmptyOpenBlockOrGlobalPrefix`, `TestStage3ActivationRunsTheStage2DrainGate`, `TestStage3ActivationWithAQuarantinedTrack`, `TestStage3ActivationWithEverySwitchOffChangesNoBehaviour`, `TestStage3MustBeCarriedOnceSet`, `TestStage3SwitchesAndStrictCopiesAreOneWay`, `TestStage3MinSafeCopiesAndGroupSizeNeverDecrease`, `TestStage3OneSwitchPerUpdate`, `TestStage3SwitchNeedsEveryEarlierSwitchCommitted`, `TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain`, `TestStage3PlacementNeedsADomainForEveryIndexer`, `TestStage3FailureDomainsNameOnlyEnrolledIndexers`, `TestStage3RecordsEachSwitchCutover`, `TestStage3RulesReplayOnRestore`, `TestHostBoundVerifierRefusedBeforeOwnerAwareSelection`, `TestHostBoundVerifierRules`, `TestHostBoundVerifierConsentIsVerifiedOnlyOnAddOrKeyRotation`, `TestVerifierHostIndexerIDNeverChanges`, `TestPoolVerifierCarriesNoHostBoundFields`, `TestMemberNodeIDMustBeUnusedByEveryRegisteredNode`, `TestCloneVerifiersCopiesEveryField` (reflection over every field of `arbiter.VerifierEntry` through `cloneVerifiers`, `cloneParams` and `normalizeConsensusParams`), `TestCloneParamsCopiesStage3`, `TestStage3ActivationNodesExemptTheSNodeOfAQuarantinedTrack`; `TestManifestOwnerPendingStage3FieldsAreExactlyZero` and `TestStage3ValueRulesHaveIndependentDefences`; the existing golden tests pass unchanged.
 - **Test fixture, Task 64** (`fsm/stage3_fixture_test.go`, used by Tasks 64–70 and Plans S3-E3/S3-E4): `stage3ActivationParams() *arbiter.Stage3Params` = `{GroupSize: 3, NetworkFillDefault: true, MinSafeCopies: 1, IndexerFailureDomains: [{0, "node:n0"}, {1, "node:n1"}], MaxLagPublications: 8, LagLow: 2, EvidenceTimeoutL2Blocks: 30, MaxUncleanedPartsPerPartition: 2000, MaxUncleanedPartsPerTable: 20000}`; `stage3Update(t, f) arbiter.ConsensusParamsUpdate` (`tracksUpdate` carrying the committed `stage3`); `activateStage3(t, f, a)`; `stage3FSM(t) (*FSM, *authority.Signer)` (`tracksFSM` plus the activation); `turnOnStage3Switch(t, f, a, name string)`; `stage3TestMember(host uint64) string` = `fmt.Sprintf("member-%d", host)`; `memberEntry(t, f, host uint64, node, domain string) arbiter.VerifierEntry` (all four flags true, weight 1, a fresh ed25519 key and replica signer, consent signed at `authoritytest.Iat` by the host's enrolment key); `rejectStage3Unchanged(t, f, cmd, reason)`.
 - **Leader gate, Task 65** (new `server/stage3_gate.go`): `const Stage3VotersMetadataKey = "arbiter-stage3-voters"`; `func (s *Server) stage3Gate(ctx context.Context, update arbiter.ConsensusParamsUpdate) error`, called after `tracksGate` in `UpdateConsensusParams`, which also takes `membershipMu` and the read barrier when `update.Stage3 != nil && !s.d.FSM.Stage3Active()`. It passes every update except the activation; for the activation, in this order: no non-voter, `FSM.Stage3ActivationRefusal()` empty, every node of `FSM.Stage3ActivationNodes()` advertised `arbiter.Stage3Feature` in a registration applied through this leader in the current term, every voter probed at the addresses named in `arbiter-stage3-voters` reports it and the probed ids are exactly the voters. The voter probe is `func (s *Server) probeFeatureVoters(ctx context.Context, voters []string, metadataKey, feature, gate, release string) error`, which `probeTracksVoters` now calls with its own values, so every tracks refusal text stays byte-identical. Refusals (FailedPrecondition): the tracks gate's texts with `tracks gate` → `stage3 gate`, `arbiter-tracks-voters` → `arbiter-stage3-voters`, `track_manifests_v1` → `stage3_v1`, `stage-2 release` → `stage-3 release` (e.g. `stage3 gate refused: data-plane nodes %s have not registered with this leader advertising stage3_v1; restart them on a stage-3 release`), and `stage3 gate refused: %s` for the FSM refusal.
 - **Registration refusal, Task 65** (`server/membership.go`, after the tracks refusal at `:53`): `isDataPlaneRegistration(req) && FSM.Stage3Active() && !slices.Contains(req.GetFeatures(), arbiter.Stage3Feature)` → FailedPrecondition `stage3 is active; this binary does not support stage-3 consensus`.
 - **Mutable params and the stage-3 reads, Task 65** (`server/consensus_admin.go:107-122`, `server/table_registry.go`): `consensusMutableParams` sets `Stage3: wire.Stage3ParamsToPB(p.Stage3)`; `GetConsensusParams` sets `ConsensusParamsState.stage3_state` (Plan S3-E1 §39, field 9) from `func (f *FSM) Stage3StateView() *Stage3State` (a deep copy, nil before the activation) through `func stage3StateToPB(st *fsm.Stage3State) *pb.Stage3StateView` (`activation_epoch`, `activation_block_seq`, `activation_promotion_seq`, and per cutover `switch_name` = `Switch`, `epoch`, `cutover_block_seq` = `BlockSeq`, `cutover_promotion_seq` = `PromotionSeq`; `IncarnationSeq` is not served, by decision D33: a read view exposes a field only when a runbook or live task reads it, and no runbook or live task of Plans S3-E2 to S3-F reads the purge cutover's incarnation seq, which restore checks (`validateStage3Activation`, Task 69's `validateStage3Incarnations`) while the served `TableIncarnation.scoped_keeper_path` shows which incarnations are scoped; a later task that needs it adds it to the view in its own task and records it in its Appendix B); `TableRegistryView` gains `Stage3 *arbiter.Stage3Params` (a copy of the committed parameter) and `tableRegistryToPB` sets `TableRegistrySnapshot.stage3` (field 12) with `wire.Stage3ParamsToPB`, and every Apply that commits a changed `Params.Stage3` bumps the registry version once, so `WatchTableRegistry` followers (the members' consensus loops, Plan S3-E1 §42.3) learn each switch; `stage3PendingProtoFields` loses `TableRegistrySnapshot.stage3`. Named tests: `TestGetConsensusParamsServesTheStage3StateView`, `TestTableRegistryServesTheCommittedStage3AndBumpsTheVersion`.
 - **arbiter-admin `consensus update`, Task 65** (`cmd/arbiter-admin/main.go`, new `cmd/arbiter-admin/stage3.go`): flags `--stage3` (bool: the activation; needs `--voter`), `--stage3-group-size` (activation default 3), `--stage3-network-fill-default` (activation default true), `--stage3-min-safe-copies` (activation default 1), `--stage3-strict-copies`, `--stage3-max-lag-publications`, `--stage3-lag-low`, `--stage3-evidence-timeout-l2-blocks`, `--stage3-max-uncleaned-parts-per-partition`, `--stage3-max-uncleaned-parts-per-table` (these five required with `--stage3`), `--stage3-exclude-quarantined-hosts`, `--stage3-switch NAME`, `--indexer-failure-domain 'id=N,domain=D'` (repeat for the complete map; omitted keeps the committed one), and the extended `--verifier 'node=NODE_ID,pubkey=HEX[,host=N,replica-signer=0x...,consent=PATH,domain=D,weight=W,verify=B,replicate=B,counts=B,shared-rmt=B]'` (`host` needs `replica-signer`, `consent` and `domain`; `weight` defaults to 1 and each flag to `true` when `host` is given). After the activation every omitted `--stage3-*` value keeps the committed one, and the committed `stage3` and host-bound entries are carried into every update. Go names: `const stage3VotersMetadataKey = "arbiter-stage3-voters"` (`TestStage3VotersMetadataKeyMatchesTheServer`), `type failureDomainFlags []arbiter.IndexerFailureDomain`, `func keyValuesOptional(value string, required, optional []string) (map[string]string, error)`, `func checkStage3NotActive(ctx context.Context, leader pb.ConsensusAdminClient) error`, `func stage3ExemptSNodes(params *pb.ConsensusParamsState, tracks *pb.TrackStateView) []string`, `var stage3Activation = activationGate{feature: arbiter.Stage3Feature, name: "stage3", aware: "stage3-aware"}` with the new field `activationGate.exempt func(nodeID string) bool` (a feature-book node it returns true for is skipped by `problems` and listed as `exempt (quarantined track): <id>` by `lines`). Refusals (verbatim): `--stage3 sets stage3 for the first time, but the leader has it committed; omit --stage3`; `--stage3 needs --stage3-max-lag-publications, --stage3-lag-low, --stage3-evidence-timeout-l2-blocks, --stage3-max-uncleaned-parts-per-partition and --stage3-max-uncleaned-parts-per-table`; `--stage3 needs --voter: the leader probes every voter for stage3_v1`; `--stage3-* and --indexer-failure-domain need stage3: pass --stage3 for the activation`; `--stage3-switch cannot be combined with --stage3: the activation leaves every switch off`; `--stage3-switch %q is not a switch (want purge, eviction_voiding, owner_aware_selection, placement, reselection, checkpoints, narrowed_drain)`; `--stage3-switch is given more than once; an update turns on one switch`; `--stage3-switch %s is on already`; `--verifier %s: host-bound keys (replica-signer, consent, domain, weight, verify, replicate, counts, shared-rmt) need host=N`; `--verifier %s: host=N needs replica-signer=0x..., consent=PATH and domain=D`; `--verifier %s: weight %q must be 1 to 64`; `--verifier %s: %s=%q must be true or false`; `--indexer-failure-domain id %d is given twice`. `--hold` keeps Plan S3-A's default `drain` (K6; Plan S3-E4 K79 replaces it at switch 9).
-- **Named tests, Task 65:** server `TestStage3GatePassesEveryUpdateButTheActivation`, `TestStage3GateRefusesNonVoters`, `TestStage3GateRefusesTheFSMActivationRefusal`, `TestStage3GateRequiresStage3V1FromEveryDataPlaneNode`, `TestStage3GateExemptsTheSNodeOfAQuarantinedTrack`, `TestStage3GateProbesEveryVoter`, `TestTracksGateRefusalsAreUnchanged`, `TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation`, `TestConsensusMutableParamsCarryStage3`, `TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation`; arbiter-admin `TestConsensusUpdateStage3SetsEveryParameterWithEverySwitchOff`, `TestConsensusUpdateStage3KeepsTheCommittedValuesWhenFlagsAreOmitted`, `TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers`, `TestConsensusUpdateStage3SwitchTurnsOnOneSwitch`, `TestConsensusUpdateStage3FlagRefusals`, `TestVerifierFlagParsesHostBoundEntries`, `TestVerifierFlagRefusesHostBoundKeysWithoutHost`, `TestIndexerFailureDomainFlag`, `TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks`, `TestStage3VotersMetadataKeyMatchesTheServer`.
+- **Named tests, Task 65:** server `TestStage3GatePassesEveryUpdateButTheActivation`, `TestStage3GateRefusesNonVoters`, `TestStage3GateRefusesTheFSMActivationRefusal`, `TestStage3GateRequiresStage3V1FromEveryDataPlaneNode`, `TestStage3GateExemptsTheSNodeOfAQuarantinedTrack`, `TestStage3GateProbesEveryVoter`, `TestTracksGateRefusalsAreUnchanged`, `TestRegisterNodeRefusesABinaryWithoutStage3V1AfterTheActivation`, `TestConsensusMutableParamsCarryStage3`, `TestUpdateConsensusParamsTakesTheMembershipBarrierForTheStage3Activation`; arbiter-admin `TestConsensusUpdateStage3SetsEveryParameterWithEverySwitchOff`, `TestConsensusUpdateStage3KeepsTheCommittedValuesWhenFlagsAreOmitted`, `TestConsensusUpdateCarriesTheCommittedStage3AndHostBoundVerifiers`, `TestConsensusUpdateStage3SwitchTurnsOnOneSwitch`, `TestConsensusUpdateStage3FlagRefusals`, `TestVerifierFlagParsesHostBoundEntries`, `TestVerifierFlagRefusesHostBoundKeysWithoutHost`, `TestIndexerFailureDomainFlag`, `TestStage3ActivationGateExemptsSNodesOfQuarantinedTracks`, `TestStage3VotersMetadataKeyMatchesTheServer`; additional reviewed server defences `TestStage3GateRejectsPreviousTermFeatureProof`, `TestStage3QuarantineDoesNotExemptAVerifier`, and FSM defence `TestStage3RegistryChangeComparisonCoversEveryParameterField`.
 
 ### 46. Snapshot v21 (Tasks 66–67)
 
 - **Versions and framing, Task 66** (`fsm/snapshot.go`, `fsm/snapshot_count.go`): `snapshotVersionV21 = 21`; `snapshotVersion = 21` (the newest written); every version whitelist and every `ver[0] == snapshotVersion || …` predicate of `readSnapshot` (`:274`, `:292`, `:301`, `:408`) names `snapshotVersionV20` explicitly, so v20 stays readable; `snapshotBodyPlain byte = 0`, `snapshotBodyInterned byte = 1`; `snapshotEnvelopePrefixBytes = 13` stays for v3–v20 and `snapshotV21EnvelopePrefixBytes = 14` is added, with `func snapshotEnvelopeBytes(version byte) uint64`; `CountSnapshotEncoding`'s `SnapshotEnvelopeBytes` uses `snapshotEnvelopeBytes(snapshotWriteVersion(st))`. `snapshotWriteVersion(st)` returns 21 exactly when `st.Params.Stage3 != nil` and is otherwise unchanged. `writeSnapshot` writes, for v21, the kind byte `snapshotBodyPlain` after the version byte. `snapshotDoc` gains `Stage3 *Stage3State` (JSON `stage3,omitempty`) after `Tracks`, set by `snapshotDocument`; Plan S3-A's `TestStateComponentsListEverySnapshotDocMember` is edited to list `"stage3"` between `"tracks"` and `"spent_ids"` (its README component list too), and `containerStateSize` and `readSnapshotMeasured` read the 14-byte v21 envelope.
 - **Reader, Task 66:** the version refusal lists 21 (`unsupported snapshot version %d (require 3, 4, …, 20 or 21); …`, the existing text extended); a v21 kind byte other than 0 is refused with `unsupported snapshot v21 body kind %d` (Task 67 admits 1); the stage-3 forged-field refusal, after the tracks one at `:483-489`: `if ver[0] < snapshotVersionV21 && stage3FieldsPresent(&doc)` → `stage3 state is present in a pre-v21 container`; `func stage3FieldsPresent(doc *snapshotDoc) bool` is true for `doc.Params.Stage3`, `doc.BootstrapParams.Stage3`, `doc.Stage3`, any `ConsensusUpdates[i].Update.Stage3`, and any verifier entry of `Params`, `BootstrapParams` or a consensus update for which `func verifierEntryHasStage3Fields(v arbiter.VerifierEntry) bool` holds (any field beyond `node_id` and `ed25519_pubkey`); Tasks 69 and 70 add their fields (§47). Then `st.Stage3 = doc.Stage3` and `validateStage3State(st)` right after `validateTrackState` (`:486-489`), wrapped `snapshot: %w`.
 - **Restore skeleton, Task 66** (new `fsm/stage3_restore.go`): `func validateStage3State(st *State) error` runs `validateStage3Activation(st)` (this task), then `validateStage3Incarnations(st)` (Task 69) and `validateStage3Selection(st)` (Task 70); later plans append theirs. `validateConsensusHistory` gains, beside its other bootstrap checks (`fsm/consensus_history.go:22-33`), `snapshot bootstrap consensus params: stage3 is set only by a consensus update, not at genesis`. `validateStage3Activation` refusals: `stage3 state must exist exactly when stage3 is committed`; `stage3 activation epoch %d is not the epoch of the first update that set stage3 (%d)`; `stage3 activation block %d or promotion %d is beyond the state's (%d, %d)`; `stage3 records a cutover for switch %s, which is off`; `stage3 switch %s is on without a cutover record`; `stage3 switch cutovers are not in the order of spec §10.4`; `stage3 switch %s cutover epoch %d is not the epoch of the update that turned it on (%d)`; `stage3 switch %s cutover (block %d, promotion %d) precedes the previous cutover or the activation`; `stage3 switch %s cutover carries an incarnation seq`; `stage3 purge cutover incarnation seq %d is outside 1..%d`.
+- **Golden, Task66 (actual local review):** exclusive `os.OpenFile` create with O_EXCL and explicit write/close checks; never replace an existing file, link or directory. The immutable accepted blob is175302 bytes with SHA256 `89707ed2f9a9ebb7017e23ce9c3be9390dbb2369d197b356a63b29285c1dbb96`; capture SKIP is followed by a separate no-capture PASS and a refused recapture with unchanged hash. This source proof does not attest a released P4 tag.
 - **Golden, Task 66:** `fsm/testdata/stage3_v21_plain.snapshot` (frozen), written once by `TestStage3V21PlainContainerGolden` under `ARBITER_CAPTURE_STAGE3_V21_PLAIN_GOLDEN=1` from `stage3V21GoldenFSM(t)` (`stage3FSM` plus one promoted, acknowledged and published block of each owner, every signature at `authoritytest.Iat`); the test compares the bytes, restores them, and re-writes the identical container.
-- **Named tests, Task 66:** `TestSnapshotWritesV20UntilStage3IsCommitted`, `TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted`, `TestStage3V21PlainContainerGolden`, `TestRestoreReadsEveryEarlierVersionUnchanged`, `TestRestoreRefusesStage3FieldsInAPreV21Container`, `TestRestoreRefusesAnUnknownV21BodyKind`, `TestValidateStage3StateRequiresStateExactlyWithTheParameter`, `TestValidateStage3StateRefusesAnActivationEpochThatIsNotTheHistorys`, `TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys`, `TestContainerStateSizeMeasuresAV21PlainContainer`, `TestCountSnapshotEncodingMatchesTheV21Writer`, the edited `TestStateComponentsListEverySnapshotDocMember`.
+- **Named tests, Task 66:** `TestSnapshotWritesV20UntilStage3IsCommitted`, `TestSnapshotWritesAV21PlainContainerOnceStage3IsCommitted`, `TestStage3V21PlainContainerGolden`, `TestRestoreReadsEveryEarlierVersionUnchanged`, `TestRestoreRefusesStage3FieldsInAPreV21Container`, `TestRestoreRefusesAnUnknownV21BodyKind`, `TestValidateStage3StateRequiresStateExactlyWithTheParameter`, `TestValidateStage3StateRefusesAnActivationEpochThatIsNotTheHistorys`, `TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys`, `TestContainerStateSizeMeasuresAV21PlainContainer`, `TestCountSnapshotEncodingMatchesTheV21Writer`, `TestStage3V21PlainGoldenCaptureDoesNotOverwriteExistingPath`, `TestValidateStage3StateRefusesRegressingCutoverPromotions`, `TestRestoreRejectsAnOversizedV21LengthPrefix`, `TestBootstrapParamsNeverCarryStage3`, the edited `TestStateComponentsListEverySnapshotDocMember`.
 - **Interned body, Task 67** (new `fsm/snapshot_interned.go`): `const internedSnapshotFormat = "arbiter-snapshot-interned-v1"`, `const internStringMinBytes = 64` (a JSON string token, quotes included), `const internValueMinBytes = 256` (an object or array, compact encoding), `const maxSnapshotRehydratedDocBytes = 1 << 32`. Exported `func InternSnapshotBody(plain []byte) ([]byte, error)` and `func RehydrateSnapshotBody(interned []byte) ([]byte, error)`. The interned body is the compact JSON of `{"format": internedSnapshotFormat, "strings": [<string tokens verbatim>], "values": [<interned forms>], "root": <interned form of the document>}`; a string token of at least `internStringMinBytes` becomes `{"$s":i}` and an object or array of at least `internValueMinBytes` becomes `{"$v":i}` (indexes in first-occurrence order, a value's children interned before it, the root never a reference); object keys, numbers, `true`, `false` and `null` stay verbatim. Refusals: `interned body: the plain document holds the reserved key %q` (any key beginning with `$`; the writer then persists plain), `interned body: format %q is not arbiter-snapshot-interned-v1`, `interned body: value %d references value %d, which is not an earlier one`, `interned body: string reference %d is out of range`, `interned body: rehydrated document exceeds %d bytes`, `interned body: malformed: %v`.
 - **Write-then-verify, Task 67** (`fsm/snapshot.go`, on Plan S3-A Task 9's `fsmSnapshot`): `type SnapshotBodyMode string`, `SnapshotBodyAuto SnapshotBodyMode = "auto"`, `SnapshotBodyPlain SnapshotBodyMode = "plain"`; `func (f *FSM) SetSnapshotBodyMode(mode SnapshotBodyMode) error` (refuses another value with `snapshot body mode must be auto or plain, got %q`; node-local, never replicated). `Snapshot()` keeps writing the plain container under the read lock; `fsmSnapshot` gains `mode SnapshotBodyMode` and `encoding *snapshotEncodingState`; `Persist`, outside the lock, for a v21 container in `auto` mode, calls `internSnapshotBodyFunc` (an unexported package variable, `InternSnapshotBody` in production, swapped by the forced-mismatch test), `RehydrateSnapshotBody` and compares the SHA-256 of the result with the SHA-256 of the plain body; on equality it writes the v21 container with `snapshotBodyInterned` and the interned body, otherwise the plain container, counting a fallback; in `plain` mode it writes the plain container and counts nothing; a v20 container is streamed unchanged. It never cancels a snapshot except on a sink error (as today), and `recordSize` keeps sampling the plain container, so `arbiter_state_bytes` stays the plain length. `type SnapshotEncodingStats struct { Fallbacks uint64; LastBodyKind string; LastPlainBodyBytes, LastInternedBodyBytes uint64 }` (`LastBodyKind` ∈ `v20`, `plain`, `interned`, `""` before the first persist; `LastInternedBodyBytes` 0 when the newest snapshot persisted plain) and `func (f *FSM) SnapshotEncodingStats() SnapshotEncodingStats`. The reader admits kind 1: it rehydrates the body (the 1 GiB cap applies to the stored body, the rehydration guard to the result) and decodes the plain bytes exactly as kind 0; `readSnapshotMeasured` samples the rehydrated plain document.
 - **Config, Task 67:** YAML `raft.snapshot_body` (`config.RaftConfig.SnapshotBody string`, YAML key `snapshot_body`, raw default `auto`), refusal `raft.snapshot_body must be auto or plain, got %q`; `cmd/arbiter/services.go` calls `SetSnapshotBodyMode` right after `fsm.NewWithNotify` (`:62`); `configs/*.local.yaml` unchanged (the default applies).
@@ -15002,9 +16114,9 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-E1's (�
 
 ### 47. Switches 1–3: eviction voiding, purge sets, owner-aware selection (Tasks 68–70)
 
-- **Eviction voiding, Task 68** (new `fsm/eviction_voiding.go`): `func (f *FSM) evictionVoidingLocked() bool` (`stage3SwitchOnLocked(Stage3SwitchEvictionVoiding)`), `func (f *FSM) evictedNodeLocked(nodeID string) bool` (a `Nodes` record with `NodeEvicted`), `func (f *FSM) evictedSignerRefusalLocked(kind, nodeID string) string` → `%s from %s: the node is evicted (stage3 eviction_voiding)` when voiding is on and the node is evicted, else `""`. Call sites, each right after that site's signature check and before any mutation: `applyRegisterRC` (`fsm/apply.go:483-487`, kind `result_claim`, node `rc.SourceNode`), `applyRecordAttestation` (`:608`, kind `attestation`, `att.ReplicaID`), `applyRecordByteSideScan` (`:637`, kind `byte_side_scan`, `scan.ReplicaID`), `applyRecordPromotionAck` (`:813-817`, kind `promotion_ack`), `applyRecordCleanupAck` (`:1034-1041`, kind `cleanup_ack`), `recordRejectedCleanupAckLocked` (`fsm/rejected_cleanup.go:343`, kind `cleanup_ack`); never inside `snodeSignatureLocked` or `verifierSignatureLocked`, which registration and activation share (spec §14 keeps both). `adoptParkedClaimsLocked` (`fsm/signed_claims.go:674-695`) discards, without binding, a parked claim whose `SourceNode` is evicted while voiding is on (K72). `reevaluateBlock` (`fsm/threeway.go:78-100`) skips the evidence of an evicted replica while voiding is on and no statement of the block is ChallengeReplay or Rejected (`blockChallenged`); a latched block is never re-evaluated (`:43-45`, unchanged). `func (f *FSM) reevaluateBlocksNamingLocked(nodeID string)` re-evaluates every block whose `VerifierSet` names the node, called by `applyEvictNode` after the status change while voiding is on; `func (f *FSM) reevaluateVoidedBlocksLocked()` does it for every evicted node, called by `onStage3SwitchOnLocked(Stage3SwitchEvictionVoiding)` and by `evictNodesLocked` after its complete status-change loop while voiding is on. This accepted Task68 rule6 path keeps signed-delisting, nil/latched/challenged and switch-off boundaries coherent with the actual predecessor of69. `evidencePresence(bv *BlockVerification, voided func(replica string) bool)` (`fsm/reads_work.go:20-32`): with voiding on, an evicted replica's evidence counts as missing, so its block is `EvidenceIncomplete` (a re-selection candidate from Plan S3-E3) and never `QuorumFailed`; with voiding off `voided` is nil and the WorkSet is unchanged. Restore re-applies none of this (spec §14).
+- **Eviction voiding, Task 68** (new `fsm/eviction_voiding.go`): `func (f *FSM) evictionVoidingLocked() bool` (`stage3SwitchOnLocked(Stage3SwitchEvictionVoiding)`), `func (f *FSM) evictedNodeLocked(nodeID string) bool` (a `Nodes` record with `NodeEvicted`), `func (f *FSM) evictedSignerRefusalLocked(kind, nodeID string) string` → `%s from %s: the node is evicted (stage3 eviction_voiding)` when voiding is on and the node is evicted, else `""`. Call sites, each right after that site's signature check and before any mutation: `applyRegisterRC` (`fsm/apply.go:483-487`, kind `result_claim`, node `rc.SourceNode`), `applyRecordAttestation` (`:608`, kind `attestation`, `att.ReplicaID`), `applyRecordByteSideScan` (`:637`, kind `byte_side_scan`, `scan.ReplicaID`), `applyRecordPromotionAck` (`:813-817`, kind `promotion_ack`), `applyRecordCleanupAck` (`:1034-1041`, kind `cleanup_ack`), `recordRejectedCleanupAckLocked` (`fsm/rejected_cleanup.go:343`, kind `cleanup_ack`); never inside `snodeSignatureLocked` or `verifierSignatureLocked`, which registration and activation share (spec §14 keeps both). `adoptParkedClaimsLocked` (`fsm/signed_claims.go:674-695`) discards, without binding, a parked claim whose `SourceNode` is evicted while voiding is on (K72). `reevaluateBlock` (`fsm/threeway.go:78-100`) skips the evidence of an evicted replica while voiding is on and no statement of the block is ChallengeReplay or Rejected (`blockChallenged`); a latched block is never re-evaluated (`:43-45`, unchanged). `func (f *FSM) reevaluateBlocksNamingLocked(nodeID string)` re-evaluates only existing unlatched verdicts of blocks whose `VerifierSet` names the node, called by `applyEvictNode` after the status change while voiding is on; `func (f *FSM) reevaluateVoidedBlocksLocked()` does it for every evicted node, called by `onStage3SwitchOnLocked(Stage3SwitchEvictionVoiding)` and, in root-accepted actual68, by `evictNodesLocked` after the complete status-change loop while voiding is on. The latter rule6 signed-delisting correction is absent from the preserved PREP68 text and must be integrated by root before execution. `func (f *FSM) voidedReplicaLocked() func(replica string) bool` returns nil while voiding is off and otherwise the evicted-node predicate; `func (f *FSM) reevaluateUnlatchedBlocksLocked(names func(set []string) bool)` is the shared narrowed loop (no nil verdict becomes an empty verdict). `evidencePresence(bv *BlockVerification, voided func(replica string) bool)` (`fsm/reads_work.go:20-32`): with voiding on, an evicted replica's evidence counts as missing, so its block is `EvidenceIncomplete` (a re-selection candidate from Plan S3-E3) and never `QuorumFailed`; with voiding off `voided` is nil and the WorkSet is unchanged. Restore re-applies none of this (spec §14).
 - **Named tests, Task 68** (`fsm/eviction_voiding_test.go`): `TestEvictionVoidingRefusesEveryMessageOfAnEvictedNode`, `TestEvictionVoidingOffKeepsTodaysAdmission`, `TestEvictionVoidingKeepsALatchedVerdictAcrossSnapshotRestore`, `TestEvictionVoidingDropsAnEvictedVerifiersEvidenceFromAnUnlatchedVerdict`, `TestEvictionVoidingKeepsTheEvidenceOfAChallengedBlock`, `TestEvictNodeReevaluatesTheBlocksNamingIt`, `TestEvictionVoidingSwitchOnReevaluatesTheBlocksOfEarlierEvictions`, `TestWorkSetTreatsAnEvictedVerifiersEvidenceAsMissing`, `TestAdoptParkedClaimsDiscardsAClaimOfAnEvictedSNode`, `TestReRegisteredNodeIsNoLongerVoided`, `TestRegistrationAndMarkActiveKeepTheirChecks`, `TestRestoreDoesNotReapplyEvictionVoiding`.
-- **Purge sets, Task 69** (`fsm/table_registry.go`, `fsm/apply_table_registry.go`, `server/table_registry.go`): `TableIncarnation.ScopedKeeperPath bool` (JSON `scoped_keeper_path,omitempty`) and `TableIncarnation.PurgeMembers []string` (JSON `purge_members,omitempty`) (sorted, unique), after `OwnerIndexerID`. `applyAddTable` sets `ScopedKeeperPath` on every incarnation it appends while `purge` is on (Refused ones included); nothing else ever sets or clears it. With `purge` on, `purgeRequiredLocked` (`:475-489`) is the owner's SNode (registered, not evicted), every node for which `poolVerifierLocked` holds, and every non-evicted node of `inc.PurgeMembers`, sorted; with it off it is today's rule; `purgeNodeIDsLocked` (`GetPurgeNodeSet`) is unchanged. `onStage3SwitchOnLocked(Stage3SwitchPurge)` reruns `completePurgesLocked` (the cutover's `IncarnationSeq` is recorded by Task 64's `recordStage3SwitchesLocked` right after), bumping the registry version when a purge completed (the `applyEvictNode` pattern). `TableRegistryView` deep-copies `PurgeMembers`; `tableRegistryToPB` sets `ScopedKeeperPath` and `PurgeMembers` (Plan S3-E1's fields 19 and 20); `stage3PendingProtoFields` loses both entries. `stage3FieldsPresent` adds any incarnation with either field. `func validateStage3Incarnations(st *State) error` refusals: `incarnation %d carries scoped_keeper_path without the purge switch`; `incarnation %d is recorded after the purge cutover (incarnation %d) without scoped_keeper_path`; `incarnation %d carries scoped_keeper_path but precedes the purge cutover (incarnation %d)`; `incarnation %d is not a chain incarnation but carries scoped_keeper_path`; `incarnation %d purge_members must be sorted, unique, non-empty node ids`; `incarnation %d carries purge_members before the placement switch` (Plan S3-E3 Task71 preserves this before-placement guard and durable historical purge obligations; every current member of a physical incarnation must be contained in purge_members, never the reverse subset against current/past membership).
+- **Purge sets, Task 69** (`fsm/table_registry.go`, `fsm/apply_table_registry.go`, `server/table_registry.go`): `TableIncarnation.ScopedKeeperPath bool` (JSON `scoped_keeper_path,omitempty`) and `TableIncarnation.PurgeMembers []string` (JSON `purge_members,omitempty`) (sorted, unique), after `OwnerIndexerID`. `applyAddTable` sets `ScopedKeeperPath` on every incarnation it appends while `purge` is on (Refused ones included); nothing else ever sets or clears it. With `purge` on, `purgeRequiredLocked` (`:475-489`) is the owner's SNode (registered, not evicted), every node for which `poolVerifierLocked` holds, and every registered, non-evicted VERIFIER-role node named by `inc.PurgeMembers`, sorted; with it off it is today's rule; `purgeNodeIDsLocked` (`GetPurgeNodeSet`) is unchanged. `onStage3SwitchOnLocked(Stage3SwitchPurge)` reruns `completePurgesLocked` (the cutover's `IncarnationSeq` is recorded by Task 64's `recordStage3SwitchesLocked` right after), bumping the registry version when a purge completed (the `applyEvictNode` pattern). `TableRegistryView` deep-copies `PurgeMembers`; `tableRegistryToPB` sets `ScopedKeeperPath` and `PurgeMembers` (Plan S3-E1's fields 19 and 20); `stage3PendingProtoFields` loses both entries. `stage3FieldsPresent` adds any incarnation with either field. `func validateStage3Incarnations(st *State) error` refusals: `incarnation %d carries scoped_keeper_path without the purge switch`; `incarnation %d is recorded after the purge cutover (incarnation %d) without scoped_keeper_path`; `incarnation %d carries scoped_keeper_path but precedes the purge cutover (incarnation %d)`; `incarnation %d is not a chain incarnation but carries scoped_keeper_path`; `incarnation %d purge_members must be sorted, unique, non-empty node ids`; `incarnation %d carries purge_members before the placement switch` (Plan S3-E3 Task71 preserves the before-placement guard and accumulates durable historical obligations; every current member of a physical incarnation must be contained in purge_members, never the reverse subset against current/past membership).
 - **Named tests, Task 69** (`fsm/purge_stage3_test.go`, `server/table_registry_test.go`): `TestPurgeSwitchMarksEveryLaterChainIncarnationScoped`, `TestPurgeSwitchOffKeepsEveryIncarnationUnscoped`, `TestPurgeRequiredSetIsTheOwnerThePoolAndPurgeMembersOnceThePurgeSwitchIsOn`, `TestPurgeRequiredSetBeforeThePurgeSwitchIsEveryNonEvictedVerifier`, `TestPurgeSwitchOnWithNoMembersChangesNoPurge`, `TestEvictNodeOfAPurgeMemberCompletesThePurge`, `TestPurgeNodeSetIsUnchangedByThePurgeSwitch`, `TestRegistryViewServesScopedKeeperPathAndPurgeMembers`, `TestRestoreRefusesAScopedIncarnationBeforeThePurgeCutover`, `TestRestoreRefusesAnUnscopedIncarnationAfterThePurgeCutover`, `TestRestoreRefusesMalformedPurgeMembers`, `TestTableRegistryToPBCarriesScopedKeeperPathAndPurgeMembers`, the edited `TestTableRegistryMirrorsProto`.
 - **Owner-aware selection, Task 70** (`fsm/select.go`, `fsm/apply.go`, `fsm/admission.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `fsm/reads_verification.go`, `server/safestate_stage3.go`): `BlockVerification` gains `EligibleRing []string` (JSON `eligible_ring,omitempty`), `RingPosition uint32` (JSON `ring_position,omitempty`), `MarkedCursorBlock uint64` (JSON `marked_cursor_block,omitempty`) after `LastMergeable`. `func (f *FSM) poolRingLocked(sources []string) []string` (Active pool verifiers, `poolVerifierLocked`, minus `sources`, sorted by node id); `func (f *FSM) eligibleRingLocked(owner uint64, sources []string) []string` (this plan: `poolRingLocked(sources)`; Plan S3-E3 adds members recorded with the block or the statement's group, never one hosted by `owner`, and the pool only while fill is on or members are fewer than three); `func ringStart(blockSeq uint64, n int) int` (`u64FromDigest(replay.DigestString(arbiter.VerifierSelectSeedPrefix + strconv.FormatUint(blockSeq, 10))) % n`, today's start); `func initialVerifierSet(ring []string, position uint32) []string` (the sorted entries at `position-2`, `position-1`, `position` modulo the ring size). `applyMarkReplaying` with the switch off is byte for byte today's; with it on it takes `ring := eligibleRingLocked(blockOwner, bv.SourceNodes)` (`blockOwner` from the header's track), refuses below `VerifierSelectN` with `eligible verifier ring below 3 (spec §7.3 floor)`, and stores `VerifierSet = initialVerifierSet(ring, p)` with `p = (ringStart(seq, len(ring)) + 2) % len(ring)`, `EligibleRing = ring`, `RingPosition = p` and `MarkedCursorBlock = TableRegistry.Cursor.BlockNumber`; with no host-bound entry the set equals `selectVerifiers`'s. Admission, right after the `SOURCE_UNAVAILABLE` check (`fsm/admission.go:141-147`) and before the lane budget, with the switch on: `func (f *FSM) verifiersUnavailableLocked(owner uint64, source string) string` → `SubmitResult{Code: arbiter.AdmissionCodeVerifiersUnavailable, Message: …}` with `storage-integrity verifiers unavailable for indexer %d: %d eligible, at least %d required` and state unchanged (the coordinate unspent, no seal prepared). WorkSet: `WorkSet.Unmarkable []uint64` lists, with the switch on, every sealed, claim-complete, unmarked block whose eligible ring is below three, which is then left out of `SealedUnmarked` (recomputed every pass, so the block returns once the count changes); the orchestrator's `handleDispatchRows` is unchanged and proposes no `MarkReplaying` for it. `BlockVerificationView` gains `EligibleRing []string`, `RingPosition uint32` and `MarkedCursorBlock uint64`; `blockVerificationToPB` sets `EligibleRing`, `RingPosition` and `MarkedCursorBlock` (Plan S3-E1 §39 fields 14–16); `stage3PendingProtoFields` loses the three entries. `stage3FieldsPresent` adds any verification with `EligibleRing`, `RingPosition` or `MarkedCursorBlock`. `func validateStage3Selection(st *State) error` refusals: `block %d carries an eligible ring without the owner_aware_selection switch`; `block %d carries an eligible ring but no verifier set`; `block %d eligible ring must be sorted, unique and hold at least 3 verifiers`; `block %d ring position %d is not the block-seeded position %d`; `block %d verifier set is not the ring's three positions ending at %d` (Plan S3-E3 Task 74 extends both rules with stored re-selections, which advance the position and replace members of the set); `block %d marked cursor block %d is beyond the registry cursor %d`; `block %d was sealed after the owner_aware_selection cutover (block %d) and marked without an eligible ring`.
 - **Named tests, Task 70** (`fsm/selection_stage3_test.go`, `orchestrator/dispatch_test.go`, `server/safestate_stage3_test.go`): `TestOwnerAwareSelectionOffSelectsByteIdentically`, `TestOwnerAwareSelectionWithOnlyThePoolPicksTodaysSet`, `TestOwnerAwareSelectionDrawsFromTheActivePoolOnly`, `TestOwnerAwareSelectionStoresTheRingThePositionAndTheCursor`, `TestMarkReplayingRefusesAnEligibleRingBelowThree`, `TestAdmissionAnswersVerifiersUnavailableBelowThreeEligible`, `TestVerifiersUnavailableIsCheckedRightAfterSourceUnavailable`, `TestVerifiersUnavailableLeavesTheCoordinateUnspent`, `TestWorkSetDropsAnUnmarkableBlockUntilTheEligibleCountChanges`, `TestOrchestratorProposesNoMarkReplayingForAnUnmarkableBlock`, `TestRestoreRefusesAnEligibleRingThatDoesNotYieldTheVerifierSet`, `TestRestoreRefusesAnEligibleRingBeforeTheOwnerAwareSelectionSwitch`, `TestRestoreRefusesABlockMarkedAfterTheCutoverWithoutARing`, `TestBlockVerificationServesTheEligibleRing`, the edited `TestBlockVerificationToPBCarriesEveryField`.
@@ -15022,21 +16134,79 @@ Plan S3-A's Appendix A (§0–§6), Plan S3-B's (§7–§15) and Plan S3-E1's (�
   - Task 60 (wire): `wire.Stage3ParamsToPB`, `wire.Stage3ParamsFromPB`; `wire.VerifierEntriesToPB` / `FromPB` and `wire.ConsensusParamsUpdateToPB` / `FromPB` carrying every new field.
   - Task 63: `arbiter.Stage3Feature = "stage3_v1"` in `arbiter.LocalNodeFeatures()`; `CORE_TAG_P5`.
 - **Release ledger:** consumed `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` (Plan S3-E1's Appendix C), `ARBITER_TAG_P4`, `ARBITER_DIGEST_P4` (Plan S3-D's Appendix C), read only from the ledger copy (decision D34: for Plans S3-D and S3-E1 the plans-cf branch `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; `s3-ledger.py get` picks it, Plan S3-C1 §19): `h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; git -C "$h" fetch -q origin; python3 -I "$L/s3-ledger.py" get "$h" PROTO_TAG_P5 HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P4 ARBITER_DIGEST_P4` (the fetch is a remote read: explicit confirmation). Produced: none; Appendix C has no row.
-- **Worktree:** one URWT worktree for Plans S3-E2 to S3-E4: `git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter fetch origin --tags` (confirmed), then `bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter claude multi-source-s3e` → `~/src/remotesrc/claude/arbiter/multi-source-s3e` (its JSON `path` is `$W`; every Bash call is prefixed `W=<path>;`), branch `urwt/claude/multi-source-s3e` from `origin/main`; Task 64 checks `git -C "$W" merge-base --is-ancestor "$(git -C "$W" rev-parse "$ARBITER_TAG_P4^{commit}")" HEAD` and stops if `ARBITER_TAG_P4` is not in the base. Tasks 65–70 reuse it (never re-created); each task starts with `git -C "$W" status --porcelain` empty and `HEAD` at the previous task's last commit.
+- **Worktree:** one actual URWT worktree, created once by Task64 with the executing-host runtime (`codex` here), never reconstructed from a Claude/Codex path template. Persist and validate the returned JSON path/branch/base/common repository/action in `$HOME/.cache/s3e2-task64/worktree.json`; preserve its absolute symlink/space spelling. Before any commit enable worktree config, `user.name poetry`, `user.email chen@sentio.xyz` and `commit.gpgsign true`. Task64's complete retained `env.sh` validates those values, JSON/repository/branch, typed observed five-row ledger state and offline environment; every standalone block65–78 loads it. Require the actual recorded P4 tag in the branch ancestry and stop for missing release provenance. Later tasks require their exact signed clean predecessor and save only observed HEADs once. Session receipts are not ledger rows.
 - **Pins (Task 64), in this order:** `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle`; `bash scripts/update-housegate.sh $HG_TAG_P5`; `bash scripts/update-arbiter-core.sh $CORE_TAG_P5`; then the pin-fallout rule of §44 and one commit `chore(deps): pin arbiter-proto, housegate and arbiter-core for stage 3 P5 (Task 64)`.
-- **Checks (every task):** `test -z "$(gofmt -l $(git ls-files '*.go'))"`; focused runs `go test ./<pkg>/ -run '<named tests>' -race -count=1` (TDD: fail, implement, pass); `bazel run //:gazelle` after a new file; `bazel build //... && bazel test //...`; the fsm red lines `bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto` printing nothing and `grep -rn 'time\.Now' fsm/` printing nothing.
-- **Commits:** subjects `feat(stage3): <what> (Task N)` (`test(stage3): …` for a test-only commit); every message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments in English; markdown never hard-wrapped.
+- **Checks (every task):** use the complete explicit fail-stop blocks in each task after sourcing64's retained environment. Go uses `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none`; missing cache inputs stop before any separately confirmed remote read. Check command status before formatting emptiness/filtered output and retain full Go output before exact named PASS/expected-RED validation; a grep or successful later diagnostic is never test success. Canonical Bazel/gazelle/build/plain/race/query use disabled repository downloads and none private/direct fallback; query must be nonempty and exclude direct arbiter-proto, production FSM source must exclude time.Now. Preserve every existing golden/vector and refuse malformed/missing/duplicate/skipped expected identities. Do not alter repository/business timeouts or count conditional service skips as live acceptance.
+- **Commits:** exact task subjects and the sole canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer; explicit staging/status/config/commit checks, `git commit -S`, changed valid HEAD, primary `poetry <chen@sentio.xyz> G`, `git verify-commit` and clean completion. Signing cancellation preserves the attempt and stops for the user to unlock the actual key in their own terminal; never unsigned fallback. Code/comments remain English and Markdown is not hard-wrapped.
 - **Runbooks:** none. This plan has no live task; Plan S3-E4 Task 81 writes `docs/storage-integrity-devnet2-stage3-p5-v21.md` and cites §44–§47 for what the build does.
-- **Push (Task 70, last step; explicit confirmation):** `git -C "$W" push -u origin HEAD`. No PR, no merge, no release, no tag in this plan (K65); Plan S3-E4 Task 78 opens the single PR of Tasks 64–78 (its body ending with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`) and cuts `ARBITER_TAG_P5`.
-- **Work directory and evidence (Task 67; local only, never committed; decision D37):** `T="$HOME/si-devnet2-multisource-s3e2-replay"` (new, mode 700; Task 67 stops if it exists and never reuses an earlier directory): `$T/helpers.sh` with the bash functions `rehearsal_build old|new` (exports `ARBITER_TAG_P4` or the branch head with `git archive` into `$T/src/<build>`, copies the five tools into its `cmd/`, builds them into `$T/bin/<build>`), `rehearsal_replay <name> <raft-dir> <arbiter.yaml>` (statedigest and snapdump under both builds, the comparable lines of Plan S3-A's `digest_lines` compared, the containers compared and cross-restored, one result line per input appended to `"$W.replay-e2.txt"`) and `rehearsal_v21size <name> <container>` (appends to `"$W.v21size-e2.txt"`); `$T/statedigest/main.go`, `$T/v20check/main.go`, `$T/snapdump/main.go` (copied verbatim from Plan S3-A's `$HOME/si-devnet2-multisource-s3a-rehearsal`, their SHA-256 recorded in `$T/tools.sha256`); `$T/v21check/main.go` (new: restores a v3–v21 container with this build and prints `restore_ok version <n> body <none|plain|interned>`); `$T/v21size/main.go` (new: reads a v20 or v21 plain container, runs `fsm.InternSnapshotBody` and `fsm.RehydrateSnapshotBody`, prints `plain_bytes <n> interned_bytes <m> rehydrated_identical <true|false>`); `$T/src/{old,new}` (`git archive` exports of `ARBITER_TAG_P4` and the branch head), `$T/bin/{old,new}`, `$T/old_tag.txt`, and the local voter copies of §48's Plan S3-A and S3-B inputs extracted under `$T/inputs/<name>`. Evidence, beside the worktree like Plan S3-E4's PR body file: `"$W.replay-e2.txt"` (`~/src/remotesrc/claude/arbiter/multi-source-s3e.replay-e2.txt`; it opens with the line of `$T/old_tag.txt` and the lines of `$T/tools.sha256`, then per input: identical `statedigest` lines under old and new, `snapshot_sha256` included, both builds writing the same v20 container, each restoring the other's with `restore_ok version 20`) and `"$W.v21size-e2.txt"` (`~/src/remotesrc/claude/arbiter/multi-source-s3e.v21size-e2.txt`; per input: `rehydrated_identical true` and the sizes). Task 67's last local step, once both files are complete, removes the work directory (`Confirm before running.`, then `rm -rf -- "$T"`), so no second P5 rehearsal directory exists: the one P5 rehearsal directory `R5="$HOME/si-devnet2-multisource-s3e-rehearsal"` is created by Plan S3-E4 Task 78 and only read by the P5 runbook, which keeps its live rehearsal evidence under its own `$si_backup` (D37). No task of this plan creates, writes or reads `$R5`, and nothing after Task 67 reads `$T`.
+- **Push (Task70, last step; explicit confirmation):** publish exactly the locally checked SHA using Step23's explicit refspec after validating the expected origin, branch ancestry, every local commit's poetry/G/signature/canonical trailer, clean stable HEAD and the completed checks receipt. Require exact remote readback and unchanged local head; only then create `$HOME/.cache/s3e2-task70/final-head.txt` exclusively (O_EXCL0600), containing the one observed lowercase40-hex pushed SHA. Task71 validates that receipt, the same current signed clean HEAD and exact final subject `feat(stage3): serve the eligible ring in GetBlockVerification (Task 70)` with64's retained environment. Partial push/readback failure is a reconciliation stop. No PR, merge, release, tag or produced ledger row here (K65); Task78 owns canonical REST FINALv2 SHA6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97 with checked-head argv and same-head atomic publication.
+- **Work directory and evidence (Task 67; local only, never committed; decision D37):** `T="$HOME/si-devnet2-multisource-s3e2-replay"` (new, mode 700; Task 67 stops if it exists and never reuses an earlier directory): `$T/helpers.sh` with the bash functions `rehearsal_build old|new` (exports `ARBITER_TAG_P4` or the branch head with `git archive` into `$T/src/<build>`, copies the five tools into its `cmd/`, builds them into `$T/bin/<build>`), `rehearsal_replay <name> <raft-dir> <arbiter.yaml>` (statedigest and snapdump under both builds, the comparable lines of Plan S3-A's `digest_lines` compared, the containers compared and cross-restored, one result line per input appended to `"$W.replay-e2.txt"`) and `rehearsal_v21size <name> <container>` (appends to `"$W.v21size-e2.txt"`); `$T/statedigest/main.go`, `$T/v20check/main.go`, `$T/snapdump/main.go` (copied verbatim from Plan S3-A's `$HOME/si-devnet2-multisource-s3a-rehearsal`, their SHA-256 recorded in `$T/tools.sha256`); `$T/v21check/main.go` (new: restores a v3–v21 container with this build and prints `restore_ok version <n> body <none|plain|interned>`); `$T/v21size/main.go` (new: reads a v20 or v21 plain container, runs `fsm.InternSnapshotBody` and `fsm.RehydrateSnapshotBody`, prints `plain_bytes <n> interned_bytes <m> rehydrated_identical <true|false>`); `$T/src/{old,new}` (`git archive` exports of `ARBITER_TAG_P4` and the branch head), `$T/bin/{old,new}`, `$T/old_tag.txt`, and the local voter copies of §48's Plan S3-A and S3-B inputs extracted under `$T/inputs/<name>`. Evidence, beside the worktree like Plan S3-E4's PR body file: `"$W.replay-e2.txt"` (using the actual retained `$W` spelling; it opens with the line of `$T/old_tag.txt` and the lines of `$T/tools.sha256`, then per input: identical `statedigest` lines under old and new, `snapshot_sha256` included, both builds writing the same v20 container, each restoring the other's with `restore_ok version 20`) and `"$W.v21size-e2.txt"` (using the actual retained `$W` spelling; per input: `rehydrated_identical true` and the sizes). Task 67's last local step, once both files are complete, removes the work directory (`Confirm before running.`, then `rm -rf -- "$T"`), so no second P5 rehearsal directory exists: the one P5 rehearsal directory `R5="$HOME/si-devnet2-multisource-s3e-rehearsal"` is created by Plan S3-E4 Task 78 and only read by the P5 runbook, which keeps its live rehearsal evidence under its own `$si_backup` (D37). No task of this plan creates, writes or reads `$R5`, and nothing after Task 67 reads `$T`.
 
 
-**Current C2 integration tests and owning files.** Task64 additionally owns `fsm/manifest_owner_wire_test.go` and the exact-zero intermediate test; `TestStage3ValueRulesHaveIndependentDefences` preserves independently tested replay bounds. Task69 owns that file's complete20-field migration, `fsm/purge_stage3_adapter_test.go`, `fsm/purge_stage3_adversarial_test.go`, `server/purge_stage3_transport_test.go`, and both affected BUILD lists. Its additional named tests cover role/status/host0/overlapping-owner semantics, signed rule6 purge completion, both actual persisted body kinds and independent v19/v20 guards. Task68's three adversarial tests cover authentication/duplicate boundaries, both body/read-view paths and signed verifier delisting. Root e970's original69 full-race FAIL/UNKNOWN cause/unquantified-risk qualification remains binding; a later isolated PASS is not causality/reliability proof. No Task70 final qualification or downstream approval is inferred.
-## Appendix B: drafting decisions and cross-task facts
+**Workflow custody (future operational receipts remain required).** Task67 Step29 exclusively records its observed signed final source HEAD; local replay binds the same HEAD and complete owned input/tool/archive/evidence roster before cleanup. Task68 consumes that observed receipt. The exact24-line validator requires15 replay/header/tool plus9 size/header lines, six unique replay inputs, both goldens, eight positive size/equality results and branch/head agreement. Accepted local source/synthetic replay evidence is not real six-voter input or a signed final-head receipt. Selected68/69/70 task texts now include accepted owning additions; qualified70 root536479ab permits bounded downstream review only. No actual71 grant, release or formal runtime execution follows.
+
+**Inherited actual67 safeguards (no new proof here).** The root-accepted task preserves exclusive O_EXCL interned capture (including symlink refusal), short-write and Close failure handling without publishing successful sink samples, reserved-key validation at every ordinary object position, exclusive started replay attempts, v21size version3..21 bounds and the fixed original v20check typed-refusal exit0 API. This procedural overlay keeps all such Go, reader, capture and Python bodies byte exact. Canonical REST FINALv2 remains SHA6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97; no reader is introduced here.
+
+**Additional inherited actual67 tests:** `TestInternedLengthAndReferenceBoundsBeforeAllocation`, `TestPersistFallsBackOnEncodingAndRehydrationErrors`, `TestPersistRejectsShortWritesAndDoesNotRecordFailedSnapshots`, `TestRehydrateRefusesReservedKeysInEveryObjectPosition`, `TestStage3V21InternedGoldenCaptureDoesNotOverwriteExistingPath`. Their full declarations remain in the accepted Task67 text; this overlay runs none of them.
+
+**Current cross-task field ownership.** Task64 retains18 FSM fields against20 wire fields, complete old18 mappings and an exact-zero guard that also refuses allocated-empty wire purge_members. These are field counts; scoped_keeper_path proto19 and purge_members proto20 never change. Selected69 owns their FSM declarations, complete20-value mapping/transport and independent boundary tests. That owning migration is already included, not a pending partial-source reconstruction. E1 current consistency prose aligns this staging boundary; future E3/E4 owners remove only their mapped pending entries, and78 must prove the final map empty.
+
+**Downstream readiness ownership.** Selected E3 `prepare-e3-readiness-field-ownership/parts/task-71.md` declares `ReadyGeneration uint64`, `ReadySignature string`, `ReadyEpoch uint64` with exact omitempty tags. Task73 populates all three in Apply, verifies signatures under their recorded epoch for current and Leaving records, and filters signature/epoch from read views (D33). This is a declaration/population boundary, not evidence that actual71/73 executed. E2's pool-only `eligibleRingLocked`, `blockRingLocked` and admission seam remain inputs for73; E3 changes the seal-aware signature in its own task.
+
+**Task70 qualified source and retained historical custody limits.** Original cc03 retains62 observations/31 historical mutants/3990 identities/19skips/638 equality under tool-drift HOLD; historical per-command SDK attribution and switch time stay UNKNOWN. New root536479ab accepts the separate fixed-tool12-call qualification: full plain and ONErace each3990 identities/3971PASS/19exactSKIP/0FAIL,22 uncached Bazel targets per mode, fresh638 custody and36 focused allPASS including persisted auto/plain.27 snapshots bind22 fixed files. SDK proof is294 configured Go actions under deps(//fsm:fsm_test) and ten resolved leaves per mode, not universal closure or proof of historical attribution. Root6892 accepts the complete70 text including the literal bee55 Step14a; future actual71 runner review/new grant and signed checked-head push/readback receipt remain mandatory. No historical mutant/TDD campaign is rerun or reattributed by this acceptance.
+
+**Additional owning test/file inventory.** Task68 includes rule6 delisting in `evictNodesLocked` and its three `TestTask68Adversarial*` regressions. Task69 includes the full `fsm/manifest_owner_wire_test.go` migration, adapter/adversarial/transport regressions and `server/BUILD.bazel`, preserving the original ownership/attribution cases. Task70 additionally owns `TestStage3SelectionRecordRestoresBothPersistedBodies` in `fsm/selection_stage3_test.go` at Step14a, after the original14-name gate and before15; real Persist auto/interned and forced plain are covered without changing snapshotBytes or recapturing either frozen golden. All exact selected task payloads bind this inventory.
+## Appendix B: drafting facts, adversarial review and final local document reconciliation
+
+Root has adopted the complete E2 task-review and documentary-consistency scope after E1; publication remains pending. Accepted64–68 source reviews,69 bounded-risk disposition and70 fixed-tool qualified source/owning text are consolidated below. Only owning evidence statements are current; historical drafting/old70-HOLD sections retain their original time/scope. No product/control run or ledger/live outcome is produced by this reconciliation.
+
+### Task 64 — Accepted actual runtime candidate
+
+Task64 adversarial review: actual51 arbiter611 (with explicit owning51 test-only oracle correction), actual63 core469,58 HG935 and57 proto were fully hash-verified; exact pin/clone/stage3 RED→GREEN, full Go race25 packages/vet, canonical offline Gazelle/build50/plain22/race22/query PASS. The pin adapter preserves18-field mapping and exact-zero future wire fields; an independent malformed-bound regression closes a demonstrated replay-defence coverage gap.51 distinct FSM runtime mutants and3 journal-oracle corruption controls are killed; every mutation restored. Final task retains35 original Go fences, adds2 regressions;43 syntax/Shellcheck plus26 creator/34 env/54 commit/24 gate/12 pin controls PASS. Final615-file exact replay/source freeze recorded. Own extra120s Bazel race harness override timed out, was preserved/disclosed and removed to use the unchanged repository long timeout; only integration reran117.7s with21 same-source race passes cached. No API stand-ins, actual remote/signing/release/ledger/live action. Those upstream gates were pending at that owner-report cut; later Task36 local acceptance is separately scoped below. Actual CH, recorded release pins and live gates remain future.
+
+### Task 65 — Accepted actual runtime candidate
+
+Task65 adversarial review: complete approved Task64 arbiter615 +actual63 core469/58HG935/57proto inputs verified before/after copy. Exact tracks characterization/shared-probe race, server/FSM and CLI missing-API RED→GREEN, whole Go race25 package outcomes (22PASS/3 no-testSKIP,19 conditional test skips)/vet and canonical offline Bazel Gazelle/build50/plain22/race22/query PASS. Signed poetry/G/newHEAD/retained-JSON/fail-stop workflow verified by26 base/54 commit/24 final-gate/6 no-match controls plus35 syntax/Shellcheck checks. Two incomplete string replacement anchors completed; drafting numeric line suffixes removed. Three new regressions cover previous-term features, verifier non-exemption and all18 registry comparison fields; a GroupSize-ignore mutant escapes original comparison tests and fails the new regression. All33 distinct runtime mutants produce real assertion RED and are restored. Final625-file exact text/Gazelle replay matches verified source,20 protected golden/vector/fixture files and full51 settle region/oracle unchanged,78 production FSM files have no wall-clock reads and no direct proto dependency. No runtime implementation rewrite or real remote/signing/release/ledger/live operation; the owner report kept upstream gates pending at its historical cut; later Task36 local acceptance is separately scoped below, while actual CH/released/live gates remain future.
+
+### Task 66 — Accepted actual runtime candidate
+
+2026-10-18 — Task66 runtime adversarial candidate, frozen after the actual approved625→628 coherent-source TDD and exact final-text/Gazelle replay. Fixed nonexclusive Go golden capture and base receipt overwrite hazards; added bootstrap-verifier and independent promotion-bound regressions. Actual final Go race22 tested packages+three no-test skips/19 environmental skips, vet/gofmt; offline canonical Bazel build50/plain22/race22/query;35 effective distinct target-assertion mutants. Formal plain175302-byte golden captured exclusively once, independent PASS/refused-recapture/hash preservation; actual main599-file old reader refuses version21. Old20 golden/vector files, complete51 settle/CLI and469/935/57 dependencies preserved. Root source-for67 subsequently accepted this bounded source; external/formal/release/live gates remain distinct and no real tag or final-head receipt is inferred.
+
+### Task 67 — Root-accepted actual runtime candidate; procedural overlay
+
+Inherited root acceptance only: full Task67 text SHA256 `0a2ba5fc2fb3ec2fd60432ba93dc3f1b531fe226cf3a1c095dfd0b2f816b1c7c`, report `5ded186e36719bae10a688452cd2ed355e9b67557e2279b7745caf7df820f287`, root receipt `53a8f22c0929116a43174fa8a268446dd262764df855716ea9b0472f80218989`. The owning review reports full Go plain/race/vet, offline Bazel build/plain/race, twelve assertion-killed mutants and independent631-file literal replay; the interned45482-byte golden was captured once and the prior175302-byte plain golden remains unchanged. Seven fixes cover exclusive capture, reserved-key grammar, sink short writes, size documentation, exclusive replay attempts, v21size version bounds and the fixed old-reader typed-refusal exit0 API. Real six-voter inputs, released P4, release/live/formal gates remain open. This overlay executes no implementation tests and preserves every implementation fence; inert Git status controls establish only procedural fail-stop behavior. Historical67 PREP is retained under baseline and is not current actual evidence.
+
+### Task 68 — Accepted complete owning text and bounded actual source
+
+Root accepted633 files over actual67's631-file source under task68-source-for69-root-receipt. The owning actual review found/fixed the omitted authenticated consensus-delisting eviction writer, with a guarded shared reevaluation after the status loop. It reports15 focused tests,19 assertion mutants, full Go race/vet, canonical offline Bazel22-target checks and633-file exact replay; real plain/interned body and authentication/duplicate boundaries are covered. These are owning-report facts, not runs repeated here. The selected published task is exact accepted owning a8739583, including rule6 and three adversarial tests; all six procedural-master Bash bodies remain preserved under the accepted ownership proof. Formal/service/release/live gates remain separate.
+
+### Task 69 — Bounded source-risk disposition; historical full-race FAIL retained
+
+Actual633→637 review supplies full20-field manifest-owner mapping, value/owner0/nil/empty/aliasing coverage, role/host/status/delisting and both-body/version-boundary tests,37 assertion mutants, Go plain/vet, offline Bazel and exact replay. The candidate's original whole-Go-race FAIL in TestDrainModeUpdateCommitsUnderContinuousWrites remains immutable; predecessor baseline and later isolated22-package/3955-identity/19-skip PASS do not excuse or explain it. Root receipt e970 accepts bounded source continuation with UNKNOWN cause and unquantified asynchronous-liveness risk, explicitly without causality/reliability/nonregression or formal claims. The selected published0409d1f1 payload already includes the complete actual69 adapter/test/BUILD migration, accepted durable-history comment and explicit e970 risk banner. It equals the accepted owning reconciliation payload; no source/code hunk is recreated here.
+
+### Task 70 — Qualified owning text; historical tool-drift HOLD retained
+
+Original rootcc03/ca23 campaign remains historical HOLD_FINAL_CUSTODY:62 classified observations,31 mutants,3990 identities/19skips and638 source equality cannot resolve Go1.27.1→1.27.2 switch time or historical SDK attribution. Resource release/INPUT ONLY78429 never constituted that attempt's source approval.
+
+Separate root536479ab accepts bounded qualified source638 (manifest89fc5753762b80e07794075601ec5aa66bccc9c4d54afb86c1448a4f32efb89f), outer session31440 exit0, observer manifestcac87896f1be7a824635f2c3964dec539723b0be61a7a3391649d903f16969fe/report7d1e18e6. Twelve fixed-tool calls give full plain/ONErace each3990 RUN/terminal identities,3971PASS/19exactSKIP/0FAIL,22 passing packages plus3 no-test terminals,22 uncached Bazel targets per mode and36 focused allPASS including real auto/interned and forced plain Persist.27 snapshots each bind22 fixed files; SDK scope is294 configured Go actions under deps(//fsm:fsm_test),ten resolved leaves per mode. No universal action/input closure, fresh literal TDD or new31-mutant qualification is claimed. Candidate/fresh638 custody permits only3 main go.mod dependency path substitutions versus held source and preserves637 other raw files; source equality is not causality/reliability proof.
+
+Root6892a362 accepts sealed complete Task70 payload2b621819 with approved a77 Step1/Step2 and exact bee55 Step14a; all42 fences/31Go remain identical to the owning e7a candidate. Five prose edits record final evidence without changing any source/test/command. Independent Task71 runner review, accepted638 consumption and a fresh root grant remain mandatory. No signed final-head/push receipt, release, live or ledger value exists by virtue of this local source acceptance.
+
+### Plan-level documentary reconciliation
+
+All11 parts are complete. Task64 is the published/root-indexed master;65–67 are exact root-indexed procedural fullparts; published68/69 equal accepted6c645 owning successors;70 is exact6892-accepted sealed payload. The old PREP integration TODOs are resolved locally. No task body is partially imported or newly implemented. Front/AppA record actual18-field-FSM/20-field-wire staging (proto tags19/20),69 full mapping/durable purge-history direction,68 rule6 and71-declares/73-populates readiness ownership. E1 wire proof fields stay absent; E3 runtime remains future.
+
+Task36 local source/review root75d776 now consolidates baselinef892 (source2b6,63PASS/5exactSKIP/0FAIL), affected74f918 (same source,764topPASS/16exactSKIP/0FAIL,1123nestedPASS,oneBazel) and oldf34c full500 (originalf272 memo+observer-v3,500/0/6/0,all4tests) as separately scoped evidence. Old failures, outer raw/ps absence, baseline283 intermediates UNKNOWN and causality/reliability limitations remain; no full500 rerun/retag to2b6 or D38 ledger/live gate closure. C4 documentary consistency is root-adopted under dd9b2409 (27/68 reviews and4/10 plan consistency at that receipt cut). Task45 corrected34 private-memo381core/923HG source review is complete under4fc391 in bounded P1 current-source BUILD/TEST/three actual CH-test scope; this is not full P3, Task46, release or live acceptance. The exact D25 append-only clarification is user-approved. Ordered root adoption of E1 then E2 is recorded in Appendix B; publication and global cross-plan review remain separate. No source-only/static result grants actual71, release, producing R4 pins or live activation.
+
+The resolved local PREP status banner is removed. Ordered root adoption is recorded below; publication remains pending. Original D25/D26/D27/D33/D34/D37/K65, both immutable v21 goldens, complete51/private63/C4 dependency behavior and all existing user/future-execution stops remain binding. E2 has no produced ledger names/recording tasks.
+
+### Historical drafting facts — never current runtime acceptance
+
+#### Historical drafting decisions and cross-task facts
 
 Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
 
-### Task 64
+#### Historical draft Task 64
 
 - Line anchors are arbiter 526a721 (v0.13.0, origin/main now: Plan S3-A merged as arbiter#133). For every fsm source file Task 64 edits by hand they are identical to the header's fb42260 anchors; only fsm/BUILD.bazel (gazelle-written) differs. At 526a721 go.mod pins housegate v0.20.0 (:18), arbiter-core v0.15.0 (:20), arbiter-proto v0.12.0 (:21).
 - Pin fallout at the base is exactly two tests: TestBlockVerificationToPBCarriesEveryField (BlockVerification.eligible_ring first of the nine unset fields 14-22) and TestTableRegistryMirrorsProto (scoped_keeper_path, purge_members). stage3PendingProtoFields holds exactly 11 entries (9 BlockVerification.*, 2 TableIncarnation.*). TestL3BlockHeaderMirrorsProto consults the map but walks only top-level header fields, so L3BlockTrack.group_key is not pending; no test walks TableRegistrySnapshot, so its three contract §44 entries are not added. Step 7 says what to do if an S3-C2/S3-D test fails on one of them.
@@ -15054,7 +16224,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: fsm cloneVerifierEntry(v arbiter.VerifierEntry) arbiter.VerifierEntry (fsm/signed_claims.go, right after cloneVerifiers); fsm findVerifierEntry(entries []arbiter.VerifierEntry, nodeID string) (arbiter.VerifierEntry, bool); fsm stage3FailureDomain(p *arbiter.Stage3Params, id uint64) string; fsm hostBoundFieldsSet(v arbiter.VerifierEntry) bool; fsm validReplicaSigner(s string) bool; server test helper stage3ProtoFieldPending(fd protoreflect.FieldDescriptor) bool; fixture stage3WithSwitch(p *arbiter.Stage3Params, name string) *arbiter.Stage3Params; fixture turnOnStage3SwitchesThrough(t, f, a, last string) (used by Task 70); fixture stage3MemberKey(node string) ed25519.PrivateKey (deterministic per node id); fixture stage3ReplicaSigner(t testing.TB, node string) *authority.Signer; fixture memberConsent(t, f, signer *authority.Signer, entry arbiter.VerifierEntry) string; fixture hostSigner(t, f, host uint64) *authority.Signer; fixture withVerifier(u arbiter.ConsensusParamsUpdate, entry arbiter.VerifierEntry) arbiter.ConsensusParamsUpdate; fixture stage3StateJSON(t, f) []byte; fsm/stage3_params_test.go: ownerAwareFSM(t) (*FSM, *authority.Signer) (switches 1-3 committed; Task 70's fixture), setNonZero, stage3Previous, requireNormalizerRefuses, requireErrorContains, consentStatement; fsm/stage3_activation_test.go: stage3Activation, type stage3Twin (apply method, versionDelta), stage3NeutralState
 - Verified while drafting: Assembled the task from the template plus the scratch tree; a script (tools/apply_step.py) applied the markdown step by step (each replace pair matched exactly once, files created as written, Step 16 append) to a fresh git archive of arbiter origin/main 526a721 with go.mod replace to stand-ins: arbiter-proto = Plan S3-E1 Task 57 drafted tree (proto/ and gen/ byte-identical to Task 57's final draft), arbiter-core = cfd4f42 + contract §41 stub. Result byte-identical to the drafting tree. / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test at every step: Step 3 count 3; Step 5 go doc output exactly as stated; Step 6 fallout exactly as stated; Step 8 three PASS + ok; Step 11 three failing subtests with the quoted message; Step 13 pass; Step 18 build failure with the quoted errors; Step 23 26 PASS and the eight goldens PASS; Step 24 gofmt-clean, go vet clean, go test ./... -race no failures, no time.Now in fsm/, status listing as stated (minus fsm/BUILD.bazel). / 49 single-point mutations (41 in fsm/stage3.go, 6 in the wiring, 2 stage3-gated behaviour changes in select.go/admission.go) each fail their named test; 0 survive. / One earlier whole-suite -race run timed out in integration TestPipeline_EndToEndOverTheWire under machine load average ~125; it passed 3 times alone and in the final whole-suite -race run. / bash -n of all 13 bash blocks and the Run lines (placeholders substituted): clean; shellcheck clean except SC2046 on contract §48's own gofmt command (kept verbatim). / Checked against the inputs: update scripts' output lines, CI's bazel test command, urwt-create.sh JSON contract, Plan S3-C1 §19 ledger tool extraction (awk) and verbs ref/show/get, E1 contract §41 names/signatures (wire converters, consent API, Stage3Params methods), E1 Task 59 in-progress normalizer texts match the quoted refusals. / Not run: Bazel and gazelle (offline; no P5 tags; git_override sources unavailable), any remote command.
 
-### Task 65
+#### Historical draft Task 65
 
 - This run resumed an interrupted r2 revision (work/e2/task-65-r2, never written out). It re-anchors the r1 draft from Oct 15 on arbiter origin/main 526a721 (v0.13.0), which now has Plan S3-A merged (#133: --hold, updateConsensusParams/proposal/heldUpdateOutcome, the stage-3 reads). arbiter-core origin/main is cfd4f42 (v0.15.0), arbiter-proto 7a73f25 (v0.12.0). The plan header's base fb42260 is out of date.
 - Changes since r1: stage3StateToPB moved into server/consensus_admin.go next to trackStateToPB. The registry bump uses stage3ParamsChanged instead of reflect.DeepEqual, so a snapshot-restored replica (omitempty drops an empty failure-domain list) can never decide a bump differently from one that replayed the log. ConsensusParamsView.Stage3 is renamed Stage3State. The --stage3-switch refusal is now the contract's literal text. New FSM tests cover the reads and the bump. A new end-to-end CLI/server/FSM test commits the activation under the default drain hold, as the P5 runbook (Plan S3-E4 contract) runs it. The r1 note claiming the CLI re-check catches quarantine changes was wrong and is corrected: exemptions are read once, and the leader's own gate decides again at submit.
@@ -15066,11 +16236,11 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: server: func voterAddresses(ctx context.Context, key string) []string (replaces tracksVoterAddresses); server refusals: stage3 gate refused: raft configuration is unavailable on this node; stage3 gate refused: raft term is unavailable on this node; Unavailable stage3 gate: read raft configuration: %v; fsm: func (f *FSM) stage3StateViewLocked() *Stage3State; fsm: ConsensusParamsView.Stage3State *Stage3State (the Stage3StateView copy taken under the parameters' lock); fsm: func stage3ParamsChanged(previous, next *arbiter.Stage3Params) bool (the registry-bump rule; an empty failure-domain list equals an absent one); arbiter-admin: func stage3GateFor(exempt []string) activationGate; arbiter-admin: type stage3SwitchFlags []string; type uint32Flag uint32; type stage3Flags (register, check, given, target); var stage3ActivationRequired; func setStage3Switch(p *arbiter.Stage3Params, name string); var verifierHostKeys; func parseVerifierFlag(value string) (arbiter.VerifierEntry, error); func parseHostBoundVerifier(entry *arbiter.VerifierEntry, fields map[string]string) error; arbiter-admin: gateObservation.exempt []string; observeGate(ctx, g, leader, voters, dial) now takes the gate; arbiter-admin refusals: --stage3 needs the tracks activation first: tracks_enabled is not committed, and the stage-3 activation must be a later update; stage3 gate refused: read the leader's track state: %w; stage3 gate refused: read the leader's consensus parameters: %w; stage3 gate refused: the leader already reports stage3 committed; re-run consensus show before retrying; --verifier %s: host %q is not an unsigned integer; --verifier %s consent: %w; --indexer-failure-domain id %q is not an unsigned integer; key %q has no value; --voter is only used with --client-lanes-max-per-account or --si-indexer, or with --tracks-enabled or --stage3 (extended text); tests: fsm TestStage3StateViewIsADetachedCopy, TestRegistryVersionBumpsOnceForEveryCommittedStage3Change, TestStage3ParamsChangedTreatsAnEmptyFailureDomainListAsAbsent; arbiter-admin TestConsensusShowJSONHasTheStage3FieldsTheRunbooksRead, TestCLIStage3ActivationThroughServerAndFSM (CLI + real server + production FSM, activation under the default --hold drain); test helpers: server stageTwoFeatures, stageThreeVoter, stageTwoOnlyVoter, stage3VotersContext, stageThreeVotersContext, stage3GateText, serverStage3Params, serverStage3ActivationRequest, serverPurgeSwitchRequest, applyServerRequest, activateServerStage3, prepareStage3Gate, refusedStage3BeforeRaft; arbiter-admin stageTwoFeatures, stage3Admin, stage3GateFixture, stage3ActivationArgs, activatedStage3, stage3WithSwitches, writeConsent, memberFlag, lastUpdate
 - Verified while drafting: Fresh scratch work/e2/task-65-r3: git archive of arbiter origin/main 526a721, plus a Task 64 stand-in built from the contract §44–§45 names (with its fsm BUILD lines), plus replace modules core5 (arbiter-core cfd4f42 with stubs of E1 §41: Stage3Params, Validate, Stage3Switches, SwitchOn, the normalizer rules, the wire converters, Stage3Feature in LocalNodeFeatures) and proto5 (arbiter-proto 7a73f25 regenerated with the E1 §39 fields and the P4 settle surface). / Generator gen_task65.py renders the markdown from the verified tree. It asserts every anchor occurs exactly once in the stand-in base, and that applying every hunk reproduces each verified file exactly. / Applier apply_task.py parsed the rendered markdown into a fresh clone and ran every step's command with GOWORK=off GOFLAGS=-mod=mod GOPROXY=off: / Results: Step 3 PASS (8 subtests). Step 6 ok. Step 8 FAIL [build failed] for server and fsm with the stated undefined-symbol messages. Step 12 PASS. Step 13: server, fsm and arbiter-admin ok with -race. Step 16 FAIL [build failed] with the stated messages. Step 18 PASS: 11 stage3_test.go tests, the integration test, 7 switch subtests, 16 refusal subtests, and the full arbiter-admin suite. Step 20: go test ./... -race ok for every package. The fsm suite was killed once by an external SIGTERM; re-run alone it passed (ok, 44.6s). / After all steps the applied tree was byte-identical to the verified tree, BUILD.bazel files from gazelle included. The three commits were created with the stated subjects and the final status was clean. The final markdown (prose-only changes after that run) was re-applied structurally and is still identical. / Mutation checks: 12 mutations, all killed by the named tests. They removed or disabled: the stage3Gate call, the registration refusal, the Stage3 clause of the barrier condition, the registry bump (semantic and compile), the empty-list rule, the CLI exemption skip, the non-voter check, the FSM-refusal check, the required-flags check, the arbiter-stage3-voters metadata, and the TableRegistrySnapshot.stage3 field. / bash -n and shellcheck -S warning are clean on all 12 'Run:' commands and all 3 bash blocks. The markdown has no TBD, TODO or placeholder text and no hard-wrapped prose; every commit message ends with the Co-Authored-By line. / fsm red lines: direct fsm imports of arbiter-proto (go list -f '{{join .Imports}}') = 0; grep time\.Now fsm/ is empty; no testdata changed. / Bazel: only gazelle ran. bazel build, test and query were not run, because the stub modules are not wired for Bazel. Disclosure: the first gazelle run, in a new scratch workspace (task-65-r2/arb-gz2), completed. A second fresh workspace failed trying to reach proxy.golang.org, which shows a fresh output base fetches gazelle's Go deps, so the arb-gz2 run most likely fetched public Go modules over the network. Every later gazelle run reused that warm workspace offline.
 
-### Task 66
+#### Historical draft Task 66
 
 - Line anchors are arbiter 526a721 (v0.13.0, origin/main, Plan S3-A merged as arbiter#133). Tasks 64 and 65 (r2) touch none of the fsm files Task 66 edits, so the fsm anchors are the base lines: snapshot.go writeSnapshot :168-189, snapshotWriteVersion :198-220, snapshotDoc :68-108, the version whitelist :285-287, the predicates :303/:318/:426, after validateTrackState :504-507, the restore sample :656, tableRegistryHasV17Fields :723; snapshot_count.go :17-19/:39-42/:66-68/:98; state_size.go :56-57/:114-142; consensus_history.go :31-33.
 - In README.md the Snapshot versions paragraph is :300, `## Artifact disposition admission` is :396 at 526a721 (on the branch it follows Task 65's new section `## Multi-source storage integrity (stage-3 activation)`, which the Snapshot v21 paragraph closes), and the State size and snapshots paragraph is :429 at 526a721. The Snapshot versions sentence points to `(see Snapshot v21 below)`, so it does not depend on what Task 65 calls its heading.
-- Built from stand-ins, the golden container is 175302 bytes and starts with `65 70 83 77 21 0`. Two separate captures in two directories gave the same SHA-256 (89707ed2…bb96, stand-in specific; the real capture differs).
+- Built from stand-ins, the golden container is 175302 bytes and starts with `65 70 83 77 21 0`. Two separate captures in two directories gave the same SHA-256 (89707ed2…bb96, stand-in specific; the actual source had not yet been captured then; the independently captured actual66 blob later has the same hash, which does not validate the stand-in proof).
 - 526a721 refuses the captured container with `unsupported snapshot version 21 (require 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 or 20); pre-v3 state requires a backup and coordinated re-genesis`.
 - The read-cap case of TestFailedRestoreKeepsThePreviousSample would still pass without its edit: under version 21 the unknown body kind 255 refuses it first. The edit keeps it a read-cap test. The other five existing-test edits each fail without the edit (checked).
 - validateStage3Activation takes the epoch of each record from the first signed update whose stage3 satisfies the rule (the update at index i produces epoch i+1), or 0 when no update does. A record with epoch 0 is refused too, and the epoch-0 test cases pin this.
@@ -15079,7 +16249,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: refusal `stage3 switch %s cutover (block %d, promotion %d) is beyond the state's (%d, %d)` (validateStage3Activation, upper bound beyond contract §46); refusal `snapshot v21 body kind: %w` (container cut after its version byte); TestRestoreRejectsAnOversizedV21LengthPrefix; TestBootstrapParamsNeverCarryStage3; test helper plainSnapshotBytes(t *testing.T, f *FSM) []byte; test helper v21Document(t *testing.T, data []byte) []byte; test helpers v21Stage3, v21Cutover, v21Update; test helper stage3SwitchedFSM(t *testing.T) *FSM; test helper fixedPromotionAck(t *testing.T, f *FSM, p uint64) wire.Command; const stage3V21PlainGoldenPath; stateSizeSample(source string, envelopeBytes, docBytes, spentIDsBytes uint64, components []StateComponentSize) StateSizeSample (Plan S3-A's unexported helper gains envelopeBytes); rewriteSnapshotDocument made envelope-aware (13 bytes for v3-v20, 14 for v21 with the plain kind byte)
 - Verified while drafting: Scratch tree: work/e2/task-66-r2/arb2, a git archive of arbiter 526a721 plus the latest Task 64 r2 draft tree (task-64-r2/arb at f0abe6f), Task 65 r2's fsm and README diffs, and gazelle output for those stand-ins. It builds against the PROTO_TAG_P5 and CORE_TAG_P5 stand-ins (proto5, core5) through go.mod replace, with GOWORK=off GOFLAGS=-mod=mod GOPROXY=off. / A script (pairs.py) applied every Replace/with pair of Steps 3, 5, 6, 7, 9 and 12 to the base files and reproduced the tested tree byte for byte. apply_doc.py then parsed the generated task-66.md itself, applied its two Create blocks, 32 Replace pairs and the README insertion to a fresh base, and reproduced all 12 files byte for byte. / Step 1 in a simulated worktree (wt-sim on branch urwt/claude/multi-source-s3e) printed the expected lines and `ok`. / Step 4 was reproduced in arb-red and gave the exact undefined-name list in the doc. / Step 10 was reproduced: only TestStage3V21PlainContainerGolden fails. / Step 11: the capture skipped as expected, od printed `65 70 83 77 21 0`, and a later rerun passed. / Step 12's four greps printed 1, 1, 1, 0. / Step 13 without the Bazel lines printed gofmt-clean, vet-clean, no-failures and goldens-untouched. / Step 14's commit printed `14 files changed` and the same SHA-256. / Full go vet ./... was clean. go test ./... passed, and go test -race ./... passed for all 22 packages. / No time.Now appears in fsm/, and the fsm library's direct imports contain no arbiter-proto. / 20 single-point mutations were each caught by a named test: the verifiers predicate, the bootstrap and update halves of stage3FieldsPresent, the pre-v21 refusal, the kind check, the writer version, snapshotDocument's Stage3, snapshotEnvelopeBytes, the state-with-parameter rule, both epoch-0 rules, the switch-on rule, the order, the precedes, upper and activation bounds, the incarnation lower bound, the bootstrap refusal, and both state-size envelopes. Two of them first survived, so tests for the epoch-0 cases were added to TestValidateStage3StateRefusesAnActivationEpochThatIsNotTheHistorys and TestValidateStage3StateRefusesSwitchCutoversThatAreNotTheHistorys. / Gazelle ran with the network blocked (proxy set to a dead port, Go modules served from the local module cache through a file:// GOPROXY) and wrote the expected fsm/BUILD.bazel lines. bazel build and bazel test were not run because the P5 modules exist only as local stand-ins. / Every bash block and Run command passed bash -n. shellcheck is clean apart from the intended SC2046 (contract §48's gofmt idiom) and SC2016 (literal backticks in grep patterns). Inline code spans and fences are balanced; the README check was moved into a bash block so no inline span contains a backtick. / The r1 draft was backed up to work/e2/task-66-r2/task-66.r1.md before task-66.md was overwritten.
 
-### Task 67
+#### Historical draft Task 67
 
 - Re-anchored on arbiter origin/main 526a721 (v0.13.0, Plan S3-A merged as arbiter#133). Plan S3-A Task 9's real code matches what the round-1 draft assumed from the plan text. New anchors: fsm/snapshot.go imports :3-17, version check :285-287, document read :296-299, fsmSnapshot block through Snapshot() :737-782; FSM struct :39-53 (stateSize :52); state_size.go ContainerBytes comment :56-57; config.go RaftConfig :31-44, trailing_logs check :569-571; raw.go :50-63, :134, :223-228; services.go newFSM :62-67; metrics.go New 'return m' :151 (stateSizeReader is in metrics.go:19-25, not metrics/snapshot.go); README paragraph :429 and the arbiter-state-size YAML fence :593; issue-31-metrics.md row :48 and sentence :50.
 - Task 66's drafted tests read the plain container through writeSnapshot (its helper plainSnapshotBytes) and forge body kinds 2 and 255, so Task 67 changes none of them. Step 10 keeps a short fallback in case Task 66 changes.
@@ -15092,7 +16262,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: fsm: maxInternedDepth = 10000, internedBodyPrefix, snapshotInterner (value, container), appendInternedRef, snapshotRehydrator (measure, measureValue, measureRef, emit, emitValue), parseInternedBody, internedArray, parseInternedRef, addRehydrated, skipJSONValue, scanJSONString, scanJSONLiteral, isHexDigit, internedMalformed; fsm: snapshotEncodingState{mu, mode, stats} with bodyMode(), the field FSM.encoding, snapshotPersisted, (*fsmSnapshot).encode, verifiedInternedBody, (*fsmSnapshot).recordEncoding, snapshotBodyKindV20/Plain/Interned (v20, plain, interned); fsm reader refusal prefix 'snapshot v21 body: ' around RehydrateSnapshotBody errors; config.stringOrDefault; metrics: snapshotEncodingCollector, newSnapshotEncodingCollector (registered in New only for a source that implements snapshotEncodingReader); test helpers: persistedSnapshotBytes, v21Parts, internedCorpus, stage3V21InternedGoldenPath, encodingSnapshot; the shared snapshotBytes now persists in plain mode; extra tests: TestRehydrateRefusesMalformedBodies, TestInternSnapshotBodyRefusesWhatItCannotRepresent, TestSnapshotEncodingStatsAreRaceFreeAgainstPersist, TestNewFSMAppliesTheRaftSnapshotBodySetting; local only: $T/helpers.sh (rehearsal_build, digest_lines, rehearsal_replay, rehearsal_v21size), $T/v21check/main.go (prints 'restore_ok|restore_refused version N body none|plain|interned'), $T/v21size/main.go (prints 'plain_bytes N interned_bytes M rehydrated_identical B'), $T/ledger.env, $T/tools.sha256, and the evidence line formats of Steps 35-39
 - Verified while drafting: Scratch: work/e2/task-67-r2/arb, a git archive of arbiter 526a721 with these stand-ins: Task 64's drafted commits (task-64-r2 HEAD f0abe6f), Task 66's drafted text, arbiter-proto at Plan S3-E1's contract §39 (proto5) and an arbiter-core §41 stub (core5) as replace modules. All Go runs used GOWORK=off GOFLAGS=-mod=mod GOPROXY=off. / TDD order checked step by step. Step 3 fails to compile (undefined InternSnapshotBody/RehydrateSnapshotBody/maxInternedDepth). Step 5 passes with 28 subtests. Step 8 fails to compile (undefined SnapshotEncodingStats, internSnapshotBodyFunc). Step 10 passes except the uncaptured golden. Step 11 prints 'captured', then 3 PASS, a refused second capture (1) and 4146534d1501. Step 12: fsm under -race ok, 9 golden/state-size PASS lines, status as stated. Steps 15/17, 19/21 and 24/26 behaved as stated. / Full suite: go test ./... -count=1 all ok. -race ok for fsm, metrics, config, cmd/arbiter, integration and integration/chpipeline. gofmt -l empty and go vet ./... clean; no time.Now in fsm/. / Nine single-point mutations each failed their tests: digest compare dropped, plain mode counting a fallback, reader keeping the stored length, self-reference admitted, root interned, expansion cap dropped, stats not recorded, reserved-key check dropped, mode not taken from the FSM. / Second clean pass: every code block was re-extracted from the final markdown and applied by a script that follows the step instructions on a fresh clone. The resulting tree is byte-identical to the first pass, golden included. / Bazel: offline gazelle ran and Task 67 adds exactly snapshot_interned.go and snapshot_interned_test.go to fsm/BUILD.bazel. The scratch replace also rewrote labels, which is a setup artefact and was reverted. bazel test could not run offline because the repository cache lacks 526a721's module versions. It tried one git ls-remote, which failed, and was not retried. / Rehearsal Steps 30-41 ran end to end under a scratch HOME. Stand-ins: Plan S2-B's tgz copies for the P0 copies, the round-1 sample copies, S3-A tool sources with the recorded checksums c5168a19/fccc6a87, a git clone as W, and v0.13.0 (526a721 tree) as ARBITER_TAG_P4, with the ledger/fetch block replaced by a stand-in. Results: 6 identical replay lines, the 11,868,827-byte v20 container from both builds, every cross restore restore_ok, the old build refusing both v21 goldens at the version byte, 8 rehydrated_identical true lines, 24 evidence lines, and $T removed. / bash -n passes on every fenced bash block and every inline Run command. shellcheck (helpers.sh prepended) reports only SC1091 info. 4 commits end with the Co-Authored-By line; 3 confirmation lines and 3 'Confirm before running.' markers (fetch, module download, rm -rf). No placeholders, and no hard-wrapped prose.
 
-### Task 68
+#### Historical draft Task 68
 
 - The task has 14 steps. Step 1 checks the worktree and its seams. Steps 2-3 add the failing tests and show them failing. Step 4 creates fsm/eviction_voiding.go. Steps 5-9 are the call-site hunks in apply.go, rejected_cleanup.go, signed_claims.go, threeway.go and reads_work.go. Step 10 is the exact onStage3SwitchOnLocked hunk. Step 11 is the README paragraph. Steps 12-13 run the tests and the checks, and Step 14 is the one commit 'feat(stage3): eviction voiding, switch 2 (Task 68)' ending with the Co-Authored-By line.
 - Every refusal is '%s from %s: the node is evicted (stage3 eviction_voiding)'. It sits right after each site's own signature check: applyRegisterRC (result_claim, before park/bind), applyRecordAttestation (attestation), applyRecordByteSideScan (byte_side_scan), applyRecordPromotionAck (promotion_ack), applyRecordCleanupAck (cleanup_ack) and recordRejectedCleanupAckLocked (cleanup_ack). None is inside snodeSignatureLocked or verifierSignatureLocked.
@@ -15104,7 +16274,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: func (f *FSM) voidedReplicaLocked() func(replica string) bool (returns nil while eviction_voiding is off, else evictedNodeLocked; the WorkSet and reevaluateBlock use it); func (f *FSM) reevaluateUnlatchedBlocksLocked(names func(set []string) bool) (the shared loop under reevaluateBlocksNamingLocked and reevaluateVoidedBlocksLocked); Test fixtures in fsm/eviction_voiding_test.go: voidedRefusalV, purgeOnlyFSMV, voidingFSMV, evictV, markedBlockV, evidenceV, recordEvidenceV, verdictV, verdictJSONV, promotedBlockV, rejectedCleanupV, parkedClaimV, type evictedMessageV, evictedMessagesV; README.md paragraph '**Eviction voiding (switch 2).**', inserted right after Task 65's '**Switches.**' paragraph in '## Multi-source storage integrity (stage-3 activation)'
 - Verified while drafting: Scratch tree work/e2/task-68-r3/arb: arbiter origin/main 526a721 plus the current stand-ins. Task 64 is task-64-r2 HEAD f0abe6f, Task 65 is task-65-r2's fsm and README parts, Task 66 is the task-66-r2 working copy at 05:05 with its plain golden captured once in scratch, and CORE_TAG_P5/PROTO_TAG_P5 are the core5/proto5 replace modules. Tests ran with GOWORK=off GOFLAGS=-mod=mod GOPROXY=off. / Step 1 commands on the pre-68 tree print 3, 3, 1, then nothing. / Step 2 then Step 3 (-race): the package compiles and the FAIL output, timings stripped, is byte-identical to the Expected block in Step 3. The same holds on a second stack, task-67-r2/arb HEAD e63f3e5 (Tasks 64, 66 r1 and 67). / Steps 4-10 applied from the markdown by a parser (tools/apply_md.py). Every quoted old block matched exactly once. / Step 11: the README paragraph went in after the **Switches.** paragraph. The grep prints 1 and `git diff --numstat` prints `2\t0\tREADME.md`. / Step 12 (-race -v): the 12 named tests PASS, and the output, timings stripped, is byte-identical to the Expected block. No data race. / Step 13: gofmt and vet are clean. `go test -race ./fsm/ ./orchestrator/ ./server/` is ok on both stacks; on the Task 67 stack ./metrics/ and ./config/ are ok too. All the listed golden and TestDeterminism_* tests PASS, `grep time.Now fsm/` prints nothing and fsm/testdata is unchanged. / Bazel 9.1.0 offline, tree = origin/main archive plus the fsm/server overlay. `bazel run //:gazelle` adds exactly eviction_voiding.go to //fsm:fsm and eviction_voiding_test.go to //fsm:fsm_test, with no deps. `bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto` prints 0. / Bazel with --override_module=arbiter_core=<core5 stand-in> and --override_repository for arbiter-proto: `bazel build //...` succeeds, and `bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors` passes all 22 test targets. A -test.v run of //fsm:fsm_test lists the 12 named tests as PASS. / Mutation run: 17 mutations. Every refusal site, the K72 discard, the reevaluateBlock skip, the blockChallenged exemption, the evidencePresence voiding, the EvictNode and switch-on re-evaluation, the verdict-nil skip, the Evicted predicate, and the switch guards in evictedSignerRefusalLocked and voidedReplicaLocked were each killed by a named test. The only survivor is the redundant switch guard around the EvictNode re-evaluation, which has no observable effect. / Step 14's bash block, with W pointed at the scratch tree: bash -n and shellcheck are clean, it commits 9 files with the stated subject and the Co-Authored-By line, and the status is empty afterwards. Every bash block and inline Run command passes bash -n. shellcheck warns only SC2046 on the contract's own gofmt command `$(git ls-files '*.go')`, where word splitting is intended.
 
-### Task 69
+#### Historical draft Task 69
 
 - Base: arbiter origin/main is now 526a721 (v0.13.0, Plan S3-A merged as arbiter#133). Every source file Task 69 edits (fsm/table_registry.go, fsm/apply_table_registry.go, server/table_registry.go, server/table_registry_test.go) has the same anchors as fb42260. Only fsm/BUILD.bazel (purge_owner_test.go at :174) and README.md (the heading '## Artifact disposition admission' at :396) moved.
 - Task 64's 2026-10-16 draft put stage3PendingProtoFields in server/safestate_stage3_test.go, not in server/table_registry_test.go. Its two TableIncarnation entries are valued "Task 69" and are the last two in the map. Task 69 deletes them in its FSM-half commit, and from then on TestTableRegistryMirrorsProto pins both JSON tags.
@@ -15121,7 +16291,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: fsm test helpers in fsm/purge_stage3_test.go: purgeTestAdd, purgeTestRetire, purgeTestPurging, purgeTestSeed, purgeTestMember, purgeTestMembers, purgeTestReport, purgeTestEvict, purgeTestRoundTrip; Extra fsm test beyond contract §47: TestPurgeSwitchOnHookCompletesAPurgeThatWaitedOnlyForAMember (white-box test of the switch-on hook on a hand-built state); Extra fsm test beyond contract §47: TestRestoreRefusesScopedKeeperPathAndPurgeMembersInAPreV21Container (the stage3FieldsPresent arm under a v20 version byte); README.md paragraph '**Purge switch**', added as the last paragraph of Task 65's section '## Multi-source storage integrity (stage-3 activation)', right before '## Artifact disposition admission'
 - Verified while drafting: Built the scratch tree as a clone of the sibling composite <scratch>/work/e2/task-68-r3/arb at 1c3fc58. That tree is arbiter 526a721 export plus a scratch pin, Task 64's draft (fsm/stage3.go and the fixture are identical to Task 64 r3's working copy), the Task 65 fsm and README stand-in, the Task 66 stand-in, and the captured plain golden. It uses the arbiter-proto and arbiter-core stubs of Plan S3-E1's contract via replace (proto5, core5). Tests ran with GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test. / TDD observed exactly as the steps state. Step 4: fsm build failure (purge_stage3_test.go:187:12 ScopedKeeperPath undefined) and TestTableRegistryMirrorsProto failing with 'proto field "scoped_keeper_path"/"purge_members" has no json tag'. Step 6: 4 pass and 9 fail with the listed messages. Step 12: 13 named tests pass under -race, the whole fsm and server packages pass, and vet is clean. Step 16: 'a scoped incarnation sent scoped_keeper_path false and purge_members []'. Step 18: the server tests pass. / go test ./... -count=1 and go test ./... -race -count=1 pass. go vet ./... is clean, gofmt is clean, there is no time.Now in fsm/, and fsm/testdata is unchanged against the pre-task head (the goldens-unchanged command was checked in the Step 20 state). / Ran 25 single-point mutations (marking, purge set, pool, owner arm, hook rerun and bump, view clone, stage3FieldsPresent arm, the restore call, each of the six restore rules, off-by-one, empty id, repeats, transport mapping). Every one is caught by at least one named test. / Built the final markdown from the verified files with build.py and applied it with apply_md.py (Create/replace/append blocks) to a fresh clone at 1c3fc58. The result is byte-identical to the verified tree (diff -r: trees-identical). / Replayed the markdown step by step (replay.py) on a fresh tree, running every bash block except bazel lines and commits with W pointed at the scratch tree. The outputs match each step's Expected text. / Compatibility check against Task 68: applied its in-progress working diff on top of Task 69. The single onStage3SwitchOnLocked conflict resolved by the hunk rule (purge case first). fsm, server and orchestrator tests all pass. / Compatibility check against Task 67: Task 69 on Task 67's draft tree, which lacks Task 65, passes every test except the one-bump assertion of TestPurgeSwitchOnWithNoMembersChangesNoPurge. That is expected, because the assertion depends on Task 65's bump. / All 10 bash blocks pass bash -n, and shellcheck -s bash is clean (the gofmt checks were rewritten as 'gofmt -l fsm server' and 'git ls-files -z | xargs -0 gofmt -l', which are equivalent to contract §48's check). No hard-wrapped prose, no placeholders. / Not run: Bazel and gazelle (offline, and the P5 tags do not exist yet); the fsm/BUILD.bazel change is stated as what gazelle writes (purge_stage3_test.go after purge_owner_test.go, no deps change).
 
-### Task 70
+#### Historical draft Task 70
 
 - arbiter origin/main is now 526a721 (v0.13.0, S3-A merged: fsm/reads_verification.go, server/safestate_stage3.go and its test exist). The task's line anchors use 526a721. For fsm/state.go, select.go, apply.go, admission.go and orchestrator/dispatch_test.go those lines are the same as fb42260.
 - Base anchors at 526a721: BlockVerification fsm/state.go:269-279 (hunk :277-279); selectVerifiers fsm/select.go:55-76, insertion before :78; applyMarkReplaying selection fsm/apply.go:439-443; SOURCE_UNAVAILABLE block fsm/admission.go:133-147 (hunk :144-147); WorkSet type fsm/reads_work_types.go:72-94 (hunk :91-94); WorkSet loop head fsm/reads_work.go:109-111 and unmarked branch :132-136; BlockVerificationView fsm/reads_verification.go:48-58 and copy line :99; blockVerificationToPB server/safestate_stage3.go:144-146; server test view :94-97 and want :157-158.
@@ -15134,11 +16304,16 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Verified while drafting: Built the scratch base <scratch> It is an export of arbiter 526a721 with stub replace modules core5/proto5 for Plan S3-E1, plus stand-ins from other drafts: Task 64 (r2), Task 65's fsm part, Task 66, its plain golden, and my own minimal Task 69 (TableIncarnation fields, the stage3FieldsPresent arm, the validateStage3Incarnations call, its pending entries removed). Baseline go test of fsm, server and orchestrator was green. / TDD on that base: the Step 4 command failed to build with exactly the stated errors (ws.Unmarkable undefined, undefined initialVerifierSet and blockSeededPosition, ...; the orchestrator's three errors). After Steps 5-13 all 13 fsm tests and the orchestrator test passed under -race. Step 18 failed as stated and Step 20 passed (5 named server tests and the whole server package under -race). / The markdown was applied from its own prose by an independent parser (tools/apply_md.py) to fresh clones at the pre-Task-70 commit. The result was byte-identical (diff -r) to the hand-applied tree, three times, after each wording change. / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... -count=1 passes on every package. go vet ./... is clean, gofmt is silent and grep time.Now fsm/ is empty. The goldens pass and fsm/testdata is unchanged. / 33 single-point mutations, 29 scripted (tools/mutate.py) plus 4 that move the admission check (before quarantine, before the source check, after the lane budget, after the insert), were each caught by a named test. / The Step 1 script was run against the pre-Task-70 tree: no 'missing' lines, the count was 3, and the final grep printed nothing. All 7 bash blocks and 5 Run: lines pass bash -n and shellcheck -s bash with no findings. / Bazel was not run: there is no offline Bazel output base or module cache. Step 22 runs gazelle, build and test on the real branch.
 
 
-### Review fixes (AgentConnect currentC2integration)
+### Root documentary adoption and publication scope
 
-Revision4c5f877cd415d1c972a4ec5b817c5ced0d958e51 had two real inherited-C2 conflicts. Task62 now carries the complete accepted extraction over coherent post-C4/private-memo425→447→469, retaining constructor-only memo, two independent schema clones, original-wire Verify-only binding, synchronous private Run lifecycle, terminal submission invalidation and uncached member/evidence execution. Task64's actual pin fallout includes the inherited manifest-owner failure and explicit18-FSM/20-wire exact-zero ownership; Task69 performs the complete20-field adapter/test/BUILD migration. Accepted Task68's rule6 delisting correction is included as the coherent633 predecessor of69. All imported runtime/test/BUILD fences are literal accepted owner bodies; current checked Git/format/signing/head/receipt procedures remain protected by the accepted procedural candidates.
-
-+This is publication of already accepted local fixes, not a new product/control campaign. Prior source/TDD/race/Bazel/mutation/replay evidence remains scoped to its owning reports:62's447/63's469 chain,64's615,68's633 and69's637. Root e970 retains69's original full-race FAIL, UNKNOWN cause and unquantified liveness risk; later isolated PASS is not reliability/nonregression proof. Task70 qualification, formal consistency, release/live/ledger and existing user execution stops remain separate. Task57/D25 and every unlisted task are byte-identical to the resynced published base; no vector/count decision is taken here.
+Root adopted E1 Tasks57–63 and plan consistency under `e1-v6-root-review-consistency-adoption.json` SHA256 `f52c1c743504808621d097d0f3ca50a87d6668895ab7d5ea1b91b64466182d55`, then E2 Tasks64–70 and plan consistency under `e2-v4-root-review-consistency-adoption.json` SHA256 `3927f0a61f796ceaf444b884e269d426a82b42e25104a1e24648bd43c4314873`. Publication remains pending. These receipts preserve every bounded source/proof scope and historical failure/CLI qualification; they create no new product execution, release/live approval, ledger value, Task72 source approval or Task73 grant. This publication-only prose preparation changes no task or code fence and adds no formal increment.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+This plan produces no ledger name and has no recording task. Consumed producing releases are read only through the canonical ledger procedure after their owning R4; no value is predicted or copied here as an E2 output. Local source/custody/runtime observations are not live execution records.
+
+| Name | Value | Recorded by |
+|---|---|---|
+
+### Run records
+
+None: Tasks64–70 record no ledger value. Task67 replay/size evidence and67/70 observed final-head receipts are local custody artifacts, not ledger rows. Qualified70 bounded source acceptance does not supply the future signed/pushed receipt, actual Task71 grant, release/tag, P5_END, R4 or live activation. Formal E2 adoption/counts remain with root; all future execution stops and confirmations remain unchanged.

@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-16): draft.** Tasks 57, 58, 59, 60, 61, 62, 63 are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet, and the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
+The user explicitly approved the exact append-only clarification in `D25-append-only-clarification-proposal.md` (reply: “可以，没问题”). Complete reviewed Tasks57–63 and accepted bounded procedures remain selected. Only the exact nine appended BlockVerification field tokens, original count changes and count/range-only comments/diagnostics are permitted; all thirteen prior names/types/order and all other freeze rules remain unchanged. The prior root9dde V5 documentary review closed framing B1 and retained the historical N1 CLI-record precision qualification; neither is an outstanding blocker. No other documentary consistency blocker remains in this reviewed scope. Root has adopted the task reviews and E1 documentary consistency under `f52c1c743504808621d097d0f3ca50a87d6668895ab7d5ea1b91b64466182d55`; publication remains pending. Actual release pins, execution confirmation, live/mechanics/R1–R4 and existing K24/K25/K86/budget/image gates remain separate. No new source/runtime proof, released tag, ledger value or downstream execution grant follows.
+
+**Binding soak criterion (K38, no contract change):** spec§16 P2, C2 contract§24.9 and Task36 require the requested owner block count and zero shadow mismatches. Missed scans and unverdicted blocks must be retained/reported; they are not required to be zero. The separately authorized observer-v3 actual50 completed all4 original tests with owner[50blocks,0mismatches,1missedscan,0unverdicted] and runnerexit0, so it passes the original50 criterion. This corrects the controller's added zero-error interpretation; it changes no existing assertion or devnet2 criterion and supplies no500/release/ledger exit. The combined candidate now includes Task34's contract-correct producer helper, whose owning correction passed106 actual local helper CLI executions; its runtime prefix and other source fences remain unchanged. The old bounded full500 and newer baseline/affected receipts are recorded separately above; D25 is approved; root documentary adoption is recorded in Appendix B and publication remains pending, and release/live/ledger gates remain execution-time requirements. This does not retag the old full500 as proof of the newer source/fixture scope.
 
 **Goal:** Fix and release every wire number of the stage-3 v21 format, teach every host's ingress the two new admission codes, and ship in arbiter-core everything the arbiter and the members need before the v21 activation: the canonical signing types with a normalizer that keeps every field, the authority, consent, member-ready and checkpoint purposes, the wire converters and Raft tags 38–42, the registry view of groups, the incarnation-scoped Keeper paths, and the member consensus mode (verify role, `hg_member_unsafe` reconciler, readiness and checkpoint signing, the hardlink byte source, purge reports with a quiescence hook). Nothing here changes consensus state or devnet2 behaviour: every new field, tag and code stays off the wire until an S3-E2–E4 switch puts it there, the member consensus mode is off unless configured, and the only new behaviour a deployed binary shows is that `CORE_TAG_P5` binaries advertise `stage3_v1` and the owner SNode reports (never repairs) unexpected Keeper replicas.
 
@@ -12,7 +14,9 @@
 
 **Spec:** housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` (spec branch `urwt/claude/ms-si-stage3-spec` at `a815dd0`, PR housegate#236, on `main` as `fb83a97`; §8.2 as amended in the stage-3 plans PR: `si_member` holds exactly `SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE, OPTIMIZE` on `hg_rstage.*`, never `ALL`, cross-plan decision D36) — binding: §6.1 (the `verifiers` entry fields and the `stage3` parameter: wire, canonical form, static rules), §6.2 (the registry view of groups), §6.3 (the salt rule, recorded only: K61), §6.4 (`RebalanceGroup` and `MemberReady` wire and signing), §7.1 (the header `group_key` field, the transition record: K62), §7.3 (`VERIFIERS_UNAVAILABLE` on the wire and at the ingress, the eligible-ring read fields), §7.4 (`ReselectVerifiers` wire and records), §8.1–§8.3 (the member verify role and the `hg_member_unsafe` reconciler), §8.6 first bullet (the hardlink source), §8.8 (incarnation-scoped Keeper paths, purge members on the wire, the owner sweep's alerts, member purge reports), §9.1–§9.2 (`MemberCheckpoint`, `checkpoint_seq`, classes on the wire), §9.3 (the strict-mode backpressure code: K59), §10.3 (`stage3_v1`), §10.4 (the switch fields), §15 (the arbiter-proto, arbiter-core and housegate lines), §17 (the data-plane tests named in contract §42), as clarified by Plan S3-A's K1–K10, Plan S3-B's K11–K22 and this plan's K58–K67. **Prerequisites:** Plans S3-A (`2026-10-14-multi-source-si-s3a-p0-guards.md`, contract §0–§6) and S3-B (`2026-10-14-multi-source-si-s3b-p0-hosts-rollout.md`, contract §7–§15) apply unchanged, as do the contracts of S3-C1 (§16–§19: the replay helpers in `HG_TAG_P1`, the ledger tool), S3-C2 (§20–§24: the member role, `ddl.MemberPinned`, `MemberUnsafeIntent`, `member/sources`, `member/install`, `wire.BlockVerification`), S3-C4 (§29–§32: `member/serve`, `HG_TAG_P3`) and S3-D (§33–§37: `CORE_TAG_P4`, and `PROTO_TAG_P4`, produced unconditionally (S3-D K53, cross-plan decision D26) with the settle RPCs `ConsensusAdmin.SettleTrack` (method 14) and `GetTrackSettle` (15) and the additive, non-Raft stream fields `PromotionCommand.settle` and `SNodeHello.settle`); this plan's Appendix A continues the numbering (§38–§43) and binds Plans S3-E2, S3-E3, S3-E4 and S3-F wherever they use a name it lists.
 
-**Base revisions.** Line anchors refer to arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0) and arbiter-core `8f0bc43` (v0.14.1), read at `origin/main` on 2026-10-15; arbiter `fb42260` (v0.12.0) and sentio-node `5d2f169` were read only for consumers and are not edited. The tasks build on the later releases, which move many of these lines (hunk rule below): arbiter-proto at `PROTO_TAG_P4` (S3-D Task 49, on S3-A's `PROTO_TAG`); housegate at `HG_TAG_P3` (S3-C4, still pinning arbiter-proto `v0.11.0`); arbiter-core at `CORE_TAG_P4` (S3-D, carrying S3-C1's `dataplane/objstore`, S3-C2's `member/*`, S3-C4's `member/serve`). devnet2 when this plan starts, as the earlier plans' exit records leave it (Appendices C of S3-B through S3-D, read with the ledger tool): tracks enabled; `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`} at `ENROLMENT_EPOCH` or later, `max_writers` 3; `verifiers` = `verifier-1..3` only (no host-bound entry); snapshot v20; every SI ClickHouse locked (`L_END`) and restarted once with `table_engines_require_grant` (`P2_RESTART_END`); `/sentio/0/unsafe_inc` created and empty (`UNSAFE_INC_ROOT`); the si-members `MEMBER_IDS` running off consensus with copies (`P2_END`) and serving replica reads (`P3_END`); voters on `ARBITER_DIGEST` or, after S3-D's settle rollout, `ARBITER_DIGEST_P4`; S3-D's hardening and rebuild drill may still be running, because this plan needs only `CORE_TAG_P4`. This plan neither reads nor changes devnet2.
+**Base revisions.** The reviewed source bases are arbiter-proto `7a73f256865c333332f0ac28b17806b1e2bfcbd1` plus complete reviewed Tasks 49 and 57; housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` plus the exact reviewed Tasks 42–44 (HG935 predecessor) and Task 58; arbiter-core `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455` plus the complete reviewed C1/C2/C4, Task 45 lease/serving and Task 50 P4 source, then Tasks 59–62 and the separately audited constructor-owned legacy memo. The coherent chain proves 379 → 400 → 407 → 412 → 423 → 425 → 447 → 469 source-file stages without API scaffolds or partial predecessors; Task 63 final source verification reaches all 469 files / 405 Go files, including all 428 protected predecessor files; actual release-version/sum/pin execution remains pending. Line anchors are navigation hints; quoted hunk context and exact producing interfaces bind. Earlier draft measurements on `1c6ae67`, `66d4df7` and `8f0bc43` remain historical evidence only. Execution still consumes the actually recorded `PROTO_TAG_P4`, `HG_TAG_P3`, `CORE_TAG_P4`, then producing P5 releases through the canonical ledger, never scratch source hashes as substitute tags. The following prerequisite state is required at execution, rather than claimed as current by this source review: devnet2 when this plan starts, as the earlier plans' exit records leave it (Appendices C of S3-B through S3-D, read with the ledger tool): tracks enabled; `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`} at `ENROLMENT_EPOCH` or later, `max_writers` 3; `verifiers` = `verifier-1..3` only (no host-bound entry); snapshot v20; every SI ClickHouse locked (`L_END`) and restarted once with `table_engines_require_grant` (`P2_RESTART_END`); `/sentio/0/unsafe_inc` created and empty (`UNSAFE_INC_ROOT`); the si-members `MEMBER_IDS` running off consensus with copies (`P2_END`) and serving replica reads (`P3_END`); voters on `ARBITER_DIGEST` or, after S3-D's settle rollout, `ARBITER_DIGEST_P4`; S3-D's hardening and rebuild drill may still be running, because this plan needs only `CORE_TAG_P4`. This plan neither reads nor changes devnet2.
+
+**Historical bounded source-review proof cut (2026-10-18; before formal adoption).** Root accepted the seven selected local source/adversarial review scopes57–63 through `task57-63-bounded-source-review-root-final.json` SHA256 `15c23b83a1f3fbb876316403ce440b1b7785264f048f8fb11113ff2602406040` and seven individual receipts recorded in Appendix B. The fresh declared-roster custody covered3093 files with zero hash/custody mismatch; tests remain their recorded historical results, with skips/caches and mechanics/module/release/live qualifications. Old Task50/59 core381 is not current accepted Task45 core381: the former omits21 paths and differs on38 common paths. The separately composed425→447→469 source preserves current45 serving/install/memo intent with explicit later ownership; it is not a relabelled old381 test. At that historical proof cut formal reviews35 and consistency5 remained unchanged; twenty additional bounded scopes57–71/83–87 yield55 mixed formal-or-bounded evidence items, not55 formal reviews. At that historical bounded-source proof cut D25 was unanswered; the approved clarification below now closes that policy hold. That source receipt itself supplies no publication/readiness decision, ledger value or downstream execution grant.
 
 ## Global Constraints
 
@@ -23,7 +27,7 @@
 - **arbiter-proto numbers and names:** contract §39, verbatim; a task that needs another proto name stops and reports a contract conflict.
 - **Canonical forms:** every Go field added to a type that is hashed today (`arbiter.ConsensusParamsUpdate`, `arbiter.VerifierEntry`) is `omitempty`, so every pre-stage-3 digest, `TestActivationUpdateVector` and every existing golden stay byte-identical; the normalizer copies every field (K58; the scoping proposal's defect D3, a defect label and not one of the decisions D1–D40).
 - **Pre-existing pins learn the additions, exactly those listed in contract §39 (arbiter-proto count pins), §40 (one housegate example code) and §42 (the feature list);** no golden constant, vector or `.binpb` fixture changes; a red test outside the lists stops the task.
-- **Never edit, and its one exception (cross-plan decision D25):** every golden or vector file S2-A and S3-A list, `pre_tracks_golden.json`, the `l3_track_golden_test.go` constants and S3-A's arbiter-proto `conformance/stage3_reads_test.go`. D25 lets Plans S3-D and S3-E1 change only that file's count literals: S3-D Task 49 the `ConsensusAdmin` method count (14 → 16), this plan the `ConsensusAdmin` method count (16 → 18), the `RaftCommand` tag count (36 → 41, tags through 42) and the `BlockVerification` field-ledger length (13 → 22 tokens, the nine new tokens appended after the 13 P0 tokens), exactly as contract §39 lists them; every existing ledger token, table row, helper and assertion stays byte-identical, and arbiter-core's same-named S3-A file is not edited at all.
+- **Never edit (binding D25; user-approved append-only clarification).** Only the existing ConsensusAdmin method counts, RaftCommand tag counts/ranges and BlockVerification field-ledger length may change by S3-D/S3-E1. Task57 may additionally append exactly the nine stage3 BlockVerification field tokens below to the existing ledger row, without modifying any of its thirteen existing field names/types/order; count/range-only comments and diagnostics may be synchronized. All other existing entries and never-edit rules remain byte-identical. The exact nine-token suffix is `eligible_ring:[]string ring_position:uint32 marked_cursor_block:uint64 group_key:string group_members:[]string group_fill:bool group_databases:[]BlockGroupRef reselections:[]BlockReselection reselections_at_latch:uint32`. No golden/vector, previous field/type/order, unrelated assertion or arbiter-core same-named protected file is opened by this decision. Normal release/content/user gates still apply.
 - **New frozen fixtures:** `arbiter-proto:conformance/stage3_test.go`; `arbiter-core:authority/authoritytest/stage3.go` and `authority/stage3_golden_test.go` (authority, consent, member-ready, checkpoint and stage-3 update vectors); `arbiter-core:wire/stage3_golden_test.go` (tag 38–42 encodings); consensus constants once committed, computed outside Go and never regenerated.
 - **production rule:** this plan changes no production file and runs nothing on sea; its remote actions are pushes, PRs, merges, the three release workflows and the three ledger records.
 - **Runbook conventions:** no runbook and no live task in this plan; commands handed to the user are fish (`bash -c '…'` wrappers allowed), the agent's own blocks bash.
@@ -65,7 +69,7 @@ Plans S3-E2 (Task 64 pins all three), S3-E3, S3-E4 (Task 79 pins `CORE_TAG_P5` a
 ## Review Focus
 
 1. **A field silently dropped, or a pool entry's bytes changed.** `VerifierEntry` is rebuilt field by field in arbiter-core's normalizer (`authority/consensus.go:125`) and wire converters (`wire/consensus.go:139-149`), and every devnet2 entry is hashed into the params digest of every epoch. Expected: every new field survives normalize, clone and the pb round trip; a pool entry with any member field set is refused, and a pool-only update hashes and encodes exactly as under `CORE_TAG_P4` (the existing `ActivationUpdateHash` and every existing golden pass unedited); a member entry is explicit in every field, with weight 1–64 and its failure domain equal to `stage3.indexer_failure_domains[host]`. Tests: Task 59 `TestVerifierEntryEveryFieldSurvivesNormalize`, `TestPoolVerifierEntryKeepsItsV20CanonicalForm`, `TestPoolVerifierEntryRefusesMemberFields`, `TestMemberVerifierEntryRules`, `TestStage3CanonicalMirrorsMatchProto`; Task 60 `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`; Task 57 `TestStage3ConsensusFieldNumbers`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`.
-2. **A pre-P5 binary meets P5 bytes, or a number is wrong.** Every number of contract §39 becomes a consensus constant at the v21 activation, and the strict decoder refuses an unknown field at any depth. Expected: every appended field left unset produces exactly the bytes `v0.11.0` writes and, set, only appends its own tags; tags 38–42 are the only new oneof members and tag 29 stays unused; no read-only message (groups, cutovers, the selection record) is reachable from `RaftCommand`; the two descriptor baselines and `buf breaking` against `PROTO_TAG_P4` are clean; S3-A's `conformance/stage3_reads_test.go` differs from `PROTO_TAG_P4` only in D25's three count changes; `GroupMember.host_indexer_id` keeps indexer 0 distinct from absent and is the only proto3 optional among the new messages; the encoded bytes of every tag-38–42 fixture are frozen; an unknown exclusion reason is refused at decode, never applied. Tests: Task 57 `TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged`, `TestStage3ConsensusRaftCommandTags`, `TestStage3ConsensusReadMessagesAreNotRaftReachable`, `TestStage3ConsensusFieldLedgers`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`, the unedited `TestSnapshotQueryDescriptorFixtureIdentities`; Task 60 `TestStage3CommandBytesAreFrozen`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero`.
+2. **A pre-P5 binary meets P5 bytes, or a number is wrong.** Every number of contract §39 becomes a consensus constant at the v21 activation, and the strict decoder refuses an unknown field at any depth. Expected: every appended field left unset produces exactly the bytes `v0.11.0` writes and, set, only appends its own tags; tags 38–42 are the only new oneof members and tag 29 stays unused; no read-only message (groups, cutovers, the selection record) is reachable from `RaftCommand`; the two descriptor baselines and `buf breaking` against `PROTO_TAG_P4` are clean; S3-A's `conformance/stage3_reads_test.go` differs from `PROTO_TAG_P4` only in the narrowly described Task57 surface, whose exact nine-token append is user-approved under D25 while preserving the original thirteen tokens; `GroupMember.host_indexer_id` keeps indexer 0 distinct from absent and is the only proto3 optional among the new messages; the encoded bytes of every tag-38–42 fixture are frozen; an unknown exclusion reason is refused at decode, never applied. Tests: Task 57 `TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged`, `TestStage3ConsensusRaftCommandTags`, `TestStage3ConsensusReadMessagesAreNotRaftReachable`, `TestStage3ConsensusFieldLedgers`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`, the unedited `TestSnapshotQueryDescriptorFixtureIdentities`; Task 60 `TestStage3CommandBytesAreFrozen`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero`.
 3. **Admission code 12 or 13 reaches a host's ingress.** A HouseGate older than `HG_TAG_P5` maps an unknown code to `OutcomeUnknown` and sends the statement to status probing (housegate `pkg/storageintegrity/arbiter_proto.go:426-427`). Expected: with `HG_TAG_P5` both are coded terminal rejects whose prepared parts are removed and whose coordinate is unspent; code 12 reaches the client as a retryable 733 with the exact verifiers-unavailable message and the session survives; code 13 as 252 back-pressure with the `storage_integrity: back-pressure:` prefix, counted in `storage_integrity_backpressure_total`, session preserved; code 14 stays unknown. Tests: Task 58 `TestVerifiersUnavailableIsATerminalRejectWithItsCode`, `TestCopiesBackpressureIsATerminalRejectWithItsCode`, the edited `TestIndexerQuarantinedIsATerminalRejectWithItsCode`, `TestVerifiersUnavailableMessage`, `TestCopiesBackpressureMessage`, `TestRelay_StagedVerifiersUnavailableRejection_KeepsSessionAndServesNextQuery`, `TestRelay_StagedCopiesBackpressureRejection_KeepsSessionAndServesNextQuery`, `TestRelay_DeferredUpstreamVerifiersUnavailable_KeepsSessionAndServesNextQuery`, `TestVerifiersUnavailableReachesTheClientAsARetryableRefusal`, `TestCopiesBackpressureReachesTheClientAsARetryableBackpressure`.
 4. **One table name on both Keeper roots.** A key can have an unscoped incarnation from before the purge switch and a scoped one after it; ClickHouse removes every child of a path when its last replica drops (S3-A M10). Expected: the unscoped path and every existing call are byte-identical; a scoped path is never under `/sentio/<shard>/unsafe`; create, drop, purge, sweep and `clearDecommissioned` each act on the incarnation's own path; dropping a stale last replica on the unscoped path after a scoped re-create leaves the scoped table's Keeper tree and writes intact; the owner's audit reports an unknown replica (another owner's SNode and a registered member of another group included, though the purge node set lists both) or a root above an incarnation path and drops nothing. Tests: Task 61 `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds`, `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`.
 5. **A member deployed ahead of its switches, or one that lost its state.** `CORE_TAG_P5` reaches hosts in S3-E4, long before S3-F's steps 4–8. Expected: without `member.Config.Consensus` the member is the P2/P3 member byte for byte; with it, the verify role is built with the role's own boot nonce, which Task 62's constructor requires, a restart with the member's registration already in the purge node set starts while an SNode's id or one the registry serves as another host's group member is still refused, nothing registers until `Register` and no replica is created until `CreateReplicas`, the purge switch, registration and placement all hold; a switch refusal maps to `ErrStage3SwitchOff`, is retried at the interval and never pages; `checkpoint_seq` is above both the journal and the published value, durable before submit, and restarts when `replica_signer` rotates, so a member that lost its state resumes; `REPLICA_ALREADY_EXISTS` stops that table and never runs `SYSTEM DROP REPLICA`; a purge is reported only after the drop and quiescence (at once for an incarnation never held). Tests: Task 62 `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`; Task 63 `TestConsensusConfigNilKeepsTheP2Role`, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq`, `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`.
@@ -78,7 +82,7 @@ Plans S3-E2 (Task 64 pins all three), S3-E3, S3-E4 (Task 79 pins `CORE_TAG_P5` a
 
 | Task | Repository | Deliverable |
 |---|---|---|
-| 57 | arbiter-proto | contract §39 verbatim: `VerifierEntry` 3–11, `Stage3Params` and `IndexerFailureDomain`, `stage3` on `ConsensusMutableParams` (9) and `ConsensusParamsUpdate` (14), `ConsensusParamsState.stage3_state` (9), the five stage-3 commands and Raft tags 38–42, admission codes 12–13, `L3BlockTrack.group_key`, `BlockVerification` 14–22, the registry view (`TableIncarnation` 19–20, `TableRegistrySnapshot` 10–12, groups with the served `GroupMember.host_indexer_id` (D27), checkpoint sequences), `ConsensusAdmin.RebalanceGroup`/`MarkMemberLagging`, `VerifierGateway.SubmitMemberReady`/`SubmitMemberCheckpoint`; `conformance/stage3_test.go`; the listed count pins (in S3-A's `stage3_reads_test.go` only D25's three counts); release `PROTO_TAG_P5` on `PROTO_TAG_P4` |
+| 57 | arbiter-proto | contract §39 verbatim: `VerifierEntry` 3–11, `Stage3Params` and `IndexerFailureDomain`, `stage3` on `ConsensusMutableParams` (9) and `ConsensusParamsUpdate` (14), `ConsensusParamsState.stage3_state` (9), the five stage-3 commands and Raft tags 38–42, admission codes 12–13, `L3BlockTrack.group_key`, `BlockVerification` 14–22, the registry view (`TableIncarnation` 19–20, `TableRegistrySnapshot` 10–12, groups with the served `GroupMember.host_indexer_id` (D27), checkpoint sequences), `ConsensusAdmin.RebalanceGroup`/`MarkMemberLagging`, `VerifierGateway.SubmitMemberReady`/`SubmitMemberCheckpoint`; `conformance/stage3_test.go`; the listed count pins (in S3-A's `stage3_reads_test.go` the count changes and user-approved exact D25 append-only clarification); release `PROTO_TAG_P5` on `PROTO_TAG_P4` |
 | 58 | housegate | pin `PROTO_TAG_P5`; codes 12 and 13 as coded terminal rejects; `chproto` verifiers-unavailable and copies-back-pressure messages; ingress refusals (733 retryable, 252 back-pressure), session-preserving in the relay; tests; release `HG_TAG_P5` |
 | 59 | arbiter-core | pin `PROTO_TAG_P5`; canonical types (`VerifierEntry` fields, `Stage3Params`, the three authority commands, `MemberReadyBody`, `MemberCheckpoint`), codes 12–13; `Stage3Params.Validate`; a normalizer that copies and checks every field; the six purposes with sign and verify functions; frozen `authoritytest` vectors; mirrors |
 | 60 | arbiter-core | wire: `Stage3Params` and `VerifierEntry` converters, the `Command` union for tags 38–42 with request converters, the registry snapshot's groups (with each member's served host), sequences, scoped flags, purge members and `stage3`, the `BlockVerification` selection record; frozen encoded-tag goldens |
@@ -93,17 +97,17 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 **arbiter-proto** (Task 57)
 - `proto/table_registry.proto` (the `replay.proto` import, `Stage3Params`, `IndexerFailureDomain`, the member commands and checkpoint messages, `CheckpointExclusionReason`, the registry view, `TableIncarnation` 19–20, `TableRegistrySnapshot` 10–12), `proto/consensus.proto` (`VerifierEntry`, the `stage3` fields, `stage3_state`, the authority commands, `Stage3SwitchCutover`, `Stage3StateView`, two `ConsensusAdmin` RPCs), `proto/raftlog.proto` (tags 38–42), `proto/arbiter.proto` (codes 12–13, `L3BlockTrack.group_key`, `BlockVerification` 14–22, `BlockGroupRef`, `BlockReselection`, two `VerifierGateway` RPCs).
 - Regenerated: `gen/pb/arbiter.pb.go`, `arbiter_grpc.pb.go`, `consensus.pb.go`, `consensus_grpc.pb.go`, `raftlog.pb.go`, `table_registry.pb.go`.
-- `conformance/stage3_test.go` (new, frozen); count pins in `conformance/client_lanes_test.go`, `signed_claims_test.go`, `tracks_test.go`, `consensus_test.go`, `table_registry_read_test.go`, `snapshot_query_test.go`, `stage3_reads_test.go` (contract §39 list only; for `stage3_reads_test.go` exactly D25's three counts).
+- `conformance/stage3_test.go` (new, frozen); count pins in `conformance/client_lanes_test.go`, `signed_claims_test.go`, `tracks_test.go`, `consensus_test.go`, `table_registry_read_test.go`, `snapshot_query_test.go`, `snapshot_query_fields_test.go`, `stage3_reads_test.go` (contract §39 list only; for `stage3_reads_test.go` the count changes and user-approved exact D25 append-only clarification).
 
 **housegate** (Task 58)
-- `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (pin); `pkg/storageintegrity/arbiter_proto.go`, `pkg/storageintegrity/admission_code_test.go`; `pkg/chproto/client_error.go`, `client_error_test.go`; `storage_integrity_ingress.go`; `pkg/proxy/relay.go`, `relay_reject_test.go`; `storage_integrity_table_state_runtime_test.go`.
+- `go.mod`, `go.sum` only at the proto pin (`MODULE.bazel`, its lockfile and every BUILD stay unchanged); `pkg/storageintegrity/arbiter_proto.go`, `admission_code_test.go`; `pkg/chproto/client_error.go`, `client_error_test.go`; `storage_integrity_ingress.go`, `storage_integrity_table_state_runtime_test.go`, `storage_integrity_ingress_unspent_test.go`; `pkg/proxy/relay.go`, `relay_reject_test.go`, `relay_unspent_test.go`; `CLAUDE.md`, `README.md`.
 
 **arbiter-core** (Tasks 59–63)
-- Task 59: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (proto pin); `consensus.go` (`VerifierEntry` fields, `IsMember`, `ConsensusParamsUpdate.Stage3`), `stage3.go` (new), `types.go` (codes 12–13), `consensus_stage3_test.go` (new); `authority/consensus.go` (normalizer), `authority/stage3.go` (new), `authority/stage3_test.go` (new), `authority/stage3_golden_test.go` (new, frozen), `authority/authoritytest/stage3.go` (new, frozen), `authority/BUILD.bazel`, `authority/authoritytest/BUILD.bazel`; `conformance/stage3_wire_test.go` (new), `conformance/BUILD.bazel`.
-- Task 60: `wire/consensus.go`, `wire/stage3.go` (new), `wire/command.go`, `wire/requests.go`, `wire/table_registry_snapshot.go`, `wire/stage3_registry.go` (new), S3-C2's `wire/block_verification.go` (or wherever S3-C2 put `wire.BlockVerification`), `wire/stage3_test.go` (new), `wire/stage3_golden_test.go` (new, frozen), `wire/BUILD.bazel`.
-- Task 61: `dataplane/ddl/naming.go`, `table.go`, `keeper_roots.go` (new), their tests and `BUILD.bazel`; `dataplane/tableset/reconciler.go`, `keeper_audit.go` (new), their tests; `wire/table_registry_snapshot.go` (`NetworkPool`, `KnownKeeperReplica`).
-- Task 62: `dataplane/evidence/{handler,replay_core,scanner,registration}.go` (new) and tests, `BUILD.bazel`; `verifier/verifier.go`, `backends.go`, `claims.go`, `registration_state.go`, `registry.go` (delegation); `member/consensus/{config,verify_role,unsafe_reconciler,quiescence}.go` (new) and tests, `BUILD.bazel`.
-- Task 63: `dataplane/member_commands.go` (new) and test; `member/consensus/{readiness,checkpoint,checkpoint_seq,purge,status,metrics}.go` (new) and tests; S3-C2's `member/sources` (`MemberUnsafeHardlink`), `member` (`Config.Consensus`, role wiring, metrics), S3-C4's `member/serve` (the `consensus` status field); `consensus.go` (`Stage3Feature`, `LocalNodeFeatures`), `consensus_test.go`, `snode/tracks_test.go` (feature list); `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` (`scripts/update-housegate.sh $HG_TAG_P5`); `README.md` (the member consensus mode and the Keeper roots).
+- Task 59: `go.mod`, `go.sum` (proto pin; MODULE/lock unchanged at the pin); `consensus.go` (`VerifierEntry` fields, `IsMember`, `ConsensusParamsUpdate.Stage3`), `stage3.go` (new), `types.go` (codes 12–13), `consensus_stage3_test.go` (new); `authority/consensus.go` (normalizer), `authority/stage3.go` (new), `authority/stage3_test.go` (new), `authority/stage3_golden_test.go` (new, frozen), `authority/authoritytest/stage3.go` (new, frozen), `authority/BUILD.bazel`, `authority/authoritytest/BUILD.bazel`; `conformance/stage3_wire_test.go` (new), `conformance/BUILD.bazel`; `wire/stage3_reads_test.go` (only the exact owner-only promotion GroupKey exemption), root `BUILD.bazel` (register the new root source/test).
+- Task 60: `wire/consensus.go`, `wire/stage3.go` (new), `wire/command.go`, `wire/requests.go`, `wire/table_registry_snapshot.go`, `wire/stage3_registry.go` (new), S3-C2's exact `wire/block_verification.go` and `wire/block_verification_test.go`, `wire/stage3_test.go` and `wire/stage3_registry_test.go` (new), `wire/stage3_golden_test.go` (new, frozen), `wire/BUILD.bazel`.
+- Task 61: `dataplane/ddl/{naming,table,keeper_roots}.go`, new `keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_roots_test.go`, `keeper_roots_ch_test.go`, `BUILD.bazel`; `dataplane/tableset/{reconciler,keeper_audit}.go`, new `keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_audit_test.go`, `keeper_audit_ch_test.go`, `BUILD.bazel`; `wire/table_registry_snapshot.go` (`NetworkPool`, `KnownKeeperReplica`), new `wire/known_keeper_replica_test.go`, `wire/BUILD.bazel`.
+- Task 62: `dataplane/evidence/{handler,replay_core,scanner,registration}.go` plus `fakes_test.go`, `handler_test.go`, `scanner_test.go`, `registration_test.go`, `BUILD.bazel`; `verifier/{verifier,backends,claims,registration_state,registry}.go`, `backends_test.go`, `registry_test.go`, new `evidence_delegation_test.go`, `BUILD.bazel` (preserve the Task 34 legacy memo files and post-C4 query adapter); `member/consensus/{config,verify_role,unsafe_reconciler,quiescence}.go`, their tests and `fakes_test.go`, `policy_readiness_test.go`, `quiescence_regression_test.go`, `BUILD.bazel`; `dataplane/ddl/member_test.go`, `BUILD.bazel`; `member/confinement/consensus_test.go`, `BUILD.bazel`; `scripts/ci/clickhouse-member-confinement.sh`.
+- Task 63: `dataplane/member_commands.go`, `member_commands_test.go`, `BUILD.bazel`; `member/consensus/{readiness,checkpoint,checkpoint_seq,purge,status,metrics,mode}.go`, `readiness_test.go`, `readiness_ch_test.go`, `checkpoint_test.go`, `checkpoint_seq_test.go`, `purge_regression_test.go`, `mode_test.go`, `stage3_fixtures_test.go`, existing `verify_role.go`, `BUILD.bazel`; `member/sources/member_unsafe_hardlink.go`, `member_unsafe_hardlink_ch_test.go`, `member_unsafe_hardlink_test.go`, `BUILD.bazel`; `member/{config,role,stats,serving,consensus_mode}.go`, `role_test.go`, `consensus_mode_test.go`, `BUILD.bazel`; `member/serve/{serve,conditions}.go`, `consensus_status_test.go`, `BUILD.bazel`; `consensus.go`, `consensus_test.go`, `snode/tracks_test.go`; `.github/workflows/ci.yml` (exactly one new member/consensus integration target); `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock` and README pin example when the actual `scripts/update-housegate.sh $HG_TAG_P5` release pin executes; `README.md` member consensus/Keeper descriptions.
 
 **housegate, ledger** (Tasks 57, 58, 63): Appendix C of this plan file (`docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`) on the ledger copy (the plans branch `urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `main`: D34), one record commit per recording task from a URWT worktree `multi-source-s3e1-ledger-<N>` (contract §43).
 
@@ -130,6 +134,8 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 | §16 P5 (the releases that precede the activation) | 57, 58, 63; S3-E4 Tasks 78–82 |
 | §17 data plane: stale unscoped last replica, same-name re-create on both path kinds, hardlink install, a member that lost its state resumes from the published `checkpoint_seq` | 61, 63 |
 
+**Additional review obligations:** Task 60 explicitly rejects absent checkpoint body/entry while accepting a present owner-0 zero frontier, retains nil verifier-element compatibility and detaches transport aliases. Task 61 protects unknown local markers across both Keeper roots on first/backoff passes. Task 62 binds readiness to the actual pinned storage policy, prevents an older Resolve RPC from erasing an overlapping Observe, and treats structurally corrupt quiescence files as holds. Those regression names and the narrow legacy memo preservation boundary are binding in contract §41–§42. Task 63 inventory/signatures and all three added pure regression names are verified against its final frozen source/report; no local source proof represents actual CH mechanics or formal acceptance.
+
 ## Follow-ups (not in this plan)
 
 - sentio-node exports `tableset.Stats.KeeperFindings` as `sentio_node_storage_integrity_keeper_findings{reason}` and registers `Role.ConsensusMetrics()` on the si-member registry (S3-E4 Task 79, widened under D30), and production alerts on them and on the member series of contract §42.3 (S3-E4 Task 80, S3-F Task 83).
@@ -139,14 +145,14 @@ Line anchors in the tasks refer to the base revisions of the header; S3-A throug
 - The si-member pod must mount the member state volume read-only into the `si-member-reconciler` container, which reads `quiescence.json` (S3-F Task 83, the S3-C2 K30 layout).
 - The owner's Keeper audit covers the scoped root to the incarnation level and the legacy root only at table level; a replicated-table root nested under a legacy path is not detected until per-path Keeper ACLs or a dedicated Keeper (spec §18).
 - Listing a third party's member stays an operating rule until `operator_id` exists (spec §12; S3-F); `shared_rmt=false` with `verify=true` stays refused until the per-operator transport (P8).
-**Current C2 integration correction.** Task62's extraction is anchored on the accepted complete425→447→469 local source chain and preserves the private legacy memo/schema/job/terminal boundaries and post-C4 query adapter. This bounded review repair does not complete plan consistency, create a release/ledger value or change Task57/D25.
-
-**Task59–63 execution handoff (PR248, 2026-10-18).** Task59 retains the actual Codex URWT JSON path in `$HOME/.cache/s3e1-task59/worktree.json`; Tasks60–63 reuse that worktree on `urwt/codex/multi-source-s3e1`. Existing attempts require reconciliation rather than another checkout. This runtime convention does not change D34’s fixed ledger-copy branch.
+**Current evidence boundaries.** C4 root receipt `dd9b2409db0a1168263963a749bcbbf7b4dc404d63974991c36eea7274553f76` and D root receipt `daf4f9cc1c81d8cd5cea286bd83e6c61e6e471626833a1b314fdad85bf186e33` adopt documents, not P3/P4 live exits. Current Task45 receipt `4fc391b77e9a0fdb83ddc65bd2e50f6dbe797e7de88db152bd61ae96d1da4e0d` accepts corrected34 core381/HG923 local review (62PASS/25SKIP in selected plain and ONErace;3 actual CH tests across2 binary invocations on26.3.37.3). The older complete E1 chain379→400→407→412→423→425→447→469 and its frozen memo/TDD evidence retain their original source scope; this preparation does not claim a fresh replay of current381 through every E1 stage. Current Task36 affected receipt `74f918f1987c6e7f413fbaa35f59fc4e6bee83d2283d9da8733ec2b3c7453992` proves its bounded2b6 source race prerequisite, not a replacement full500 or E1-specific mechanics. Fixed-tool Task70 receipt `536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d` accepts638-source downstream review with3990 identities and22 uncached targets per plain/single-race pass; old mutable-tool HOLD and69 causal risk remain historical, and no Task71 grant follows. These scope distinctions change no task implementation, pin, timeout or execution stop.
 
 
 ---
 
 ## Task 57: arbiter-proto — the stage-3 P5 wire contract (v21 fields, Raft tags 38–42, admission codes 12–13), release PROTO_TAG_P5 (S3-E1)
+
+**D25 APPROVED — protected-file scope.** The user explicitly approved the exact append-only clarification. Only the existing ConsensusAdmin method counts, RaftCommand tag counts/ranges and BlockVerification field-ledger length may change by S3-D/S3-E1. Task57 may additionally append exactly the nine stage3 BlockVerification field tokens below to the existing ledger row, without modifying any of its thirteen existing field names/types/order; count/range-only comments and diagnostics may be synchronized. All other existing entries and never-edit rules remain byte-identical. Step11/Step13 and the release-content guard retain their six exact substitutions; this approval changes no substitution, implementation, field shape or execution procedure. Ordinary user confirmation, reviewed release-content/tag and ledger/R1–R4 gates still apply; no execution or ledger authority is created by this paragraph.
 
 The whole P5 wire contract of stage 3 in one additive release (spec §6.1–§6.4, §7.1, §7.3–§7.4, §8.8, §9.1–§9.3, §10.3–§10.4, §15 arbiter-proto line; clarifications K58–K67; decisions D25, D26, D27, D33; contract §38–§39): the host fields 3–11 of `VerifierEntry`, the `stage3` parameter (`Stage3Params` with its seven switches and `IndexerFailureDomain`) on `ConsensusMutableParams` and `ConsensusParamsUpdate`, the activation and switch cutovers in `ConsensusParamsState.stage3_state`, the five stage-3 commands as Raft tags 38–42, admission codes 12 (`VERIFIERS_UNAVAILABLE`) and 13 (`COPIES_BACKPRESSURE`), the header `L3BlockTrack.group_key`, the `BlockVerification` selection record (fields 14–22), the registry view of groups with each member's served host (`TableRegistrySnapshot` 10–12, `TableIncarnation` 19–20), and `ConsensusAdmin.RebalanceGroup`/`MarkMemberLagging` plus `VerifierGateway.SubmitMemberReady`/`SubmitMemberCheckpoint`. Nothing here changes a consensus byte: every appended field is absent from the wire while unset (`TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged`), no binary of Plan S3-E1 proposes tags 38–42 or returns codes 12–13, and no read-only view is reachable from `RaftCommand` (`TestStage3ConsensusReadMessagesAreNotRaftReachable`); once Plan S3-E4 activates v21, every number below is a consensus constant. The release `PROTO_TAG_P5` is cut on `PROTO_TAG_P4` (decision D26: Plan S3-D Task 49's unconditional release, also the `buf breaking` baseline); Task 58 pins it in housegate, Tasks 59–63 in arbiter-core and Plan S3-E2 Task 64 in arbiter.
 
@@ -161,8 +167,8 @@ The whole P5 wire contract of stage 3 in one additive release (spec §6.1–§6.
 - Modify (count pins outside contract §39's list, found in drafting; Notes): `conformance/consensus_test.go` (`TestConsensusUpdateContract`: 18-19, 24-25, 30-31), `conformance/snapshot_query_fields_test.go` (61)
 - Test: `conformance/stage3_test.go` — `TestStage3ConsensusFieldNumbers`, `TestStage3ConsensusFieldLedgers`, `TestStage3ConsensusEnumValues`, `TestStage3ConsensusAdmissionCodes`, `TestStage3ConsensusRaftCommandTags`, `TestStage3ConsensusRPCSignatures`, `TestStage3ConsensusReadMessagesAreNotRaftReachable`, `TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged`, `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`
 - Modify, housegate (Step 21): `docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`, Appendix C (the `PROTO_TAG_P5` row and the run record `arbiter-proto release (Task 57)`), on the ledger copy `s3-ledger.py ref <housegate> s3e1` prints (decision D34), through the record procedure of contract §43 from the URWT worktree `multi-source-s3e1-ledger-57`
-- Local only, never committed: `$HOME/.cache/s3e1-task57/` (mode 700: `ledger.env`, `pr-body.md`, `pr-url`, `merge`, `merged-at`, `downstream.txt`, `downstream.log`, `dry-run-since`, `dry-run-id`, `cut-since`, `cut-id`, `tag`, and the transient `tags/` and `downstream/`); `$HOME/.cache/s3-ledger/s3-ledger.py` (the ledger tool of Plan S3-C1 contract §19), `s3-ledger.py.plan`, `record-57`, `record-57.md` and, when the ledger copy is `origin/main`, `record-57-pr.md` and `record-57-pr-url`
-- Never touch: `proto/replay.proto`, `proto/da.proto`, `proto/artifact_disposition.proto`; any existing message, field, enum value, RPC, import or comment line (every proto hunk is a pure insertion); every line of `conformance/stage3_reads_test.go` except D25's count lines; Plan S3-D's `conformance/p4_settle_test.go`; `conformance/testdata/*.binpb` (hash-pinned by `TestSnapshotQueryDescriptorFixtureIdentities`); `testdata/*.json`; `README.md`; `docs/`; anything under `gen/` by hand.
+- Local only, never committed: `$HOME/.cache/s3e1-task57/` (mode 700: `ledger.env`, `worktree.json`, `ledger-worktree.json`, `release.json`, `release-verified`, `pr-body.md`, `pr-url`, `merge`, `merged-at`, `downstream.txt`, `dry-run-since`, `dry-run-id`, `cut-since`, `cut-id`, `tag`, the transient `tags/`, and retained `downstream/` exports plus per-repository `.jsonl`, `.stderr` and `.exit` evidence); `$HOME/.cache/s3-ledger/s3-ledger.py` (the ledger tool of Plan S3-C1 contract §19), `s3-ledger.py.plan`, `record-57`, `record-57.md` and, when the ledger copy is `origin/main`, `record-57-pr.md` and `record-57-pr-url`
+- Never touch: `proto/replay.proto`, `proto/da.proto`, `proto/artifact_disposition.proto`; any existing message, field, enum value, RPC, import or comment line (every proto hunk is a pure insertion); every line of `conformance/stage3_reads_test.go` except D25's exact approved count/range/comment/diagnostic and nine-token append surface; Plan S3-D's `conformance/p4_settle_test.go`; `conformance/testdata/*.binpb` (hash-pinned by `TestSnapshotQueryDescriptorFixtureIdentities`); `testdata/*.json`; `README.md`; `docs/`; anything under `gen/` by hand.
 
 Line anchors refer to arbiter-proto at `PROTO_TAG_P4`. It was not cut when this task was drafted (2026-10-16: `origin/main` is `7a73f256865c333332f0ac28b17806b1e2bfcbd1`, `PROTO_TAG` `v0.12.0`); the anchors were read on a scratch tree of that commit with Plan S3-D Task 49 applied exactly as its text gives it (its numstat reproduced: `7 0 proto/arbiter.proto`, `46 0 proto/consensus.proto`, `446` lines of `p4_settle_test.go`). If Task 49 merged differently, apply this task's intent on its result (the hunk rule of the Global Constraints); Step 3 proves the anchors that matter.
 
@@ -192,7 +198,10 @@ Notes (facts recorded for Appendix B):
 - **`make breaking` is not the gate.** It compares with the clone's local `main` (stale at `bb1823f`); the gate is `buf breaking --against ".git#tag=$PROTO_TAG_P4"` (contract §43, D26), which works from a worktree whose `.git` is a file, and CI repeats it against `origin/main` on the PR. Its `FILE` rules accept the new import, the appended fields (the synthetic oneofs of the two optional fields included), messages, enum values, tags and RPCs (checked in drafting against the `PROTO_TAG_P4` scratch tree: no output, exit 0).
 - **`make tools` reads the Go module proxy** (`go install …@v1.36.11`), so Step 10 checks the installed generators against `Makefile:3-4` and Step 13 runs the contract's chain with `make tools` after a confirmation; Step 14 runs offline (`GOPROXY=off`) from the module cache.
 - **The release number is never predicted.** `cut-release.yml` derives `vX.Y.Z` from the last tag's UTC day (a cut later on the day `PROTO_TAG_P4` was cut gives the next patch, on a later day the next minor); Steps 19–20 read it from the run, check its `PREVIOUS` is `PROTO_TAG_P4`, and Step 21 records what the run cut.
-- **Every value a later block needs is in a file.** The Bash tool keeps no variables between calls, so each block sets `W`, `T57` and its paths itself and reads earlier results from `$HOME/.cache/s3e1-task57/`; no block contains a value to type in. The blocks are bash and run unchanged in the Bash tool's zsh; `bash -n` and `shellcheck -s bash` pass on every block, and in drafting Steps 1–3, 5–13, 15–21 ran end to end against mock origins of arbiter-proto (`PROTO_TAG_P4` stand-in) and housegate (the plan files with their Appendix C) with a fake `gh`, ending with `PROTO_TAG_P5=<tag>` from R4.
+- **Every value a later block needs is in a file.** The Bash tool keeps no variables between calls, so each block sets `W`, `T57` and its paths itself and reads earlier results from `$HOME/.cache/s3e1-task57/`; no block contains a value to type in. The blocks require Bash; execute a saved block with `bash <block-file>` rather than relying on the host shell. In drafting, Steps 1–3, 5–13, 15–21 ran end to end against mock origins of arbiter-proto (`PROTO_TAG_P4` stand-in) and housegate (the plan files with their Appendix C) with a fake `gh`, ending with `PROTO_TAG_P5=<tag>` from R4.
+
+
+**Adversarial review candidate (2026-10-17).** Verified over actual arbiter-proto main `7a73f256865c333332f0ac28b17806b1e2bfcbd1` plus the exact reviewed Task 49 candidate, not a predicted released tag. The exact 606-line test reproduces compile RED; canonical generation reproduces fifteen old-pin REDs, then the exact pin changes pass whole-module race/vet. Canonical `make proto`, `make lint` and `buf breaking` pass offline using checksum-verified buf 1.74.0 and the pinned local generators against the exact P4 source baseline. Formal upstream acceptance and full future released dependency-chain verification remain mandatory. No release or execution-ledger value is recorded by this review.
 
 - [ ] **Step 1: Write the ledger tool, read `PROTO_TAG_P4`, check `PROTO_TAG_P5` is empty**
 
@@ -201,6 +210,7 @@ The ledger lives in Appendix C of the plan files on their ledger copies, never i
 Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T57="$HOME/.cache/s3e1-task57"
 mkdir -p "$T57" && chmod 700 "$T57"
 git -C "$h" fetch -q origin
@@ -237,35 +247,60 @@ Expected, in order: `s3-ledger.py is contract §19 of origin/urwt/claude/ms-si-s
 Remote read (arbiter-proto fetch): needs explicit user confirmation in chat before running.
 
 ```bash
-P=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"
-git -C "$P" fetch -q origin --tags
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" claude multi-source-s3e1)"
+set -eo pipefail
+P=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; T57="$HOME/.cache/s3e1-task57"
+git -C "$P" fetch -q origin --tags || exit 1
+[ ! -e "$T57/worktree.json" ] || { echo "saved URWT state exists; reconcile the prior attempt before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3e1 urwt/codex/multi-source-s3e1 origin/main)" || { echo "URWT failed; stop"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$T57/worktree.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$P" rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3e1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
 printf '%s\n' "$out"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(printf '%s\n' "$out" | jq -r .path)" = "$W" ] || { echo "no new worktree at $W: stop and ask"; exit 1; }
-git -C "$W" rev-parse --abbrev-ref HEAD
-git -C "$W" rev-parse HEAD origin/main
-git -C "$W" status --porcelain | wc -l | tr -d ' '
+git -C "$W" log -1 --format='%H' || exit 1
 ```
 
-Expected: the status line `✓ Created branch urwt/claude/multi-source-s3e1 from origin/main and worktree @ ~/src/remotesrc/claude/arbiter-proto/multi-source-s3e1` on stderr; one JSON object `{"action":"created","branch":"urwt/claude/multi-source-s3e1","path":"/Users/uranuswch/src/remotesrc/claude/arbiter-proto/multi-source-s3e1","created_branch":true,"base_branch":"origin/main"}` (the path is reported unresolved; `~/src/remotesrc` is a symlink to `/Volumes/SamsungSSD/src`); then `urwt/claude/multi-source-s3e1`, two equal 40-hex lines and `0`. Every later block sets `W` to that path itself. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto config approvals add` in their own terminal (the same command in fish); never pass `--yes` or `--clobber`. `no new worktree … stop and ask` means a worktree of that name exists already (an earlier attempt): stop and ask.
+Expected: one retained JSON object with `action: created`, the actual absolute path (including its returned symlink spelling) and branch `urwt/codex/multi-source-s3e1`, then its base SHA. The runtime here is Codex; a different executing host uses its own runtime consistently. Never reconstruct a path from the template, overwrite a saved JSON, silently reuse `existing`, or create a replacement worktree when resuming. Preserve a failed attempt and reconcile it with the user. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto config approvals add` in their own fish terminal; never use `--yes`, `--clobber` or bypass hooks. Every following block reloads `W` from this JSON. Real commits use the worktree identity `poetry <chen@sentio.xyz>` and GPG signing; signing cancellation stops before any later check or publication. Ask the user to unlock this repository's actual signing key; never disable signing or publish an unsigned fallback.
 
 - [ ] **Step 3: Prove the base is `PROTO_TAG_P4`, every name and number is free, and downstream stays compilable**
 
 Run (read-only):
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"; PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")"
-git -C "$W" rev-parse HEAD "$PROTO_TAG_P4^{commit}"
-git -C "$W" describe --tags --exact-match HEAD
-git -C "$W" diff --name-only "$PROTO_TAG_P4" HEAD -- proto/ gen/ conformance/ | wc -l | tr -d ' '
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")"
+git -C "$W" rev-parse HEAD "$PROTO_TAG_P4^{commit}" || exit 1
+exact_tags="$(git -C "$W" tag --points-at HEAD)" || exit 1
+if [ -n "$exact_tags" ]; then
+  exact="$(git -C "$W" describe --tags --exact-match HEAD 2>/dev/null)" || exit 1
+  [ "$exact" = "$PROTO_TAG_P4" ] || { echo "HEAD has an unexpected release tag; stop"; exit 1; }
+  printf '%s\n' "$exact"
+else
+  echo "HEAD has no exact tag; checking unchanged proto/generated/conformance surface"
+fi
+changed="$(git -C "$W" diff --name-only "$PROTO_TAG_P4" HEAD -- proto/ gen/ conformance/)" || exit 1
+[ -z "$changed" ] || { echo "the P4 surface changed after its release; stop"; exit 1; }
+echo 0
 ```
 
-Expected: two equal 40-hex lines (`PROTO_TAG_P4`'s commit), then the `PROTO_TAG_P4` value, then `0`. If `origin/main` has moved past `PROTO_TAG_P4` (`describe` then fails with `fatal: no tag exactly matches`), continue only when the last line is still `0` and the next checks print exactly their expected lines; otherwise stop and ask (by the release order no proto change reaches arbiter-proto between `PROTO_TAG_P4` and `PROTO_TAG_P5`).
+Expected: two equal 40-hex lines (`PROTO_TAG_P4`'s commit), then the `PROTO_TAG_P4` value, then `0`. If `origin/main` has moved past `PROTO_TAG_P4` (the block prints `HEAD has no exact tag; checking unchanged proto/generated/conformance surface`), continue only when the last line is still `0` and the next checks print exactly their expected lines; otherwise stop and ask (by the release order no proto change reaches arbiter-proto between `PROTO_TAG_P4` and `PROTO_TAG_P5`).
 
 Run (read-only, before any edit):
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
 cd "$W" && buf build -o '-#format=json' | python3 -I -c '
 import json, sys
 img = json.load(sys.stdin)
@@ -326,10 +361,14 @@ So the twenty-one new messages and enums are free; each extended message's next 
 Run (read-only; every tag's protos built with buf in a scratch directory under `$HOME/.cache/s3e1-task57/tags`):
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"; T57="$HOME/.cache/s3e1-task57"
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+T57="$HOME/.cache/s3e1-task57"
 rm -rf "$T57/tags" && mkdir -p "$T57/tags"
 n=0; used=0
-for t in $(git -C "$W" tag --list 'v*' --sort=v:refname); do
+s3e1_read_001="$(git -C "$W" tag --list 'v*' --sort=v:refname)" || exit 1
+[ -n "$s3e1_read_001" ] || { echo 'empty required Git enumeration; stop' >&2; exit 1; }
+for t in $s3e1_read_001; do
   mkdir "$T57/tags/$t" && git -C "$W" archive "$t" | tar -x -C "$T57/tags/$t"
   r="$(cd "$T57/tags/$t" && buf build -o '-#format=json' | python3 -I -c '
 import json, sys
@@ -357,9 +396,18 @@ Expected: `14 tags read; none uses a stage-3 P5 number` (`v0.1.0` … `v0.12.0` 
 Run (downstream implementers, read-only at their current `origin/main`):
 
 ```bash
+set -eo pipefail
 N=/Users/uranuswch/Dev/projects/sentio-network
-for r in arbiter arbiter-core housegate sentio-node; do printf '%s %s\n' "$r" "$(git -C "$N/$r" grep -n -E 'UnsafeConsensusAdminServer|UnsafeVerifierGatewayServer|func \([a-z]+ \*?[A-Za-z]+\) (GetProtocolInfo|GetConsensusParams|UpdateConsensusParams|GetSnapshotQueryAbortCandidate|AbortSnapshotQuery|ActivateQueryProfile|GetNodeFeatures|EvictNode|QuarantineIndexer|ReleaseIndexer|GetTrackState|PrepareConsensusUpdate|GetConsensusHold|ReleaseConsensusHold|SettleTrack|GetTrackSettle|SubscribeVerifierDispatch|SubmitAttestation|SubmitSnapshotQueryAttestation|SubmitByteSideScan)\(.*grpc\.CallOption' origin/main -- '*.go' | wc -l | tr -d ' ')"; done
-for r in arbiter arbiter-core sentio-node housegate; do git -C "$N/$r" grep -n -E 'pb\.Unimplemented(ConsensusAdmin|VerifierGateway)Server$' origin/main -- '*.go' | sed "s|^|$r:|"; done
+for r in arbiter arbiter-core housegate sentio-node; do
+  if matches="$(git -C "$N/$r" grep -n -E 'UnsafeConsensusAdminServer|UnsafeVerifierGatewayServer|func \([a-z]+ \*?[A-Za-z]+\) (GetProtocolInfo|GetConsensusParams|UpdateConsensusParams|GetSnapshotQueryAbortCandidate|AbortSnapshotQuery|ActivateQueryProfile|GetNodeFeatures|EvictNode|QuarantineIndexer|ReleaseIndexer|GetTrackState|PrepareConsensusUpdate|GetConsensusHold|ReleaseConsensusHold|SettleTrack|GetTrackSettle|SubscribeVerifierDispatch|SubmitAttestation|SubmitSnapshotQueryAttestation|SubmitByteSideScan)\(.*grpc\.CallOption' origin/main -- '*.go')"; then git_read_rc=0; else git_read_rc=$?; fi
+  case "$git_read_rc" in 0) ;; 1) [ -z "$matches" ] || exit 1 ;; *) echo 'downstream Git grep failed; stop' >&2; exit 1 ;; esac
+  count="$(printf '%s' "$matches" | awk 'END {print NR}')" || exit 1
+  printf '%s %s\n' "$r" "$count"
+done
+for r in arbiter arbiter-core sentio-node housegate; do
+  if embeds="$(git -C "$N/$r" grep -n -E 'pb\.Unimplemented(ConsensusAdmin|VerifierGateway)Server$' origin/main -- '*.go')"; then git_read_rc=0; else git_read_rc=$?; fi
+  case "$git_read_rc" in 0) [ -n "$embeds" ] || exit 1; printf '%s\n' "$embeds" | sed "s|^|$r:|" || exit 1 ;; 1) [ -z "$embeds" ] || exit 1 ;; *) echo 'downstream Git embed read failed; stop' >&2; exit 1 ;; esac
+done
 ```
 
 Expected (read on 2026-10-16 at arbiter `526a721`, arbiter-core `cfd4f42`, housegate `862a7a8` and sentio-node `5d2f169`; the later revisions this task meets may list more embeds, never an `Unsafe…` one and never a non-zero count):
@@ -386,7 +434,7 @@ No repository embeds `UnsafeConsensusAdminServer` / `UnsafeVerifierGatewayServer
 
 - [ ] **Step 4: Write the failing conformance test**
 
-Create `$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1/conformance/stage3_test.go` with the Write tool (contract §39; the style of Plan S3-A's `conformance/stage3_reads_test.go` and Plan S3-D's `p4_settle_test.go`; it reuses `stage3Fields`, `stage3LedgerType` and `reachableTypes` from the first, `populateSnapshotField` and `tracksMessage` from `snapshot_query_test.go`, `assertSnapshotVariant` from `snapshot_query_services_test.go`, and `deterministicBytes` and `wireFieldNumbers` from `tracks_test.go`):
+Create `$W/conformance/stage3_test.go` with the Write tool (contract §39; the style of Plan S3-A's `conformance/stage3_reads_test.go` and Plan S3-D's `p4_settle_test.go`; it reuses `stage3Fields`, `stage3LedgerType` and `reachableTypes` from the first, `populateSnapshotField` and `tracksMessage` from `snapshot_query_test.go`, `assertSnapshotVariant` from `snapshot_query_services_test.go`, and `deterministicBytes` and `wireFieldNumbers` from `tracks_test.go`):
 
 ```go
 package conformance
@@ -999,7 +1047,7 @@ func TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent(t *testing.T) {
 
 - [ ] **Step 5: Run it and see it fail**
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && go test ./conformance/ -run 'TestStage3Consensus' -v`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && go test ./conformance/ -run 'TestStage3Consensus' -v`
 
 Expected: a build failure, verbatim:
 
@@ -1496,7 +1544,7 @@ Append to `service VerifierGateway`, after `rpc SubmitByteSideScan (ByteSideScan
 
 - [ ] **Step 10: Regenerate, run the new test, and see the old pins fail**
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && protoc-gen-go --version && protoc-gen-go-grpc --version && make proto && buf lint && git status --porcelain -- gen/ proto/ && git diff --numstat -- proto/`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && protoc-gen-go --version && protoc-gen-go-grpc --version && make proto && buf lint && git status --porcelain -- gen/ proto/ && git diff --numstat -- proto/`
 
 Expected: `protoc-gen-go v1.36.11` and `protoc-gen-go-grpc 1.5.1` (the generators `Makefile:3-4` pins; if either differs, run `make tools` first, which reads the Go module proxy and needs explicit user confirmation in chat before running), make echoes `buf generate`, and `buf lint` prints nothing. Then exactly these ten modified files and no deleted proto line:
 
@@ -1517,7 +1565,7 @@ Expected: `protoc-gen-go v1.36.11` and `protoc-gen-go-grpc 1.5.1` (the generator
 200	0	proto/table_registry.proto
 ```
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && git diff -U0 -- proto/ | grep '^@@'`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && git diff -U0 -- proto/ | grep '^@@'`
 
 Expected, verbatim: eighteen pure insertions (every old side is `,0`), each at its anchor; git names the enclosing or preceding top-level declaration, so the `VerifierEntry` paragraph shows as `message NodeFeatures` and the import as its neighbour line:
 
@@ -1544,7 +1592,7 @@ Expected, verbatim: eighteen pure insertions (every old side is `,0`), each at i
 
 (The `BlockVerification` hunk joins the nine fields and the two messages after the closing brace; the `TrackSettle`, `RecordTablePurgedCmd`, `SIIndexerEntry` and `PurgeNodeSet` hunks start after the blank line that follows the anchor, which is why their old side is one line past the brace.)
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && go test ./conformance/ -count=1 -run 'TestStage3Consensus(FieldNumbers|FieldLedgers|EnumValues|AdmissionCodes|RaftCommandTags|RPCSignatures|ReadMessagesAreNotRaftReachable|FieldsAbsentLeaveTheWireUnchanged|HostIndexerZeroIsDistinctFromAbsent)$' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && go test ./conformance/ -count=1 -run 'TestStage3Consensus(FieldNumbers|FieldLedgers|EnumValues|AdmissionCodes|RaftCommandTags|RPCSignatures|ReadMessagesAreNotRaftReachable|FieldsAbsentLeaveTheWireUnchanged|HostIndexerZeroIsDistinctFromAbsent)$' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
 
 Expected, verbatim except the duration:
 
@@ -1563,7 +1611,7 @@ ok  	github.com/sentioxyz/arbiter-proto/conformance	0.377s
 
 (With `-v` and without the `grep`: 27 subtests of `TestStage3ConsensusFieldNumbers`, 19 of `TestStage3ConsensusFieldLedgers` in name order from `BlockGroupRef` to `Stage3SwitchCutover`, 2 of `TestStage3ConsensusEnumValues`, 4 of `TestStage3ConsensusRPCSignatures`, 27 of `TestStage3ConsensusFieldsAbsentLeaveTheWireUnchanged` and 2 of `TestStage3ConsensusHostIndexerZeroIsDistinctFromAbsent`.)
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && go test ./conformance/ -count=1 2>&1 | grep -E '^--- FAIL' | LC_ALL=C sort`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && go test ./conformance/ -count=1 2>&1 | grep -E '^--- FAIL' | LC_ALL=C sort`
 
 Expected, exactly these fifteen pre-existing pins:
 
@@ -1800,7 +1848,7 @@ with
 
 Nothing is loosened: the exemption names three messages and one exact field descriptor each (a different number, type, name, JSON name or an extra field fails with `<message> stage-3 addition must be exactly stage3 = 9: …`, and every other field must still equal the baseline); a new message still needs a ledger entry, and `TestStage3ConsensusFieldLedgers` gives each `stage3ConsensusFields` entry the same every-field wire round trip.
 
-`conformance/stage3_reads_test.go` (Plan S3-A's frozen file; decision D25 allows only its count literals to change) — exactly these six edits and nothing else in the file. In `stage3Fields`, replace the `BlockVerification` entry (34)
+`conformance/stage3_reads_test.go` (Plan S3-A's frozen file; decision D25 permits exactly the approved count/range/comment/diagnostic and nine-token append surface) — exactly these six edits and nothing else in the file. In `stage3Fields`, replace the `BlockVerification` entry (34)
 
 ```go
 	"BlockVerification":             "header:L3BlockHeader chain_hash:string replay_job:ReplayJob statements:[]StatementCandidates scan_parts:[]PartRef source_nodes:[]string verifier_set:[]string evidence:[]VerifierEvidence verdict_evaluated:bool quorum:bool anchor:AnchorRef finality:bool last_mergeable:bool",
@@ -1876,11 +1924,11 @@ with
 
 - [ ] **Step 12: Run the conformance suite and see it pass**
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && gofmt -l conformance/ && go test ./conformance/ -count=1`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && gofmt -l conformance/ && go test ./conformance/ -count=1`
 
 Expected: `gofmt` prints nothing (if it lists a file, run `gofmt -w conformance/` and repeat), then `ok  	github.com/sentioxyz/arbiter-proto/conformance	…`.
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && go test ./conformance/ -count=1 -run 'TestSnapshotQuery(Old|Main)DescriptorsUnchanged|TestSnapshotQueryDescriptorFixtureIdentities|TestSnapshotQueryEveryFieldWireRoundTrip|TestSnapshotQueryLegacyWireRoundTrips|TestSnapshotQueryLedgerCoversEveryNewMessage|TestConsensusUpdateContract|TestConsensusAdminRPCSignatures|TestTableRegistryReadContract|TestSignedClaimsFieldNumbers|TestTracksFieldNumbers|TestTracksFieldsAbsentLeaveTheWireUnchanged|AdmissionCodeIs|TestStage3|TestSettle' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && go test ./conformance/ -count=1 -run 'TestSnapshotQuery(Old|Main)DescriptorsUnchanged|TestSnapshotQueryDescriptorFixtureIdentities|TestSnapshotQueryEveryFieldWireRoundTrip|TestSnapshotQueryLegacyWireRoundTrips|TestSnapshotQueryLedgerCoversEveryNewMessage|TestConsensusUpdateContract|TestConsensusAdminRPCSignatures|TestTableRegistryReadContract|TestSignedClaimsFieldNumbers|TestTracksFieldNumbers|TestTracksFieldsAbsentLeaveTheWireUnchanged|AdmissionCodeIs|TestStage3|TestSettle' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
 
 Expected, verbatim except the durations:
 
@@ -1919,19 +1967,19 @@ Expected, verbatim except the durations:
 ok  	github.com/sentioxyz/arbiter-proto/conformance	0.307s
 ```
 
-`TestSnapshotQueryDescriptorFixtureIdentities` proves the two `.binpb` baselines are byte-identical; Plan S3-A's four `TestStage3…` tests pass with their file changed in D25's count lines only, and Plan S3-D's three `TestSettle…` tests pass unedited.
+`TestSnapshotQueryDescriptorFixtureIdentities` proves the two `.binpb` baselines are byte-identical; Plan S3-A's four `TestStage3…` tests pass with their file changed only in D25's exact approved surface, and Plan S3-D's three `TestSettle…` tests pass unedited.
 
 - [ ] **Step 13: Full verification (every gate)**
 
-`make tools` reads the Go module proxy (`go install` of the two pinned generators): needs explicit user confirmation in chat before running. After a yes, run (contract §43): `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")" && make tools && make proto && make lint && make test && buf breaking --against ".git#tag=$PROTO_TAG_P4"; echo "exit=$?"`
+`make tools` reads the Go module proxy (`go install` of the two pinned generators): needs explicit user confirmation in chat before running. After a yes, run (contract §43): `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")" && make tools && make proto && make lint && make test && buf breaking --against ".git#tag=$PROTO_TAG_P4" && echo "exit=0"`
 
 Expected: `make tools` echoes `go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11` and `go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1`; `make proto` echoes `buf generate` and leaves `gen/` as Step 10 generated it; `make lint` echoes `buf lint` and exits 0; `make test` echoes `go build ./...`, `go vet ./...` and `go test ./...`, then prints `ok  	github.com/sentioxyz/arbiter-proto/conformance	…` and `?   	github.com/sentioxyz/arbiter-proto/gen/pb	[no test files]`; `buf breaking` prints nothing; `exit=0`.
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && git add -A proto gen conformance && make proto && git diff --exit-code -- gen/; echo "drift exit=$?"`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && git add -A proto gen conformance && make proto && git diff --exit-code -- gen/ && echo "drift exit=0"`
 
 Expected: `buf generate`, then `drift exit=0` (regeneration is idempotent; CI's `generated code is current` step).
 
-Run: `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && git diff --cached --numstat`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && git diff --cached --numstat`
 
 Expected, exactly these nineteen files (the generated counts follow from the generators pinned in `Makefile:3-4`; the removed lines in `gen/` are renumbered descriptor indices and the regenerated raw descriptors, and the four protos remove nothing):
 
@@ -1957,9 +2005,9 @@ Expected, exactly these nineteen files (the generated counts follow from the gen
 200	0	proto/table_registry.proto
 ```
 
-Run (decision D25): `cd "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" && PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")" && git diff --cached -U0 "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go | tail -n +5`
+Run (decision D25): `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1; cd "$W" && PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$HOME/.cache/s3e1-task57/ledger.env")" && git diff --cached -U0 "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go | tail -n +5`
 
-Expected, verbatim: D25's count lines and nothing else of Plan S3-A's frozen file:
+Expected, verbatim: D25's exact approved surface and nothing else of Plan S3-A's frozen file:
 
 ```
 @@ -34 +34 @@ var stage3Fields = map[string]string{
@@ -1989,39 +2037,100 @@ Expected, verbatim: D25's count lines and nothing else of Plan S3-A's frozen fil
 Local and offline (it reads the local clones' `origin/main` and the Go module cache, `GOPROXY=off`): a scratch copy of each downstream repository with a `replace` of arbiter-proto by this worktree must build and vet, and the tests of every package that imports arbiter-proto or serves the two services must fail only where a mirror sees a new field, before anything is pushed. Run it with the Bash tool's 600000 ms timeout:
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"; T57="$HOME/.cache/s3e1-task57"; N=/Users/uranuswch/Dev/projects/sentio-network
-export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off
-rm -rf "$T57/downstream" "$T57/downstream.txt" "$T57/downstream.log" && mkdir -p "$T57/downstream"
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+T57="$HOME/.cache/s3e1-task57"; N=/Users/uranuswch/Dev/projects/sentio-network
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off
+[ ! -e "$T57/downstream" ] && [ ! -e "$T57/downstream.txt" ] || { echo "prior downstream evidence exists; preserve and reconcile it before a fresh attempt; stop"; exit 1; }
+mkdir -p "$T57/downstream" || exit 1
 for r in arbiter-core arbiter sentio-node housegate; do
   d="$T57/downstream/$r"; mkdir "$d"
   git -C "$N/$r" archive origin/main | tar -x -C "$d"
   printf '\nreplace github.com/sentioxyz/arbiter-proto => %s\n' "$W" >> "$d/go.mod"
-  printf '%s %s\n' "$r" "$(git -C "$N/$r" rev-parse --short origin/main)" | tee -a "$T57/downstream.txt"
+  s3e1_read_002="$(git -C "$N/$r" rev-parse --short origin/main)" || exit 1
+  printf '%s %s\n' "$r" "${s3e1_read_002}" | tee -a "$T57/downstream.txt"
 done
 (cd "$T57/downstream/arbiter-core" && go build ./... && go vet ./...) || exit 1
 (cd "$T57/downstream/arbiter" && go build ./... && go vet ./...) || exit 1
 (cd "$T57/downstream/sentio-node" && go vet ./standalone/ ./storageintegrityadapter/) || exit 1
 (cd "$T57/downstream/housegate" && go build ./...) || exit 1
-{
-  (cd "$T57/downstream/arbiter-core" && go test -count=1 ./conformance/ ./wire/ ./authority/ ./dataplane/ ./snode/)
-  (cd "$T57/downstream/arbiter" && go test -count=1 ./server/ ./cmd/arbiter-admin/ ./orchestrator/ ./fsm/)
-  (cd "$T57/downstream/sentio-node" && go test -count=1 ./storageintegrityadapter/)
-  (cd "$T57/downstream/housegate" && go test -count=1 -vet=off . ./pkg/storageintegrity/ ./pkg/plugins/storageintegrity/)
-} > "$T57/downstream.log" 2>&1
-grep -E '^(ok|FAIL|--- FAIL)' "$T57/downstream.log" | grep -v '^FAIL$'
-python3 -I -c '
-import re, sys
-new = {"stage3", "stage3_state", "host_indexer_id", "replica_signer", "consent_jws", "weight", "failure_domain", "verify", "replicate", "counts", "shared_rmt", "scoped_keeper_path", "purge_members", "groups", "member_checkpoint_seqs", "group_key", "eligible_ring", "ring_position", "marked_cursor_block", "group_members", "group_fill", "group_databases", "reselections", "reselections_at_latch"}
-log = open(sys.argv[1]).read().split("\n")
-details = [l.strip() for l in log if re.match(r"^\s+\S+_test\.go:[0-9]+: ", l)]
-bad = [l for l in details if not set(re.findall(r"[\x22.]([a-z0-9_]+)", l.split(": ", 1)[1])) & new]
-bad += [l.strip() for l in log if re.search(r"\[(build|setup) failed\]$|^panic: ", l)]
-for l in bad:
-    print("unexpected: " + l)
-print("downstream: %d failure line(s), each naming a field the stage-3 P5 contract appends" % len(details) if not bad else "downstream: a failure names no stage-3 P5 field: stop and report it")
-sys.exit(1 if bad else 0)
-' "$T57/downstream.log" || exit 1
-rm -rf "$T57/downstream"
+for r in arbiter-core arbiter sentio-node housegate; do
+  case "$r" in
+    arbiter-core) packages='./conformance/ ./wire/ ./authority/ ./dataplane/ ./snode/'; vetflag= ;;
+    arbiter) packages='./server/ ./cmd/arbiter-admin/ ./orchestrator/ ./fsm/'; vetflag= ;;
+    sentio-node) packages='./storageintegrityadapter/'; vetflag= ;;
+    housegate) packages='. ./pkg/storageintegrity/ ./pkg/plugins/storageintegrity/'; vetflag=-vet=off ;;
+  esac
+  # The package words above are fixed literals, not external input.
+  if (cd "$T57/downstream/$r" && go test -json -count=1 $vetflag $packages) > "$T57/downstream/$r.jsonl" 2> "$T57/downstream/$r.stderr"; then
+    status=0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$status" > "$T57/downstream/$r.exit"
+  [ ! -s "$T57/downstream/$r.stderr" ] || { echo "$r emitted stderr; inspect the retained log and stop"; exit 1; }
+done
+python3 -I - "$T57/downstream" <<'PYDOWNSTREAM'
+import json, pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+expected = {
+    'arbiter-core': {'github.com/sentioxyz/arbiter-core/' + p for p in ('conformance', 'wire', 'authority', 'dataplane', 'snode')},
+    'arbiter': {'github.com/sentioxyz/arbiter/' + p for p in ('server', 'cmd/arbiter-admin', 'orchestrator', 'fsm')},
+    'sentio-node': {'compute-network-node/storageintegrityadapter'},
+    'housegate': {'github.com/housegate/housegate' + p for p in ('', '/pkg/storageintegrity', '/pkg/plugins/storageintegrity')},
+}
+allowed = {
+    ('github.com/sentioxyz/arbiter-core/conformance', 'TestArbiterMirrorsMatchProto'),
+    ('github.com/sentioxyz/arbiter-core/wire', 'TestPromotionOutcomesConvertersCopyEveryField'),
+    ('github.com/sentioxyz/arbiter/server', 'TestBlockVerificationToPBCarriesEveryField'),
+    ('github.com/sentioxyz/arbiter/server', 'TestTableRegistryMirrorsProto'),
+}
+new = {'stage3', 'stage3_state', 'host_indexer_id', 'replica_signer', 'consent_jws', 'weight', 'failure_domain', 'verify', 'replicate', 'counts', 'shared_rmt', 'scoped_keeper_path', 'purge_members', 'groups', 'member_checkpoint_seqs', 'group_key', 'eligible_ring', 'ring_position', 'marked_cursor_block', 'group_members', 'group_fill', 'group_databases', 'reselections', 'reselections_at_latch'}
+diagnostic_patterns = {
+    ('github.com/sentioxyz/arbiter-core/conformance', 'TestArbiterMirrorsMatchProto'): r'(?:ConsensusParamsUpdate: proto field "stage3" has no Go mirror json tag|VerifierEntry: proto field "(?:host_indexer_id|replica_signer|consent_jws|weight|failure_domain|verify|replicate|counts|shared_rmt)" has no Go mirror json tag)',
+    ('github.com/sentioxyz/arbiter-core/wire', 'TestPromotionOutcomesConvertersCopyEveryField'): r'arbiter\.L3BlockTrack\.group_key is unset',
+    ('github.com/sentioxyz/arbiter/server', 'TestBlockVerificationToPBCarriesEveryField'): r'BlockVerification\.eligible_ring is not set by the test literal',
+    ('github.com/sentioxyz/arbiter/server', 'TestTableRegistryMirrorsProto'): r'TableIncarnation: proto field "(?:scoped_keeper_path|purge_members)" has no json tag',
+}
+failed = 0
+for repo, packages in expected.items():
+    status = (root / (repo + '.exit')).read_text().strip()
+    if status not in ('0', '1'):
+        sys.exit(repo + ': unexpected test exit; stop')
+    terminal, failures, output = {}, set(), {}
+    for line in (root / (repo + '.jsonl')).read_text().splitlines():
+        event = json.loads(line)
+        if not isinstance(event, dict) or event.get('Package') not in packages:
+            sys.exit(repo + ': malformed or unexpected package event; stop')
+        package, action, test = event['Package'], event.get('Action'), event.get('Test')
+        if action == 'output':
+            text = event.get('Output')
+            if not isinstance(text, str) or re.search(r'panic:|fatal error:|\[(build|setup) failed\]|^# ', text):
+                sys.exit(repo + ': compilation/panic/output failure; stop')
+            if test:
+                output.setdefault((package, test.split('/')[0]), []).append(text)
+        if action in ('pass', 'fail', 'skip') and not test:
+            if package in terminal or action == 'skip':
+                sys.exit(repo + ': missing/duplicate package execution; stop')
+            terminal[package] = action
+        if action == 'fail' and test:
+            key = (package, test.split('/')[0])
+            if key not in allowed:
+                sys.exit(repo + ': unexpected failed test ' + test + '; stop')
+            failures.add(key)
+    if set(terminal) != packages or (status == '0') != all(v == 'pass' for v in terminal.values()):
+        sys.exit(repo + ': incomplete results or status mismatch; stop')
+    for package, action in terminal.items():
+        if (action == 'fail') != any(p == package for p, _ in failures):
+            sys.exit(repo + ': package failure without an approved failed test; stop')
+    for key in failures:
+        diagnostics = [line.strip() for line in ''.join(output.get(key, [])).splitlines() if re.match(r'^\s+\S+_test\.go:[0-9]+: ', line)]
+        if not diagnostics or any(re.fullmatch(diagnostic_patterns[key], line.split(': ', 1)[1]) is None for line in diagnostics):
+            sys.exit(repo + ': mirror failure has no exact new-field diagnostic; stop')
+    failed += len(failures)
+print('downstream: all expected packages completed; %d approved new-field mirror failures' % failed)
+PYDOWNSTREAM
+# Keep all raw JSON/stderr/status evidence; never delete a failed run's logs.
 ```
 
 Expected: four lines `arbiter-core <sha>`, `arbiter <sha>`, `sentio-node <sha>`, `housegate <sha>` (their `origin/main`, also kept in `$HOME/.cache/s3e1-task57/downstream.txt` for the run record), `go: downloading …` lines on stderr (modules unpacked from the module cache), `go build` and `go vet` silent, then the package results and the verdict. On 2026-10-16, at `cfd4f42`, `526a721`, `5d2f169` and `862a7a8`, durations aside:
@@ -2044,16 +2153,18 @@ ok  	compute-network-node/storageintegrityadapter	0.493s
 ok  	github.com/housegate/housegate	8.421s
 ok  	github.com/housegate/housegate/pkg/storageintegrity	4.342s
 ok  	github.com/housegate/housegate/pkg/plugins/storageintegrity	0.500s
-downstream: 14 failure line(s), each naming a field the stage-3 P5 contract appends
+downstream: all expected packages completed; 4 approved new-field mirror failures
 ```
 
-The four failures are the mirror tests of the Notes (`TestArbiterMirrorsMatchProto`: `ConsensusParamsUpdate: proto field "stage3" has no Go mirror json tag` and nine `VerifierEntry: proto field "<f>" has no Go mirror json tag` lines; `TestPromotionOutcomesConvertersCopyEveryField`: `arbiter.L3BlockTrack.group_key is unset`; `TestBlockVerificationToPBCarriesEveryField`: `BlockVerification.eligible_ring is not set by the test literal`; `TestTableRegistryMirrorsProto`: `TableIncarnation: proto field "scoped_keeper_path" has no json tag` and the same for `purge_members`; read them with `grep -E '_test.go:[0-9]+:' "$HOME/.cache/s3e1-task57/downstream.log"`). At the later revisions this task meets (arbiter-core at `CORE_TAG_P4`, arbiter at `ARBITER_TAG_P4` or later), more mirror tests of Plans S3-C2–S3-D may fail the same way; the verdict line passes them as long as every failure line names a field this task appends. `downstream: a failure names no stage-3 P5 field: stop and report it` (with the `unexpected:` lines above it), or any compile or vet error, is a contract conflict: stop and report it. housegate runs its tests with `-vet=off` because `go vet` reports pre-existing findings in its own test files (`pkg/storageintegrity/intake_test.go:1802: suspect or`, `build_collector_test.go:30: … struct literal uses unkeyed fields`) that have nothing to do with arbiter-proto; sentio-node's `go vet` type-checks `standalone`'s test files, which import arbiter-proto, without running its ClickHouse-gated tests. A `module lookup disabled by GOPROXY=off` line means the module cache lacks a dependency of a newer `origin/main`: run the block again without `GOPROXY=off` (a read of the Go module proxy: needs explicit user confirmation in chat before running).
+The four failures are the mirror tests of the Notes (`TestArbiterMirrorsMatchProto`: `ConsensusParamsUpdate: proto field "stage3" has no Go mirror json tag` and nine `VerifierEntry: proto field "<f>" has no Go mirror json tag` lines; `TestPromotionOutcomesConvertersCopyEveryField`: `arbiter.L3BlockTrack.group_key is unset`; `TestBlockVerificationToPBCarriesEveryField`: `BlockVerification.eligible_ring is not set by the test literal`; `TestTableRegistryMirrorsProto`: `TableIncarnation: proto field "scoped_keeper_path" has no json tag` and the same for `purge_members`; read the retained `<repo>.jsonl` Output events and `<repo>.stderr` files under `$HOME/.cache/s3e1-task57/downstream/`). The JSON gate requires all thirteen expected packages to finish and binds nonzero exits to these four named mirror tests with explicit diagnostics naming a new field. Missing diagnostics, missing packages, compilation/panic/setup failures, unknown failed tests or a status mismatch stop execution. At a later released predecessor, a new mirror failure (including a new adapter count test) stops for review instead of being automatically excused by a substring. Retain raw JSON, stderr and exit status for every repository; inspect any changed result against that repository's clean predecessor before proceeding. housegate runs its tests with `-vet=off` because `go vet` reports pre-existing findings in its own test files (`pkg/storageintegrity/intake_test.go:1802: suspect or`, `build_collector_test.go:30: … struct literal uses unkeyed fields`) that have nothing to do with arbiter-proto; sentio-node's `go vet` type-checks `standalone`'s test files, which import arbiter-proto, without running its ClickHouse-gated tests. A `module lookup disabled by GOPROXY=off` line means the module cache lacks a dependency of a newer `origin/main`: preserve/reconcile the failed attempt's evidence, then run a fresh attempt without `GOPROXY=off` (a read of the Go module proxy: needs explicit user confirmation in chat before running).
 
 - [ ] **Step 15: Commit**
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"
-git -C "$W" add proto gen conformance
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+git -C "$W" add proto gen conformance || exit 1
+previous_head="$(git -C "$W" rev-parse HEAD)" || exit 1
 git -C "$W" commit -m "feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)
 
 The whole P5 wire contract of multi-source SI stage 3 (housegate spec
@@ -2072,17 +2183,23 @@ VerifierGateway.SubmitMemberReady/SubmitMemberCheckpoint. Every new
 field is absent from the wire while unset, and no read-only view is
 reachable from RaftCommand. conformance/stage3_test.go pins every
 number; the count pins learn the additions (in S3-A's
-stage3_reads_test.go only its count literals, decision D25), and the
+stage3_reads_test.go only its exact approved append/count surface, decision D25), and the
 baseline descriptor test strips exactly the three fields appended to
 messages of the hash-pinned baselines.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log --oneline -1
-(cd "$W" && make proto > /dev/null) && git -C "$W" diff --exit-code -- gen/ && echo "gen/ is current after the commit"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit/signature failed; stop and unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+s3e1_read_003="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_003}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
+git -C "$W" log --oneline -1 || exit 1
+(cd "$W" && make proto > /dev/null) || exit 1
+git -C "$W" diff --exit-code -- gen/ || exit 1
+echo "gen/ is current after the commit"
 git -C "$W" status --short | wc -l | tr -d ' '
 ```
 
-Expected: `git commit` prints `[urwt/claude/multi-source-s3e1 <sha>] feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`, ` 19 files changed, 3912 insertions(+), 426 deletions(-)` and ` create mode 100644 conformance/stage3_test.go` (the sums of Step 13's numstat); then `<sha> feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`, `gen/ is current after the commit` (contract §43's drift check on the commit) and `0`.
+Expected: `git commit` prints `[urwt/codex/multi-source-s3e1 <sha>] feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`, ` 19 files changed, 3912 insertions(+), 426 deletions(-)` and ` create mode 100644 conformance/stage3_test.go` (the sums of Step 13's numstat); then `<sha> feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`, `gen/ is current after the commit` (contract §43's drift check on the commit) and `0`.
 
 - [ ] **Step 16: Push and open the PR**
 
@@ -2098,52 +2215,96 @@ P5 wire contract of stage 3 of the multi-source storage-integrity network (house
 - The read-only registry view of groups: `TableIncarnation.scoped_keeper_path` (19) and `purge_members` (20, K60), `TableRegistrySnapshot.groups` (10) and `member_checkpoint_seqs` (11) with `DatabaseGroup`, `GroupMember` (its `optional uint64 host_indexer_id = 8` is filled from the member's verifiers entry when the view is served and is never FSM state), `LeavingMember`, `MemberCheckpointRecord`, `MemberCheckpointSeq` and `MemberClass`.
 - No existing field, enum value, RPC, import or comment line changes: `git diff -U0 -- proto/` is eighteen pure insertions, and `table_registry.proto` gains `import "replay.proto"` for `TrackFrontier`. Exactly six generated files regenerate.
 
-`conformance/stage3_test.go` pins every appended field and every new message's field ledger with an every-field wire round trip (only `GroupMember.host_indexer_id` and `VerifierEntry.host_indexer_id` are proto3 optional), both enums, codes 12 and 13, tags 38–42 as the only new oneof members, the four RPCs (unary, types, positions, full method names, `Unimplemented` stubs), that no read-only view is reachable from `RaftCommand`, that every appended field is absent from the wire while unset, and that host 0 is distinct from absent. The count pins learn the additions: `AdmissionCode` 14 values, `ConsensusAdmin` 18 methods, the field-count maps, `TestConsensusUpdateContract`, `TestTableRegistryReadContract`, the `L3BlockTrack` every-field ledger; `TestTracksFieldsAbsentLeaveTheWireUnchanged` populates only fields below the one under test; the baseline descriptor comparison strips exactly the three fields appended to its baseline messages; in `conformance/stage3_reads_test.go` only its count literals change (the `BlockVerification` ledger length, the `ConsensusAdmin` count and the `RaftCommand` tag count, decision D25). The hash-pinned baselines are unchanged.
+`conformance/stage3_test.go` pins every appended field and every new message's field ledger with an every-field wire round trip (only `GroupMember.host_indexer_id` and `VerifierEntry.host_indexer_id` are proto3 optional), both enums, codes 12 and 13, tags 38–42 as the only new oneof members, the four RPCs (unary, types, positions, full method names, `Unimplemented` stubs), that no read-only view is reachable from `RaftCommand`, that every appended field is absent from the wire while unset, and that host 0 is distinct from absent. The count pins learn the additions: `AdmissionCode` 14 values, `ConsensusAdmin` 18 methods, the field-count maps, `TestConsensusUpdateContract`, `TestTableRegistryReadContract`, the `L3BlockTrack` every-field ledger; `TestTracksFieldsAbsentLeaveTheWireUnchanged` populates only fields below the one under test; the baseline descriptor comparison strips exactly the three fields appended to its baseline messages; in `conformance/stage3_reads_test.go` only the exact approved nine-token append and count/range/comment/diagnostic changes occur (decision D25). The hash-pinned baselines are unchanged.
 
 Every server of `ConsensusAdmin` and `VerifierGateway` embeds the generated `Unimplemented…Server` and no repository hand-writes their clients: arbiter-core, arbiter, sentio-node and housegate at their `main` build and vet against this branch; their tests pass except the mirror tests that see the new fields (arbiter-core `TestArbiterMirrorsMatchProto` and `TestPromotionOutcomesConvertersCopyEveryField`, arbiter `TestBlockVerificationToPBCarriesEveryField` and `TestTableRegistryMirrorsProto`), which the pinning tasks of Plans S3-E1 and S3-E2 map. The four RPCs answer `Unimplemented` until the arbiter implements them.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-Remote write (push, PR): needs explicit user confirmation in chat before running. Gate: "push `urwt/claude/multi-source-s3e1` to sentioxyz/arbiter-proto and open the PR `feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`". After a yes:
+Remote write (push, PR): needs explicit user confirmation in chat before running. Gate: "push `urwt/codex/multi-source-s3e1` to sentioxyz/arbiter-proto and open the PR `feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`". After a yes:
 
 ```bash
-W="$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1"; T57="$HOME/.cache/s3e1-task57"
-[ -s "$T57/pr-body.md" ] && [ -z "$(git -C "$W" status --porcelain)" ] && [ "$(git -C "$W" rev-list --count origin/main..HEAD)" = 1 ] || { echo "write $T57/pr-body.md first and keep the worktree at one clean commit ahead of origin/main: stop"; exit 1; }
-git -C "$W" push -u origin urwt/claude/multi-source-s3e1
-gh pr create --repo sentioxyz/arbiter-proto --base main --head urwt/claude/multi-source-s3e1 --title 'feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)' --body-file "$T57/pr-body.md" | tee "$T57/pr-url"
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
+T57="$HOME/.cache/s3e1-task57"
+s3e1_read_005="$(git -C "$W" status --porcelain)" || exit 1
+s3e1_read_004="$(git -C "$W" rev-list --count origin/main..HEAD)" || exit 1
+[ -s "$T57/pr-body.md" ] && [ -z "${s3e1_read_005}" ] && [ "${s3e1_read_004}" = 1 ] || { echo "write $T57/pr-body.md first and keep the worktree at one clean commit ahead of origin/main: stop"; exit 1; }
+s3e1_read_007="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+s3e1_read_006="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${s3e1_read_007}" = urwt/codex/multi-source-s3e1 ] && [ "${s3e1_read_006}" = 'poetry <chen@sentio.xyz> G' ] || { echo "unexpected branch or unsigned author; stop"; exit 1; }
+git -C "$W" verify-commit HEAD || exit 1
+git -C "$W" merge-base --is-ancestor origin/main HEAD || exit 1
+git -C "$W" push -u origin urwt/codex/multi-source-s3e1 || exit 1
+gh pr create --repo sentioxyz/arbiter-proto --base main --head urwt/codex/multi-source-s3e1 --title 'feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)' --body-file "$T57/pr-body.md" | tee "$T57/pr-url"
 ```
 
-Expected: the push creates `urwt/claude/multi-source-s3e1` on `origin`; `gh pr create` prints the PR URL `https://github.com/sentioxyz/arbiter-proto/pull/<n>`, kept in `$HOME/.cache/s3e1-task57/pr-url`.
+Expected: the push creates `urwt/codex/multi-source-s3e1` on `origin`; `gh pr create` prints the PR URL `https://github.com/sentioxyz/arbiter-proto/pull/<n>`, kept in `$HOME/.cache/s3e1-task57/pr-url`.
 
 - [ ] **Step 17: CI**
 
 Remote read: needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"
 n="$(sed -n 's|^https://github.com/sentioxyz/arbiter-proto/pull/\([0-9][0-9]*\)$|\1|p' "$T57/pr-url")"
 [ -n "$n" ] || { echo "no PR URL in $T57/pr-url: stop"; exit 1; }
 gh pr checks "$n" --repo sentioxyz/arbiter-proto --watch
 ```
 
-Expected: the `proto` check passes (its steps `buf lint`, `breaking check (PRs only)` = `buf breaking --against ".git#branch=origin/main"`, `generated code is current`, `make test`) and the command exits 0. If it prints `no checks reported on the 'urwt/claude/multi-source-s3e1' branch` (the run is not registered yet), run the block again after a few seconds. If CI or review asks for a change, make it on the branch, repeat Steps 10–15 for the touched files (a new commit, never an amend of a pushed one), push with `git -C "$HOME/src/remotesrc/claude/arbiter-proto/multi-source-s3e1" push` after its own confirmation, and run this step again; a change to a number or name of contract §39 is never a review fix: stop and report it.
+Expected: the `proto` check passes (its steps `buf lint`, `breaking check (PRs only)` = `buf breaking --against ".git#branch=origin/main"`, `generated code is current`, `make test`) and the command exits 0. If it prints `no checks reported on the 'urwt/codex/multi-source-s3e1' branch` (the run is not registered yet), run the block again after a few seconds. If CI or review asks for a change, make it on the branch, repeat Steps 10–15 for the touched files (a new commit, never an amend of a pushed one), push with `git -C "$W" push` after its own confirmation, and run this step again; a change to a number or name of contract §39 is never a review fix: stop and report it.
 
 - [ ] **Step 18: Merge**
 
 Remote write (squash merge into `main`), then a remote read (fetch): needs explicit user confirmation in chat before running. Gate: "squash-merge sentioxyz/arbiter-proto PR <url in pr-url> (the stage-3 P5 wire contract)". After a yes:
 
 ```bash
+set -eo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/worktree.json")" || exit 1
 T57="$HOME/.cache/s3e1-task57"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
 n="$(sed -n 's|^https://github.com/sentioxyz/arbiter-proto/pull/\([0-9][0-9]*\)$|\1|p' "$T57/pr-url")"
 [ -n "$n" ] || { echo "no PR URL in $T57/pr-url: stop"; exit 1; }
-gh pr merge "$n" --repo sentioxyz/arbiter-proto --squash || exit 1
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+s3e1_read_008="$(gh pr view "$n" --repo sentioxyz/arbiter-proto --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_008" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_008}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/arbiter-proto/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+s3e1_read_009="$(gh pr view "$n" --repo sentioxyz/arbiter-proto --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_009" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_009}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+s3e1_read_010="$(gh pr view "$n" --repo sentioxyz/arbiter-proto --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_010" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_010}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$n" --repo sentioxyz/arbiter-proto --squash --match-head-commit "$expected_head" || exit 1
 gh pr view "$n" --repo sentioxyz/arbiter-proto --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 gh pr view "$n" --repo sentioxyz/arbiter-proto --json mergeCommit --jq .mergeCommit.oid > "$T57/merge"
 gh pr view "$n" --repo sentioxyz/arbiter-proto --json mergedAt --jq .mergedAt > "$T57/merged-at"
 git -C "$R" fetch -q origin
-git -C "$R" log --oneline -1 origin/main
-[ "$(git -C "$R" rev-parse origin/main)" = "$(cat "$T57/merge")" ] && echo "origin/main is the merge commit"
+git -C "$R" log --oneline -1 origin/main || exit 1
+s3e1_read_011="$(git -C "$R" rev-parse origin/main)" || exit 1
+[[ "$s3e1_read_011" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_011}" = "$(cat "$T57/merge")" ] && echo "origin/main is the merge commit"
 ```
 
 Expected: `gh pr merge` succeeds; `MERGED <40 hex> <UTC time>`; then `origin/main` as `<short sha> feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13) (#<n>)` and `origin/main is the merge commit`. The merge commit and time are kept in `$HOME/.cache/s3e1-task57/merge` and `merged-at`. If `origin/main is the merge commit` is missing, another PR merged right after this one: stop and ask before any release.
@@ -2155,8 +2316,10 @@ Expected: `gh pr merge` succeeds; `MERGED <40 hex> <UTC time>`; then `origin/mai
 Remote write (workflow dispatch; it tags nothing): needs explicit user confirmation in chat before running. Gate: "dispatch the arbiter-proto cut-release workflow on main with dry_run=true". After a yes:
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
-[ "$(git -C "$R" ls-remote origin refs/heads/main | cut -f1)" = "$(cat "$T57/merge")" ] || { echo "origin main is not the merge commit $(cat "$T57/merge") any more: stop and ask"; exit 1; }
+s3e1_read_012="$(git -C "$R" ls-remote origin refs/heads/main | cut -f1)" || exit 1
+[ "${s3e1_read_012}" = "$(cat "$T57/merge")" ] || { echo "origin main is not the merge commit $(cat "$T57/merge") any more: stop and ask"; exit 1; }
 python3 -I -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ"))' > "$T57/dry-run-since"
 gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main -f dry_run=true
 ```
@@ -2164,19 +2327,21 @@ gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main -f dry
 Expected: `✓ Created workflow_dispatch event for cut-release.yml at main` (and gh's hint line). Then the remote reads below, which need explicit user confirmation in chat before running (the yes for this step covers them; the block is re-runnable: run it with the Bash tool's 600000 ms timeout, and again after a few seconds when it says the run is not listed yet):
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
 PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$T57/ledger.env")"; since="$(cat "$T57/dry-run-since")"; merge="$(cat "$T57/merge")"
-rid="$(gh run list --repo sentioxyz/arbiter-proto --workflow cut-release.yml --event workflow_dispatch --limit 10 --json databaseId,createdAt,headSha --jq "map(select(.createdAt >= \"$since\" and .headSha == \"$merge\")) | .[0].databaseId // empty")"
+rid="$(gh run list --repo sentioxyz/arbiter-proto --workflow cut-release.yml --event workflow_dispatch --limit 10 --json databaseId,createdAt,headSha --jq "map(select(.createdAt >= \"$since\" and .headSha == \"$merge\")) | if length == 1 then .[0].databaseId else error(\"expected exactly one matching run; stop\") end")" || exit 1
 [ -n "$rid" ] || { echo "no cut-release run at $merge since $since is listed yet: run this block again"; exit 1; }
 echo "$rid" > "$T57/dry-run-id"
 gh run watch "$rid" --repo sentioxyz/arbiter-proto --exit-status > /dev/null || { echo "cut-release dry run $rid failed: gh run view $rid --repo sentioxyz/arbiter-proto --log-failed; stop"; exit 1; }
-log="$(gh run view "$rid" --repo sentioxyz/arbiter-proto --log)"
+log="$(gh run view "$rid" --repo sentioxyz/arbiter-proto --log)" || exit 1
 printf '%s\n' "$log" | grep -oE '(VERSION|PREVIOUS|REASON|DRY_RUN): .*' | LC_ALL=C sort -u
 version="$(printf '%s\n' "$log" | sed -n 's/.*VERSION: \(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | LC_ALL=C sort -u)"
 if ! { [ "$(printf '%s\n' "$version" | grep -c .)" = 1 ] && printf '%s\n' "$log" | grep -qE "PREVIOUS: ${PROTO_TAG_P4}[[:space:]]*\$" && printf '%s\n' "$log" | grep -qE 'DRY_RUN: true[[:space:]]*$'; }; then
   echo "dry run $rid does not preview exactly one version after $PROTO_TAG_P4: stop and ask"; exit 1
 fi
-[ -z "$(git -C "$R" ls-remote --tags origin "refs/tags/$version")" ] || { echo "$version exists on origin already: stop and ask"; exit 1; }
+s3e1_read_013="$(git -C "$R" ls-remote --tags origin "refs/tags/$version")" || exit 1
+[ -z "${s3e1_read_013}" ] || { echo "$version exists on origin already: stop and ask"; exit 1; }
 echo "dry run $rid at $merge previews $version after $PROTO_TAG_P4; no tag was pushed"
 ```
 
@@ -2184,40 +2349,77 @@ Expected: four lines `DRY_RUN: true`, `PREVIOUS: <PROTO_TAG_P4>`, `REASON: <the 
 
 - [ ] **Step 20: Cut the release and verify `PROTO_TAG_P5` by content**
 
-Remote write (tag and GitHub release): needs explicit user confirmation in chat before running. Gate: "dispatch the arbiter-proto cut-release workflow on main (tags and publishes the next vX.Y.Z)". After a yes:
+Remote write (tag and GitHub release): needs explicit user confirmation in chat before running. Gate: "dispatch the arbiter-proto cut-release workflow on main (tags and publishes the next vX.Y.Z)". Retain the attempted-dispatch marker before the remote call; an existing marker or failed/ambiguous attempt requires reconciliation, never automatic redispatch. After a yes:
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"; R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
-[ "$(git -C "$R" ls-remote origin refs/heads/main | cut -f1)" = "$(cat "$T57/merge")" ] || { echo "origin main is not the merge commit $(cat "$T57/merge") any more: stop and ask"; exit 1; }
-python3 -I -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ"))' > "$T57/cut-since"
+[ ! -e "$T57/cut-since" ] || { echo "release dispatch already attempted; reconcile the retained run before retrying; stop"; exit 1; }
+s3e1_read_014="$(git -C "$R" ls-remote origin refs/heads/main | cut -f1)" || exit 1
+[ "${s3e1_read_014}" = "$(cat "$T57/merge")" ] || { echo "origin main is not the merge commit $(cat "$T57/merge") any more: stop and ask"; exit 1; }
+(set -C; python3 -I -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ"))' > "$T57/cut-since") || exit 1
 gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main
 ```
 
 Expected: `✓ Created workflow_dispatch event for cut-release.yml at main`. Then the remote reads below, which need explicit user confirmation in chat before running (the yes for this step covers them; the block is re-runnable: the Bash tool's 600000 ms timeout, and again after a few seconds when it says the run is not listed yet):
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"
 PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$T57/ledger.env")"; since="$(cat "$T57/cut-since")"; merge="$(cat "$T57/merge")"; dry="$(cat "$T57/dry-run-id")"
-rid="$(gh run list --repo sentioxyz/arbiter-proto --workflow cut-release.yml --event workflow_dispatch --limit 10 --json databaseId,createdAt,headSha --jq "map(select(.createdAt >= \"$since\" and .headSha == \"$merge\" and .databaseId != $dry)) | .[0].databaseId // empty")"
+rid="$(gh run list --repo sentioxyz/arbiter-proto --workflow cut-release.yml --event workflow_dispatch --limit 10 --json databaseId,createdAt,headSha --jq "map(select(.createdAt >= \"$since\" and .headSha == \"$merge\" and .databaseId != $dry)) | if length == 1 then .[0].databaseId else error(\"expected exactly one matching run; stop\") end")" || exit 1
 [ -n "$rid" ] || { echo "no cut-release run at $merge since $since is listed yet: run this block again"; exit 1; }
 echo "$rid" > "$T57/cut-id"
 gh run watch "$rid" --repo sentioxyz/arbiter-proto --exit-status > /dev/null || { echo "cut-release run $rid failed: gh run view $rid --repo sentioxyz/arbiter-proto --log-failed; stop and ask"; exit 1; }
-log="$(gh run view "$rid" --repo sentioxyz/arbiter-proto --log)"
+log="$(gh run view "$rid" --repo sentioxyz/arbiter-proto --log)" || exit 1
 tag="$(printf '%s\n' "$log" | sed -n 's/.*VERSION: \(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | LC_ALL=C sort -u)"
 if ! { [ "$(printf '%s\n' "$tag" | grep -c .)" = 1 ] && printf '%s\n' "$log" | grep -qE "PREVIOUS: ${PROTO_TAG_P4}[[:space:]]*\$" && printf '%s\n' "$log" | grep -qE 'DRY_RUN: false[[:space:]]*$'; }; then
   echo "run $rid did not cut exactly one version after $PROTO_TAG_P4: stop and ask"; exit 1
 fi
-gh release view "$tag" --repo sentioxyz/arbiter-proto --json tagName,isDraft,isPrerelease,createdAt --jq '.tagName + " draft=" + (.isDraft | tostring) + " prerelease=" + (.isPrerelease | tostring) + " " + .createdAt'
+gh release view "$tag" --repo sentioxyz/arbiter-proto --json tagName,isDraft,isPrerelease,createdAt > "$T57/release.json" || exit 1
+python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d.get("tagName")==sys.argv[2] and d.get("isDraft") is False and d.get("isPrerelease") is False and isinstance(d.get("createdAt"),str) and d["createdAt"], "release metadata mismatch; stop"; print(d["tagName"]+" draft=false prerelease=false "+d["createdAt"])' "$T57/release.json" "$tag" || exit 1
 echo "$tag" > "$T57/tag"
 echo "run $rid cut $tag at $merge"
 ```
 
-Expected: `v<x.y.z> draft=false prerelease=false <UTC time of a moment ago>` and `run <id> cut v<x.y.z> at <merge commit>`; the tag is kept in `$HOME/.cache/s3e1-task57/tag`. Record what the run cut, never a prediction. Then verify the tag by content (a remote read, the tag fetch: it needs explicit user confirmation in chat before running, which the yes for this step covers):
+Expected: `v<x.y.z> draft=false prerelease=false <release object creation time>` (metadata only; freshness is established by the exact run/head/tag/content gates) and `run <id> cut v<x.y.z> at <merge commit>`; the tag is kept in `$HOME/.cache/s3e1-task57/tag`. Record what the run cut, never a prediction. Then verify the tag by content (a remote read, the tag fetch: it needs explicit user confirmation in chat before running, which the yes for this step covers):
 
 ```bash
+set -eo pipefail
 R=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; T57="$HOME/.cache/s3e1-task57"
 PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$T57/ledger.env")"; T="$(cat "$T57/tag")"; merge="$(cat "$T57/merge")"
-git -C "$R" fetch -q origin --tags
+git -C "$R" fetch -q origin --tags || exit 1
+python3 -I - "$R" "$PROTO_TAG_P4" "$T" "$merge" <<'PYVERIFY'
+import subprocess, sys
+repo, base, tag, merge = sys.argv[1:]
+def git(*args):
+    return subprocess.check_output(["git", "-C", repo, *args], text=True)
+if git("rev-parse", tag + "^{commit}").strip() != merge:
+    sys.exit("release tag does not name the reviewed merge; stop")
+if git("cat-file", "-t", tag).strip() != "tag":
+    sys.exit("release tag is not annotated; stop")
+remote = git("ls-remote", "--tags", "origin", "refs/tags/" + tag).strip().split()
+if remote != [git("rev-parse", tag).strip(), "refs/tags/" + tag]:
+    sys.exit("origin annotated-tag identity differs; stop")
+expected = {'proto/arbiter.proto', 'conformance/stage3_reads_test.go', 'gen/pb/arbiter_grpc.pb.go', 'conformance/table_registry_read_test.go', 'gen/pb/arbiter.pb.go', 'proto/table_registry.proto', 'conformance/snapshot_query_test.go', 'gen/pb/consensus.pb.go', 'gen/pb/consensus_grpc.pb.go', 'conformance/consensus_test.go', 'conformance/tracks_test.go', 'conformance/client_lanes_test.go', 'conformance/signed_claims_test.go', 'gen/pb/table_registry.pb.go', 'conformance/stage3_test.go', 'proto/consensus.proto', 'proto/raftlog.proto', 'gen/pb/raftlog.pb.go', 'conformance/snapshot_query_fields_test.go'}
+if set(git("diff", "--name-only", base, tag).splitlines()) != expected:
+    sys.exit("release does not contain exactly the task's nineteen files; stop")
+for path, lines in {'proto/raftlog.proto': ['    MarkMemberLaggingCmd mark_member_lagging = 42;'], 'proto/consensus.proto': ['  optional uint64 host_indexer_id = 3;', '  Stage3Params stage3 = 14;', '  Stage3StateView stage3_state = 9;', '  rpc MarkMemberLagging (MarkMemberLaggingCmd) returns (Ack) {}'], 'proto/table_registry.proto': ['  optional uint64 host_indexer_id = 8;', '  Stage3Params stage3 = 12;'], 'proto/arbiter.proto': ['  ADMISSION_CODE_COPIES_BACKPRESSURE = 13;', '  uint32 reselections_at_latch = 22;', '  rpc SubmitMemberCheckpoint (MemberCheckpointCmd) returns (Ack) {}'], 'conformance/stage3_test.go': ['func TestStage3ConsensusReadMessagesAreNotRaftReachable(t *testing.T) {']}.items():
+    text = git("show", tag + ":" + path).splitlines()
+    if any(text.count(line) != 1 for line in lines):
+        sys.exit("release content mismatch in " + path + "; stop")
+old = git("show", base + ":conformance/stage3_reads_test.go")
+for before, after in [('\t"BlockVerification":             "header:L3BlockHeader chain_hash:string replay_job:ReplayJob statements:[]StatementCandidates scan_parts:[]PartRef source_nodes:[]string verifier_set:[]string evidence:[]VerifierEvidence verdict_evaluated:bool quorum:bool anchor:AnchorRef finality:bool last_mergeable:bool",\n', '\t"BlockVerification":             "header:L3BlockHeader chain_hash:string replay_job:ReplayJob statements:[]StatementCandidates scan_parts:[]PartRef source_nodes:[]string verifier_set:[]string evidence:[]VerifierEvidence verdict_evaluated:bool quorum:bool anchor:AnchorRef finality:bool last_mergeable:bool eligible_ring:[]string ring_position:uint32 marked_cursor_block:uint64 group_key:string group_members:[]string group_fill:bool group_databases:[]BlockGroupRef reselections:[]BlockReselection reselections_at_latch:uint32",\n'), ('\t\t{pb.File_consensus_proto, "ConsensusAdmin", 16},\n', '\t\t{pb.File_consensus_proto, "ConsensusAdmin", 18},\n'), ('// arbiter v0.12.0. RaftCommand keeps exactly its 36 tags (1-28 and 30-37).\n', '// arbiter v0.12.0. RaftCommand keeps exactly its 41 tags (1-28 and 30-42).\n'), ('\tif cmd == nil || raft.Fields().Len() != 36 || cmd.Fields().Len() != 36 {\n\t\tt.Fatalf("RaftCommand has %d fields, want its 36 oneof tags", raft.Fields().Len())\n', '\tif cmd == nil || raft.Fields().Len() != 41 || cmd.Fields().Len() != 41 {\n\t\tt.Fatalf("RaftCommand has %d fields, want its 41 oneof tags", raft.Fields().Len())\n'), ('\tfor n := protoreflect.FieldNumber(1); n <= 37; n++ {\n', '\tfor n := protoreflect.FieldNumber(1); n <= 42; n++ {\n'), ('\t\t\tt.Fatalf("RaftCommand tag %d = %v; want tags 1-28 and 30-37 only", n, f)\n', '\t\t\tt.Fatalf("RaftCommand tag %d = %v; want tags 1-28 and 30-42 only", n, f)\n')]:
+    if old.count(before) != 1:
+        sys.exit("D25 base count anchor differs; stop")
+    old = old.replace(before, after)
+if git("show", tag + ":conformance/stage3_reads_test.go") != old:
+    sys.exit("D25 frozen file changed outside the six exact approved edits; stop")
+if git("diff", "--numstat", base, tag, "--", "proto/").splitlines() != ["60\t0\tproto/arbiter.proto", "105\t0\tproto/consensus.proto", "9\t0\tproto/raftlog.proto", "200\t0\tproto/table_registry.proto"]:
+    sys.exit("proto additions differ from reviewed surface; stop")
+print("release content and D25 verified")
+PYVERIFY
+printf '%s\n%s\n' "$T" "$merge" > "$T57/release-verified"
 git -C "$R" show "$T:proto/raftlog.proto" | grep -c 'MarkMemberLaggingCmd mark_member_lagging = 42;'
 for check in "proto/consensus.proto|  optional uint64 host_indexer_id = 3;" \
   "proto/consensus.proto|  Stage3Params stage3 = 14;" \
@@ -2229,13 +2431,20 @@ for check in "proto/consensus.proto|  optional uint64 host_indexer_id = 3;" \
   "proto/arbiter.proto|  uint32 reselections_at_latch = 22;" \
   "proto/arbiter.proto|  rpc SubmitMemberCheckpoint (MemberCheckpointCmd) returns (Ack) {}" \
   "conformance/stage3_test.go|func TestStage3ConsensusReadMessagesAreNotRaftReachable(t *testing.T) {"; do
-  printf '%s %s\n' "$(git -C "$R" show "$T:${check%%|*}" | grep -cxF -- "${check#*|}")" "${check#*|}"
+  s3e1_read_015="$(git -C "$R" show "$T:${check%%|*}" | grep -cxF -- "${check#*|}")" || exit 1
+  printf '%s %s\n' "${s3e1_read_015}" "${check#*|}"
 done
-git -C "$R" diff --numstat "$PROTO_TAG_P4" "$T" -- proto/
+git -C "$R" diff --numstat "$PROTO_TAG_P4" "$T" -- proto/ || exit 1
 git -C "$R" diff --name-only "$PROTO_TAG_P4" "$T" | wc -l | tr -d ' '
 git -C "$R" diff -U0 "$PROTO_TAG_P4" "$T" -- conformance/stage3_reads_test.go | grep '^@@'
-[ "$(git -C "$R" rev-parse "$T^{commit}")" = "$merge" ] && echo "$T points at the merge commit $merge"
-[ "$(git -C "$R" ls-remote --tags origin "refs/tags/$T" | cut -f1)" = "$(git -C "$R" rev-parse "$T")" ] && echo "origin holds the annotated tag $T ($(git -C "$R" cat-file -t "$T"))"
+s3e1_read_016="$(git -C "$R" rev-parse "$T^{commit}")" || exit 1
+[[ "$s3e1_read_016" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_016}" = "$merge" ] && echo "$T points at the merge commit $merge"
+s3e1_read_019="$(git -C "$R" ls-remote --tags origin "refs/tags/$T" | cut -f1)" || exit 1
+s3e1_read_018="$(git -C "$R" rev-parse "$T")" || exit 1
+[[ "$s3e1_read_018" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+s3e1_read_017="$(git -C "$R" cat-file -t "$T")" || exit 1
+[ "${s3e1_read_019}" = "${s3e1_read_018}" ] && echo "origin holds the annotated tag $T (${s3e1_read_017})"
 ```
 
 Expected, verbatim except the tag, commit and object values:
@@ -2267,20 +2476,22 @@ v<x.y.z> points at the merge commit <merge commit>
 origin holds the annotated tag v<x.y.z> (tag)
 ```
 
-So the tag holds Raft tag 42 (contract §43's content check, the first `1`), the contract's other anchor lines and the frozen test, exactly this task's nineteen files changed between `PROTO_TAG_P4` and the tag (if the count differs, list them with `git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto diff --name-only <PROTO_TAG_P4> <tag>`, and stop and confirm with the user that every other change belongs in `PROTO_TAG_P5` before recording it), Plan S3-A's frozen file changed in D25's six hunks only, the tag's commit is Step 18's merge commit, and origin holds the annotated tag object the workflow pushed. A missing last line or a `0` count: stop and ask. That tag is `PROTO_TAG_P5`.
+The executable gate first requires `release content and D25 verified`, retaining a tag/merge receipt. So the tag holds Raft tag 42 (contract §43's content check, the first `1`), the contract's other anchor lines and the frozen test, exactly this task's nineteen files changed between `PROTO_TAG_P4` and the tag (if the count differs, list them with `git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto diff --name-only <PROTO_TAG_P4> <tag>`, and stop and confirm with the user that every other change belongs in `PROTO_TAG_P5` before recording it), Plan S3-A's frozen file changed in D25's six hunks only, the tag's commit is Step 18's merge commit, and origin holds the annotated tag object the workflow pushed. A missing last line or a `0` count: stop and ask. That tag is `PROTO_TAG_P5`.
 
 - [ ] **Step 21: Record `PROTO_TAG_P5` (contract §43)**
 
 Record it, never predicting it, with the record procedure of contract §43 (Plan S3-B's R1–R4 through `s3-ledger.py`, Plan S3-C1 contract §19). First write the run record from the saved results (local):
 
 ```bash
+set -eo pipefail
 T57="$HOME/.cache/s3e1-task57"; L="$HOME/.cache/s3-ledger"
 PROTO_TAG_P4="$(sed -n 's/^PROTO_TAG_P4=//p' "$T57/ledger.env")"
 n="$(sed -n 's|^https://github.com/sentioxyz/arbiter-proto/pull/\([0-9][0-9]*\)$|\1|p' "$T57/pr-url")"
 merge="$(cat "$T57/merge")"; at="$(cat "$T57/merged-at")"; tag="$(cat "$T57/tag")"
+[ "$(sed -n 1p "$T57/release-verified")" = "$tag" ] && [ "$(sed -n 2p "$T57/release-verified")" = "$merge" ] || { echo "strict release verification missing for this tag/merge; stop"; exit 1; }
 dry="$(cat "$T57/dry-run-id")"; cut="$(cat "$T57/cut-id")"; ds="$(paste -sd ',' "$T57/downstream.txt" | sed 's/,/, /g')"
 for v in "$PROTO_TAG_P4" "$n" "$merge" "$at" "$tag" "$dry" "$cut" "$ds"; do [ -n "$v" ] || { echo "a value of the run record is missing in $T57: stop"; exit 1; }; done
-printf '%s\n' "\`sentioxyz/arbiter-proto#$n\` (\`feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)\`) squash-merged as \`$merge\` at $at with the \`proto\` job passed (\`buf lint\`, \`buf breaking\` against \`origin/main\`, generated code current, \`make test\`); before the push \`buf breaking --against .git#tag=$PROTO_TAG_P4\` printed nothing and these revisions built and vetted against the branch through a replace, their tests failing only on the mirrors of the new fields that Tasks 59-60 and Plan S3-E2 Task 64 map: $ds; cut-release dry run \`$dry\` previewed \`$tag\` after \`$PROTO_TAG_P4\` and pushed no tag; cut-release run \`$cut\` cut the annotated tag \`$tag\` at \`$merge\` with its GitHub release; between \`$PROTO_TAG_P4\` and \`$tag\` nineteen files changed, \`proto/arbiter.proto\` 60, \`proto/consensus.proto\` 105, \`proto/raftlog.proto\` 9 and \`proto/table_registry.proto\` 200 lines added and none removed, and \`conformance/stage3_reads_test.go\` only in its three count literals (decision D25)." > "$L/record-57.md"
+printf '%s\n' "\`sentioxyz/arbiter-proto#$n\` (\`feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)\`) squash-merged as \`$merge\` at $at with the \`proto\` job passed (\`buf lint\`, \`buf breaking\` against \`origin/main\`, generated code current, \`make test\`); before the push \`buf breaking --against .git#tag=$PROTO_TAG_P4\` printed nothing and these revisions built and vetted against the branch through a replace, their tests failing only on the mirrors of the new fields that Tasks 59-60 and Plan S3-E2 Task 64 map: $ds; cut-release dry run \`$dry\` previewed \`$tag\` after \`$PROTO_TAG_P4\` and pushed no tag; cut-release run \`$cut\` cut the annotated tag \`$tag\` at \`$merge\` with its GitHub release; between \`$PROTO_TAG_P4\` and \`$tag\` nineteen files changed, \`proto/arbiter.proto\` 60, \`proto/consensus.proto\` 105, \`proto/raftlog.proto\` 9 and \`proto/table_registry.proto\` 200 lines added and none removed, and \`conformance/stage3_reads_test.go\` only in its six exact approved edits (decision D25)." > "$L/record-57.md"
 cat "$L/record-57.md"
 ```
 
@@ -2289,52 +2500,130 @@ Expected: one paragraph naming the PR, its merge commit and time, the four downs
 R1 (local; its housegate fetch reads a remote): needs explicit user confirmation in chat before running.
 
 ```bash
-PROTO_TAG_P5="$(cat "$HOME/.cache/s3e1-task57/tag")"
+set -eo pipefail
+T57="$HOME/.cache/s3e1-task57"
+PROTO_TAG_P5="$(cat "$T57/tag")" || exit 1
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=57
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e1)" || exit 1
 python3 -I "$L/s3-ledger.py" empty "$h" PROTO_TAG_P5 || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e1-ledger-$n" "urwt/claude/multi-source-s3e1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+[ ! -e "$T57/ledger-worktree.json" ] || { echo "saved ledger URWT exists; reconcile before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3e1-ledger-$n" "urwt/codex/multi-source-s3e1-ledger-$n" "$ref")" || exit 1
+(set -C; printf '%s\n' "$out" > "$T57/ledger-worktree.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task57/ledger-worktree.json")" || exit 1
+s3e1_read_022="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$s3e1_read_022" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+s3e1_read_021="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$s3e1_read_021" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+s3e1_read_020="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${s3e1_read_022}" = "${s3e1_read_021}" ] && [ -z "${s3e1_read_020}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+s3e1_read_023="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${s3e1_read_023}" = "urwt/codex/multi-source-s3e1-ledger-$n" ] || { echo "ledger branch mismatch; stop"; exit 1; }
+common_d="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_h="$(git -C "$h" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2])' "$common_d" "$common_h" || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-$n.md" PROTO_TAG_P5="$PROTO_TAG_P5" || exit 1
+previous_head="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record PROTO_TAG_P5 of Plan S3-E1 (Task 57)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signature failed; stop and unlock the repository signing key"; exit 1; }
+new_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+s3e1_read_024="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$new_head" != "$previous_head" ] && [ "${s3e1_read_024}" = 'poetry <chen@sentio.xyz> G' ] || { echo "commit did not create a new poetry-signed HEAD; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
-Expected: `s3-ledger: PROTO_TAG_P5 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; the worktree's status line on stderr (`✓ Created branch urwt/claude/multi-source-s3e1-ledger-57 from <ref> and worktree @ ~/src/remotesrc/claude/housegate/multi-source-s3e1-ledger-57`); `s3-ledger: Task 57 recorded PROTO_TAG_P5=<tag> and its run record 'arbiter-proto release' in <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; then one commit `docs(plan): record PROTO_TAG_P5 of Plan S3-E1 (Task 57)` of the plan file only (` 1 file changed, 2 insertions(+), 2 deletions(-)`, plus one insertion per sub-item: the `PROTO_TAG_P5` row and the run-record item). A `stop` writes nothing: report it and ask.
+Expected: `s3-ledger: PROTO_TAG_P5 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; the worktree's status line on stderr (`✓ Created branch urwt/codex/multi-source-s3e1-ledger-57 from <ref> and worktree @ <actual returned ledger worktree path>`); `s3-ledger: Task 57 recorded PROTO_TAG_P5=<tag> and its run record 'arbiter-proto release' in <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; then one commit `docs(plan): record PROTO_TAG_P5 of Plan S3-E1 (Task 57)` of the plan file only (` 1 file changed, 2 insertions(+), 2 deletions(-)`, plus one insertion per sub-item: the `PROTO_TAG_P5` row and the run-record item). A `stop` writes nothing: report it and ask.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 57's ledger record (Appendix C of Plan S3-E1: PROTO_TAG_P5 and the run record 'arbiter-proto release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf when that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
+set -eo pipefail
 L="$HOME/.cache/s3-ledger"; n=57
 d="$(sed -n 1p "$L/record-$n")"; ref="$(sed -n 2p "$L/record-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+s3e1_read_026="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+s3e1_read_025="$(git -C "$d" status --porcelain)" || exit 1
+[ "${s3e1_read_026}" = 1 ] && [ -z "${s3e1_read_025}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+s3e1_read_028="$(git -C "$d" rev-parse --abbrev-ref HEAD)" || exit 1
+s3e1_read_027="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${s3e1_read_028}" = "urwt/codex/multi-source-s3e1-ledger-$n" ] && [ "${s3e1_read_027}" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger branch/identity/signature mismatch; stop"; exit 1; }
+git -C "$d" verify-commit HEAD || exit 1
+git -C "$d" merge-base --is-ancestor "$ref" HEAD || exit 1
+case "$ref" in
+  origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;;
+  *) echo "unexpected ledger-copy ref; stop"; exit 1 ;;
+esac
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E1 only, docs only (contract §43, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-$n-pr.md") | tee "$L/record-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  s3e1_read_029="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "${s3e1_read_029}: Appendix C of Plan S3-E1 only, docs only (contract §43, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-$n-pr.md"
+  s3e1_read_030="$(git -C "$d" log -1 --format=%s)" || exit 1
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${s3e1_read_030}" --body-file "$L/record-$n-pr.md") | tee "$L/record-$n-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
 ```
 
-Expected: the push `HEAD -> urwt/claude/ms-si-stage3-plans-cf`, or, when the ledger copy is `origin/main`, the push of `urwt/claude/multi-source-s3e1-ledger-57` and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit user confirmation in chat (Gate: "squash-merge housegate PR <url in record-57-pr-url>: Task 57's ledger record"); after a yes, run `gh pr merge "$(sed -n 's|^https://github.com/housegate/housegate/pull/\([0-9][0-9]*\)$|\1|p' "$HOME/.cache/s3-ledger/record-57-pr-url")" --repo housegate/housegate --squash`.
+Expected: the push `HEAD -> urwt/claude/ms-si-stage3-plans-cf`, or, when the ledger copy is `origin/main`, the push of `urwt/codex/multi-source-s3e1-ledger-57` and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit user confirmation in chat (Gate: "squash-merge housegate PR <url in record-57-pr-url>: Task 57's ledger record"); after a yes, run:
+
+```bash
+set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=57
+d="$(sed -n 1p "$L/record-$n")" || exit 1
+pr="$(sed -n 's|^https://github.com/housegate/housegate/pull/\([0-9][0-9]*\)$|\1|p' "$L/record-$n-pr-url")"
+[ -n "$pr" ] || { echo "missing ledger PR; stop"; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+s3e1_read_031="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_031" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_031}" = "$expected_head" ] || { echo "PR head mismatch; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+s3e1_read_032="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_032" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_032}" = "$expected_head" ] || { echo "PR head changed during author validation; stop"; exit 1; }
+s3e1_read_033="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_033" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+[ "${s3e1_read_033}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
+```
 
 R4 (read-only; a remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" get "$h" PROTO_TAG_P5
 ```
 
 Expected: `PROTO_TAG_P5=<the value written>`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints `PROTO_TAG_P5`. Task 58 reads it from there only and pins it in housegate, Task 59 in arbiter-core, both with `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle` (contract §43), and Plan S3-E2 Task 64 in arbiter. After a push to the plans branch the user's plans worktree is behind its remote; only the user updates it (fish: `git -C ~/src/remotesrc/claude/housegate/ms-si-stage3-plans-cf pull --ff-only`). Run `wt remove` on this task's worktrees only when the user asks.
+
 
 ---
 
@@ -2350,16 +2639,17 @@ Spec §7.3 (`VERIFIERS_UNAVAILABLE`: retryable, state unchanged, like `SOURCE_UN
 - documents both, opens and merges the PR, releases `HG_TAG_P5` and records it in Appendix C.
 
 Notes:
-- **Base.** housegate at `HG_TAG_P3` (Plan S3-C4 Task 44, on `main`), read from the ledger. The header's anchors are `66d4df7`'s; this task's anchors are those of `origin/main` `862a7a8` (S3-A merged as housegate#238), which equal `66d4df7`'s for every file here except `CLAUDE.md`, `README.md` and `storage_integrity_table_state_runtime_test.go` (S3-A's text and its held-Pending resolver tests, housegate#238), and, where Plan S3-C4 moves a line, **Files** gives its line at `HG_TAG_P3` too. Of this task's files, the releases in between change only these: Task 44 adds `TableRefusedMessage` and `IsIndexerQuarantinedReadMessage` after `IsIndexerQuarantinedMessage` in `pkg/chproto/client_error.go`, appends two tests to `client_error_test.go` and moves `isSessionPreservingIngressException` in `pkg/proxy/relay.go` down by 22 lines, and Plan S3-C1 Task 22 and Plan S3-C4 Tasks 42–44 edit other paragraphs of `CLAUDE.md` and `README.md`; S3-D changes no housegate code. Every hunk below anchors on text those changes leave as it is (the hunk rule), and every hunk applies to both bases (Measured).
+- **Base and review scope.** Actual main is housegate `bc8780f2a099c1f8a1f0316ded1858bb04d4c360` plus the hash-verified real reviewed Task44 HG935 source; proto is the complete57-file generated Task57 P5 candidate on actualmain `7a73f256865c333332f0ac28b17806b1e2bfcbd1` plus reviewed49/57. No two-enum/API stand-in is used. Execution still requires the actual recorded HG_TAG_P3 and PROTO_TAG_P5. C2 full500, C3/C4/D/post45 and full future released-chain gates remain pending and are not waived by independent ingress checks. Quoted text is the hunk anchor; line numbers are navigation hints.
 - **Why the 733 and 252.** Code 12 is a transient lack of verifiers, retried like the source refusal (`SOURCE_UNAVAILABLE`, 733). Code 13 is K59's back-pressure: 252 is the refusal every client already retries for part pressure, and the message starts with `storage_integrity: back-pressure:`, so `isSessionPreservingIngressException`'s 252 rule (`pkg/proxy/relay.go:2321-2322` at `origin/main`) keeps the agent's session without a change; only the 733 case learns a matcher. The verifiers text says `(retryable)` like the other 733 refusals; both texts are contract §40's, verbatim.
 - **Counted like back-pressure.** Code 13 increments `storage_integrity_backpressure_total{table=<physical name>}` (`sicore.PhysicalTableName(rec.TableID)`, the label every local back-pressure refusal uses, `storage_integrity_ingress.go:630`, `:821`); code 12 does not. The arbiter's own series for code 13 is `arbiter_admission_rejects_total{code="ADMISSION_CODE_COPIES_BACKPRESSURE"}` (S3-E4).
 - **Marked unspent, parts removed.** Like codes 10 and 11, both refusals carry `SeqUnspent` (the FSM changed nothing) and arrive after the terminal-submit path removed the prepared parts (`OutcomeCategory.RequiresAbort`, `pkg/storageintegrity/intake.go:321-323`); `TestConsumeAdmission_PostOrchestrateMarking` gains a row per code.
 - **Agents.** The agent's relay classifies the server's Exception (`isSessionPreservingIngressException`), so an agent older than this release closes its session on the 733 verifiers text (fail closed: the statement is refused either way, and the client reconnects). The agent's own lane logic matches only the generic `rejected by the arbiter: <code>` text (`pkg/plugins/sistatement/lanes.go:270-290`), which these two codes never produce.
 - **`MODULE.bazel` and the lockfile.** Bzlmod's `go_deps` reads `go.mod` (`MODULE.bazel:22-24`, `use_repo` already lists `com_github_sentioxyz_arbiter_proto`), so contract §43's `bazel mod tidy && bazel run //:gazelle` leave `MODULE.bazel`, `MODULE.bazel.lock` and every `BUILD.bazel` unchanged, as at the stage-2 pin of `v0.11.0` (`66d4df7` changed only `go.mod` and `go.sum` for it). A change there means the release moved another dependency: stop.
 - **Beyond contract §40's file list** (recorded in Appendix B): `pkg/proxy/relay_unspent_test.go` and `storage_integrity_ingress_unspent_test.go` gain one row per code, `pkg/proxy/relay_reject_test.go` the extra `TestRelay_DeferredUpstreamCopiesBackpressure_KeepsSessionAndServesNextQuery` (it pins that the unchanged 252 rule covers code 13), and `CLAUDE.md` and `README.md` document both refusals, as the stage-2 code 11 change did.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of housegate `origin/main` `862a7a8` with Plan S3-C4 Tasks 42–44 applied as their texts write them (the `HG_TAG_P3` stand-in), and a stand-in arbiter-proto module (`git archive` of arbiter-proto `origin/main` `7a73f25` with contract §39's two enum values added and `buf generate` run with protoc-gen-go v1.36.11 and protoc-gen-go-grpc v1.5.1, served from a local file proxy under a scratch module cache), this task applied step by step with its own commit commands, with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1, and the four packages again with Go 1.26.3, `go.mod`'s version): the pin changed exactly `go.mod` (1 line) and `go.sum` (2 lines); every failing step failed with the messages given; every test passes, the relay tests also under `-race -count=20`; each new test fails with its fix reverted (each code dropped from the case list, the counter increment, the unspent mark, `KeepSession`, an exact matcher loosened to a prefix, the relay's 733 matcher); the same hunks apply unchanged to plain `862a7a8`, where the four packages pass too. With Bazel 9.1.0 run offline (`--repository_disable_download`, `GOPROXY` pointed at the stand-in proxy and local module caches through `--repo_env`), `bazel mod tidy` and `bazel run //:gazelle` changed nothing after the pin and after every step, `bazel build //...` passed and `bazel test //...` ended with `Executed 20 out of 67 tests: 67 tests pass.`; the ledger blocks of Steps 1 and 24 (R1 with a stub `urwt-create.sh` that runs `git worktree add` and prints the same JSON, R2 to the plans branch, R4) ran against a local bare origin holding this plan's Appendix C on `urwt/claude/ms-si-stage3-plans-cf` and printed the lines and the commit stat they expect; Step 23's checks printed `1 3 5 2 1` on the stand-in tag; every bash block passes `bash -n` and `shellcheck`, and every fish line `fish -n`. `go test ./pkg/storageintegrity/` stops at the base already on vet's `suspect or` (`intake_test.go:1802`; Bazel's test of that package passes), so this task runs that package with `-vet=off`.
+- **Current review evidence.** Mapping/message compile REDs and ingress/deferred-lane behavior REDs reproduce against the actual source chain; final measurements and remaining gates are in the review report. Historical draft67-target and stub-release measurements are not current evidence. The root config.Duration vet warnings and storageintegrity suspect-or warning are pre-existing; actual non-root affected vet and canonical Bazel results must be reported separately.
 - **Remote actions.** Every fetch, module download, push, PR, check watch, merge, release run, run-log read and ledger push below needs explicit user confirmation in chat, each for its own step. Nothing touches devnet2 or sea.
-- **Values across commands.** The worktree is `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"` (Step 1), and the Bash tool keeps no variables between calls, so every command sets `W` itself. What the steps learn is kept in files beside the worktree, never inside it: `$W.proto-tag-p5` and `$W.hg-tag-p3` (Step 1), `$W.pr-body.md` and `$W.pr-url` (Step 20), `$W.merge` (Step 21) and `$W.hg-tag-p5` (Step 22); later commands read them back, so no value is typed in by hand.
+- **Values across commands.** Step1 retains actual `$HOME/.cache/s3e1-task58/worktree.json`; each command reloads its path. Produced-input tags, PR body/URL, merge metadata, attempted release/run/tag and verified release receipt stay beside that actual worktree and outside git. Never infer a path from a template or retry a retained dispatch automatically.
+
 
 **Files:**
 - Modify: `go.mod` (`:15`), `go.sum` (`:279-280`); `MODULE.bazel`, `MODULE.bazel.lock` and every `BUILD.bazel` stay unchanged (Notes)
@@ -2369,7 +2659,7 @@ Notes:
 - Modify: `pkg/proxy/relay.go` (`isSessionPreservingIngressException` doc and 733 case, `:2301-2305` and `:2323-2324`; `:2326-2330` and `:2348-2349` at `HG_TAG_P3`), `pkg/proxy/relay_reject_test.go` (before `testStagedSessionPreservingRejection`, `:182`; before `testDeferredUpstreamSessionPreservingRejection`, `:432`; rows after `:540`), `pkg/proxy/relay_unspent_test.go` (`:74`)
 - Modify: `CLAUDE.md` (the relay diagram, `:110-113`, `:111-114` at `HG_TAG_P3`; the `pkg/storageintegrity` bullet, `:177`, `:180` at `HG_TAG_P3`), `README.md` (Dynamic table state, `:195`)
 - Ledger: Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md` on the ledger copy (row `HG_TAG_P5`, item `housegate release (Task 58)`), from URWT `multi-source-s3e1-ledger-58`
-- Local only, never committed: beside the worktree, `$HOME/src/remotesrc/claude/housegate/multi-source-s3e1.proto-tag-p5`, `.hg-tag-p3`, `.pr-body.md`, `.pr-url`, `.merge` and `.hg-tag-p5`; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19's tool), `record-58.md` (the run record) and `record-58` (the ledger worktree's path and ref), and `record-58-pr.md` / `record-58-pr-url` only when the ledger copy is `origin/main`
+- Local only, never committed: beside the worktree, `$W.proto-tag-p5`, `.hg-tag-p3`, `.pr-body.md`, `.pr-url`, `.merge` and `.hg-tag-p5`; `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19's tool), `record-58.md` (the run record) and `record-58` (the ledger worktree's path and ref), and `record-58-pr.md` / `record-58-pr-url` only when the ledger copy is `origin/main`
 
 **Interfaces:**
 - Consumes:
@@ -2387,65 +2677,140 @@ Notes:
   - Release ledger: `HG_TAG_P5` (the tag the release run prints), with the run record `housegate release`.
 - Consumed by: Task 63 (arbiter-core `bash scripts/update-housegate.sh $HG_TAG_P5`, which also pins `MODULE.bazel`'s `git_override` commit, `git rev-parse "$HG_TAG_P5^{commit}"`); Plan S3-E2 Task 64 (arbiter pins `HG_TAG_P5`); Plan S3-E4 Task 79 (sentio-node pins it, which puts this ingress on every SI host); Plan S3-F (switch 3 is turned on only once every SI host runs it).
 
-- [ ] **Step 1: Worktree, base and ledger check**
+- [ ] **Step 1: Worktree, base and producing-ledger check**
 
-Remote reads (the housegate and arbiter-proto fetches): need explicit user confirmation in chat before running.
-
-```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin --tags
-git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto fetch -q origin --tags
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3e1
-```
-
-Expected: one JSON object with `"action": "created"` whose `path` is `/Users/uranuswch/src/remotesrc/claude/housegate/multi-source-s3e1` on the new branch `urwt/claude/multi-source-s3e1`, at `origin/main`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` themselves; never pass `--yes` or `--clobber`. If the action is not `created` (an earlier attempt left the worktree), stop and read it before going on.
-
-Read the two consumed ledger values. First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (every task that reads or records the ledger writes it; an earlier copy holds the same text and is overwritten). Then:
+Confirm the housegate and arbiter-proto remote fetches in chat before running this Bash block. Write `$HOME/.cache/s3-ledger/s3-ledger.py` from the canonical S3-C1 contract19 tool verbatim first; never use a local guessed value or a scratch review manifest as a release input. The creation JSON is retained with noclobber, and the returned absolute symlink spelling is used everywhere.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; h=/Users/uranuswch/Dev/projects/sentio-network/housegate
-python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$h" PROTO_TAG_P5 | sed -n 's/^PROTO_TAG_P5=//p' > "$W.proto-tag-p5"
-python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" get "$h" HG_TAG_P3 | sed -n 's/^HG_TAG_P3=//p' > "$W.hg-tag-p3"
-python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" empty "$h" HG_TAG_P5
-cat "$W.proto-tag-p5" "$W.hg-tag-p3"
+(
+set -eo pipefail
+P=/Users/uranuswch/Dev/projects/sentio-network/housegate; T58="$HOME/.cache/s3e1-task58"
+umask 077
+mkdir -p "$T58" || exit 1
+chmod 700 "$T58" || exit 1
+git -C "$P" fetch -q origin --tags || exit 1
+[ ! -e "$T58/worktree.json" ] || { echo "saved URWT state exists; reconcile the prior attempt before resuming; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3e1 urwt/codex/multi-source-s3e1 origin/main)" || { echo "URWT failed; stop"; exit 1; }
+(set -C; printf '%s\n' "$out" > "$T58/worktree.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+actual_branch="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+actual_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+base_head="$(git -C "$P" rev-parse origin/main)" || exit 1
+actual_dirty="$(git -C "$W" status --porcelain)" || exit 1
+[ "$actual_branch" = urwt/codex/multi-source-s3e1 ] && [ "$actual_head" = "$base_head" ] && [ -z "$actual_dirty" ] || { echo "URWT is not the expected clean branch/base; stop"; exit 1; }
+common_w="$(git -C "$W" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+common_repo="$(git -C "$P" rev-parse --path-format=absolute --git-common-dir)" || exit 1
+python3 -I -c 'import os,sys;assert os.path.samefile(sys.argv[1],sys.argv[2]),"URWT belongs to another repository"' "$common_w" "$common_repo" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+printf '%s\n' "$out"
+git -C "$W" log -1 --format='%H' || exit 1
+
+)
 ```
 
-Expected: `s3-ledger: HG_TAG_P5 not recorded yet in origin/urwt/claude/ms-si-stage3-plans-cf:docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md` (or `origin/main:…` once the stage-3 plans PR merged, D34), then two lines, each `v<x>.<y>.<z>`: `PROTO_TAG_P5` (Task 57's record) and `HG_TAG_P3` (Plan S3-C4 Task 44's record). A `s3-ledger: … stop` line (a value not recorded yet, or `HG_TAG_P5` recorded already) or an empty file: stop, because this task needs Task 57's release and the `HG_TAG_P3` base.
-
-Check the base and the arbiter-proto release:
+Expected: one new clean worktree at actual JSON path on `urwt/codex/multi-source-s3e1`, at fetched origin/main, configured `poetry <chen@sentio.xyz>` and worktree GPG signing. Existing/failed creation state stops for reconciliation; never overwrite it or invent a replacement worktree. URWT approval failures require the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` in their own terminal; never bypass hooks. Signing cancellation at any later commit stops: ask the user to unlock this repository's actual signing key, never disable signing or publish an unsigned fallback.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; A=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
-HG_TAG_P3="$(cat "$W.hg-tag-p3")"; PROTO_TAG_P5="$(cat "$W.proto-tag-p5")"
-git -C "$W" merge-base --is-ancestor "$HG_TAG_P3" HEAD && echo "HEAD contains $HG_TAG_P3"
-git -C "$W" diff --stat "$HG_TAG_P3" HEAD -- go.mod go.sum MODULE.bazel MODULE.bazel.lock pkg/storageintegrity/arbiter_proto.go pkg/storageintegrity/admission_code_test.go pkg/chproto storage_integrity_ingress.go storage_integrity_table_state_runtime_test.go storage_integrity_ingress_unspent_test.go pkg/proxy/relay.go pkg/proxy/relay_reject_test.go pkg/proxy/relay_unspent_test.go CLAUDE.md README.md
-grep -c 'github.com/sentioxyz/arbiter-proto v0.11.0$' "$W/go.mod"
-grep -c '^func IsIndexerQuarantinedReadMessage(msg string) bool {' "$W/pkg/chproto/client_error.go"
-grep -c 'VERIFIERS_UNAVAILABLE\|COPIES_BACKPRESSURE' "$W/pkg/storageintegrity/arbiter_proto.go"
-git -C "$A" show "$PROTO_TAG_P5":proto/arbiter.proto | grep -c -E '^  ADMISSION_CODE_(VERIFIERS_UNAVAILABLE = 12|COPIES_BACKPRESSURE = 13);$'
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+L="$HOME/.cache/s3-ledger"; h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+A=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
+git -C "$A" fetch -q origin --tags || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" PROTO_TAG_P5 HG_TAG_P3 > "$W.inputs.env" || exit 1
+python3 -I "$L/s3-ledger.py" empty "$h" HG_TAG_P5 || exit 1
+python3 -I - "$W" "$A" <<'PY58INPUT'
+import pathlib,re,subprocess,sys
+w,a=sys.argv[1:]
+rows=pathlib.Path(w+".inputs.env").read_text().splitlines()
+if len(rows)!=2 or not re.fullmatch(r"PROTO_TAG_P5=v[0-9]+\.[0-9]+\.[0-9]+",rows[0]) or not re.fullmatch(r"HG_TAG_P3=v[0-9]+\.[0-9]+\.[0-9]+",rows[1]):
+    raise SystemExit("invalid producing ledger rows; stop")
+proto,base=[x.split("=",1)[1] for x in rows]
+for ext,value in [(".proto-tag-p5",proto),(".hg-tag-p3",base)]:pathlib.Path(w+ext).write_text(value+"\n")
+def git(repo,*args):return subprocess.check_output(["git","-C",repo,*args],text=True).strip()
+if git(w,"branch","--show-current")!="urwt/codex/multi-source-s3e1" or git(w,"status","--porcelain"):
+    raise SystemExit("not the clean expected worktree; stop")
+for key,value in [("user.name","poetry"),("user.email","chen@sentio.xyz"),("commit.gpgsign","true")]:
+    if git(w,"config","--worktree","--get",key)!=value:raise SystemExit("worktree identity/signing mismatch; stop")
+subprocess.run(["git","-C",w,"merge-base","--is-ancestor",base,"HEAD"],check=True)
+paths=["go.mod","go.sum","pkg/storageintegrity/arbiter_proto.go","pkg/storageintegrity/admission_code_test.go","pkg/chproto/client_error.go","pkg/chproto/client_error_test.go","storage_integrity_ingress.go","storage_integrity_table_state_runtime_test.go","storage_integrity_ingress_unspent_test.go","pkg/proxy/relay.go","pkg/proxy/relay_reject_test.go","pkg/proxy/relay_unspent_test.go","CLAUDE.md","README.md"]
+if git(w,"diff","--name-only",base,"HEAD","--",*paths):raise SystemExit("task surface changed since HG_TAG_P3; reread before applying; stop")
+mod=pathlib.Path(w,"go.mod").read_text()
+if len(re.findall(r"(?m)^\s*github.com/sentioxyz/arbiter-proto v0\.11\.0$",mod))!=1:raise SystemExit("unexpected base proto pin; stop")
+for needle in ["func IsIndexerQuarantinedReadMessage(msg string) bool {"]:
+    if pathlib.Path(w,"pkg/chproto/client_error.go").read_text().count(needle)!=1:raise SystemExit("Task44 prerequisite missing; stop")
+if re.search("VERIFIERS_UNAVAILABLE|COPIES_BACKPRESSURE",pathlib.Path(w,"pkg/storageintegrity/arbiter_proto.go").read_text()):raise SystemExit("Task58 already partially applied; stop")
+schema=git(a,"show",proto+":proto/arbiter.proto")
+for line in ["  ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12;","  ADMISSION_CODE_COPIES_BACKPRESSURE = 13;"]:
+    if schema.splitlines().count(line)!=1:raise SystemExit("producing proto release mismatch; stop")
+print("inputs verified",proto,base)
+PY58INPUT
+)
 ```
 
-For the user in fish, the first two lines are `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; set A /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; set HG_TAG_P3 (cat "$W.hg-tag-p3"); set PROTO_TAG_P5 (cat "$W.proto-tag-p5")`; the rest run unchanged. Expected: `HEAD contains <HG_TAG_P3>`; an empty diff stat (nothing merged after `HG_TAG_P3` touched these files; if something did, re-read each listed file before applying a hunk below); `1` (still on arbiter-proto `v0.11.0`), `1` (Task 44's matcher is in the base), `0` (neither code is mapped yet) and `2` (the release carries both codes with contract §39's numbers). Any other count: stop.
+Expected: empty HG_TAG_P5, two exact producing rows, then `inputs verified <PROTO_TAG_P5> <HG_TAG_P3>`. Any missing/recorded value, stale hunk surface, partial task or config mismatch stops before editing. Inline Run commands are Bash tool commands. For a user terminal, save a block to a file and run `bash /absolute/path/to/block.sh`; the loader can be used in fish as:
+
+```fish
+set W (python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task58/worktree.json")
+```
 
 - [ ] **Step 2: Pin arbiter-proto `PROTO_TAG_P5`** (contract §43)
 
 Module download (arbiter-proto `PROTO_TAG_P5` from the Go module proxy by `go get`, a few hundred kilobytes): needs explicit user confirmation in chat before running.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; PROTO_TAG_P5="$(cat "$W.proto-tag-p5")"
-cd "$W" && GOWORK=off go get "github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5" && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle
-cd "$W" && GOWORK=off go list -m github.com/sentioxyz/arbiter-proto && git status --short && git diff --stat | tail -1
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+PROTO_TAG_P5=$(cat "$W.proto-tag-p5")
+cp "$W/go.mod" "$W.before-proto-go.mod" || exit 1
+cp "$W/go.sum" "$W.before-proto-go.sum" || exit 1
+cd "$W"
+GOWORK=off go get "github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5" || exit 1
+GOWORK=off go mod tidy || exit 1
+bazel mod tidy || exit 1
+bazel run //:gazelle || exit 1
+python3 -I - "$W" "$PROTO_TAG_P5" <<'PY58PIN'
+import pathlib,re,subprocess,sys
+w,tag=sys.argv[1:]
+if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+',tag):raise SystemExit('invalid producing proto tag; stop')
+root=pathlib.Path(w)
+old=pathlib.Path(w+'.before-proto-go.mod').read_text();new=(root/'go.mod').read_text()
+needle='github.com/sentioxyz/arbiter-proto v0.11.0'
+if old.count(needle)!=1 or new!=old.replace(needle,'github.com/sentioxyz/arbiter-proto '+tag):raise SystemExit('dependency graph or local replaces changed beyond the single proto pin; stop')
+a=pathlib.Path(w+'.before-proto-go.sum').read_text().splitlines();b=(root/'go.sum').read_text().splitlines()
+removed=[x for x in a if x not in b];added=[x for x in b if x not in a]
+if len(removed)!=2 or len(added)!=2 or any(not x.startswith('github.com/sentioxyz/arbiter-proto v0.11.0') for x in removed) or any(not x.startswith('github.com/sentioxyz/arbiter-proto '+tag+' ') and not x.startswith('github.com/sentioxyz/arbiter-proto '+tag+'/go.mod ') for x in added):raise SystemExit('sum changes exceed the two proto release sums; stop')
+changed=subprocess.check_output(['git','-C',w,'diff','--name-only'],text=True).splitlines()
+if sorted(changed)!=['go.mod','go.sum']:raise SystemExit('unexpected pin/Bazel/generated file changes; stop')
+resolved=subprocess.check_output(['go','list','-m','-json','github.com/sentioxyz/arbiter-proto'],text=True)
+import json
+m=json.loads(resolved)
+if m.get('Version')!=tag or m.get('Replace') is not None:raise SystemExit('actual resolved proto source is not the producing release; stop')
+print('exact proto pin verified',tag)
+PY58PIN
+git status --short || exit 1
+)
 ```
 
 Expected: `go: downloading github.com/sentioxyz/arbiter-proto <PROTO_TAG_P5>` (unless the module cache has it), `go: upgraded github.com/sentioxyz/arbiter-proto v0.11.0 => <PROTO_TAG_P5>`, gazelle's build lines, then `github.com/sentioxyz/arbiter-proto <PROTO_TAG_P5>`; `git status --short` lists exactly ` M go.mod` and ` M go.sum`; the stat ends ` 2 files changed, 3 insertions(+), 3 deletions(-)` (the `require` line, and the two `v0.11.0` sums replaced by the two `PROTO_TAG_P5` sums). `PROTO_TAG_P5` requires the `google.golang.org/grpc` and `google.golang.org/protobuf` versions housegate already has (v1.82.0, v1.36.11), so nothing else moves; if `go.mod` changes another line, or `MODULE.bazel`, `MODULE.bazel.lock` or a `BUILD.bazel` changes, stop and report it (contract §40: no other dependency moves).
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && GOWORK=off go build ./... && GOWORK=off go test ./pkg/chproto/ ./pkg/proxy/ . && GOWORK=off go test -vet=off ./pkg/storageintegrity/`
+Run: `set -euo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; cd "$W" && GOWORK=off go build ./... && GOWORK=off go test ./pkg/chproto/ ./pkg/proxy/ . && GOWORK=off go test -vet=off ./pkg/storageintegrity/`
 
 Expected: `ok` for the four packages. The pin is additive: until Step 5 both new codes still fall into `OutcomeUnknown`, and `TestIndexerQuarantinedIsATerminalRejectWithItsCode`'s unknown-code example (code 12) still passes.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; PROTO_TAG_P5="$(cat "$W.proto-tag-p5")"
-git -C "$W" add go.mod go.sum
-git -C "$W" commit -m "chore(deps): pin arbiter-proto $PROTO_TAG_P5
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; PROTO_TAG_P5="$(cat "$W.proto-tag-p5")"
+s3e1_read_034="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_034}" = urwt/codex/multi-source-s3e1 || exit 1
+before=$(git -C "$W" rev-parse HEAD) || exit 1
+git -C "$W" add go.mod go.sum || exit 1
+git -C "$W" commit -S -m "chore(deps): pin arbiter-proto $PROTO_TAG_P5
 
 The stage-3 P5 release of arbiter-proto adds
 ADMISSION_CODE_VERIFIERS_UNAVAILABLE (12) and
@@ -2454,7 +2819,13 @@ contract (housegate spec 2026-10-14 §15, plan S3-E1 contract §39);
 additive only. Until the next commit both codes still map to
 OutcomeUnknown, as on v0.11.0.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_035="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_035}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 3: Write the failing tests for the two coded terminal rejects**
@@ -2528,7 +2899,17 @@ func TestCopiesBackpressureIsATerminalRejectWithItsCode(t *testing.T) {
 
 - [ ] **Step 4: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && GOWORK=off go test -vet=off ./pkg/storageintegrity/ -run 'IsATerminalRejectWithItsCode'`
+```bash
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+cd "$W"
+if GOWORK=off go test -vet=off ./pkg/storageintegrity/ -run IsATerminalRejectWithItsCode > "$HOME/.cache/s3e1-task58/red-4-0.log" 2>&1; then
+  cat "$HOME/.cache/s3e1-task58/red-4-0.log"; echo "expected RED passed unexpectedly; stop"; exit 1
+fi
+cat "$HOME/.cache/s3e1-task58/red-4-0.log"
+)
+```
 
 Expected: FAIL to compile with `admission_code_test.go:97:67: undefined: AdmissionCodeVerifiersUnavailable` and `undefined: AdmissionCodeCopiesBackpressure` at `admission_code_test.go:119`, `:130` and `:131`.
 
@@ -2584,16 +2965,21 @@ The `default` branch (`:426-427`) is unchanged, so code 14 and above stay `Outco
 
 - [ ] **Step 6: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && gofmt -l pkg/storageintegrity && GOWORK=off go test -vet=off ./pkg/storageintegrity/ && GOWORK=off go test . -run 'Reaches|PostOrchestrateMarking|PostSubmission'`
+Run: `set -euo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; cd "$W" && gofmt -l pkg/storageintegrity && GOWORK=off go test -vet=off ./pkg/storageintegrity/ && GOWORK=off go test . -run 'Reaches|PostOrchestrateMarking|PostSubmission'`
 
 Expected: `gofmt` lists nothing; `ok` for both packages. The root package's existing refusal tests still pass: the ingress has no branch for the two codes yet, and a coded terminal reject without one is the generic unspent refusal `storage_integrity: statement <id> rejected by the arbiter: <code>`.
 
 - [ ] **Step 7: Commit the mapping**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-git -C "$W" add pkg/storageintegrity/arbiter_proto.go pkg/storageintegrity/admission_code_test.go
-git -C "$W" commit -m "feat(storageintegrity): codes 12 and 13 are coded terminal rejects
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_036="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_036}" = urwt/codex/multi-source-s3e1 || exit 1
+before=$(git -C "$W" rev-parse HEAD) || exit 1
+git -C "$W" add pkg/storageintegrity/arbiter_proto.go pkg/storageintegrity/admission_code_test.go || exit 1
+git -C "$W" commit -S -m "feat(storageintegrity): codes 12 and 13 are coded terminal rejects
 
 The arbiter answers ADMISSION_CODE_VERIFIERS_UNAVAILABLE when the
 eligible ring of a statement's group holds fewer than three verifiers
@@ -2604,7 +2990,13 @@ SubmitOutcomeFromSequencedAck lists them with the coded terminal
 rejects, so the terminal-submit path removes the prepared parts and
 the ingress learns the code; code 14 and above stay OutcomeUnknown.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_037="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_037}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 8: Write the failing tests for the two client messages**
@@ -2688,7 +3080,17 @@ func TestCopiesBackpressureMessage(t *testing.T) {
 
 - [ ] **Step 9: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && GOWORK=off go test ./pkg/chproto/ -run 'TestVerifiersUnavailableMessage|TestCopiesBackpressureMessage'`
+```bash
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+cd "$W"
+if GOWORK=off go test ./pkg/chproto/ -run 'TestVerifiersUnavailableMessage|TestCopiesBackpressureMessage' > "$HOME/.cache/s3e1-task58/red-9-0.log" 2>&1; then
+  cat "$HOME/.cache/s3e1-task58/red-9-0.log"; echo "expected RED passed unexpectedly; stop"; exit 1
+fi
+cat "$HOME/.cache/s3e1-task58/red-9-0.log"
+)
+```
 
 Expected: FAIL to compile with `undefined: VerifiersUnavailableMessage` (first at `client_error_test.go:254:12` at `HG_TAG_P3`, `:201:12` at `origin/main`), `undefined: IsVerifiersUnavailableMessage` and `undefined: CopiesBackpressureMessage`; Go reports the first ten and ends with `too many errors`.
 
@@ -2779,16 +3181,21 @@ func isTableRefusalMessage(message, suffix string) bool {
 
 - [ ] **Step 11: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && gofmt -l pkg/chproto && GOWORK=off go test ./pkg/chproto/ ./pkg/proxy/`
+Run: `set -euo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; cd "$W" && gofmt -l pkg/chproto && GOWORK=off go test ./pkg/chproto/ ./pkg/proxy/`
 
 Expected: `gofmt` lists nothing (the new constants keep the block's alignment); `ok` for both packages.
 
 - [ ] **Step 12: Commit the messages**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-git -C "$W" add pkg/chproto/client_error.go pkg/chproto/client_error_test.go
-git -C "$W" commit -m "feat(chproto): the verifiers-unavailable and copies back-pressure refusals
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_038="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_038}" = urwt/codex/multi-source-s3e1 || exit 1
+before=$(git -C "$W" rev-parse HEAD) || exit 1
+git -C "$W" add pkg/chproto/client_error.go pkg/chproto/client_error_test.go || exit 1
+git -C "$W" commit -S -m "feat(chproto): the verifiers-unavailable and copies back-pressure refusals
 
 VerifiersUnavailableMessage is the retryable 733 text of the arbiter's
 VERIFIERS_UNAVAILABLE (spec 2026-10-14 §7.3) and CopiesBackpressureMessage
@@ -2796,7 +3203,13 @@ the 252 text of its strict-mode COPIES_BACKPRESSURE (§9.3, plan S3-E1
 K59), which starts with the back-pressure prefix. Both are built and
 matched only here, exactly, so the ingress and the relay cannot drift.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_039="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_039}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 13: Write the failing ingress and relay tests**
@@ -3017,7 +3430,21 @@ with:
 
 - [ ] **Step 14: Run the tests and see them fail**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && GOWORK=off go test . -run 'TestVerifiersUnavailableReachesTheClientAsARetryableRefusal|TestCopiesBackpressureReachesTheClientAsARetryableBackpressure|TestConsumeAdmission_PostOrchestrateMarking'; GOWORK=off go test ./pkg/proxy/ -run 'VerifiersUnavailable|CopiesBackpressure|TestSessionPreservingIngressException'`
+```bash
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+cd "$W"
+if GOWORK=off go test . -run 'TestVerifiersUnavailableReachesTheClientAsARetryableRefusal|TestCopiesBackpressureReachesTheClientAsARetryableBackpressure|TestConsumeAdmission_PostOrchestrateMarking' > "$HOME/.cache/s3e1-task58/red-14-0.log" 2>&1; then
+  cat "$HOME/.cache/s3e1-task58/red-14-0.log"; echo "expected RED passed unexpectedly; stop"; exit 1
+fi
+cat "$HOME/.cache/s3e1-task58/red-14-0.log"
+if GOWORK=off go test ./pkg/proxy/ -run 'VerifiersUnavailable|CopiesBackpressure|TestSessionPreservingIngressException' > "$HOME/.cache/s3e1-task58/red-14-1.log" 2>&1; then
+  cat "$HOME/.cache/s3e1-task58/red-14-1.log"; echo "expected RED passed unexpectedly; stop"; exit 1
+fi
+cat "$HOME/.cache/s3e1-task58/red-14-1.log"
+)
+```
 
 Expected, root package: FAIL with
 - `TestVerifiersUnavailableReachesTheClientAsARetryableRefusal`: `err = storage_integrity: statement 0xabc:1:n1 rejected by the arbiter: ADMISSION_CODE_VERIFIERS_UNAVAILABLE, want the retryable verifiers-unavailable refusal`;
@@ -3125,16 +3552,21 @@ The 252 case is unchanged.
 
 - [ ] **Step 16: Run the tests and see them pass**
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && gofmt -l storage_integrity_ingress.go storage_integrity_table_state_runtime_test.go storage_integrity_ingress_unspent_test.go pkg/proxy && GOWORK=off go test . ./pkg/chproto/ ./pkg/proxy/ && GOWORK=off go test -vet=off ./pkg/storageintegrity/ && GOWORK=off go test -race -count=20 ./pkg/proxy/ -run 'VerifiersUnavailable|CopiesBackpressure|TestSessionPreservingIngressException'`
+Run: `set -euo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; cd "$W" && gofmt -l storage_integrity_ingress.go storage_integrity_table_state_runtime_test.go storage_integrity_ingress_unspent_test.go pkg/proxy && GOWORK=off go test . ./pkg/chproto/ ./pkg/proxy/ && GOWORK=off go test -vet=off ./pkg/storageintegrity/ && GOWORK=off go test -race -count=20 ./pkg/proxy/ -run 'VerifiersUnavailable|CopiesBackpressure|TestSessionPreservingIngressException'`
 
 Expected: `gofmt` lists nothing; `ok` for the four packages, then `ok` for the relay tests under `-race -count=20`.
 
 - [ ] **Step 17: Commit the ingress refusals**
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-git -C "$W" add storage_integrity_ingress.go storage_integrity_table_state_runtime_test.go storage_integrity_ingress_unspent_test.go pkg/proxy/relay.go pkg/proxy/relay_reject_test.go pkg/proxy/relay_unspent_test.go
-git -C "$W" commit -m "feat(storage-integrity): answer admission codes 12 and 13 at the ingress
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_040="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_040}" = urwt/codex/multi-source-s3e1 || exit 1
+before=$(git -C "$W" rev-parse HEAD) || exit 1
+git -C "$W" add storage_integrity_ingress.go storage_integrity_table_state_runtime_test.go storage_integrity_ingress_unspent_test.go pkg/proxy/relay.go pkg/proxy/relay_reject_test.go pkg/proxy/relay_unspent_test.go || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): answer admission codes 12 and 13 at the ingress
 
 VERIFIERS_UNAVAILABLE (spec 2026-10-14 §7.3) reaches the client as the
 retryable 733 'storage_integrity: the verifiers of table <id> are not
@@ -3146,7 +3578,13 @@ Both are marked unspent, end only the query and keep the arbiter's code
 and reason server-side. The relay keeps a deferred-lane session on the
 733 text; its 252 rule already accepts the back-pressure prefix.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_041="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_041}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 18: Document both refusals**
@@ -3206,40 +3644,65 @@ with:
 (the arbiter's `INDEXER_QUARANTINED`: the table's owning SI indexer is quarantined; spec 2026-10-10 §7.4). Back-pressure, code 252 (`TOO_MANY_PARTS`, which clients already retry): `storage_integrity: back-pressure: table <id> waits for its replica copies to catch up; retry later (retryable)` (the arbiter's `COPIES_BACKPRESSURE` in strict mode: the table's cleanup waits for its replica copies; spec 2026-10-14 §9.3). A Gone table
 ```
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; git -C "$W" diff --stat | tail -1`
+Run: `set -euo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1; git -C "$W" diff --stat | tail -1`
 
 Expected: ` 2 files changed, 8 insertions(+), 5 deletions(-)`.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-git -C "$W" add CLAUDE.md README.md
-git -C "$W" commit -m "docs: document the verifiers-unavailable and copies back-pressure refusals
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_042="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_042}" = urwt/codex/multi-source-s3e1 || exit 1
+before=$(git -C "$W" rev-parse HEAD) || exit 1
+git -C "$W" add CLAUDE.md README.md || exit 1
+git -C "$W" commit -S -m "docs: document the verifiers-unavailable and copies back-pressure refusals
 
 CLAUDE.md and README.md describe the ingress answers to the arbiter's
 VERIFIERS_UNAVAILABLE (733, retryable) and strict-mode
 COPIES_BACKPRESSURE (252 back-pressure) of spec 2026-10-14 §7.3 and
 §9.3, both session-preserving on the staged and the deferred lane.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$W" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_043="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_043}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+)
 ```
 
 - [ ] **Step 19: Full verification**
 
-Download (Bazel's fetch of arbiter-proto `PROTO_TAG_P5` into its own module cache, the one module this branch adds; every other dependency is cached from earlier housegate builds): needs explicit user confirmation in chat before running.
+Confirm any dependency download explicitly before running. No other dependency may move; stop and report a contract conflict rather than hiding transitive changes.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; cd "$W" && git ls-files -z '*.go' | xargs -0 gofmt -l; bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
+```bash
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+cd "$W"
+python3 -I - <<'PY58FORMAT'
+import pathlib,subprocess
+paths=['pkg/storageintegrity/arbiter_proto.go','pkg/storageintegrity/admission_code_test.go','pkg/chproto/client_error.go','pkg/chproto/client_error_test.go','storage_integrity_ingress.go','storage_integrity_table_state_runtime_test.go','storage_integrity_ingress_unspent_test.go','pkg/proxy/relay.go','pkg/proxy/relay_reject_test.go','pkg/proxy/relay_unspent_test.go']
+root=subprocess.check_output(['go','env','GOROOT'],text=True).strip()
+listed=subprocess.check_output([str(pathlib.Path(root)/'bin/gofmt'),'-l',*paths],text=True)
+if listed:raise SystemExit('unformatted task files:\n'+listed)
+PY58FORMAT
+bazel run //:gazelle || exit 1
+s3e1_read_044="$(git status --porcelain)" || exit 1
+test -z "${s3e1_read_044}" || { echo 'gazelle changed the worktree; inspect and stop'; exit 1; }
+bazel build //... || exit 1
+bazel test //... --test_output=errors || exit 1
+)
+```
 
-Expected:
-- `gofmt` lists exactly `pkg/config/agent_quickstart_test.go`, a finding at the base already (housegate#228, `423e691`; Go 1.26.3's and 1.27's gofmt both report it, and no CI job runs gofmt), in a file this task does not touch, so contract §43's `test -z "$(gofmt -l $(git ls-files '*.go'))"` cannot pass on any branch until that file is fixed; any other file listed is this task's: run `gofmt -w` on it, amend nothing, and commit the formatting as a new commit. Gazelle makes no change and `git status --short` prints nothing (no import is new to a Bazel target: the root test target already depends on `prometheus/testutil` through `storage_integrity_backpressure_ingress_test.go`);
-- the build passes and every test passes; the summary ends with `67 tests pass.` (measured on the scratch export: `Executed 20 out of 67 tests: 67 tests pass.`; how many it executes depends on the cache). On darwin run plain `bazel test //...`; `--config=ci` resolves only on linux/x64. The integration target is `manual`. `//pkg/replay/snapshotquery:snapshotquery_test` runs `TestCanonical65536Duplicates` under a 60 s context and can fail on a loaded machine with `canonical_test.go:148: context deadline exceeded` (at `HG_TAG_P1` already); this branch does not change `pkg/replay`, so rerun that target alone once the machine is idle and continue only when it passes.
+Expected: all ten task-owned Go files formatted; gazelle changes nothing; complete build/tests pass with the actual discovered target count. No historical67-test count is an oracle. The manual integration target still runs in CI; skipped tests are not integration proof. A failed canonical snapshotquery timeout needs the documented clean-main comparison and a successful isolated retry, not a waiver. Root/storageintegrity known vet diagnostics are retained separately; they do not justify ignoring a new diagnostic.
 
-Run: `W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; git -C "$W" log --oneline origin/main..HEAD | cat`
-
-Expected, newest first: `docs: document the verifiers-unavailable and copies back-pressure refusals`, `feat(storage-integrity): answer admission codes 12 and 13 at the ingress`, `feat(chproto): the verifiers-unavailable and copies back-pressure refusals`, `feat(storageintegrity): codes 12 and 13 are coded terminal rejects`, `chore(deps): pin arbiter-proto <PROTO_TAG_P5>` (five commits, six if the gofmt check above needed a formatting commit).
+The five signed code commits are the dependency pin, outcome mapping, messages, ingress refusals and docs (plus a separately reviewed formatting commit only if needed). Every expected new HEAD must be verified, never inferred from a log count.
 
 - [ ] **Step 20: PR (requires explicit user confirmation)**
 
-Write the PR body with the Write tool to `/Users/uranuswch/src/remotesrc/claude/housegate/multi-source-s3e1.pr-body.md` (`$W.pr-body.md` below: beside the worktree, never inside it), with `<PROTO_TAG_P5>` replaced by the content of `$W.proto-tag-p5`:
+Write the complete body below to `$W.pr-body.md` beside the actual worktree, substituting only the ledger-produced PROTO_TAG_P5. Confirm push and PR creation separately in chat before executing the Bash block.
 
 ```markdown
 Stage 3, P5, of the multi-source storage-integrity network: the host side of the two stage-3 admission codes (spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §7.3, §9.3 and §15; plan S3-E1 Task 58, contract §40, clarification K59). Nothing changes until the arbiter returns either code, which it does only after the v21 activation and its switch (`owner_aware_selection` for 12, `strict_copies` for 13).
@@ -3256,138 +3719,383 @@ Rollout: every SI host's sentio-node pins this release (plan S3-E4 Task 79) befo
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-Remote write (push and PR): needs explicit user confirmation in chat before running.
-
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-git -C "$W" push -u origin urwt/claude/multi-source-s3e1
-gh pr create --repo housegate/housegate --base main --head urwt/claude/multi-source-s3e1 --title 'feat(storage-integrity): stage-3 admission codes 12 and 13 at the ingress' --body-file "$W.pr-body.md" | tee "$W.pr-url"
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_045="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_045}" = urwt/codex/multi-source-s3e1 || exit 1
+s3e1_read_046="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_046}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+s3e1_read_047="$(git -C "$W" status --porcelain)" || exit 1
+test -z "${s3e1_read_047}" || exit 1
+git -C "$W" push -u origin urwt/codex/multi-source-s3e1 || exit 1
+gh pr create --repo housegate/housegate --base main --head urwt/codex/multi-source-s3e1 --title 'feat(storage-integrity): stage-3 admission codes 12 and 13 at the ingress' --body-file "$W.pr-body.md" > "$W.pr-url" || exit 1
+python3 -I - "$W.pr-url" <<'PY58PR'
+import pathlib, re, sys
+rows = pathlib.Path(sys.argv[1]).read_text().splitlines()
+if len(rows) != 1 or not re.fullmatch(r"https://github.com/housegate/housegate/pull/[1-9][0-9]*", rows[0]):
+    raise SystemExit("invalid PR URL; stop")
+print(rows[0])
+PY58PR
+)
 ```
 
-For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"`; the other two run unchanged. Expected: the push creates the remote branch, and `gh` prints the PR URL `https://github.com/housegate/housegate/pull/<number>`, which `$W.pr-url` keeps for Step 21.
+Expected: nonforced branch push and one validated PR URL; failure stops.
 
-- [ ] **Step 21: Checks and merge (requires explicit user confirmation)**
+- [ ] **Step 21: Checks, author validation and merge (requires explicit user confirmation)**
 
-Remote read (the PR's checks): needs explicit user confirmation in chat before running.
+Confirm the remote CI read, run the following check, then obtain a separate explicit confirmation for squash merge after review. An integration failure is compared with clean main before being called a regression; a new admission/ingress regression stops and is fixed on the branch before another confirmed push.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; n="$(basename "$(cat "$W.pr-url")")"
-gh pr checks "$n" --repo housegate/housegate --watch
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+n=$(basename "$(cat "$W.pr-url")")
+case "$n" in ''|*[!0-9]*) echo 'invalid PR number; stop' >&2; exit 1;; esac
+gh pr checks "$n" --repo housegate/housegate --watch || exit 1
+)
 ```
 
-For the user in fish, the first line is `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; set n (basename (cat "$W.pr-url"))`; the second runs unchanged. Expected: `Release tooling`, `Build` and `Integration (ClickHouse)` pass. Judge an integration failure against a clean `main` run (main-baseline rule, `.claude/skills/upgrade-dependency/SKILL.md`) before calling it a regression; a failure in `pkg/storageintegrity`, `pkg/chproto`, `pkg/proxy` or the root package's ingress tests is this PR's: fix it on the branch with a new commit and ask again before pushing.
-
-Remote write (merge), then a remote read of the merge commit: needs explicit user confirmation in chat, after review, before running.
+After the separate merge confirmation, validate the current remote head and complete paginated REST primary-author/messages immediately before merging:
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; n="$(basename "$(cat "$W.pr-url")")"
-gh pr merge "$n" --repo housegate/housegate --squash
-gh pr view "$n" --repo housegate/housegate --json state,mergeCommit,mergedAt --jq '[.state, .mergeCommit.oid, .mergedAt] | @tsv' | tee "$W.merge"
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+s3e1_read_048="$(git -C "$W" branch --show-current)" || exit 1
+test "${s3e1_read_048}" = urwt/codex/multi-source-s3e1 || exit 1
+s3e1_read_049="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_049}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+n=$(basename "$(cat "$W.pr-url")")
+case "$n" in ''|*[!0-9]*) exit 1;; esac
+head=$(git -C "$W" rev-parse HEAD) || exit 1
+s3e1_read_050="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_050" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+test "${s3e1_read_050}" = "$head" || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$head" || exit 1
+s3e1_read_051="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_051" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+test "${s3e1_read_051}" = "$head" || exit 1
+gh pr merge "$n" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+gh pr view "$n" --repo housegate/housegate --json state,mergeCommit,mergedAt > "$W.merge.json" || exit 1
+python3 -I - "$W.merge.json" "$W.merge" <<'PY58MERGE'
+import json, pathlib, re, sys
+v = json.loads(pathlib.Path(sys.argv[1]).read_text())
+m = v.get("mergeCommit")
+if v.get("state") != "MERGED" or not isinstance(m, dict) or not re.fullmatch(r"[0-9a-f]{40}", m.get("oid", "")) or not isinstance(v.get("mergedAt"), str) or not v["mergedAt"].endswith("Z"):
+    raise SystemExit("PR is not a recorded completed merge; stop")
+row = "MERGED\t" + m["oid"] + "\t" + v["mergedAt"] + "\n"
+pathlib.Path(sys.argv[2]).write_text(row)
+print(row, end="")
+PY58MERGE
+)
 ```
 
-For the user in fish, the first line is as above; the other two run unchanged. Expected: `MERGED`, the 40-hex squash-merge commit (`M` below) and the merge time, tab-separated; `$W.merge` keeps them for Steps 23 and 24.
+Expected: `PR commit identities and pinned head verified`, then one validated MERGED/hash/UTC-time row. Empty/malformed/truncated REST data, unexpected primary author/trailer, changed head, failed merge or invalid merge evidence stops before release.
 
-- [ ] **Step 22: Release `HG_TAG_P5` (requires explicit user confirmation)**
+- [ ] **Step 22: Release HG_TAG_P5 (requires explicit user confirmation)**
 
-Remote write (release workflow): needs explicit user confirmation in chat before running.
+Confirm release dispatch, bounded run discovery, watch and logs as one explicit remote release action. Dispatch only while main equals the recorded merge. Persist the exact run id; never watch or read an arbitrary latest run. If another matching dispatch makes the selection ambiguous, stop and reconcile the run IDs with the user. A timeout or failed job is not success; retry only the failed job when appropriate, because a full redispatch may cut a second tag.
 
 ```bash
-gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto
-bash -c 'gh run watch --repo housegate/housegate "$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq ".[0].databaseId")"'
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+M=$(cut -f2 "$W.merge")
+python3 -I - "$W" "$M" <<'PY58RELEASE'
+import datetime, json, pathlib, re, subprocess, sys, time
+w, merge = sys.argv[1:]
+if pathlib.Path(w + ".release-dispatch").exists():
+    raise SystemExit("release dispatch already attempted; reconcile the retained run before retrying; stop")
+if not re.fullmatch(r"[0-9a-f]{40}", merge):
+    raise SystemExit("invalid merge commit; stop")
+def gh(*args):
+    return subprocess.check_output(["gh", *args], text=True, timeout=60)
+main = json.loads(gh("api", "repos/housegate/housegate/commits/main"))
+if main.get("sha") != merge:
+    raise SystemExit("main moved after the recorded merge; review the additional commits before releasing; stop")
+prior = json.loads(gh("run", "list", "--repo", "housegate/housegate", "--workflow", "release.yml", "--limit", "100", "--json", "databaseId"))
+if not isinstance(prior, list) or any(not isinstance(v, dict) or type(v.get("databaseId")) is not int or v["databaseId"] <= 0 for v in prior):
+    raise SystemExit("malformed prior workflow listing; stop")
+old = {v["databaseId"] for v in prior}
+started = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+pathlib.Path(w + ".release-dispatch").write_text(started.isoformat() + "\n")
+subprocess.run(["gh", "workflow", "run", "release.yml", "--repo", "housegate/housegate", "--ref", "main", "-f", "bump=auto"], check=True, timeout=60)
+run = None
+for _ in range(30):
+    runs = json.loads(gh("run", "list", "--repo", "housegate/housegate", "--workflow", "release.yml", "--limit", "100", "--json", "databaseId,event,headBranch,headSha,createdAt"))
+    if not isinstance(runs, list) or any(not isinstance(v, dict) for v in runs):
+        raise SystemExit("malformed workflow listing; stop")
+    matches = []
+    for v in runs:
+        if v.get("databaseId") in old:
+            continue
+        if v.get("event") != "workflow_dispatch" or v.get("headBranch") != "main" or v.get("headSha") != merge:
+            continue
+        if datetime.datetime.fromisoformat(v["createdAt"].replace("Z", "+00:00")) >= started:
+            matches.append(v)
+    if len(matches) > 1:
+        raise SystemExit("ambiguous release dispatch; inspect the run IDs with the user; stop")
+    if matches:
+        run = matches[0]["databaseId"]
+        if type(run) is not int or run <= 0:
+            raise SystemExit("invalid release run ID; stop")
+        break
+    time.sleep(2)
+if run is None:
+    raise SystemExit("release run not found within60s; inspect without redispatching; stop")
+pathlib.Path(w + ".release-run").write_text(str(run) + "\n")
+subprocess.run(["gh", "run", "watch", str(run), "--repo", "housegate/housegate", "--exit-status"], check=True)
+meta = json.loads(gh("run", "view", str(run), "--repo", "housegate/housegate", "--json", "conclusion,event,headBranch,headSha"))
+if (meta.get("conclusion"), meta.get("event"), meta.get("headBranch"), meta.get("headSha")) != ("success", "workflow_dispatch", "main", merge):
+    raise SystemExit("release run does not match the successful recorded dispatch; stop")
+log = gh("run", "view", str(run), "--repo", "housegate/housegate", "--log")
+tags = set(re.findall(r"Next tag: (v[0-9]+\.[0-9]+\.[0-9]+)(?![0-9])", log))
+if len(tags) != 1:
+    raise SystemExit("release log must contain exactly one tag; stop")
+tag = tags.pop()
+pathlib.Path(w + ".hg-tag-p5").write_text(tag + "\n")
+print("release", run, tag, merge)
+PY58RELEASE
+)
 ```
 
-Both lines run unchanged in fish and in the agent's shell. The new run can take a few seconds to appear: if the watched run is not the one just dispatched (its `createdAt` in `gh run list --repo housegate/housegate --workflow release.yml --limit 2` predates the dispatch), wait and run the second line again. Expected: the run succeeds. `bump=auto` cuts a minor version on the first cut of a UTC day and a patch version otherwise (`.github/workflows/release.yml:11-15`); `HG_TAG_P3` is the latest release this plan knows of, and others may follow it: record what the run prints, never a predicted tag. The workflow also publishes the GitHub Release (`housegate-<tag>-linux-amd64`, `housegate-<tag>-darwin-arm64` and `SHA256SUMS`), `ghcr.io/housegate/housegate:<tag>` and `:latest`, and the Homebrew formula; if only the `homebrew` job fails, re-run that job alone (a remote write with its own confirmation), because re-running the whole workflow cuts another tag.
+Expected: one retained successful exact run and one observed tag. No predicted value; missing/ambiguous run or failure stops without redispatch. Proceed only after the following separately confirmed content check.
 
-Read the tag the run printed (remote read; needs explicit user confirmation in chat before running):
+- [ ] **Step 23: Verify the observed release by content (requires explicit user confirmation)**
+
+Confirm the fetch in chat first. No commit merged after the reviewed merge is silently included: main drift stops for separate review before another dispatch.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-run="$(gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-gh run view "$run" --repo housegate/housegate --json conclusion,event,headBranch,createdAt --jq '[.conclusion, .event, .headBranch, .createdAt] | @tsv'
-gh run view "$run" --repo housegate/housegate --log | grep -oE 'Next tag: v[0-9]+\.[0-9]+\.[0-9]+' | sort -u | sed 's/^Next tag: //' | tee "$W.hg-tag-p5"
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+python3 -I -c 'import pathlib,sys;pathlib.Path(sys.argv[1]+".release-verified").unlink(missing_ok=True)' "$W" || exit 1
+git -C "$W" fetch -q origin --tags || exit 1
+python3 -I - "$W" <<'PY58CONTENT'
+import pathlib,re,subprocess,sys
+w=sys.argv[1]
+def value(ext):
+    rows=pathlib.Path(w+ext).read_text().splitlines()
+    if len(rows)!=1 or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+",rows[0]):raise SystemExit('invalid retained tag; stop')
+    return rows[0]
+tag,base,proto=[value(x) for x in ['.hg-tag-p5','.hg-tag-p3','.proto-tag-p5']]
+merge=pathlib.Path(w+'.merge').read_text().split('\t')[1]
+def git(*a):return subprocess.check_output(['git','-C',w,*a],text=True)
+if git('rev-parse',tag+'^{commit}').strip()!=merge:raise SystemExit('tag is not the reviewed merge; stop')
+subprocess.run(['git','-C',w,'merge-base','--is-ancestor',base,tag],check=True)
+mod=git('show',tag+':go.mod')
+if len(re.findall(r'(?m)^\s*github.com/sentioxyz/arbiter-proto '+re.escape(proto)+r'$',mod))!=1:raise SystemExit('release proto pin mismatch; stop')
+checks={'pkg/storageintegrity/arbiter_proto.go':['var AdmissionCodeVerifiersUnavailable = pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE.String()','var AdmissionCodeCopiesBackpressure = pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE.String()','\t\tpb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE,','\t\tpb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE:'],'pkg/chproto/client_error.go':['func VerifiersUnavailableMessage(tableID string) string {','func IsVerifiersUnavailableMessage(message string) bool {','func CopiesBackpressureMessage(tableID string) string {','func IsCopiesBackpressureMessage(message string) bool {','func IsIndexerQuarantinedReadMessage(msg string) bool {'],'storage_integrity_ingress.go':['Message:     chproto.VerifiersUnavailableMessage(rec.TableID),','Message:     chproto.CopiesBackpressureMessage(rec.TableID),'],'pkg/proxy/relay.go':['chproto.IsVerifiersUnavailableMessage(message)']}
+for path,needles in checks.items():
+    source=git('show',tag+':'+path)
+    for needle in needles:
+        if source.count(needle)!=1:raise SystemExit('release content mismatch: '+path+' '+needle)
+pathlib.Path(w+'.release-verified').write_text(tag+'\t'+merge+'\t'+proto+'\n')
+print('release verified',tag,merge,'contains',base,'pins',proto)
+PY58CONTENT
+)
 ```
 
-For the user in fish, the first two lines are `set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; set run (gh run list --repo housegate/housegate --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')`; the other two run unchanged. Expected: `success`, `workflow_dispatch`, `main` and the dispatch time, tab-separated; then exactly one line, the tag that the run's `Compute next tag` step printed (`Next tag: v<x>.<y>.<z> (<reason>)`), which `$W.hg-tag-p5` keeps. Any other conclusion, no tag line or two different tags: stop; nothing is recorded.
+Expected: one verified tag/merge/base/proto line and receipt; no content count is merely printed and ignored. Any missing/duplicate content, wrong pin/tag/ancestor stops and produces no valid ledger input.
 
-- [ ] **Step 23: Verify `HG_TAG_P5` by content (requires explicit user confirmation)**
+- [ ] **Step 24: Record HG_TAG_P5 through R1–R4**
 
-Remote read (the fetch): needs explicit user confirmation in chat before running.
-
-```bash
-R=/Users/uranuswch/Dev/projects/sentio-network/housegate; W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"
-HG_TAG_P5="$(cat "$W.hg-tag-p5")"; HG_TAG_P3="$(cat "$W.hg-tag-p3")"; PROTO_TAG_P5="$(cat "$W.proto-tag-p5")"; M="$(cut -f2 "$W.merge")"
-git -C "$R" fetch -q origin --tags
-git -C "$R" show "$HG_TAG_P5":go.mod | grep -c "^[[:space:]]*github.com/sentioxyz/arbiter-proto $PROTO_TAG_P5\$"
-git -C "$R" show "$HG_TAG_P5":pkg/storageintegrity/arbiter_proto.go | grep -c -e '^var AdmissionCodeVerifiersUnavailable = pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE.String()$' -e '^var AdmissionCodeCopiesBackpressure = pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE.String()$' -e '^[[:space:]]*pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE:$'
-git -C "$R" show "$HG_TAG_P5":pkg/chproto/client_error.go | grep -c -e '^func VerifiersUnavailableMessage(tableID string) string {' -e '^func IsVerifiersUnavailableMessage(message string) bool {' -e '^func CopiesBackpressureMessage(tableID string) string {' -e '^func IsCopiesBackpressureMessage(message string) bool {' -e '^func IsIndexerQuarantinedReadMessage(msg string) bool {'
-git -C "$R" show "$HG_TAG_P5":storage_integrity_ingress.go | grep -c -e 'Message:     chproto.VerifiersUnavailableMessage(rec.TableID),' -e 'Message:     chproto.CopiesBackpressureMessage(rec.TableID),'
-git -C "$R" show "$HG_TAG_P5":pkg/proxy/relay.go | grep -c '^[[:space:]]*chproto.IsVerifiersUnavailableMessage(message)$'
-git -C "$R" merge-base --is-ancestor "$HG_TAG_P3" "$HG_TAG_P5" && echo "$HG_TAG_P5 contains $HG_TAG_P3"
-git -C "$R" merge-base --is-ancestor "$M" "$HG_TAG_P5" && echo "$HG_TAG_P5 contains $M"
-git -C "$R" rev-parse "$HG_TAG_P5^{commit}"
-git -C "$R" log --oneline "$M..$HG_TAG_P5" | cat
-```
-
-For the user in fish, the first two lines are `set R /Users/uranuswch/Dev/projects/sentio-network/housegate; set W "$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; set HG_TAG_P5 (cat "$W.hg-tag-p5"); set HG_TAG_P3 (cat "$W.hg-tag-p3"); set PROTO_TAG_P5 (cat "$W.proto-tag-p5"); set M (cut -f2 "$W.merge")`; the rest run unchanged. Expected: `1`, `3`, `5` (the four new functions and `HG_TAG_P3`'s read-side matcher), `2`, `1`, `<HG_TAG_P5> contains <HG_TAG_P3>`, `<HG_TAG_P5> contains <M>`, the tag's commit hash, which is `M` itself when nothing merged after Step 21, and an empty log; if the log lists commits merged after `M`, they are in the release too: name them in the run record. Any other count: stop; nothing is recorded.
-
-- [ ] **Step 24: Record `HG_TAG_P5`**
-
-Record it, never predicting it, with the record procedure of contract §43 (S3-B D23 through `s3-ledger.py`, S3-C1 contract §19). The ledger tool is the one Step 1 wrote. Write the run record `$HOME/.cache/s3-ledger/record-58.md` with the Write tool: one paragraph of what Steps 20–23 printed — `housegate/housegate#<number>` (`feat(storage-integrity): stage-3 admission codes 12 and 13 at the ingress`, Task 58) squash-merged as `<M>` on <merge date> UTC with `Release tooling`, `Build` and `Integration (ClickHouse)` passed; `Release` run `<run id>` cut `<HG_TAG_P5>` at `<its commit>` (GitHub Release with the darwin-arm64 and linux-amd64 assets, `ghcr.io/housegate/housegate:<HG_TAG_P5>`, Homebrew formula), naming any commit merged after `<M>`; it pins arbiter-proto `<PROTO_TAG_P5>`; the content checks printed `1 3 5 2 1`, and `<HG_TAG_P5>` contains `<HG_TAG_P3>` and `<M>` — then lines starting `- ` (each becomes a sub-item): the local runs of Steps 16 and 19 (the Bazel summary line). Every value in it is one Steps 20–23 printed or `$W.pr-url`, `$W.merge`, `$W.hg-tag-p5`, `$W.hg-tag-p3` and `$W.proto-tag-p5` hold.
-
-R1 (local; the housegate fetch only reads; contract §43). Like every remote read of this task, it needs explicit user confirmation in chat before running:
+Write the canonical contract19 ledger tool verbatim first. Write `$HOME/.cache/s3-ledger/record-58.md` with the observed PR URL/merge UTC time, exact successful CI checks, retained release-run ID/tag/merge/proto/base and Step23 verification receipt, plus actual local test summaries as `- ` subitems. Never predict a value. R1 requires the current verified release receipt and a separate explicit confirmation of its remote fetch. The only produced row is HG_TAG_P5; no digest row belongs to this task.
 
 ```bash
-W="$HOME/src/remotesrc/claude/housegate/multi-source-s3e1"; HG_TAG_P5="$(cat "$W.hg-tag-p5")"
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=58
+(
+set -euo pipefail
+umask 077
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+HG_TAG_P5=$(cat "$W.hg-tag-p5")
+test "$(cut -f1 "$W.release-verified")" = "$HG_TAG_P5" || exit 1
+test "$(cut -f2 "$W.release-verified")" = "$(cut -f2 "$W.merge")" || exit 1
+test "$(cut -f3 "$W.release-verified")" = "$(cat "$W.proto-tag-p5")" || exit 1
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+L="$HOME/.cache/s3-ledger"
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md
-git -C "$h" fetch -q origin
+mkdir -p "$L" || exit 1
+chmod 700 "$L" || exit 1
+git -C "$h" fetch -q origin || exit 1
 python3 -I "$L/s3-ledger.py" empty "$h" HG_TAG_P5 || exit 1
-ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e1)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e1-ledger-$n" "urwt/claude/multi-source-s3e1-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
-  { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-printf '%s\n%s\n' "$d" "$ref" > "$L/record-$n"
-python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-$n.md" HG_TAG_P5="$HG_TAG_P5" || exit 1
-git -C "$d" commit -q -m "docs(plan): record HG_TAG_P5 of Plan S3-E1 (Task 58)
+ref=$(python3 -I "$L/s3-ledger.py" ref "$h" s3e1) || exit 1
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) echo 'unexpected ledger ref; stop' >&2; exit 1;; esac
+test ! -e "$L/record-58-urwt.json" || { echo 'retained ledger attempt exists; reconcile before continuing'; exit 1; }
+out=$(bash "$HOME/.agents/skills/urwt/scripts/urwt-create.sh" "$h" codex multi-source-s3e1-ledger-58 urwt/codex/multi-source-s3e1-ledger-58 "$ref") || exit 1
+(set -C; printf '%s\n' "$out" > "$L/record-58-urwt.json") || exit 1
+d=$(python3 -I - "$L/record-58-urwt.json" "$h" "$ref" <<'PY58LEDGERPATH'
+import json, os, pathlib, subprocess, sys
+file, repo, ref = sys.argv[1:]
+v = json.loads(pathlib.Path(file).read_text())
+p = v.get("path") if isinstance(v, dict) else None
+if not isinstance(v, dict) or v.get("action") != "created" or not isinstance(p, str) or p == "/" or not os.path.isabs(p) or any(ord(c) < 32 or ord(c) == 127 for c in p) or not os.path.isdir(p):
+    raise SystemExit("ledger worktree is not a new valid actual JSON path; stop and reconcile")
+def git(where, *args):
+    return subprocess.check_output(["git", "-C", where, *args], text=True).strip()
+if git(p, "branch", "--show-current") != "urwt/codex/multi-source-s3e1-ledger-58":
+    raise SystemExit("unexpected ledger branch; stop")
+if os.path.realpath(git(p, "rev-parse", "--path-format=absolute", "--git-common-dir")) != os.path.realpath(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")):
+    raise SystemExit("unexpected ledger repository; stop")
+if git(p, "rev-parse", "HEAD") != git(repo, "rev-parse", ref) or git(p, "status", "--porcelain"):
+    raise SystemExit("ledger worktree is not a clean checkout of its producing ref; stop")
+print(p)
+PY58LEDGERPATH
+) || exit 1
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+printf '%s\n%s\n' "$d" "$ref" > "$L/record-58"
+before=$(git -C "$d" rev-parse HEAD) || exit 1
+python3 -I "$L/s3-ledger.py" set "$d/$rel" 58 "$L/record-58.md" HG_TAG_P5="$HG_TAG_P5" || exit 1
+s3e1_read_052="$(git -C "$d" diff --name-only)" || exit 1
+test "${s3e1_read_052}" = "$rel" || exit 1
+git -C "$d" add -- "$rel" || exit 1
+git -C "$d" commit -S -m "docs(plan): record HG_TAG_P5 of Plan S3-E1 (Task 58)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" show --stat --oneline HEAD | cat
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
+after=$(git -C "$d" rev-parse HEAD) || exit 1
+test "$after" != "$before" || exit 1
+s3e1_read_053="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_053}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit "$after" || exit 1
+git -C "$d" show --stat --oneline HEAD || exit 1
+)
 ```
 
-Expected: `s3-ledger: HG_TAG_P5 not recorded yet in <ref>:docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; `ref` prints the ledger copy (`origin/urwt/claude/ms-si-stage3-plans-cf` until the PR carrying Plans S3-C1 to S3-F merges, then `origin/main`, D34); `s3-ledger: Task 58 recorded HG_TAG_P5=v… and its run record 'housegate release' in …/docs/superpowers/plans/2026-10-15-multi-source-si-s3e1-p5-wire-dataplane.md`; then one commit of the plan file only (` 1 file changed, 2 insertions(+), 2 deletions(-)` plus one insertion per sub-item: the row and the run-record item). A `stop` writes nothing: report it and ask. When `ref` stops with `no plan 's3e1'` (the plans branch is not on origin yet), stop and ask the user to push it; never record into a local checkout.
+Expected: one row and the `housegate release` run record are recorded in exactly one signed docs-only commit. A missing ledger copy/value, existing or wrong URWT result, path/identity/signing failure stops; ask the user to unlock the repository's actual key on signing cancellation. No unsigned fallback and no predicted ledger value.
 
-R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 58's ledger record (Appendix C of Plan S3-E1: HG_TAG_P5 and the run record 'housegate release'; docs only) to housegate, straight to the plans branch when it is the ledger copy, else as a docs PR into main". After a yes:
+R2 requires separate confirmation to push Task58's one ledger row and `housegate release` record. Its only permitted direct ledger-copy target is D34's plans branch; origin/main uses a docs PR instead.
 
 ```bash
-L="$HOME/.cache/s3-ledger"; n=58
-d="$(sed -n 1p "$L/record-$n")"; ref="$(sed -n 2p "$L/record-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+(
+set -euo pipefail
+L="$HOME/.cache/s3-ledger"
+d=$(sed -n 1p "$L/record-58")
+ref=$(sed -n 2p "$L/record-58")
+case "$ref" in origin/main|origin/urwt/claude/ms-si-stage3-plans-cf) ;; *) exit 1;; esac
+s3e1_read_054="$(git -C "$d" branch --show-current)" || exit 1
+test "${s3e1_read_054}" = urwt/codex/multi-source-s3e1-ledger-58 || exit 1
+s3e1_read_055="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+test "${s3e1_read_055}" = 1 || exit 1
+git -C "$d" merge-base --is-ancestor "$ref" HEAD || exit 1
+s3e1_read_056="$(git -C "$d" status --porcelain)" || exit 1
+test -z "${s3e1_read_056}" || exit 1
+s3e1_read_057="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_057}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit HEAD || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
-  printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E1 only, docs only (contract §43, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-$n-pr.md") | tee "$L/record-$n-pr-url"
+  git -C "$d" push -u origin HEAD || exit 1
+  s3e1_read_058="$(git -C "$d" log -1 --format=%s)" || exit 1
+  printf '%s\n\n%s\n' "${s3e1_read_058}: Appendix C of Plan S3-E1 only, docs only (contract43/D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-58-pr.md"
+  s3e1_read_059="$(git -C "$d" log -1 --format=%s)" || exit 1
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${s3e1_read_059}" --body-file "$L/record-58-pr.md") > "$L/record-58-pr-url" || exit 1
+  cat "$L/record-58-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  git -C "$d" push origin "HEAD:${ref#origin/}" || exit 1
 fi
+)
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 58's ledger record"); after a yes:
+Expected: the non-forced docs push, or one docs PR. A rejected push stops for reconciliation, never force.
+
+R3 applies only when the ledger copy was origin/main. Obtain a separate explicit confirmation for this docs PR squash merge, then validate the exact current head and every REST primary author/message before merging:
 
 ```bash
-L="$HOME/.cache/s3-ledger"; n=58
-gh pr merge "$(basename "$(cat "$L/record-$n-pr-url")")" --repo housegate/housegate --squash
+(
+set -euo pipefail
+L="$HOME/.cache/s3-ledger"
+d=$(sed -n 1p "$L/record-58")
+test "$(sed -n 2p "$L/record-58")" = origin/main || exit 1
+n=$(basename "$(cat "$L/record-58-pr-url")")
+case "$n" in ''|*[!0-9]*) exit 1;; esac
+head=$(git -C "$d" rev-parse HEAD) || exit 1
+s3e1_read_060="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+test "${s3e1_read_060}" = 'poetry <chen@sentio.xyz> G' || exit 1
+git -C "$d" verify-commit HEAD || exit 1
+s3e1_read_061="$(gh pr view "$n" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$s3e1_read_061" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid observed commit/head SHA; stop' >&2; exit 1; }
+test "${s3e1_read_061}" = "$head" || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$n/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$head" || exit 1
+gh pr merge "$n" --repo housegate/housegate --squash --match-head-commit "$head" || exit 1
+)
 ```
 
-Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+R4, after its own remote-read confirmation, fetches and re-reads the produced row through the ledger tool. Exact equality with the retained release/tag evidence is required; a ledger-copy transition after R1 is not success until the row are on the current copy.
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
-git -C "$h" fetch -q origin
-python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P5
+(
+set -euo pipefail
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(ord(c)<32 or ord(c)==127 for c in p);print(p)' "$HOME/.cache/s3e1-task58/worktree.json")" || exit 1
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+L="$HOME/.cache/s3-ledger"
+git -C "$h" fetch -q origin || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" HG_TAG_P5 > "$L/record-58-readback.env" || exit 1
+python3 -I - "$W" "$L/record-58-readback.env" <<'PY58READBACK'
+import pathlib, re, sys
+w, file = sys.argv[1:]
+tag = pathlib.Path(w + ".hg-tag-p5").read_text().strip()
+if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+    raise SystemExit("invalid retained release evidence; stop")
+rows = pathlib.Path(file).read_text().splitlines()
+if rows != ["HG_TAG_P5=" + tag]:
+    raise SystemExit("ledger readback differs from produced release evidence; stop")
+print("\n".join(rows))
+PY58READBACK
+)
 ```
 
-Expected: `HG_TAG_P5=<the tag written>`, equal to `$W.hg-tag-p5`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints it. Task 63 reads `HG_TAG_P5` from there only (`bash scripts/update-housegate.sh $HG_TAG_P5`), as do Plan S3-E2 Task 64 and Plan S3-E4 Task 79. For the user in fish, the R4 lines run as `set h /Users/uranuswch/Dev/projects/sentio-network/housegate; set L "$HOME/.cache/s3-ledger"`, then the last two unchanged, and R3 as `set L "$HOME/.cache/s3-ledger"; gh pr merge (basename (cat "$L/record-58-pr-url")) --repo housegate/housegate --squash`.
+Task58 completes only after R4. Task63, E2 Task64 and E4 Task79 consume HG_TAG_P5 only through its producing ledger.
+
+Commands above are Bash tool blocks. For the user's own fish terminal, load the same actual path with:
+
+```fish
+set W (python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task58/worktree.json"); or exit 1
+```
+
+Then execute a reviewed block file with `bash /absolute/path/to/block.sh`; never paste a Bash assignment or heredoc directly into fish.
+
+
 
 ---
 
@@ -3404,7 +4112,7 @@ Spec §6.1 (the `verifiers` entry fields and the `stage3` parameter: canonical f
 It changes no consensus byte: a pool-only update hashes exactly as before (`authoritytest.ActivationUpdateHash` and `TestConsensusParamsUpdateHashIsFrozen` pass unedited), and nothing here proposes, decodes or applies a stage-3 command (Task 60 adds the wire, S3-E2–E4 the FSM).
 
 Notes:
-- **Base.** arbiter-core at `CORE_TAG_P4` (Plan S3-D Task 50), read from the ledger; it pins arbiter-proto `PROTO_TAG_P4` (S3-D contract §34). The anchors below are those of `origin/main` `cfd4f42` (S3-A merged as arbiter-core#50). Of this task's files the releases in between change only these: Plan S3-D Task 50 appends `SettleTrackCommand` at the end of `consensus.go` (after `ReleaseIndexerCommand.Validate`, below every hunk here) and adds `authority/settle.go` (`SettleTrackPurpose`, which `TestStage3TokensDoNotCrossPurposes` lists) with its tests; Plan S3-C2 Task 29 adds `wire/block_verification.go` and `wire/block_verification_test.go`; gazelle adds those files to the same `BUILD.bazel` lists this task extends. Plans S3-C1 and S3-C4 touch none of this task's files. Every hunk anchors on text those changes leave as it is (the hunk rule), and Step 1 checks it.
+- **Base.** arbiter-core at `CORE_TAG_P4` (Plan S3-D Task 50), read from the ledger; it pins arbiter-proto `PROTO_TAG_P4` (S3-D contract §34). The anchors below are those of `origin/main` `cfd4f42` (S3-A merged as arbiter-core#50). Of this task's files the releases in between change only these: Plan S3-D Task 50 appends `SettleTrackCommand` at the end of `consensus.go` (after `ReleaseIndexerCommand.Validate`, below every hunk here) and adds `authority/settle.go` (`SettleTrackPurpose`, which `TestStage3TokensDoNotCrossPurposes` lists) with its tests; Plan S3-C2 Task 29 adds `wire/block_verification.go` and `wire/block_verification_test.go`; gazelle adds those files to the same `BUILD.bazel` lists this task extends. The canonical implementation anchors used below are unchanged by Plans S3-C1 and S3-C4; their dependency pins, module metadata and generated BUILD additions must nevertheless be preserved from the fully recorded CORE_TAG_P4 predecessor. Do not replace a predecessor file wholesale or reset its HouseGate pin. Every implementation hunk anchors on the preserved text (the hunk rule), and Step 1 checks it. Formal post-C4 released-chain verification remains required even when independent Task 59 source-candidate tests pass.
 - **The pin's test fallout (measured; contract issue recorded in Appendix B).** `PROTO_TAG_P5` appends fields to messages that three existing every-field tests walk, so after the pin `bazel test` fails in exactly two targets and nothing fails to build: `//conformance:conformance_test` `TestArbiterMirrorsMatchProto` (`ConsensusParamsUpdate: proto field "stage3" has no Go mirror json tag` and nine `VerifierEntry` lines for fields 3–11) is this task's failing test for the root types and passes, unedited, once they exist (contract §41); `//wire:wire_test` `TestPromotionOutcomesConvertersCopyEveryField` (S3-A Task 4, `arbiter.L3BlockTrack.group_key is unset`) and S3-C2's `TestBlockVerificationFromPBReadsEveryField` (`arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it`). The first wire test is not a gap: `wire.PromotionOutcome` names its promotion's track by the owner only (`TrackIndexerID`), the arbiter builds an outcome's track as `{IndexerID}` alone (arbiter `fsm/reads_promotions.go:90`, `server/safestate_stage3.go:125`), and a block's `group_key` is read through `GetBlockVerification`; Step 3 exempts that one proto field in the test with that reason (`wire/stage3_reads_test.go` is not a frozen file; S3-A froze only the arbiter-proto ledgers and arbiter-core's `conformance/stage3_reads_test.go`, which is not edited). The second is S3-C2's own design ("Plan S3-E1 (fields 14–22) extends the Go type and the cases together"), and contract §41 places `wire.BlockVerification`'s nine new fields in Task 60, so it stays red from this task's pin until Task 60 extends the type and the test's cases. Tasks 59–63 share one branch whose single PR opens in Task 63, so no red commit reaches `main`; every step below names this failure, and any other failure is a stop.
 - **Canonical forms (K58).** Every field added to a hashed type is `omitempty` (`ConsensusParamsUpdate.Stage3` a nil pointer, `VerifierEntry.HostIndexerID` a `*uint64` because indexer 0 is a valid host), so an update without `stage3` and a pool entry encode exactly as under `CORE_TAG_P4`: `TestPoolVerifierEntryKeepsItsV20CanonicalForm` checks the existing `ActivationUpdateHash` and the pool entries' two-member JSON. `Stage3Params` itself has no `omitempty` except on `indexer_failure_domains` (contract §41): once present it is explicit. The normalizer refuses a member field on a pool entry, so no pool entry ever hashes differently; on a member entry an unset bool or zero weight is omitted from the canonical JSON and means false or 0 (never a default; `arbiter-admin` supplies the spec's "true" and "1" in S3-E2 Task 65).
 - **The normalizer.** `NormalizeConsensusParamsUpdate` keeps its existing checks and order and adds, after `normalizeSIIndexers`: `normalizeStage3` (sorts a copy of the failure domains by indexer id, nil when empty; `Stage3Params.Validate`; `stage3 requires tracks_enabled in the same update`; every domain names an indexer of the normalized `si_indexers`; with the placement switch every indexer has a domain), then `normalizeVerifiers(in, siIndexers, stage3)`, which copies every field (`cloneVerifierEntry`: the key bytes and the host pointer detached from the caller's, `ReplicaSigner` lowercased), refuses the per-entry rules, keeps the sort and the duplicate node-id and key refusals, refuses a shared replica signer, and checks every member against the update's `si_indexers` and `stage3`. Every refusal is contract §41's text behind the existing `consensus params update: ` prefix. Consent verification, "node id unused by every registered node", the per-group floor and the one-way rules stay with the FSM (S3-E2 Task 64).
@@ -3413,7 +4121,7 @@ Notes:
 - **Beyond contract §41's file list** (recorded in Appendix B): `wire/stage3_reads_test.go` (one exempted field, above); the extra tests `TestStage3FailureDomainLookupAndIsMember`, `TestStage3FieldsAreOmittedWhenUnset` (root), `TestStage3AuthorityCommandsAuthorizeOnlyFreshTokens`, `TestStage3HashesRefuseMalformedMessages` (authority); the conformance helper `assertMirrorOrder` (a canonical mirror lists its fields in proto field-number order, so its canonical JSON follows the wire order); the constant `authoritytest.Stage3MemberUpdateHash`; the unexported `normalizeStage3`, `cloneVerifierEntry`, `validateVerifierStage3Fields`, `validFailureDomain`, `memberMessagePreimage`, `memberMessageHash`, `sortedUnique`, `sortedUniqueBy`, `knownExclusionReason` and the six domain constants; test helpers `validStage3Params`, `withSwitches`, `testMemberEntry`, `stage3TestUpdate`, `memberOf`, `stage3TestMessages`.
 - **Bazel.** arbiter-proto is resolved by `go_deps.from_file(go_mod = "//:go.mod")` (`MODULE.bazel:28-29`), so the pin changes `go.mod` and `go.sum` only; `bazel mod tidy` and gazelle leave `MODULE.bazel`, `MODULE.bazel.lock` and every `BUILD.bazel` unchanged at the pin. Gazelle then adds the new files, `@housegate//pkg/replay` to the root library (`stage3.go` uses `replay.TrackFrontier`) and to `authoritytest`, and `//authority/authoritytest` to `authority_test`: the golden tests are in the external package `authority_test`, because `authoritytest` imports `authority` and an internal test importing it would be a cycle (rules_go recompiles the internal archive for it).
 - **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with the `CORE_TAG_P4` parts of this task's files applied from their drafts (Plan S3-D Task 50's `SettleTrackCommand`, `authority/settle.go` and its tests; Plan S3-C2 Task 29's `wire/block_verification.go` and its test) and pinned to a `PROTO_TAG_P4` stand-in, with arbiter-proto stand-ins served from a local file module proxy under a scratch module cache (`v0.13.0`: `7a73f25` with Plan S3-D Task 49 applied; `v0.14.0`: the same with Task 57 applied, its 19-file commit; both generated with protoc-gen-go v1.36.11 and protoc-gen-go-grpc v1.5.1), and a local ledger origin holding Appendix C rows for `CORE_TAG_P4`, `PROTO_TAG_P4`, `PROTO_TAG_P5` and an empty `CORE_TAG_P5`, every step of this task was applied mechanically from this text with its own commands (Bazel 9.1.0 offline: `--repository_disable_download`, `GOPROXY` pointed at the stand-in proxy through `--repo_env`; `GOWORK=off`, Go 1.27.1 and Go 1.26.4): Step 1's checks printed what they expect; the pin changed exactly `go.mod` (1 line) and `go.sum` (2 lines) and `bazel mod tidy` and gazelle nothing; every failing step failed with the messages given and every passing step passed; Step 22 printed every line it expects in bash and in zsh; `go vet ./...` is clean and `go test -race` passes for the root, `authority`, `authoritytest` and `conformance`; the final `bazel test //...` failed only in `//wire:wire_test`'s S3-C2 test. Each new test fails with its fix reverted (measured: the field rebuild of `normalizeVerifiers` restored, `omitempty` dropped from a `VerifierEntry` field, the pool member-field refusal, the domain sort, a refusal check, the switch prefix rule, the `tracks_enabled` refusal, the replica-signer lowercasing, the exact-context check of a verifier, a purpose or domain constant swapped, two `Stage3Params` fields swapped, code 13 renumbered, a pinned constant changed in one digit, which Step 22 also reports as `DIFFERS`; dropping `nilIfEmpty` from a hash is an equivalent change, because every list it guards is `omitempty`). Every bash block passes `bash -n` and `shellcheck`, every fish line `fish -n`.
-- **Remote actions.** The fetches of Step 1 and the module download of Step 2 need explicit user confirmation in chat, each for its own step. This task pushes nothing and opens no PR: Tasks 60–63 continue on the same branch, and Task 63 opens the one PR, merges it and cuts `CORE_TAG_P5`. Nothing touches devnet2 or sea.
+- **Remote actions.** The fetches of Step 1 and the module download of Step 2 need explicit user confirmation in chat, each for its own step. Signing cancellation stops immediately; ask the user to unlock the actual repository signing key in their own terminal, never disable signing. This task pushes nothing and opens no PR: Tasks 60–63 continue on the same branch, and Task 63 opens the one PR, merges it and cuts `CORE_TAG_P5`. Nothing touches devnet2 or sea.
 - **Values across commands.** The worktree path is retained in `$HOME/.cache/s3e1-task59/worktree.json` (Step 1), and every following block reloads that exact path; the Bash tool keeps no variables between calls, so every command sets `W` itself. What the steps learn is kept in files beside the worktree, never inside it: `$W.core-tag-p4`, `$W.proto-tag-p4`, `$W.proto-tag-p5` (Step 1), `$W.pin-test.log` (Step 2), the scratch directory `$W.vectors` (Step 22, removed by it) and `$W.final-test.log` (Step 25), and Step 10's retained `$W.step10.log`; the pin/final `.jsonl`, `.jsonl.exit`, `.jsonl.packages` and `.stderr` files retain complete test evidence; Tasks 60–63 read the first three back.
 
 **Files:**
@@ -3441,6 +4149,11 @@ Notes:
   - Tests (contract §41 names): `TestVerifierEntryEveryFieldSurvivesNormalize`, `TestPoolVerifierEntryKeepsItsV20CanonicalForm`, `TestPoolVerifierEntryRefusesMemberFields`, `TestMemberVerifierEntryRules`, `TestStage3ParamsValidate`, `TestStage3SwitchesArePrefixes`, `TestNormalizeSortsFailureDomainsAndChecksThemAgainstSIIndexers`, `TestStage3UpdateHashIsFrozen`, `TestStage3AuthorityCommandVectorsAreFrozen`, `TestGroupMemberConsentVectorIsFrozen`, `TestMemberReadyVectorIsFrozen`, `TestMemberCheckpointVectorIsFrozen`, `TestStage3TokensDoNotCrossPurposes`, `TestMemberCheckpointHashRefusesMalformedCheckpoints`, `TestStage3CanonicalMirrorsMatchProto`, `TestStage3AdmissionCodesMatchProto`; the existing `TestArbiterMirrorsMatchProto` passes unedited.
   - Added names (Appendix B): `authoritytest.Stage3MemberUpdateHash` (`0x0f2fec8d9ab1ede1b5ba6cf312d12295e1358682262c297f26e4663a53b2432c`); tests `TestStage3FailureDomainLookupAndIsMember`, `TestStage3FieldsAreOmittedWhenUnset`, `TestStage3AuthorityCommandsAuthorizeOnlyFreshTokens`, `TestStage3HashesRefuseMalformedMessages`; helper `assertMirrorOrder`; the unexported names of the Notes.
 - Consumed by: Task 60 (the wire converters and `Command` fields over these types; its frozen tag-38–42 goldens from the `authoritytest` fixtures and `Stage3Update()`; it turns S3-C2's `TestBlockVerificationFromPBReadsEveryField` green), Tasks 62–63 (`SignMemberReady`, `SignMemberCheckpoint`, `MemberCheckpointHash`, `GroupMemberConsentStatement`), Plan S3-E2 Task 64 (the FSM's `verifiers` and `stage3` rules on the normalized update, consent verification with `VerifyGroupMemberConsent`, `cloneVerifiers` copying every field) and Task 65 (`arbiter-admin` defaults), Plan S3-E3 Tasks 71–75 (the `Verify…` functions in Apply and restore), Plan S3-E4 Task 79 (sentio-node's consent statement and member keys).
+
+
+**Adversarial review candidate (2026-10-17).** Independently verified over the complete hash-checked Task 50 core candidate (381 files, including C1/C2 and P4 settle/rebuild), its hash-checked housegate source and Task 57's canonical P5 generated proto. This is a source candidate, not a predicted future release/tag or a completed execution ledger record. All original Go hunks and frozen vectors remain byte-identical; actual root/conformance, normalizer, six-purpose and vector RED→GREEN steps pass, as do selected race and whole-module vet. Complete Go JSON results finish 28 packages with only Task 60's exact eligible-ring mirror failure. Full post-C4 released-chain acceptance remains a separate upstream gate; no API stand-ins were added to claim it. See Appendix B's review entry for the current bounded proof and any unavailable tool gate.
+
+**Final source-chain reconciliation (2026-10-18).** The complete local source chain has now been replayed through the actual C4/Task45 serving and durable lease code, P4 Task50, Tasks59–61, the separately audited Task34 constructor-owned legacy memo, Task62 and Task63: core379 →400 →407 →412 →423 →425 →447 →469. It preserves the real C4 query adapter and every non-owning predecessor byte at each owning stage; no API scaffold or old partial-base measurement substitutes for that proof. The final469 manifest is `ba35ad28056a3a9b840512ac1f366f72e30efc80ddfd9f0504392e111c129b5c`, with actual Task58 HG935 and canonical proto57. Earlier independent/drafting measurements above remain historical stage-specific evidence. This is source-level proof only: actual released CORE_TAG_P4/P5 pins, required ClickHouse/Keeper/MinIO tests, formal full500/prerequisite plan exits and execution ledger records remain separate gates.
 
 - [ ] **Step 1: Worktree, base and ledger check**
 
@@ -3507,7 +4220,7 @@ git -C "$A" show "$PROTO_TAG_P5":proto/table_registry.proto | grep -c -E '^messa
 git -C "$A" show "$PROTO_TAG_P5":proto/arbiter.proto | grep -c -E '^  ADMISSION_CODE_(VERIFIERS_UNAVAILABLE = 12|COPIES_BACKPRESSURE = 13);$'
 ```
 
-For the user in fish, the first two lines are `set W (python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task59/worktree.json"); or exit 1; set A /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; set CORE_TAG_P4 (cat "$W.core-tag-p4"); set PROTO_TAG_P4 (cat "$W.proto-tag-p4"); set PROTO_TAG_P5 (cat "$W.proto-tag-p5")`; the rest run unchanged. Expected: `HEAD contains <CORE_TAG_P4>`; an empty diff stat (nothing merged after `CORE_TAG_P4` touched these files; if something did, re-read each listed file before applying a hunk below); then `1` (the base pins `PROTO_TAG_P4`), `1` (S3-D's settle purpose is in the base), `1` (S3-C2's reflection helper is in the base), `0` (no stage-3 canonical field yet), `0` (none of this task's new files exists yet), `3`, `6` and `2` (the release carries contract §39's `VerifierEntry.host_indexer_id`, both `stage3` fields, the six messages and both codes). If the S3-C2 line prints `0` or grep reports `wire/block_verification_test.go` missing, S3-C2's `BlockVerification` test is not in the base: go on, and expect no `block_verification_test.go` line in Steps 2, 3 and 25 (`//wire:wire_test` then passes from Step 3 on). Any other count: stop.
+For the user in fish, the first two lines are `set W (python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task59/worktree.json"); or exit 1; set A /Users/uranuswch/Dev/projects/sentio-network/arbiter-proto; set CORE_TAG_P4 (cat "$W.core-tag-p4"); set PROTO_TAG_P4 (cat "$W.proto-tag-p4"); set PROTO_TAG_P5 (cat "$W.proto-tag-p5")`; the rest run unchanged. Expected: `HEAD contains <CORE_TAG_P4>`; an empty diff stat (nothing merged after `CORE_TAG_P4` touched these files; if something did, re-read each listed file before applying a hunk below); then `1` (the base pins `PROTO_TAG_P4`), `1` (S3-D's settle purpose is in the base), `1` (S3-C2's reflection helper is in the base), `0` (no stage-3 canonical field yet), `0` (none of this task's new files exists yet), `3`, `6` and `2` (the release carries contract §39's `VerifierEntry.host_indexer_id`, both `stage3` fields, the six messages and both codes). A missing S3-C2 reflection helper is a missing required predecessor and stops this task. Every count above is required; any mismatch stops before implementation. The full future CORE_TAG_P4 must include the earlier released C2/C4 source, not an incomplete stand-in.
 
 - [ ] **Step 2: Pin arbiter-proto `PROTO_TAG_P5`** (contract §43)
 
@@ -3522,7 +4235,7 @@ cd "$W" && GOWORK=off go list -m github.com/sentioxyz/arbiter-proto && git statu
 
 Expected: `go: downloading github.com/sentioxyz/arbiter-proto <PROTO_TAG_P5>` (unless the module cache has it), `go: upgraded github.com/sentioxyz/arbiter-proto <PROTO_TAG_P4> => <PROTO_TAG_P5>`, Bazel's progress and gazelle's build lines, then `github.com/sentioxyz/arbiter-proto <PROTO_TAG_P5>`, exactly ` M go.mod` and ` M go.sum`, and ` 2 files changed, 3 insertions(+), 3 deletions(-)` (the require line and the two sums). `PROTO_TAG_P5` requires the `google.golang.org/grpc` and `google.golang.org/protobuf` versions arbiter-core already has (v1.82.0, v1.36.11), so nothing else moves; if another line of `go.mod`, or `MODULE.bazel`, `MODULE.bazel.lock` or a `BUILD.bazel`, changes, stop and report it.
 
-Build and run the whole suite at the pin; the guard passes only failures that name a field `PROTO_TAG_P5` appends:
+Build the whole module, retain Bazel diagnostics, and independently gate a complete Go JSON suite. Only the named tests with their exact new-field diagnostics may fail; a missing, malformed, truncated, unrelated or zero-diagnostic failure stops.
 
 ```bash
 set -eo pipefail
@@ -3586,7 +4299,7 @@ print('Bazel completed: only exact permitted mirror failures')
 PYBAZEL
 ```
 
-Expected (2026-10-16, on the stand-ins of the Notes; durations aside, and at `CORE_TAG_P4` the line numbers of the three tests may differ):
+Historical diagnostic detail (2026-10-16, on the stand-ins of the Notes; durations aside, and at `CORE_TAG_P4` the line numbers of the three tests may differ):
 
 ```
 bazel build //... passed
@@ -3608,7 +4321,7 @@ bazel test exit 3
 pin: 12 failure line(s) in //conformance:conformance_test //wire:wire_test, each naming a field PROTO_TAG_P5 appends
 ```
 
-`TestArbiterMirrorsMatchProto` is this task's failing test for the root types (Steps 4–7 make it pass unedited); `TestPromotionOutcomesConvertersCopyEveryField` is handled in Step 3; S3-C2's `TestBlockVerificationFromPBReadsEveryField` stays red until Task 60 (Notes). At `CORE_TAG_P4` more targets exist than in the stand-in (S3-C1's, S3-C2's, S3-C4's and S3-D's packages), and every one of them must pass. `pin: a failure names no stage-3 P5 field: stop and report it` (with the `unexpected:` lines above it), a failing target other than these two, or a build error is a contract conflict: stop and report it. The guard's field set lists the names of contract §39 these three tests can meet; a later mirror test of Plans S3-C2–S3-D that fails on another appended field (`scoped_keeper_path`, `purge_members`, `groups`, …) prints an `unexpected:` line: stop and report it rather than widening the set.
+`TestArbiterMirrorsMatchProto` is this task's failing test for the root types (Steps 4–7 make it pass unedited); `TestPromotionOutcomesConvertersCopyEveryField` is handled in Step 3; S3-C2's `TestBlockVerificationFromPBReadsEveryField` stays red until Task 60 (Notes). At `CORE_TAG_P4` more targets exist than in the stand-in (S3-C1's, S3-C2's, S3-C4's and S3-D's packages), and every one of them must pass. `pin: a failure names no stage-3 P5 field: stop and report it` (with the `unexpected:` lines above it), a failing target other than these two, or a build error is a contract conflict: stop and report it. The strict JSON gate admits only the exact producer-specific diagnostics of these three tests; a later mirror test of Plans S3-C2–S3-D that fails on another appended field (`scoped_keeper_path`, `purge_members`, `groups`, …) prints an `unexpected:` line: stop and report it rather than widening the set.
 
 - [ ] **Step 3: A promotion outcome's track never carries a `group_key`**
 
@@ -3645,7 +4358,7 @@ func TestPromotionOutcomesConvertersCopyEveryField(t *testing.T) {
 
 The rest of the test is unchanged: the round trips still compare every field `wire.PromotionOutcome` has.
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l wire && bazel test //wire:wire_test --test_output=errors 2>&1 | grep -E '^//wire|^--- FAIL|^    \S+_test\.go:[0-9]+: '`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l wire && bazel test //wire:wire_test --test_output=errors 2>&1 | grep -E '^//wire|^--- FAIL|^    \S+_test\.go:[0-9]+: '`
 
 Expected: `gofmt` lists nothing; then exactly
 
@@ -3920,7 +4633,7 @@ func TestStage3AdmissionCodesMatchProto(t *testing.T) {
 
 - [ ] **Step 5: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test --keep_going //:arbiter-core_test //conformance:conformance_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test --keep_going //:arbiter-core_test //conformance:conformance_test --test_output=errors`
 
 Expected: gazelle adds `consensus_stage3_test.go` to the root `go_test` and `stage3_wire_test.go` to `conformance_test`; then FAIL to build both targets (the compiler lists the first ten errors of each package; Bazel's `ERROR:` and `compilepkg:` lines around them omitted):
 
@@ -4259,7 +4972,7 @@ type MemberCheckpoint struct {
 
 - [ ] **Step 7: Run the tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l . && bazel run //:gazelle && bazel test //:arbiter-core_test //conformance:conformance_test //authority/... --test_output=errors && GOWORK=off go vet . ./conformance/`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l . && bazel run //:gazelle && bazel test //:arbiter-core_test //conformance:conformance_test //authority/... --test_output=errors && GOWORK=off go vet . ./conformance/`
 
 Expected: `gofmt` lists nothing; gazelle adds `stage3.go` to the root `go_library` with `deps = ["@housegate//pkg/replay"]`; `//:arbiter-core_test`, `//conformance:conformance_test`, `//authority:authority_test` and `//authority/authoritytest:authoritytest_test` PASSED: the four new root tests, the two new conformance tests, the unedited `TestArbiterMirrorsMatchProto` and `TestEnumNumbersMatchProto`, and every authority test, `TestActivationUpdateVector` and `TestConsensusParamsUpdateHashIsFrozen` included (the old normalizer still rebuilds entries; Step 11 replaces it); `go vet` silent.
 
@@ -4579,7 +5292,7 @@ func TestNormalizeSortsFailureDomainsAndChecksThemAgainstSIIndexers(t *testing.T
 
 - [ ] **Step 10: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //authority:authority_test --test_output=errors > "$W.step10.log" 2>&1; grep -E '^//authority|^--- FAIL' "$W.step10.log"; grep -c '^    --- FAIL' "$W.step10.log"; rm "$W.step10.log"`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run //:gazelle || exit 1; if bazel test //authority:authority_test --test_output=errors > "$W.step10.log" 2>&1; then echo "expected RED but passed; stop"; exit 1; else rc=$?; fi; [ "$rc" = 3 ] || exit 1; grep -E '^//authority|^--- FAIL' "$W.step10.log"; grep -c '^    --- FAIL' "$W.step10.log"`
 
 Expected: gazelle adds `stage3_test.go` to `authority_test`; the target builds (the tests use only root types) and FAILS in exactly the four new tests, every other authority test passing (durations aside):
 
@@ -4842,7 +5555,7 @@ func validFailureDomain(d string) bool {
 
 - [ ] **Step 12: Run the tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel test //authority/... //:arbiter-core_test //conformance:conformance_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel test //authority/... //:arbiter-core_test //conformance:conformance_test --test_output=errors`
 
 Expected: `gofmt` lists nothing; the four targets PASSED: the four new normalizer tests and every existing one, `TestNormalizeConsensusParamsUpdateSignedClaims`, `TestActivationUpdateVector`, `TestConsensusParamsUpdateHashIsFrozen` and S3-D's `TestSettleTrackHashGolden` included (a pool-only update normalizes and hashes as before).
 
@@ -5330,7 +6043,7 @@ func TestMemberCheckpointHashRefusesMalformedCheckpoints(t *testing.T) {
 
 - [ ] **Step 15: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test //authority:authority_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test //authority:authority_test --test_output=errors`
 
 Expected: FAIL to build `//authority:authority_test` (the first ten errors; Bazel's `ERROR:` and `compilepkg:` lines omitted):
 
@@ -5757,7 +6470,7 @@ func VerifyMemberCheckpoint(ctx MessageContext, cp arbiter.MemberCheckpoint, jws
 
 - [ ] **Step 17: Run the tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel run //:gazelle && bazel test //authority/... --test_output=errors && GOWORK=off go vet ./authority/`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel run //:gazelle && bazel test //authority/... --test_output=errors && GOWORK=off go vet ./authority/`
 
 Expected: `gofmt` lists nothing; gazelle adds `stage3.go` to the `authority` library (no new dependency); both targets PASSED, the four purpose tests and every existing one; `go vet` silent.
 
@@ -5993,7 +6706,7 @@ func TestMemberCheckpointVectorIsFrozen(t *testing.T) {
 
 - [ ] **Step 20: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //authority:authority_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //authority:authority_test --test_output=errors`
 
 Expected: gazelle adds `stage3_golden_test.go` to `authority_test` and `//authority/authoritytest` to its deps; FAIL to build the external test package (the first ten errors; Bazel's `ERROR:` and `compilepkg:` lines omitted):
 
@@ -6234,11 +6947,11 @@ MemberCheckpointJWS ok
 Signature Verified Successfully
 ```
 
-A `DIFFERS` line means a constant was mistyped: compare it with this task's text and never regenerate it from Go.
+The block exits nonzero on every payload, hash or signature difference. A `DIFFERS` line means a constant was mistyped: compare it with this task's text and never regenerate it from Go.
 
 - [ ] **Step 23: Run the tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel run //:gazelle && bazel test //authority/... //:arbiter-core_test //conformance:conformance_test --test_output=errors`
+Run: `set -eo pipefail; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l authority && bazel run //:gazelle && bazel test //authority/... //:arbiter-core_test //conformance:conformance_test --test_output=errors`
 
 Expected: `gofmt` lists nothing; gazelle adds `stage3.go` and `@housegate//pkg/replay` to the `authoritytest` library; the four targets PASSED, the six vector tests included.
 
@@ -6346,23 +7059,8 @@ git log --oneline "$CORE_TAG_P4..HEAD" || exit 1
 git diff --stat "$CORE_TAG_P4" HEAD || exit 1
 ```
 
-Expected: `gofmt clean`; `0` (gazelle and `bazel mod tidy` leave nothing to commit); `go vet` silent and
+Expected: formatting, module metadata, vet and the four selected race packages are clean. Every package listed by `go list ./...` must complete in the retained JSON stream. The strict gate permits only `wire.TestBlockVerificationFromPBReadsEveryField` with the exact `arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it` diagnostic, until Task 60 adds the selection record; no other failed or missing package/test, panic, build failure, malformed/truncated stream, skipped package or status inconsistency is accepted. Integration-gated test skips are reported separately and do not prove integration execution. Bazel must build the whole module and complete its suite with only `//wire:wire_test` permitted to fail, corroborated by the same exact Go diagnostic. The four poetry-signed commits of Steps 8, 13, 18 and 24 appear newest first. Preserve both successful and failed raw logs. Leave the actual JSON-retained worktree on its branch for Task 60; nothing is pushed.
 
-```
-ok github.com/sentioxyz/arbiter-core
-ok github.com/sentioxyz/arbiter-core/authority
-ok github.com/sentioxyz/arbiter-core/authority/authoritytest
-ok github.com/sentioxyz/arbiter-core/conformance
-```
-
-then `bazel build //... passed`, `bazel test exit 3` and exactly
-
-```
-    block_verification_test.go:269: arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it
-//wire:wire_test                                                         FAILED in 0.4s
-```
-
-(every other target PASSED: the ClickHouse-gated tests skip outside their CI jobs, and no target of this task's packages fails); then the four commits of Steps 8, 13, 18 and 24 (newest first) and ` 17 files changed, 2061 insertions(+), 13 deletions(-)` (the stand-in measured; at `CORE_TAG_P4` the same seventeen files). `bazel test exit 0` with no `//wire:wire_test` line means S3-C2's test is absent from the base (Step 1's `0`): fine. Any other failing target or line: stop and report it. Leave the worktree on its branch for Task 60; nothing is pushed.
 
 ---
 
@@ -6371,26 +7069,29 @@ then `bazel build //... passed`, `bazel test exit 3` and exactly
 The arbiter-core `wire` half of the stage-3 P5 contract (spec §6.1, §6.2, §6.4, §7.1, §7.3, §7.4, §8.8, §9.1, §9.2, §15 arbiter-core line "wire converters"; clarifications K58, K60, K62, K63, K64; decisions D27 and D33; contract §38, §39 and §41's **Wire (Task 60)** paragraphs). On the branch Task 59 started (it pinned `PROTO_TAG_P5` and added the canonical types), this task makes every new proto field reachable from Go and back, losslessly:
 
 - `VerifierEntriesFromPB`/`ToPB` copy all eleven `VerifierEntry` fields (today they rebuild `{node_id, ed25519_pubkey}` and would silently drop every member field: the scoping proposal's defect D3, `wire/consensus.go:139-149`), and the consensus update converters carry the `stage3` parameter (`Stage3ParamsFromPB`/`ToPB`);
-- the `Command` union gains the five stage-3 commands at Raft tags 38–42 (`RebalanceGroup`, `ReselectVerifiers`, `MemberReady`, `MemberCheckpoint`, `MarkMemberLagging`) with their request converters and their `Canonical`/`Body` signing forms, and a checkpoint exclusion reason outside K63's closed set is refused at decode on every voter alike;
-- `TableRegistrySnapshot` carries the registry view of groups (each current member with its served `host_indexer_id`, D27), the published checkpoint sequences and the committed `stage3` parameter, `TableIncarnation` its `scoped_keeper_path` and `purge_members` (K60, K64), with the lookups `Group`, `GroupsWithMember` and `PublishedCheckpointSeq`, and the decoder refuses every view the arbiter never serves;
+- the `Command` union gains the five stage-3 commands at Raft tags 38–42 (`RebalanceGroup`, `ReselectVerifiers`, `MemberReady`, `MemberCheckpoint`, `MarkMemberLagging`) with their request converters and their `Canonical`/`Body` signing forms, and a missing checkpoint body/entry or an exclusion reason outside K63's closed set is refused at decode on every voter alike;
+- `TableRegistrySnapshot` carries the registry view of groups (each current member with its served `host_indexer_id`, D27), the published checkpoint sequences and the committed `stage3` parameter, `TableIncarnation` its `scoped_keeper_path` and `purge_members` (K60, K64), with the lookups `Group`, `GroupsWithMember` and `PublishedCheckpointSeq`, and the decoder enforces contract §41's structural refusals;
 - Plan S3-C2's `wire.BlockVerification` carries the selection record (`BlockVerification` fields 14–22) and its `BlockHeaderView` the header's `group_key`;
 - `TestStage3CommandBytesAreFrozen` (new, frozen `wire/stage3_golden_test.go`) pins the Raft bytes of every stage-3 command, of the v21 activation update and of an update listing a member entry, computed outside Go with `protoc --encode` over `PROTO_TAG_P5`.
 
 Nothing here changes a consensus byte: no binary of this plan proposes tags 38–42 (S3-E2–E4 propose them after the v21 activation and their switch), every new field is absent from what an existing caller encodes (a pool entry still encodes exactly as arbiter-proto `v0.11.0`'s two-field `VerifierEntry`, an update without `stage3` carries no field 14, a pre-stage-3 snapshot no field 10–12 or 19–20, a block marked before the switches no field 14–22), and every existing wire and conformance golden passes unedited.
 
 Notes (facts recorded for Appendix B):
-- **Base and branch.** The arbiter-core worktree `the actual path retained in `$HOME/.cache/s3e1-task59/worktree.json`` (branch `urwt/codex/multi-source-s3e1`) that Task 59 created from `origin/main` (at `CORE_TAG_P4` or later) and left with its commits: the `PROTO_TAG_P5` pin, the canonical types of contract §41 (`arbiter.Stage3Params`, `arbiter.VerifierEntry`'s nine new fields, `arbiter.MemberCheckpoint` and the other bodies) and the authority purposes. Tasks 59–63 share the branch and one PR, which Task 63 opens and merges before it cuts `CORE_TAG_P5`; this task only commits. Line anchors are those of arbiter-core `origin/main` `cfd4f42` (v0.15.0, Plan S3-A merged), which Task 59 leaves unchanged in `wire/command.go`, `wire/consensus.go`, `wire/requests.go` and `wire/table_registry_snapshot.go`, and of Plan S3-C2 Task 29's `wire/block_verification.go` and `wire/block_verification_test.go` as its text writes them; at `CORE_TAG_P4`, Task 29's `ManifestOwner` (after `Owner`, `wire/table_registry_snapshot.go:178-186`) moves the snapshot converters down, and Plan S3-D Task 50 adds `wire/settle.go` (no file of this task). Every hunk below anchors on text those changes leave as it is (the hunk rule).
+- **Base and branch.** The actual arbiter-core worktree retained by Task 59 in `$HOME/.cache/s3e1-task59/worktree.json` (branch `urwt/codex/multi-source-s3e1` for the executing Codex host) that Task 59 created from `origin/main` (at `CORE_TAG_P4` or later) and left with its commits: the `PROTO_TAG_P5` pin, the canonical types of contract §41 (`arbiter.Stage3Params`, `arbiter.VerifierEntry`'s nine new fields, `arbiter.MemberCheckpoint` and the other bodies) and the authority purposes. Tasks 59–63 share the branch and one PR, which Task 63 opens and merges before it cuts `CORE_TAG_P5`; this task only commits. Line anchors are those of arbiter-core `origin/main` `cfd4f42` (v0.15.0, Plan S3-A merged), which Task 59 leaves unchanged in `wire/command.go`, `wire/consensus.go`, `wire/requests.go` and `wire/table_registry_snapshot.go`, and of Plan S3-C2 Task 29's `wire/block_verification.go` and `wire/block_verification_test.go` as its text writes them; at `CORE_TAG_P4`, Task 29's `ManifestOwner` (after `Owner`, `wire/table_registry_snapshot.go:178-186`) moves the snapshot converters down, and Plan S3-D Task 50 adds `wire/settle.go` (no file of this task). Every hunk below anchors on text those changes leave as it is (the hunk rule).
 - **The start state is one red test.** Task 59's pin makes Plan S3-C2's every-field test `TestBlockVerificationFromPBReadsEveryField` fail (`arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it`): it walks every field of `pb.BlockVerification`, and `PROTO_TAG_P5` appends nine. Contract §41 gives the selection record to this task, so Step 1 expects exactly that failure and Steps 2–5 fix it first. Task 59 itself exempts the other field the pin exposes to a wire test, `L3BlockTrack.group_key` in Plan S3-A's `TestPromotionOutcomesConvertersCopyEveryField` (a promotion's track names its owner only; the key belongs to a sealed header and is read through `GetBlockVerification`), so this task does not touch `wire/stage3_reads_test.go`; if Step 1 sees that test fail too, Task 59 left its exemption out: stop and ask. The red `TestBlockVerificationFromPBReadsEveryField` between Task 59's last commit and this task's first one is recorded in Appendix B (Task 59's gate must expect it).
 - **The strict decoder needs no change.** `wire.Decode` refuses an unknown field at any depth through `validateCommandBytes` (`wire/command.go:387`, `wire/snapshot_query.go:1328`), which walks the `RaftCommand` descriptor of the pinned arbiter-proto, so tags 38–42 and every message they embed are checked once `Decode` has a case for them; `TestStage3CommandsRoundTripThroughEncodeAndDecode` proves the refusal inside each new message (`wire: unknown arbiter.RebalanceGroupCmd field 9` … `wire: unknown arbiter.TrackFrontier field 9`). A voter on `CORE_TAG_P4` refuses the tags themselves, which is why S3-E2–E4 propose them only after the v21 activation and their switch (contract §38).
 - **Where the code goes.** The five command mirrors, their `Canonical`/`Body` forms and the checkpoint body converters are in the new `wire/stage3.go`; the ten request converters follow the existing pattern in `wire/requests.go` (`QuarantineIndexerFromRequest` … `ReleaseIndexerToRequest`), as the plan's File Structure lists; the registry view types and their converters are in the new `wire/stage3_registry.go`, with only the new fields and calls in `wire/table_registry_snapshot.go`. Like `wire.QuarantineIndexer` and S3-A's read types, none of the transport mirrors carries JSON tags (they are not signing forms); `Command`'s five new fields carry `json:",omitempty"` like every field added since client lanes.
 - **Lossless both ways.** Request converters copy lists as sent (an empty list decodes to nil) and keep the signature; `Canonical` sorts, deduplicates and copies `Add`/`Remove`/`ExpectedSet` (nil when empty) and drops the token, so a signer and the FSM hash one form; `Body` drops the member-ready signature. `host_indexer_id` is copied with the existing `cloneUint64` both ways (`wire/table_registry.go:43`): absent stays nil, indexer 0 stays 0, and no decoder refuses an absent host (a delisted member is served without one, D27). Validation of entries and of the parameter stays with Task 59's `authority.NormalizeConsensusParamsUpdate` and the FSM; the converters only copy.
+- **Nil verifier elements.** `VerifierEntriesFromPB` preserves the prior nil-element-to-zero-value behavior before reading the optional host field; semantic entry validation remains with authority. It must not panic at the new direct optional-pointer access.
+- **Checkpoint presence.** The checkpoint body and its entry must be present at decode, including for owner 0. A present owner-0 zero frontier remains valid; a missing protobuf entry cannot be inferred after conversion into its Go zero value. The exact refusals are `wire: member checkpoint body is required` and `wire: member checkpoint entry is required`; both propagate through the request, Raft and stored-registry checkpoint decoders.
 - **Closed exclusion reasons.** `MemberCheckpointBodyFromPB` maps the six known `CheckpointExclusionReason` values to Task 59's spellings and refuses `UNSPECIFIED` and any unknown number with `wire: member checkpoint excludes %s with reason %v, which is not a known CheckpointExclusionReason` (contract §41), in the request, the Raft command and a stored checkpoint of the registry view; a Go reason outside the set encodes as `UNSPECIFIED`, so it can never become a known one (`authority.MemberCheckpointHash` refuses it before signing anyway).
 - **The registry decoder refuses what the arbiter never serves** (contract §41's six texts and `table registry snapshot: %w` around `Stage3Params.Validate`), like an unknown status: the registry follower keeps its previous view and logs `table registry snapshot refused` (`dataplane/registry_follower.go:220-225`; an initial snapshot it refuses is fetched again, `:179-181`), so a data-plane node on `CORE_TAG_P5` never acts on a corrupt group list. The converse is a liveness rule for Plans S3-E2–E3: the arbiter must never commit a `stage3` parameter that `Stage3Params.Validate` refuses (its normalizer runs `Validate`, Task 59) or serve an unsorted list, or every `CORE_TAG_P5` follower stops at its last good view. An unknown exclusion reason inside a stored checkpoint is refused with the composed text `table registry snapshot: group %d/%s: member %s: wire: member checkpoint excludes …` (Appendix B: a composition of two contract texts, no new wording).
 - **The selection record.** `BlockHeaderView.GroupKey` is read from `header.track.group_key` (empty without a track), and `BlockVerificationToPB` writes it back only on a track it writes. The decoder refuses `block verification: eligible_ring and group_members must be sorted ascending without duplicates` and `block verification: ring_position %d is outside an eligible ring of %d` (a non-zero position without a ring included). The every-field test gives the header's key and the recorded key different values, although a real block has them equal, so a converter that reads one for the other fails.
 - **The frozen goldens.** `authoritytest` imports `authority`, which imports `wire` (`authority/artifact_disposition.go`), so `package wire` cannot import the `authoritytest` fixtures: `stage3_golden_test.go` spells out their bodies (contract §41's fixture values: `RebalanceGroupCommand()` `{0, "dex", 1, ["member-c"], ["member-b"], true}`, `ReselectVerifiersCommand()`, `MemberReadyBody()`, `MemberCheckpoint()`, `MarkMemberLaggingCommand()`) with the placeholder tokens `h.p.s` and `ab` of every earlier wire golden (`preSignedClaimsGolden`, `preTracksGolden`), and builds its updates on `legacyGoldenUpdate` like `update_consensus_params_with_lanes`. `update_consensus_params_with_stage3` is the v21 activation's shape with `authoritytest.Stage3Update`'s `stage3` values (every switch off, domains `node:test-a` and `node:test-b`, `max_writers` 2, two enrolled indexers, tracks on, a pool verifier); the extra subtest `update_consensus_params_with_a_member` (Appendix B, beyond contract §41's list) is spec §10.4 step 4's update, switches 1–3 on and member-b's entry with every member field explicit (`counts` false between true flags), so the bytes of `VerifierEntry` fields 3–11 inside a Raft command are frozen too. The hex was computed with `protoc --encode=arbiter.RaftCommand` over the `PROTO_TAG_P5` stand-in, the same command reproduces `record_cleanup_ack` of `preSignedClaimsGolden` (`62190a17…`) byte for byte, and Step 14 repeats it over the real `PROTO_TAG_P5` before the commit. A difference there means the implementation or the release moved: fix the implementation or stop, never the constant.
 - **Names added beyond contract §41 (Appendix B).** Unexported: `sortedUnique`, `exclusionReasonFromPB`, `exclusionReasonToPB` (`wire/stage3.go`); `memberClassFromPB`, `memberClassToPB`, `nodeIDs`, `groupsFromPB`, `groupMemberFromPB`, `groupsToPB`, `groupMemberToPB`, `memberCheckpointSeqsFromPB`, `memberCheckpointSeqsToPB` (`wire/stage3_registry.go`); `blockReselectionFromPB`, `blockReselectionToPB`, `ascendingUnique` (`wire/block_verification.go`). Test helpers: `stage3ParamsFixture`, `memberVerifierEntry`, `wireFieldNumbers`, `eachFlagAlone`, `mustMarshal` (`wire/stage3_test.go`), `stage3ActivationGoldenUpdate`, `stage3MemberGoldenUpdate`, `stage3Golden` (`wire/stage3_golden_test.go`), `stage3RegistryFixture` (`wire/stage3_registry_test.go`), `reselectionThroughReflection` (`wire/block_verification_test.go`); the subtest `update_consensus_params_with_a_member`.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Task 59's drafted tree (its pin, `stage3.go`, `consensus.go`, `types.go`, `authority/stage3.go`, `authority/authoritytest/stage3.go` and its `wire/stage3_reads_test.go` exemption), Plan S3-C2 Task 29's `wire/block_verification.go` and `wire/block_verification_test.go` exactly as its text writes them, and a `replace` to a `PROTO_TAG_P5` stand-in (arbiter-proto `7a73f25` with Plan S3-D Task 49 and Task 57 applied as their texts write them, regenerated with protoc-gen-go v1.36.11 and protoc-gen-go-grpc v1.5.1, its conformance suite green), this task was applied step by step with Bazel 9.1.0 offline (`--repository_disable_download`) and Go 1.26.3: Step 1 printed the one red test; Steps 3, 8 and 17 failed with the errors given; Steps 5, 13 and 20 passed; Step 14's check printed its line; gazelle added exactly the five new files and no dependency; `bazel build //...` and `bazel test //...` passed (`Executed 17 out of 17 tests: 17 tests pass.` on that base), `go vet` and `go test -race -count=3 ./wire/` were clean, and the same result held with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...`. Thirty-nine mutations of the converters, each a dropped, swapped or zeroed field, a skipped sort or refusal, or a shared pointer, each failed at least one test of this task. Every bash block passes `bash -n` and `shellcheck -s bash`, and Steps 1, 6, 14, 15, 21 and 22 ran against a copy of that repository with a stub ledger tool. The extracted plan text (every replace pair and every new file below) applied to a fresh export reproduces the tested tree byte for byte.
-- **Remote actions: none.** Every command reads or writes the local worktree, the module cache and `$HOME/.cache/s3e1-task60/`. Go and Bazel use what Task 59's pin downloaded: if a command starts fetching (`go: downloading`, Bazel `Fetching`), stop it and ask, because a download is a remote read that needs explicit user confirmation in chat.
+- **Historical drafting measurement (2026-10-16; not the adversarial acceptance result).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Task 59's drafted tree (its pin, `stage3.go`, `consensus.go`, `types.go`, `authority/stage3.go`, `authority/authoritytest/stage3.go` and its `wire/stage3_reads_test.go` exemption), Plan S3-C2 Task 29's `wire/block_verification.go` and `wire/block_verification_test.go` exactly as its text writes them, and a `replace` to a `PROTO_TAG_P5` stand-in (arbiter-proto `7a73f25` with Plan S3-D Task 49 and Task 57 applied as their texts write them, regenerated with protoc-gen-go v1.36.11 and protoc-gen-go-grpc v1.5.1, its conformance suite green), this task was applied step by step with Bazel 9.1.0 offline (`--repository_disable_download`) and Go 1.26.3: Step 1 printed the one red test; Steps 3, 8 and 17 failed with the errors given; Steps 5, 13 and 20 passed; Step 14's check printed its line; gazelle added exactly the five new files and no dependency; `bazel build //...` and `bazel test //...` passed (`Executed 17 out of 17 tests: 17 tests pass.` on that base), `go vet` and `go test -race -count=3 ./wire/` were clean, and the same result held with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...`. Thirty-nine mutations of the converters, each a dropped, swapped or zeroed field, a skipped sort or refusal, or a shared pointer, each failed at least one test of this task. Every bash block passes `bash -n` and `shellcheck -s bash`, and Steps 1, 6, 14, 15, 21 and 22 ran against a copy of that repository with a stub ledger tool. The extracted plan text (every replace pair and every new file below) applied to a fresh export reproduces the tested tree byte for byte.
+- **Adversarial candidate measurement (2026-10-17).** On the complete verified Task 59 candidate plus the exact generated Task 57 proto (no C4 stand-ins), the exact hunk TDD and owner-0 presence/nil-verifier regressions pass; all 28 Go packages pass (705 top-level tests, 1638 passing test/subtest events; 248 integration-gated skips are not integration execution), full-module vet is clean, enforced-offline Bazel builds all 55 targets and all 28 race targets pass within the unchanged 120s per-target bound. After the added registry isolation regression, the affected wire Bazel race target passes again. Eighteen implementation mutation cases fail their named tests and restore exactly; the frozen new hex constants and all 380 non-owning predecessor files remain unchanged. Current source-chain acceptance still requires the actual post-C4 released CORE_TAG_P4 base. The historical drafting counts above are not acceptance counts.
+- **Remote actions: none.** Every Bash block explicitly clears inherited private-module proxy bypass (`GONOPROXY=none`, `GOPRIVATE=none`), disables Go proxy/sum lookups, and passes equivalent repository controls plus `--repository_disable_download` to Bazel. An unavailable cached dependency stops before implementation; any later download requires its own user confirmation. No direct fallback is permitted.  Every command reads or writes the local worktree, the module cache and `$HOME/.cache/s3e1-task60/`. Go and Bazel use what Task 59's pin downloaded: if a command starts fetching (`go: downloading`, Bazel `Fetching`), stop it and ask, because a download is a remote read that needs explicit user confirmation in chat.
 - **Values across commands.** The Bash tool keeps no variables between calls, so every block sets `W` itself and reads what Step 1 wrote: `$HOME/.cache/s3e1-task60/base` (the branch head before this task) and `proto-tag-p5` (the ledger's `PROTO_TAG_P5`); Step 14's text protos live in `$HOME/.cache/s3e1-task60/golden/`. Nothing there is committed.
 
 **Files:**
@@ -6402,7 +7103,7 @@ Notes (facts recorded for Appendix B):
 - Modify: `wire/table_registry_snapshot.go` (`type TableIncarnation` `:61-84`, `type TableRegistrySnapshot` `:109-131`, `TableRegistrySnapshotFromPB` `:233-298`, `TableRegistrySnapshotToPB` `:300-327`; at `CORE_TAG_P4` the last two sit below Task 29's `ManifestOwner`)
 - Create: `wire/stage3.go`, `wire/stage3_registry.go`, `wire/stage3_test.go`, `wire/stage3_registry_test.go`, `wire/stage3_golden_test.go` (frozen once committed)
 - Modify (gazelle): `wire/BUILD.bazel` (the `wire` library gains `stage3.go` and `stage3_registry.go`, `wire_test` the three test files; no new dependency)
-- Test: `wire/stage3_test.go` — `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestStage3CanonicalizeSortsAndDeduplicates`, `TestDecodeRefusesAnUnknownExclusionReason`; `wire/stage3_golden_test.go` — `TestStage3CommandBytesAreFrozen`; `wire/stage3_registry_test.go` — `TestTableRegistrySnapshotCarriesGroupsSeqsScopedPathsAndStage3`, `TestTableRegistrySnapshotEveryStage3FieldRoundTrips`, `TestTableRegistrySnapshotRefusesCorruptStage3Views`, `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero`, `TestGroupMemberReady`; `wire/block_verification_test.go` — `TestBlockVerificationCarriesTheSelectionRecord` and the extended `TestBlockVerificationFromPBReadsEveryField`, `TestBlockVerificationRoundTrip`
+- Test: `wire/stage3_test.go` — `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestStage3CanonicalizeSortsAndDeduplicates`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestMemberCheckpointRequiresExplicitBodyAndEntry`, `TestVerifierEntriesNilPBElementKeepsItsZeroValue`; `wire/stage3_golden_test.go` — `TestStage3CommandBytesAreFrozen`; `wire/stage3_registry_test.go` — `TestTableRegistrySnapshotCarriesGroupsSeqsScopedPathsAndStage3`, `TestTableRegistrySnapshotEveryStage3FieldRoundTrips`, `TestTableRegistrySnapshotRefusesCorruptStage3Views`, `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero`, `TestGroupMemberReady`, `TestStage3RegistryConvertersDetachMutableFields`; `wire/block_verification_test.go` — `TestBlockVerificationCarriesTheSelectionRecord` and the extended `TestBlockVerificationFromPBReadsEveryField`, `TestBlockVerificationRoundTrip`
 - Local only, never committed: `$HOME/.cache/s3e1-task60/` (mode 700: `base`, `proto-tag-p5`, `golden/*.txtpb`, `golden/protoc.txt`)
 - Never touch: `wire/stage3_reads_test.go` (Task 59's exemption is all it needs), `wire/legacy_command_golden_test.go`, `wire/signed_claims_golden_test.go`, `wire/tracks_golden_test.go`, `wire/artifact_disposition_test.go`, `wire/scan_hash_test.go`, `wire/snapshot_query.go` (the strict decoder), `authority/*`, `authority/authoritytest/*`, `conformance/*` (Task 59 owns `conformance/stage3_wire_test.go`; S3-A's `conformance/stage3_reads_test.go` is never edited), `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`, every file outside `wire/`.
 
@@ -6420,8 +7121,13 @@ Notes (facts recorded for Appendix B):
   - `wire/command.go`: `Command.RebalanceGroup *RebalanceGroup`, `.ReselectVerifiers *ReselectVerifiers`, `.MemberReady *MemberReady`, `.MemberCheckpoint *MemberCheckpoint`, `.MarkMemberLagging *MarkMemberLagging` (each `json:",omitempty"`); `Encode`/`Decode` carry tags 38–42, `Decode` returning `MemberCheckpointFromRequest`'s error.
   - `wire/stage3_registry.go` and `wire/table_registry_snapshot.go`: `TableIncarnation.ScopedKeeperPath bool`, `.PurgeMembers []string`; `TableRegistrySnapshot.Groups []DatabaseGroup`, `.MemberCheckpointSeqs []MemberCheckpointSeq`, `.Stage3 *arbiter.Stage3Params`; `type MemberClass string` with `MemberClassBootstrapping`, `MemberClassCaughtUp`, `MemberClassBehind`, `MemberClassLagging`; `MemberCheckpointRecord`, `GroupMember` (with `HostIndexerID *uint64`) and `func (m GroupMember) Ready() bool`, `LeavingMember`, `DatabaseGroup`, `MemberCheckpointSeq`, fields verbatim; `func (s TableRegistrySnapshot) Group(owner uint64, databaseID string) (DatabaseGroup, bool)`, `func (s TableRegistrySnapshot) GroupsWithMember(nodeID string) []DatabaseGroup`, `func (s TableRegistrySnapshot) PublishedCheckpointSeq(nodeID string, owner uint64) (MemberCheckpointSeq, bool)`; `TableRegistrySnapshotFromPB`'s six refusals and `table registry snapshot: %w`.
   - `wire/block_verification.go`: `BlockHeaderView.GroupKey string`; `BlockVerification.{EligibleRing []string; RingPosition uint32; MarkedCursorBlock uint64; GroupKey string; GroupMembers []string; GroupFill bool; GroupDatabases []BlockGroupRef; Reselections []BlockReselection; ReselectionsAtLatch uint32}`; `type BlockGroupRef struct{ DatabaseID string; GroupGeneration uint64 }`; `type BlockReselection struct{ Replaced, Replacements []string; RingPosition uint32; CursorBlock uint64; AuthorityJWS string; AuthorityEpoch uint64 }`; the two refusals.
-  - Tests: contract §41's twelve Task 60 names (Files, Test) and the frozen `wire/stage3_golden_test.go`.
+  - Tests: contract §41's twelve Task 60 names plus the three adversarial regression names (Files, Test) and the frozen `wire/stage3_golden_test.go`.
 - Consumed by: Task 61 (`KnownKeeperReplica` reads `Group`, `PurgeMembers`, `ScopedKeeperPath` through `tableset.KeeperScopeOf`), Task 62 (the reconciler reads `Stage3.Purge`, `Group`, `Leaving`), Task 63 (`wire.MemberReady`, `wire.MemberCheckpoint`, `PublishedCheckpointSeq`, `GroupsWithMember`, `GroupMember.Ready`, the switches through `Stage3`); Plan S3-E2 Tasks 64–65 (`Stage3ParamsFromPB`/`ToPB` in `wire/consensus.go`, the `VerifierEntry` and update converters), Plans S3-E2–E3 (the `Command` fields and `Canonical`/`Body` for tags 38–42), Plan S3-E3 Task 71 (the view's shape its `groupsToPB` fills), Plan S3-E4 Task 79 (`GroupMember.HostIndexerID` for `replica_hosts`).
+
+
+**Adversarial source-chain gate.** Verify the complete final Task 59 source manifest before applying this task. The independent source candidate uses actual reviewed C1/C2/P4 bytes plus Task 57 generated proto, without C4 API stand-ins; the fully recorded post-C4 CORE_TAG_P4 chain remains an execution-time gate. The later E2 Task 64 CORE_TAG_P5 arbiter pin must extend Task 36's complete `manifest_owner_wire_test.go` adapter/counts for wire TableIncarnation 18→20 and the corresponding FSM stages. Preserve its full-field equality check and every D25 restriction; do not anticipate those fields in P2 or weaken that test here.
+
+**Final source-chain reconciliation (2026-10-18).** The complete local source chain has now been replayed through the actual C4/Task45 serving and durable lease code, P4 Task50, Tasks59–61, the separately audited Task34 constructor-owned legacy memo, Task62 and Task63: core379 →400 →407 →412 →423 →425 →447 →469. It preserves the real C4 query adapter and every non-owning predecessor byte at each owning stage; no API scaffold or old partial-base measurement substitutes for that proof. The final469 manifest is `ba35ad28056a3a9b840512ac1f366f72e30efc80ddfd9f0504392e111c129b5c`, with actual Task58 HG935 and canonical proto57. Earlier independent/drafting measurements above remain historical stage-specific evidence. This is source-level proof only: actual released CORE_TAG_P4/P5 pins, required ClickHouse/Keeper/MinIO tests, formal full500/prerequisite plan exits and execution ledger records remain separate gates.
 
 - [ ] **Step 1: Check the branch, Task 59's state and the one red test**
 
@@ -6469,7 +7175,7 @@ python3 -I -c 'import pathlib;fs=("wire/stage3.go","wire/stage3_registry.go","wi
 
 Expected, one count per line: `4` (Task 59's `Validate`, `MemberCheckpoint`, `RebalanceGroupCommand` and `MemberReadyBody` in `stage3.go`), `2` (`VerifierEntry.HostIndexerID` and `ConsensusParamsUpdate.Stage3` in `consensus.go`), `1` (Task 59's exemption in `wire/stage3_reads_test.go`), `2` (Plan S3-C2's `BlockHeaderView` and `BlockVerification`), `0` (none of this task's types and converters exists yet) and `0` (none of its new files). A smaller first, second or fourth count means Task 59 or Plan S3-C2 Task 29 is not on the branch: stop. A third count of `0`: Task 59 left the exemption out (Notes): stop and ask. A non-zero fifth or sixth count: this task ran before: stop and ask.
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: `//wire:wire_test FAILED` with exactly one failing test, `--- FAIL: TestBlockVerificationFromPBReadsEveryField` and `block_verification_test.go:269: arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it`, then `Executed 1 out of 1 test: 1 fails locally.` (Notes: the pin exposes fields 14–22 to Plan S3-C2's every-field test). If `TestPromotionOutcomesConvertersCopyEveryField` fails as well (`arbiter.L3BlockTrack.group_key is unset`), stop and ask; any other failure: stop.
 
@@ -6819,7 +7525,7 @@ func TestBlockVerificationCarriesTheSelectionRecord(t *testing.T) {
 
 - [ ] **Step 3: Run the wire tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: FAIL to build: `ERROR: …/wire/BUILD.bazel:33:8: GoCompilePkg wire/wire_test.internal.a failed`, then `wire/block_verification_test.go:55:87: unknown field GroupKey in struct literal of type BlockHeaderView`, `wire/block_verification_test.go:88:3: unknown field EligibleRing in struct literal of type BlockVerification`, the same for `RingPosition`, `MarkedCursorBlock`, `GroupKey`, `GroupMembers`, `GroupFill` and `GroupDatabases`, `wire/block_verification_test.go:90:21: undefined: BlockGroupRef`, `wire/block_verification_test.go:216:51: undefined: BlockReselection` and `too many errors`; the run ends `ERROR: Build did NOT complete successfully`, `//wire:wire_test FAILED TO BUILD` and `Executed 0 out of 1 test: 1 fails to build.` (Line numbers as in Plan S3-C2 Task 29's file; a base that moved them shifts them, not the messages.)
 
@@ -7068,7 +7774,7 @@ func ascendingUnique(ids []string) bool {
 
 - [ ] **Step 5: Run the wire tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire/block_verification.go wire/block_verification_test.go)" && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire/block_verification.go wire/block_verification_test.go)" && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: gofmt lists nothing; `//wire:wire_test PASSED` and `Executed 1 out of 1 test: 1 test passes.`: the new test, the extended S3-C2 tests (Step 1's failure is gone) and every existing wire test, the frozen goldens included.
 
@@ -7515,6 +8221,59 @@ func TestDecodeRefusesAnUnknownExclusionReason(t *testing.T) {
 		t.Fatalf("a reason outside the set must encode as UNSPECIFIED and be refused, got %v", err)
 	}
 }
+
+// TestMemberCheckpointRequiresExplicitBodyAndEntry distinguishes missing
+// transport fields from a present owner-0 zero frontier. The canonical Go
+// value cannot retain protobuf presence, so the decoder owns this check.
+func TestMemberCheckpointRequiresExplicitBodyAndEntry(t *testing.T) {
+	base := &pb.MemberCheckpoint{NodeId: "member-b", CheckpointSeq: 1, SnapshotId: "0xsnap",
+		Groups: []*pb.CheckpointGroup{{DatabaseId: "dex", GroupGeneration: 1}}, Entry: &pb.TrackFrontier{}}
+	without := proto.Clone(base).(*pb.MemberCheckpoint)
+	without.Entry = nil
+	for _, tc := range []struct {
+		name string
+		body *pb.MemberCheckpoint
+		want string
+	}{
+		{"absent body", nil, "wire: member checkpoint body is required"},
+		{"absent owner-0 entry", without, "wire: member checkpoint entry is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := MemberCheckpointBodyFromPB(tc.body); err == nil || err.Error() != tc.want {
+				t.Fatalf("body error = %v, want %q", err, tc.want)
+			}
+			req := &pb.MemberCheckpointCmd{Checkpoint: tc.body, ReplicaJws: "r.j.s"}
+			if _, err := MemberCheckpointFromRequest(req); err == nil || err.Error() != tc.want {
+				t.Fatalf("request error = %v, want %q", err, tc.want)
+			}
+			raw := mustMarshal(t, &pb.RaftCommand{Cmd: &pb.RaftCommand_MemberCheckpoint{MemberCheckpoint: req}})
+			if _, err := Decode(raw); err == nil || err.Error() != tc.want {
+				t.Fatalf("Raft error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := MemberCheckpointFromRequest(nil); err == nil || err.Error() != "wire: member checkpoint body is required" {
+		t.Fatalf("nil request error = %v", err)
+	}
+	cp, err := MemberCheckpointBodyFromPB(base)
+	if err != nil || cp.OwnerIndexerID != 0 || cp.Entry != (replay.TrackFrontier{}) {
+		t.Fatalf("present owner-0 zero frontier: %+v, %v", cp, err)
+	}
+	if back := MemberCheckpointBodyToPB(cp); back.Entry == nil {
+		t.Fatal("a present zero frontier lost its presence")
+	}
+	mustRoundTrip(t, Command{MemberCheckpoint: &MemberCheckpoint{Checkpoint: cp, ReplicaJWS: "r.j.s"}})
+}
+
+// TestVerifierEntriesNilPBElementKeepsItsZeroValue preserves the previous
+// getter-only converter's nil-element behavior. Validation rejects the zero
+// entry separately; adding optional-pointer copying must not introduce panic.
+func TestVerifierEntriesNilPBElementKeepsItsZeroValue(t *testing.T) {
+	got := VerifierEntriesFromPB([]*pb.VerifierEntry{nil})
+	if want := []arbiter.VerifierEntry{{}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("nil element = %+v, want %+v", got, want)
+	}
+}
 ```
 
 Create `wire/stage3_golden_test.go` (frozen once committed: never regenerate its values; Notes):
@@ -7637,7 +8396,7 @@ func TestStage3CommandBytesAreFrozen(t *testing.T) {
 
 - [ ] **Step 8: Run the wire tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && git diff --stat -- wire/BUILD.bazel && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git diff --stat -- wire/BUILD.bazel && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: gazelle adds `stage3_golden_test.go` and `stage3_test.go` to the `wire_test` srcs (` wire/BUILD.bazel | 2 ++`, no new dependency); FAIL to build `//wire:wire_test` (`GoCompilePkg wire/wire_test.internal.a failed`) with, first, `wire/stage3_golden_test.go:65:31: unknown field RebalanceGroup in struct literal of type Command`, `wire/stage3_golden_test.go:65:48: undefined: RebalanceGroup`, the same pair for `ReselectVerifiers` (`:68`), `MemberReady` (`:71`), `MemberCheckpoint` (`:73`) and `MarkMemberLagging` (`:78`), and `too many errors`; the run ends `//wire:wire_test FAILED TO BUILD` and `Executed 0 out of 1 test: 1 fails to build.`
 
@@ -7706,6 +8465,9 @@ with:
 // authority normalisation, which refuses member fields on a pool entry.
 func VerifierEntriesFromPB(ms []*pb.VerifierEntry) []arbiter.VerifierEntry {
 	return mapSlice(ms, func(m *pb.VerifierEntry) arbiter.VerifierEntry {
+		if m == nil {
+			return arbiter.VerifierEntry{}
+		}
 		return arbiter.VerifierEntry{NodeID: m.GetNodeId(), Ed25519Pubkey: cloneBytes(m.GetEd25519Pubkey()),
 			HostIndexerID: cloneUint64(m.HostIndexerId), ReplicaSigner: m.GetReplicaSigner(), ConsentJWS: m.GetConsentJws(),
 			Weight: m.GetWeight(), FailureDomain: m.GetFailureDomain(),
@@ -7920,9 +8682,16 @@ func exclusionReasonToPB(r arbiter.CheckpointExclusionReason) pb.CheckpointExclu
 
 // MemberCheckpointBodyFromPB converts a checkpoint body. A reason outside the
 // closed set (UNSPECIFIED included) is refused here, on every voter alike,
-// never applied. Repeated fields decode empty to nil; an absent entry decodes
-// to the zero frontier, which authority.MemberCheckpointHash judges.
+// never applied. Repeated fields decode empty to nil. Body and entry must
+// be present: owner 0 can legitimately carry a present zero frontier, so
+// canonical value equality cannot detect an absent protobuf entry.
 func MemberCheckpointBodyFromPB(m *pb.MemberCheckpoint) (arbiter.MemberCheckpoint, error) {
+	if m == nil {
+		return arbiter.MemberCheckpoint{}, fmt.Errorf("wire: member checkpoint body is required")
+	}
+	if m.Entry == nil {
+		return arbiter.MemberCheckpoint{}, fmt.Errorf("wire: member checkpoint entry is required")
+	}
 	out := arbiter.MemberCheckpoint{NodeID: m.GetNodeId(), OwnerIndexerID: m.GetOwnerIndexerId(), CheckpointSeq: m.GetCheckpointSeq(),
 		SnapshotID: m.GetSnapshotId(), Entry: TrackFrontierFromPB(m.GetEntry())}
 	for _, g := range m.GetGroups() {
@@ -8144,7 +8913,7 @@ with:
 
 - [ ] **Step 13: Run the wire tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire)" && bazel run //:gazelle && git diff --stat -- wire/BUILD.bazel && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire)" && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && git diff --stat -- wire/BUILD.bazel && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: gofmt lists nothing; gazelle also adds `stage3.go` to the `wire` library srcs (` wire/BUILD.bazel | 3 +++`, still no new dependency); `//wire:wire_test PASSED`, `Executed 1 out of 1 test: 1 test passes.` (the six new tests with their subtests, `TestStage3CommandBytesAreFrozen`'s seven among them, and every existing wire test unedited).
 
@@ -8421,7 +9190,7 @@ s3e1_read_076="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
 git -C "$W" verify-commit HEAD || exit 1
 ```
 
-Expected: `[urwt/codex/multi-source-s3e1 <sha>] feat(wire): stage-3 parameter, member entries and Raft tags 38-42`, ` 7 files changed, 888 insertions(+), 5 deletions(-)` and `create mode 100644` for `wire/stage3.go`, `wire/stage3_golden_test.go` and `wire/stage3_test.go`.
+Expected: `[urwt/codex/multi-source-s3e1 <sha>] feat(wire): stage-3 parameter, member entries and Raft tags 38-42`, the seven owning files (line counts vary with the reviewed regressions) and `create mode 100644` for `wire/stage3.go`, `wire/stage3_golden_test.go` and `wire/stage3_test.go`.
 
 - [ ] **Step 16: Write the failing registry-view tests**
 
@@ -8656,6 +9425,10 @@ func TestTableRegistrySnapshotRefusesCorruptStage3Views(t *testing.T) {
 		mutate func(m *snapshot)
 		want   string
 	}{
+		{"absent stored checkpoint body", func(m *snapshot) { m.Groups[0].Members[0].Checkpoint.Checkpoint = nil },
+			"table registry snapshot: group 0/dex: member member-b: wire: member checkpoint body is required"},
+		{"absent stored checkpoint entry", func(m *snapshot) { m.Groups[0].Members[0].Checkpoint.Checkpoint.Entry = nil },
+			"table registry snapshot: group 0/dex: member member-b: wire: member checkpoint entry is required"},
 		{"unsorted purge members", func(m *snapshot) { m.Incarnations[3].PurgeMembers = []string{"member-b", "member-a"} }, purgeOrder},
 		{"duplicate purge member", func(m *snapshot) { m.Incarnations[3].PurgeMembers = []string{"member-a", "member-a"} }, purgeOrder},
 		{"unsorted groups", func(m *snapshot) { m.Groups[0], m.Groups[1] = m.Groups[1], m.Groups[0] }, groupsOrder},
@@ -8749,11 +9522,46 @@ func TestGroupMemberReady(t *testing.T) {
 		}
 	}
 }
+
+// The transport converters own every mutable value they return. Exercise both
+// directions independently so a round trip cannot hide a shared slice/pointer.
+func TestStage3RegistryConvertersDetachMutableFields(t *testing.T) {
+	s := stage3RegistryFixture(t)
+	m := TableRegistrySnapshotToPB(s)
+	before := proto.Clone(m)
+	s.Incarnations[3].PurgeMembers[0] = "changed"
+	s.Groups[0].PastMembers[0] = "changed"
+	s.Groups[0].Leaving[0].FrozenMembers[0] = "changed"
+	*s.Groups[0].Members[0].HostIndexerID = 99
+	s.Groups[0].Members[0].Checkpoint.Checkpoint.Groups[0].Excluded[0].TableID = "changed"
+	s.Groups[0].Members[1].ObservedEntry.SafeBlockSeq = 99
+	s.MemberCheckpointSeqs[0].NodeID = "changed"
+	s.Stage3.IndexerFailureDomains[0].FailureDomain = "changed"
+	if !proto.Equal(m, before) {
+		t.Fatal("ToPB aliases the source registry view")
+	}
+	got, err := TableRegistrySnapshotFromPB(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := stage3RegistryFixture(t)
+	m.Incarnations[3].PurgeMembers[0] = "changed"
+	m.Groups[0].PastMembers[0] = "changed"
+	m.Groups[0].Leaving[0].FrozenMembers[0] = "changed"
+	*m.Groups[0].Members[0].HostIndexerId = 99
+	m.Groups[0].Members[0].Checkpoint.Checkpoint.Groups[0].Excluded[0].TableId = "changed"
+	m.Groups[0].Members[1].ObservedEntry.SafeBlockSeq = 99
+	m.MemberCheckpointSeqs[0].NodeId = "changed"
+	m.Stage3.IndexerFailureDomains[0].FailureDomain = "changed"
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("FromPB aliases the protobuf registry view")
+	}
+}
 ```
 
 - [ ] **Step 17: Run the wire tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: gazelle adds `stage3_registry_test.go` to the `wire_test` srcs; FAIL to build `//wire:wire_test` (`GoCompilePkg wire/wire_test.internal.a failed`) with, first, `wire/stage3_registry_test.go:27:20: s.Incarnations[3].ScopedKeeperPath undefined (type TableIncarnation has no field or method ScopedKeeperPath)`, `wire/stage3_registry_test.go:28:20: s.Incarnations[3].PurgeMembers undefined (type TableIncarnation has no field or method PurgeMembers)`, `wire/stage3_registry_test.go:32:4: s.Groups undefined (type TableRegistrySnapshot has no field or method Groups)`, `wire/stage3_registry_test.go:32:15: undefined: DatabaseGroup`, `undefined: GroupMember`, `undefined: MemberClassCaughtUp`, `undefined: MemberCheckpointRecord`, `undefined: MemberClassLagging`, `undefined: LeavingMember` and `too many errors`; the run ends `//wire:wire_test FAILED TO BUILD`.
 
@@ -9197,7 +10005,7 @@ with:
 
 - [ ] **Step 20: Run the wire tests and see them pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire)" && bazel run //:gazelle && bazel test //wire:wire_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && test -z "$(gofmt -l wire)" && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //wire:wire_test --test_output=errors`
 
 Expected: gofmt lists nothing; gazelle adds `stage3_registry.go` to the `wire` library srcs; `//wire:wire_test PASSED`, `Executed 1 out of 1 test: 1 test passes.` (the five registry tests and everything before).
 
@@ -9231,7 +10039,7 @@ s3e1_read_078="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
 git -C "$W" verify-commit HEAD || exit 1
 ```
 
-Expected: `[urwt/codex/multi-source-s3e1 <sha>] feat(wire): registry view of database groups and the stage3 parameter`, ` 4 files changed, 643 insertions(+), 9 deletions(-)` and `create mode 100644` for `wire/stage3_registry.go` and `wire/stage3_registry_test.go`.
+Expected: `[urwt/codex/multi-source-s3e1 <sha>] feat(wire): registry view of database groups and the stage3 parameter`, the four owning files (line counts vary with the reviewed regressions) and `create mode 100644` for `wire/stage3_registry.go` and `wire/stage3_registry_test.go`.
 
 - [ ] **Step 22: Full verification**
 
@@ -9258,7 +10066,7 @@ git diff --quiet "$B" HEAD -- wire/legacy_command_golden_test.go wire/signed_cla
 echo 0
 ```
 
-Expected, in order: `gofmt-clean`; gazelle's run lines, then `0` (gazelle has nothing left to add and every change is committed); the full build succeeds and the test summary ends `Executed <k> out of <n> tests: <n> tests pass.` (`<k>` counts the targets not cached; 17 test targets on the drafting base, more with the packages of Plans S3-C1–S3-D; the ClickHouse-gated tests skip without `ARBITER_CH_INTEGRATION`); `ok  	github.com/sentioxyz/arbiter-core/wire	<seconds>s` (vet clean, race-free); the three subjects `feat(wire): registry view of database groups and the stage3 parameter`, `feat(wire): stage-3 parameter, member entries and Raft tags 38-42`, `feat(wire): stage-3 selection record in BlockVerification`; ` 12 files changed, 1804 insertions(+), 30 deletions(-)`; `0` (nothing outside `wire/`); `0` (no frozen golden, S3-A's `wire/stage3_reads_test.go` and the strict decoder untouched). Any failing test, a changed frozen file or a file outside `wire/`: stop and report it. Task 61 continues on this branch; the PR is Task 63's.
+Expected, in order: `gofmt-clean`; gazelle's run lines, then `0` (gazelle has nothing left to add and every change is committed); the full build succeeds and the test summary ends `Executed <k> out of <n> tests: <n> tests pass.` (`<k>` counts the targets not cached; 17 test targets on the drafting base, more with the packages of Plans S3-C1–S3-D; the ClickHouse-gated tests skip without `ARBITER_CH_INTEGRATION`); `ok  	github.com/sentioxyz/arbiter-core/wire	<seconds>s` (vet clean, race-free); the three subjects `feat(wire): registry view of database groups and the stage3 parameter`, `feat(wire): stage-3 parameter, member entries and Raft tags 38-42`, `feat(wire): stage-3 selection record in BlockVerification`; the twelve owning wire files (line counts vary with the reviewed regressions); `0` (nothing outside `wire/`); `0` (no frozen golden, S3-A's `wire/stage3_reads_test.go` and the strict decoder untouched). Any failing test, a changed frozen file or a file outside `wire/`: stop and report it. Task 61 continues on this branch; the PR is Task 63's.
 
 ---
 
@@ -9273,16 +10081,20 @@ Spec §8.8 (incarnation-scoped Keeper paths, the owner sweep's alerts), §8.2 (w
 Nothing changes on devnet2 with this code alone (contract §38, data-plane inertness): no incarnation is scoped before switch 1, so every statement on a legacy path is the one `CORE_TAG_P4` issues, the only new Keeper reads are the listing of `unsafe_inc` (empty there, `UNSAFE_INC_ROOT`) and the audit's reads every ten minutes, and the audit only reports.
 
 Notes:
-- **Base and branch.** The arbiter-core worktree `the actual path retained in `$HOME/.cache/s3e1-task59/worktree.json`` (branch `urwt/codex/multi-source-s3e1`) that Task 59 created from `origin/main` at `CORE_TAG_P4` or later, with Tasks 59 and 60 committed; Tasks 59–63 share the branch and one PR, which Task 63 opens and merges before it cuts `CORE_TAG_P5`, so this task only commits. Line anchors are those of arbiter-core `origin/main` `cfd4f42`, identical to the header's `8f0bc43` for every file here. Of this task's files the releases and tasks in between change only these: Plan S3-D Task 50 appends `ReplicaIsActive` and `ScopedUnsafeRootChildren` at the end of `dataplane/ddl/table.go` (both stay as they are: they serve the rebuild fence, which requires `unsafe_inc` to be empty before the purge switch) and two tests at the end of `table_ch_test.go`; Plan S3-C2 Task 29 adds `ManifestOwner` right after `Owner` in `wire/table_registry_snapshot.go`; Task 60 adds `ScopedKeeperPath`, `PurgeMembers` and `Groups` there and the group types in `wire/stage3_registry.go`. Nothing in between touches `dataplane/ddl/naming.go` or `dataplane/tableset/reconciler.go`. Every hunk anchors on text those changes leave as it is (the hunk rule), and Step 1 checks it.
+- **Base and branch.** The actual arbiter-core worktree retained in `$HOME/.cache/s3e1-task59/worktree.json` (branch `urwt/codex/multi-source-s3e1`) that Task 59 created from `origin/main` at `CORE_TAG_P4` or later, with Tasks 59 and 60 committed; Tasks 59–63 share the branch and one PR, which Task 63 opens and merges before it cuts `CORE_TAG_P5`, so this task only commits. Line anchors are those of arbiter-core `origin/main` `cfd4f42`, identical to the header's `8f0bc43` for every file here. Of this task's files the releases and tasks in between change only these: Plan S3-D Task 50 appends `ReplicaIsActive` and `ScopedUnsafeRootChildren` at the end of `dataplane/ddl/table.go` (both stay as they are: they serve the rebuild fence, which requires `unsafe_inc` to be empty before the purge switch) and two tests at the end of `table_ch_test.go`; Plan S3-C2 Task 29 adds `ManifestOwner` right after `Owner` in `wire/table_registry_snapshot.go`; Task 60 adds `ScopedKeeperPath`, `PurgeMembers` and `Groups` there and the group types in `wire/stage3_registry.go`. Nothing in between touches `dataplane/ddl/naming.go` or `dataplane/tableset/reconciler.go`. Every hunk anchors on text those changes leave as it is (the hunk rule), and Step 1 checks it.
 - **A sibling root.** ClickHouse removes every child of a table's path when its last replica drops (S3-A M10), so an incarnation path may never lie below a legacy table path. `unsafe` and `unsafe_inc` are siblings under `/sentio/<shard>` (contract §42.1's two constants); `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot` checks it for any table name, and `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica` drops a stale last replica on `/sentio/<shard>/unsafe/<t>` after a scoped re-create and keeps writing to `/sentio/<shard>/unsafe_inc/<t>/<seq>`.
 - **An incarnation's scope.** `KeeperScopeOf(inc)` is `{inc.Seq, inc.ScopedKeeperPath}`. The arbiter fixes the flag when it records the incarnation (S3-E2 Task 69), so an incarnation never moves between paths; a genesis table is never scoped (its target's scope carries the unmarked seq 0, and every function that acts on a path refuses a scoped scope with seq 0: `ddl: an incarnation-scoped Keeper path needs an incarnation seq of at least 1`). Local table names do not change: an incarnation's three tables keep `CHTableName`, only `hg_unsafe`'s `ReplicatedMergeTree` path differs, and `VerifyProtocolTable` compares the live `zookeeper_path` with the scope's, so a table on the wrong path is drift, fatal as today. `Intents` (`build.go`) still renders the legacy path, which `IncarnationIntentsFor` replaces for a scoped scope, so `BuildDDL` and every golden DDL stay byte-identical.
 - **Both roots in the owner's sweep.** `sweepPurgedKeeperPaths` (only with `Config.SweepDecommissioned`, the owner SNode) lists both roots with `ListKeeperRoots` and keeps today's rule for a legacy path of a key whose live incarnation has no tables. Two cases are new: the legacy path of a key whose live incarnation is scoped (only retired incarnations used that path, so this node's own stranded replica and every replica outside the purge node set are removed, without touching the live incarnation's tables), and the incarnation path of a Purged or Refused scoped incarnation it owns (no other incarnation shares it). Every other path is left alone; the audit reports the ones that are no incarnation path at all.
+- **Unknown local markers protect both roots.** Build the protection map from the complete local marker view on every pass, including desired scoped keys and backoff passes. An unknown, noncanonical or wrong-physical-name marker cannot authorize removal of local Keeper metadata; both retired-path sweep branches skip it. Known current/retired markers still permit the specified retired-path cleanup. Pure fake regressions pin the initial drift and backoff cases and both roots independently.
 - **The Keeper audit.** It runs only with `Config.SweepDecommissioned` (the owner SNode: verifiers and members never audit), at the first pass and then once `Config.KeeperAuditInterval` (0 → `DefaultKeeperAuditInterval`, ten minutes) has passed since the last audit that completed, after the sweep of the same pass, and only while the registry is followed. A legacy path is judged against every unscoped incarnation of its physical name this reconciler owns, an incarnation path against its own incarnation, and another owner's paths are left to that owner; each `KeeperRoots.NonIncarnation` path, and each incarnation path whose seq is no `scoped_keeper_path` incarnation of that table, is reported whoever owns the name. It reads the purge node set only when it lists a replica other than its own, and derives the network pool from it once per audit (`NetworkPool`). Contract §42.1's two warn texts are logged once per finding, when it first appears (the `reportUnknown` precedent), and `Stats.KeeperFindings` holds the last audit's findings sorted by path then replica; a failed audit is logged as `keeper audit failed; the next pass retries it` and retried at the next pass. It drops nothing (`TestOwnerKeeperAuditDropsNothing`). sentio-node exports the findings as `sentio_node_storage_integrity_keeper_findings{reason}` in S3-E4 Task 79.
 - **What `KnownKeeperReplica` counts.** Contract §42.1's four sets, spec §8.2's "the owner, a pool verifier or a current or past member" plus the incarnation's purge members: the owner's SNode (`si_indexers[Owner(inc)].snode_node_id`), the network pool, a current or past member of `G(Owner(inc), inc.DatabaseID)`, and `inc.PurgeMembers`. The arbiter's purge node set is not the pool: it lists every registered, non-evicted SNode and verifier, so every other owner's SNode and every registered member of every group too, and taking it whole would hide exactly the replica of an unrelated member that the audit exists to report. The registry view does not carry the `verifiers` parameter, so `NetworkPool(purgeNodeSet)` derives the pool from what the view does carry: the purge node set without the SNode of every `si_indexers` entry and without every node the view names as a current, past or Leaving member of any group, as a purge member of any incarnation or by a published checkpoint sequence. A registered member that the view names nowhere yet (from its registration at S3-F step 4 to its first placement) counts as a pool node there; it holds no `hg_member_unsafe` replica then, because its reconciler creates one only for an incarnation of a group it is placed in and `si_member_ddl` exists only from S3-F step 6 (spec §8.2, contract §42.3), so the residual is a leaked `si_member_ddl` credential of a member that no group names (Appendix B, Task 61: a pool list served by the arbiter would close it). A removed member is merged into `PastMembers` (S3-E3 contract §50, `RebalanceGroup` effect 3); the function also checks `Leaving` directly, so a Leaving member, which keeps its replicas until it is released, stays known however the view prunes `PastMembers`. An incarnation that names no owner belongs to the founding indexer (`Owner`); before the signed-claims activation no `si_indexers` entry exists, so the pool is then the whole purge node set. (Review fix, AgentConnect round 1, finding 3.)
-- **Inertness, measured.** With no scoped incarnation, every DDL and Keeper statement is byte-identical (`TestZooKeeperPathForUnscopedIsByteIdentical` records the statements of the legacy entry points on a fake connection), and the existing ClickHouse suites of `ddl`, `tableset`, `snode` and `verifier` pass unchanged; the owner SNode issues one more Keeper read per pass (the `unsafe_inc` listing, plus one per table under it once there are any).
-- **Beyond contract §42.1's names** (recorded in Appendix B): the tests `TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath` (ClickHouse), `TestListKeeperRootsClassifiesChildren`, `TestKeeperScopeOfFollowsTheRegistryMark`, `TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers` and `TestNewDefaultsTheKeeperAuditInterval`; the log text `keeper audit failed; the next pass retries it`; the unexported `KeeperScope.validate`, `keeperRootPath`, `dropReplicaAtPath`, `canonicalIncarnationSeq` (`ddl`), `target.scope`, `sweepRetiredPath`, `dropTables`, `leftoverScopes`, `auditKeeperIfDue`, `auditKeeper`, `keeperFindingOf` and the `Reconciler` fields `keeperFindings`, `keeperAuditRuns`, `lastKeeperAudit` (`tableset`); the test helpers `keeperFakeConn`, `nameRows`, `isolatedShard`, `strandReplicaAt`, `replicaState`, `createReplicatedAt` (`ddl`), `isolatedShard`, `isolatedPinned`, `scopedInc`, `fakeView.setSnap`, `peer`, `replicaOf`, `replicasAt`, `keeperRoots`, `hasScoped`, `insertUnsafe`, `unsafeRows`, `syncReplica`, `syncBuffer`, `auditedOwner`, `strayRoot` (`tableset`); the new test files `wire/known_keeper_replica_test.go`, `dataplane/ddl/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_roots_test.go`, `keeper_roots_ch_test.go`, `dataplane/tableset/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_audit_test.go`, `keeper_audit_ch_test.go`.
-- **The ClickHouse pair.** The gated tests run on a local two-node pair in the topology of CI's `integration-clickhouse` job (node A hosts the shared Keeper, ephemeral loopback ports, the CI image `clickhouse/clickhouse-server:25.8`), and Step 29 repeats `ddl` and `tableset` on devnet2's `clickhouse/clickhouse-server:26.3.37.3`. `arbiter-core-ci` is the CI-only password the public repository commits in `scripts/ci/clickhouse-default-password.xml` for these throwaway containers (CI's own job sets it the same way); it guards nothing else. Every new test that reads a whole root or creates incarnation paths uses a Keeper shard of its own (`isolatedShard`, 1 000 000–1 999 999; Plan S3-D's tests use 2 000 000 and up), because the `ddl`, `tableset`, `snode` and `verifier` targets share one Keeper; reruns on the same Keeper start clean. Bazel runs the integration targets one at a time (`--local_test_jobs=1`): on a loaded workstation, parallel targets made the shared Keeper's sessions expire (`code: 999, message: Session expired`) in pre-existing tests of three targets.
-- **Measured (2026-10-16).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Plan S3-D Task 50's two `ddl` functions appended to `table.go` as its text writes them and stand-ins of Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Groups` and group types (contract §41's fields; this task uses nothing else of Task 60, apart from the `MemberCheckpointSeqs` that the review fix of Appendix B reads), this task was applied step by step from its own text with its own commands (Go 1.27.1 and Go 1.26.3 with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`; Bazel 9.1.0): every failing step failed with the errors given and every passing step passed; gazelle changed exactly the `BUILD.bazel` lines given; `go vet` is clean, `go test -race` passes for `ddl`, `tableset`, `wire` and `conformance`, `bazel build //...` passed and `bazel test --build_tests_only --@rules_go//go/config:race //...` ended `Executed 9 out of 17 tests: 17 tests pass.` on that base; on a local pair of ClickHouse 25.8.28.1 the five integration targets passed through Bazel (`Executed 5 out of 5 tests: 5 tests pass.`, the `snode` and `verifier` suites unchanged), and again on the same Keeper, and `ddl`, `tableset`, `snode` and `verifier` passed on 26.3.51.7, the local 26.3 image (96 top-level `--- PASS` lines in `ddl` and `tableset`, none skipped). Seventeen mutations, each reverting one fix (a scoped path nested under the legacy root, the scoped path left out of the intent, the stale-replica recovery on the legacy path, no root above an incarnation path, purge or past members unknown, no scoped sweep, no legacy sweep under a scoped live key, the purge or `clearDecommissioned` on the legacy path, an audit that drops, logs every run or runs on every node, leftovers always on the legacy path), each failed at least one test of this task. Every bash block passes `bash -n`, `zsh -n` and `shellcheck -s bash`, and the fish lines `fish -n`; the plan text (every new file and replace pair) applied to a fresh export reproduces the tested tree byte for byte, and every block of Steps 1–30 ran in zsh (the Bash tool's shell) against a scratch worktree with a stand-in `$W.core-tag-p4` and printed what it expects (Step 29 on the local 26.3.51.7 image). The `BUILD.bazel` line counts of Steps 7–27 and the stat line of Step 28 are measured on `cfd4f42`'s `BUILD.bazel` files: a list an earlier plan already extended the same way (a test dependency gazelle adds here) shows one line fewer.
+- **Historical inertness measurement.** With no scoped incarnation, every DDL and Keeper statement is byte-identical (`TestZooKeeperPathForUnscopedIsByteIdentical` records the statements of the legacy entry points on a fake connection), and the existing ClickHouse suites of `ddl`, `tableset`, `snode` and `verifier` pass unchanged; the owner SNode issues one more Keeper read per pass (the `unsafe_inc` listing, plus one per table under it once there are any).
+- **Beyond contract §42.1's names** (recorded in Appendix B): the tests `TestScopedSweepPreservesUnknownLocalKeeperMetadata`, `TestRetiredKeeperSweepsProtectUnknownMarkersOnBothRoots`, `TestKeeperAuditPureFakeRetriesPacesReportsAndNeverMutates`, `TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath` (ClickHouse), `TestListKeeperRootsClassifiesChildren`, `TestKeeperScopeOfFollowsTheRegistryMark`, `TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers` and `TestNewDefaultsTheKeeperAuditInterval`; the log text `keeper audit failed; the next pass retries it`; the unexported `KeeperScope.validate`, `keeperRootPath`, `dropReplicaAtPath`, `canonicalIncarnationSeq` (`ddl`), `target.scope`, `sweepRetiredPath`, `dropTables`, `leftoverScopes`, `unattributableKeeperTables`, `auditKeeperIfDue`, `auditKeeper`, `keeperFindingOf` and the `Reconciler` fields `keeperFindings`, `keeperAuditRuns`, `lastKeeperAudit` (`tableset`); the test helpers `keeperFakeConn`, `nameRows`, `isolatedShard`, `strandReplicaAt`, `replicaState`, `createReplicatedAt` (`ddl`), `isolatedShard`, `isolatedPinned`, `scopedInc`, `fakeView.setSnap`, `peer`, `replicaOf`, `replicasAt`, `keeperRoots`, `hasScoped`, `insertUnsafe`, `unsafeRows`, `syncReplica`, `syncBuffer`, `auditedOwner`, `strayRoot`, the unit-only `keeperAuditConn` and `keeperAuditRows` (`tableset`); the new test files `wire/known_keeper_replica_test.go`, `dataplane/ddl/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_roots_test.go`, `keeper_roots_ch_test.go`, `dataplane/tableset/keeper_scope_test.go`, `keeper_scope_ch_test.go`, `keeper_audit_test.go`, `keeper_audit_ch_test.go`.
+- **The ClickHouse pair.** The gated tests run on a local two-node pair in the topology of CI's `integration-clickhouse` job (node A hosts the shared Keeper, ephemeral loopback ports, the CI image `clickhouse/clickhouse-server:25.8`), and Step 29 repeats `ddl` and `tableset` on devnet2's `clickhouse/clickhouse-server:26.3.37.3`. The CI-only password is read from the public repository file `scripts/ci/clickhouse-default-password.xml` for these throwaway containers (CI's own job sets it the same way); it guards nothing else. Every new test that reads a whole root or creates incarnation paths uses a Keeper shard of its own (`isolatedShard`, 1 000 000–1 999 999; Plan S3-D's tests use 2 000 000 and up), because the `ddl`, `tableset`, `snode` and `verifier` targets share one Keeper; reruns on the same Keeper start clean. Bazel runs the integration targets one at a time (`--local_test_jobs=1`): on a loaded workstation, parallel targets made the shared Keeper's sessions expire (`code: 999, message: Session expired`) in pre-existing tests of three targets.
+- **Historical drafting measurement (2026-10-16; not current acceptance proof).** In a scratch git repository holding a `git archive` of arbiter-core `origin/main` `cfd4f42` with, on top, Plan S3-D Task 50's two `ddl` functions appended to `table.go` as its text writes them and historical stand-ins of Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Groups` and group types (contract §41's fields; this task uses nothing else of Task 60, apart from the `MemberCheckpointSeqs` that the review fix of Appendix B reads), this task was applied step by step from its own text with its own commands (Go 1.27.1 and Go 1.26.3 with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off`; Bazel 9.1.0): every failing step failed with the errors given and every passing step passed; gazelle changed exactly the `BUILD.bazel` lines given; `go vet` is clean, `go test -race` passes for `ddl`, `tableset`, `wire` and `conformance`, `bazel build //...` passed and `bazel test --build_tests_only --@rules_go//go/config:race //...` ended `Executed 9 out of 17 tests: 17 tests pass.` on that base; on a local pair of ClickHouse 25.8.28.1 the five integration targets passed through Bazel (`Executed 5 out of 5 tests: 5 tests pass.`, the `snode` and `verifier` suites unchanged), and again on the same Keeper, and `ddl`, `tableset`, `snode` and `verifier` passed on 26.3.51.7, the local 26.3 image (96 top-level `--- PASS` lines in `ddl` and `tableset`, none skipped). Seventeen mutations, each reverting one fix (a scoped path nested under the legacy root, the scoped path left out of the intent, the stale-replica recovery on the legacy path, no root above an incarnation path, purge or past members unknown, no scoped sweep, no legacy sweep under a scoped live key, the purge or `clearDecommissioned` on the legacy path, an audit that drops, logs every run or runs on every node, leftovers always on the legacy path), each failed at least one test of this task. Every bash block passes `bash -n`, `zsh -n` and `shellcheck -s bash`, and the fish lines `fish -n`; the plan text (every new file and replace pair) applied to a fresh export reproduces the tested tree byte for byte, and every block of Steps 1–30 ran in zsh (the Bash tool's shell) against a scratch worktree with a stand-in `$W.core-tag-p4` and printed what it expects (Step 29 on the local 26.3.51.7 image). The `BUILD.bazel` line counts of Steps 7–27 and the stat line of Step 28 are measured on `cfd4f42`'s `BUILD.bazel` files: a list an earlier plan already extended the same way (a test dependency gazelle adds here) shows one line fewer.
+- **Independent candidate measurement (2026-10-17).** Applied all original owning hunks over the complete verified Task 60 source and actual generated Task 57 proto, without C4 API stand-ins. Five original TDD stages reproduce their RED/GREEN results. The new unknown-local-marker sweep regression fails before the fix, then first/backoff and both-root protection tests and fake audit pacing/retry/read-only tests pass. Whole-module Go completes 28 packages, 717 top-level passing tests and 1656 passing events; 260 gated skips are not integration execution. Vet and selected race pass; enforced-offline Bazel builds 55 and races all 28 targets PASS within an unchanged 120s per-target bound. Twenty assertion mutations fail and all 404 source hashes restore exactly. The actual CH25.8/exact26.3.37.3 and full post-C4 released-chain gates remain pending.
+- **Verification boundary.** This independent review runs no Docker or real endpoint. The ClickHouse 25.8 and exact 26.3.37.3 integration stages remain mandatory execution gates, not inferred from fake unit tests or historical 26.3.51.7 results. Confirm the CI-only credential default with the user before running the pair; read it from the existing CI XML without printing it or putting it on argv. Every standalone Bash/inline block explicitly disables inherited private-module bypass and Go/Bazel downloads; an unavailable cached dependency stops.
+- **Gate output.** Integration Go blocks now retain JSON and validate complete package/test completion with no failed or skipped event; the gate prints a completion summary instead of the historical grep-filtered PASS lines shown below. Those named tests must still be present in the retained JSON. All earlier historical line-count/target-count observations are descriptive, not acceptance conditions.
 - **Remote actions.** Only the image pulls of Steps 2 and 29 when an image is not in the local Docker cache; each needs explicit user confirmation in chat before running. This task pushes nothing and opens no PR (Task 63 does both for Tasks 59–63). Go and Bazel use what Task 59's pin downloaded: if a command starts fetching (`go: downloading`, Bazel `Fetching`), stop it and ask, because a download is a remote read that needs explicit user confirmation in chat. Nothing touches devnet2 or sea.
 - **Values across commands.** The Bash tool keeps no variables between calls, so every block sets `W` itself and reads what earlier steps wrote: `$W.core-tag-p4` (Task 59's record of the ledger's `CORE_TAG_P4`) and, in `$HOME/.cache/s3e1-task61/` (mode 700), `base` (the branch head before this task, Step 1), `pair.env` (the pair's two addresses, Step 2, removed in Step 30) and `targets` (the integration targets, Step 28). Nothing there is committed.
 
@@ -9295,7 +10107,7 @@ Notes:
 - Test: `wire/known_keeper_replica_test.go` (new) — `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`
 - Modify: `dataplane/tableset/reconciler.go` (`Config.SweepDecommissioned` `:70-73`; the end of `Stats` `:110-112`; the `leftoverDrops` field `:135-136`; `New` `:161-163`; `Stats()` `:319`; `target` `:381-386`; `reconcileRegistry` `:392-393`, `:409-411`, `:488-503`; `ensurePresent` `:525-532`, `:539-540`, `:549-552`, `:570-576`; `purge` `:669-671`, `:692-693`, `:705-706`; `sweep` `:721-724`, `:736-739`; `clearDecommissioned` `:744-755`, `:778-781`; `sweepPurgedKeeperPaths` and the head of `dropLeftover` `:815-844`)
 - Create: `dataplane/tableset/keeper_audit.go`
-- Test: `dataplane/tableset/keeper_scope_test.go` (new) — `TestKeeperScopeOfFollowsTheRegistryMark`, `TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers`; `dataplane/tableset/keeper_scope_ch_test.go` (new, ClickHouse and Keeper) — `TestReconcilerCreatesAScopedIncarnationOnItsIncarnationPath`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds`, `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica`; `dataplane/tableset/keeper_audit_test.go` (new) — `TestNewDefaultsTheKeeperAuditInterval`; `dataplane/tableset/keeper_audit_ch_test.go` (new, ClickHouse and Keeper) — `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`
+- Test: `dataplane/tableset/keeper_scope_test.go` (new) — `TestKeeperScopeOfFollowsTheRegistryMark`, `TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers`; `dataplane/tableset/keeper_scope_ch_test.go` (new, ClickHouse and Keeper) — `TestReconcilerCreatesAScopedIncarnationOnItsIncarnationPath`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds`, `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica`; `dataplane/tableset/keeper_audit_test.go` (new) — `TestNewDefaultsTheKeeperAuditInterval`, `TestScopedSweepPreservesUnknownLocalKeeperMetadata`, `TestRetiredKeeperSweepsProtectUnknownMarkersOnBothRoots`, `TestKeeperAuditPureFakeRetriesPacesReportsAndNeverMutates`; `dataplane/tableset/keeper_audit_ch_test.go` (new, ClickHouse and Keeper) — `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`
 - BUILD through gazelle: `dataplane/ddl/BUILD.bazel` (library srcs `keeper_roots.go`; test srcs the four new test files; test deps `@com_github_clickhouse_clickhouse_go_v2//lib/driver`), `dataplane/tableset/BUILD.bazel` (library srcs `keeper_audit.go`; test srcs the four new test files), `wire/BUILD.bazel` (test srcs `known_keeper_replica_test.go`); no other dependency
 - Unchanged: `dataplane/ddl/build.go`, `verify.go` and every `ddl` golden, `snode/*` (`snode.go` already sets `SweepDecommissioned` for the owner SNode, which gets the audit through it with the default interval), `verifier/*`, `wire/stage3_registry.go` (Task 60's), `README.md` (Task 63 documents the Keeper roots), `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`, `.github/workflows/ci.yml` (its `integration-clickhouse` job already runs the `ddl` and `tableset` targets)
 - Local only, never committed: `$HOME/.cache/s3e1-task61/` (mode 700: `base`, `targets`, `check-tests.py`, retained test logs and `pair.env` until Step 30); the Docker containers `arbiter-core-s3e1-t61-ch-a`, `arbiter-core-s3e1-t61-ch-b` and their network `arbiter-core-s3e1-t61-ch` (Steps 2–30)
@@ -9310,8 +10122,12 @@ Notes:
   - `dataplane/ddl`: `const KeeperUnsafeRoot = "unsafe"`, `const KeeperScopedUnsafeRoot = "unsafe_inc"`; `type KeeperScope struct{ IncarnationSeq uint64; Scoped bool }`; `func ZooKeeperPathFor(keeperShardID uint32, tableID string, s KeeperScope) string`; `func IncarnationIntentsFor(p Pinned, t payloadexec.TableSchema, s KeeperScope) (TableIntent, TableIntent, TableIntent, error)`; `func EnsureTableFor(ctx context.Context, conn clickhouse.Conn, p Pinned, t payloadexec.TableSchema, s KeeperScope, mode Mode) error`; `func DropTableFor(ctx context.Context, conn clickhouse.Conn, p Pinned, tableID string, s KeeperScope) error`; `func KeeperReplicasAt(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32, tableID string, s KeeperScope) ([]string, error)`; `func DropReplicaAt(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32, tableID string, s KeeperScope, replica string) error`; `type ScopedKeeperPath struct{ Table string; IncarnationSeq uint64 }`; `type KeeperRoots struct{ Legacy []string; Scoped []ScopedKeeperPath; NonIncarnation []string }`; `func ListKeeperRoots(ctx context.Context, conn clickhouse.Conn, keeperShardID uint32) (KeeperRoots, error)`; the existing seven functions delegating, byte for byte.
   - `wire`: `func (s TableRegistrySnapshot) NetworkPool(purgeNodeSet []string) []string`; `func (s TableRegistrySnapshot) KnownKeeperReplica(inc TableIncarnation, pool []string, replica string) bool` (`pool` is `NetworkPool`'s result, never the whole purge node set).
   - `dataplane/tableset`: `func KeeperScopeOf(inc wire.TableIncarnation) ddl.KeeperScope`; `Config.KeeperAuditInterval time.Duration`; `const DefaultKeeperAuditInterval = 10 * time.Minute`; `type KeeperFindingReason string` with `KeeperFindingUnknownReplica` (`unknown_replica`) and `KeeperFindingNonIncarnationRoot` (`non_incarnation_root`); `type KeeperFinding struct{ Path, Replica string; Reason KeeperFindingReason }`; `Stats.KeeperFindings []KeeperFinding`, `Stats.KeeperAuditRuns uint64`; the warn texts `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`), verbatim.
-  - Tests: contract §42.1's fourteen Task 61 names (Files, Test) and the five added ones of the Notes.
+  - Tests: contract §42.1's fourteen Task 61 names (Files, Test) and the eight added ones of the Notes.
 - Consumed by: Task 62 (`consensus.UnsafeReconciler` creates `hg_member_unsafe` replicas at `ddl.ZooKeeperPathFor(cfg.KeeperShardID, tableID, tableset.KeeperScopeOf(inc))`), Task 63 (purge reports and readiness read `ddl.KeeperReplicasAt` and `ddl.ZooKeeperPathFor` with `tableset.KeeperScopeOf`), Plan S3-E2 Task 69 (the arbiter sets `scoped_keeper_path` after switch 1, which this task's paths follow), Plan S3-E4 Task 79 (sentio-node exports `Stats.KeeperFindings` with both reasons always present), Plan S3-F (the operating rules read the findings).
+
+**Source-chain gate.** Verify the complete final Task 60 candidate source and actual generated Task 57 proto before independent application. The actual post-C4 CORE_TAG_P4 released predecessor remains an execution-time gate; preserve the complete locally replayed C4 serving/lease/query-adapter source, while refusing a missing actual released predecessor. No switch or feature is activated here.
+
+**Final source-chain reconciliation (2026-10-18).** The complete local source chain has now been replayed through the actual C4/Task45 serving and durable lease code, P4 Task50, Tasks59–61, the separately audited Task34 constructor-owned legacy memo, Task62 and Task63: core379 →400 →407 →412 →423 →425 →447 →469. It preserves the real C4 query adapter and every non-owning predecessor byte at each owning stage; no API scaffold or old partial-base measurement substitutes for that proof. The final469 manifest is `ba35ad28056a3a9b840512ac1f366f72e30efc80ddfd9f0504392e111c129b5c`, with actual Task58 HG935 and canonical proto57. Earlier independent/drafting measurements above remain historical stage-specific evidence. This is source-level proof only: actual released CORE_TAG_P4/P5 pins, required ClickHouse/Keeper/MinIO tests, formal full500/prerequisite plan exits and execution ledger records remain separate gates.
 
 - [ ] **Step 1: Check the branch, Tasks 59–60 and the anchors**
 
@@ -9365,7 +10181,7 @@ print("integration JSON complete: %d packages, %d passing test/subtest events, n
 PY_CHECK_TESTS
 ```
 
-For the user in fish, the first line is `set W (python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task59/worktree.json"); or exit 1; set T61 "$HOME/.cache/s3e1-task61"` and the sixth `set CORE_TAG_P4 (cat "$W.core-tag-p4")`; the rest run unchanged. Expected: `urwt/codex/multi-source-s3e1`; `0` (a clean tree); a 40-hex line (Task 60's last commit, now in `base`); `HEAD contains v<x>.<y>.<z>`; a diff stat that lists `wire/table_registry_snapshot.go` alone (Task 60's fields and converters). A missing `$W.core-tag-p4` (Task 59 did not run), another branch or a dirty tree: stop. A `dataplane/ddl` or `dataplane/tableset` file in the stat: something after `CORE_TAG_P4` moved this task's anchors; re-read that file before applying any hunk to it.
+The user can save the complete block as `$HOME/.cache/s3e1-task61/step-01.sh` and invoke `bash -eo pipefail "$HOME/.cache/s3e1-task61/step-01.sh"` from fish. Do not paste the Bash body directly into fish. Expected: `urwt/codex/multi-source-s3e1`; `0` (a clean tree); a 40-hex line (Task 60's last commit, now in `base`); `HEAD contains v<x>.<y>.<z>`; a diff stat that lists `wire/table_registry_snapshot.go` alone (Task 60's fields and converters). A missing `$W.core-tag-p4` (Task 59 did not run), another branch or a dirty tree: stop. A `dataplane/ddl` or `dataplane/tableset` file in the stat: something after `CORE_TAG_P4` moved this task's anchors; re-read that file before applying any hunk to it.
 
 ```bash
 set -eo pipefail
@@ -9384,6 +10200,8 @@ Expected, one line each: `4` (Task 60's `ScopedKeeperPath`, `PurgeMembers`, `Gro
 - [ ] **Step 2: Start the local ClickHouse pair and run the baseline**
 
 Start the two-node ClickHouse pair in the topology of CI's `integration-clickhouse` job (Notes); it stays up until Step 30. Local containers; the image pull is a remote read: needs explicit user confirmation in chat before running, unless `docker image inspect clickhouse/clickhouse-server:25.8` already succeeds.
+
+Confirm before running.
 
 ```bash
 set -eo pipefail
@@ -9855,7 +10673,7 @@ func TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath(t *testing.T) {
 
 - [ ] **Step 4: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && GOWORK=off go test ./dataplane/ddl/ -run 'TestZooKeeperPathForUnscopedIsByteIdentical|TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot|TestIncarnationIntentsForUsesTheIncarnationPath|TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./dataplane/ddl/ -run 'TestZooKeeperPathForUnscopedIsByteIdentical|TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot|TestIncarnationIntentsForUsesTheIncarnationPath|TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath'`
 
 Expected: FAIL to build:
 
@@ -10478,7 +11296,7 @@ func TestListKeeperRootsSeparatesIncarnationPathsFromOtherRoots(t *testing.T) {
 
 - [ ] **Step 9: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && GOWORK=off go test ./dataplane/ddl/ -run 'TestListKeeperRoots'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./dataplane/ddl/ -run 'TestListKeeperRoots'`
 
 Expected: FAIL to build:
 
@@ -10755,7 +11573,7 @@ func TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers(t *testing.T) {
 
 - [ ] **Step 14: Run the test and see it fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && GOWORK=off go test ./wire/ -run 'TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./wire/ -run 'TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers'`
 
 Expected: FAIL to build:
 
@@ -10874,7 +11692,7 @@ At `CORE_TAG_P4` Plan S3-C2's `ManifestOwner` follows `Owner`; `NetworkPool` and
 
 - [ ] **Step 16: Run the test and see it pass**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l wire && GOWORK=off go test -count=1 -v ./wire/ -run 'TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers' | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test -count=1 ./wire/ ./conformance/`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l wire)" || exit 1; [ -z "$formatting" ] || exit 1; GOWORK=off go test -count=1 -v ./wire/ -run 'TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers' | grep -E '^(--- |ok|FAIL)' && GOWORK=off go test -count=1 ./wire/ ./conformance/`
 
 Expected: `gofmt` lists nothing; `--- PASS: TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers (0.00s)` and `ok  	github.com/sentioxyz/arbiter-core/wire	<t>s`; then `ok` for `wire` and `conformance`.
 
@@ -11457,7 +12275,7 @@ func TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica(t *testing.T)
 
 - [ ] **Step 19: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && GOWORK=off go test ./dataplane/tableset/ -run 'TestKeeperScopeOf|TestLeftoverScopes'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./dataplane/tableset/ -run 'TestKeeperScopeOf|TestLeftoverScopes'`
 
 Expected: FAIL to build:
 
@@ -11580,7 +12398,7 @@ with:
 
 ```go
 	skipSweep := maps.Clone(desired) // physical names the legacy Keeper sweep must not drop
-	unattributable := map[string]bool{}
+	unattributable := unattributableKeeperTables(snap, comments)
 	for _, physical := range sortedKeys(comments) {
 		keys, ok := history[physical]
 		if desired[physical] || !ok {
@@ -11885,6 +12703,9 @@ func (r *Reconciler) sweepPurgedKeeperPaths(ctx context.Context, snap wire.Table
 		return
 	}
 	for _, physical := range roots.Legacy {
+		if unattributable[physical] {
+			continue
+		}
 		if keys, ok := history[physical]; ok && !skip[physical] {
 			key := keys[0]
 			if err := ddl.DropTable(ctx, r.d.Conn, r.cfg.Pinned, key); err != nil {
@@ -11971,6 +12792,34 @@ func leftoverScopes(snap wire.TableRegistrySnapshot, comments []string) []ddl.Ke
 		out = []ddl.KeeperScope{{}}
 	}
 	return out
+}
+
+// unattributableKeeperTables protects local Keeper metadata even for a
+// desired scoped key, including passes that skip its create during backoff.
+// A local table must have a known incarnation marker of its physical name,
+// or be unmarked with a matching genesis incarnation. Unknown markers do not
+// authorize sweeping either root, even if the registry's desired scope moved.
+func unattributableKeeperTables(snap wire.TableRegistrySnapshot, comments map[string][]string) map[string]bool {
+	markers := map[string]map[string]bool{}
+	for _, inc := range snap.Incarnations {
+		physical := ddl.CHTableName(inc.Key())
+		if markers[physical] == nil {
+			markers[physical] = map[string]bool{}
+		}
+		markers[physical][ddl.IncarnationComment(inc.Seq)] = true
+		if inc.Origin == wire.TableOriginGenesis {
+			markers[physical][""] = true
+		}
+	}
+	protected := map[string]bool{}
+	for physical, values := range comments {
+		for _, value := range values {
+			if !markers[physical][value] {
+				protected[physical] = true
+			}
+		}
+	}
+	return protected
 }
 
 func (r *Reconciler) dropLeftover(ctx context.Context, snap wire.TableRegistrySnapshot, key string, comments []string) {
@@ -12068,6 +12917,12 @@ Create `dataplane/tableset/keeper_audit_test.go`:
 package tableset
 
 import (
+	"context"
+	"fmt"
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/sentioxyz/arbiter-core/wire"
+	"strings"
 	"testing"
 	"time"
 
@@ -12086,6 +12941,178 @@ func TestNewDefaultsTheKeeperAuditInterval(t *testing.T) {
 	}
 	if st := r.Stats(); st.KeeperFindings != nil || st.KeeperAuditRuns != 0 {
 		t.Fatalf("a new reconciler's Keeper audit stats = %+v", st)
+	}
+}
+
+// keeperAuditConn is a unit-only Keeper/table view. Exec records intended
+// mutations; it does not model ClickHouse's active-replica refusal or writes.
+type keeperAuditConn struct {
+	clickhouse.Conn
+	children map[string][]string
+	local    [][]string
+	execs    []string
+	queryErr error
+}
+
+func (c *keeperAuditConn) Query(_ context.Context, q string, args ...any) (driver.Rows, error) {
+	if c.queryErr != nil {
+		return nil, c.queryErr
+	}
+	if strings.Contains(q, "FROM system.tables") {
+		return &keeperAuditRows{rows: c.local}, nil
+	}
+	if q != `SELECT name FROM system.zookeeper WHERE path = ?` || len(args) != 1 {
+		return nil, fmt.Errorf("unexpected query %q %v", q, args)
+	}
+	var rows [][]string
+	for _, n := range c.children[args[0].(string)] {
+		rows = append(rows, []string{n})
+	}
+	return &keeperAuditRows{rows: rows}, nil
+}
+func (c *keeperAuditConn) Exec(_ context.Context, q string, _ ...any) error {
+	c.execs = append(c.execs, q)
+	return nil
+}
+
+type keeperAuditRows struct {
+	driver.Rows
+	rows [][]string
+	cur  []string
+}
+
+func (r *keeperAuditRows) Next() bool {
+	if len(r.rows) == 0 {
+		return false
+	}
+	r.cur, r.rows = r.rows[0], r.rows[1:]
+	return true
+}
+func (r *keeperAuditRows) Scan(dst ...any) error {
+	if len(dst) != len(r.cur) {
+		return fmt.Errorf("wrong scan arity")
+	}
+	for i, d := range dst {
+		p, ok := d.(*string)
+		if !ok {
+			return fmt.Errorf("wrong scan target")
+		}
+		*p = r.cur[i]
+	}
+	return nil
+}
+func (r *keeperAuditRows) Err() error   { return nil }
+func (r *keeperAuditRows) Close() error { return nil }
+
+// A scoped desired table does not authorize destroying a stranded legacy
+// replica belonging to local tables whose marker is unknown. The create is
+// already refused as drift; a later sweep must preserve that refusal.
+func TestScopedSweepPreservesUnknownLocalKeeperMetadata(t *testing.T) {
+	sch := schemaFor(t, "drift")
+	legacy := chainInc(t, 1, sch, wire.TableStatusPurged)
+	live := scopedInc(t, 2, sch, wire.TableStatusActive)
+	snap := wire.TableRegistrySnapshot{Incarnations: []wire.TableIncarnation{legacy, live}}
+	physical := ddl.CHTableName(sch.TableID)
+	c := &keeperAuditConn{children: map[string][]string{
+		"/sentio/0/unsafe": {physical}, "/sentio/0/unsafe/" + physical + "/replicas": {"n"},
+	}, local: [][]string{{"u", physical, "foreign-marker"}}}
+	r, err := New(Config{Pinned: ddl.Pinned{UnsafeDB: "u", SafeDB: "s", PromoteDB: "p", NodeID: "n"}, SweepDecommissioned: true}, Deps{Conn: c, Arbiter: &fakeArbiter{nodeSet: []string{"n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Check both the first drift and a backed-off pass: protection may not be
+	// derived only from ensurePresent being called in this pass.
+	for i := 0; i < 2; i++ {
+		_ = r.reconcileRegistry(context.Background(), snap, ddl.ModeCreateAndVerify)
+		if len(c.execs) != 0 {
+			t.Fatalf("unknown local marker must protect Keeper metadata: %v", c.execs)
+		}
+	}
+}
+
+func TestRetiredKeeperSweepsProtectUnknownMarkersOnBothRoots(t *testing.T) {
+	sch := schemaFor(t, "protected")
+	retired := scopedInc(t, 1, sch, wire.TableStatusPurged)
+	current := scopedInc(t, 2, sch, wire.TableStatusActive)
+	snap := wire.TableRegistrySnapshot{Incarnations: []wire.TableIncarnation{retired, current}}
+	physical := ddl.CHTableName(sch.TableID)
+	for _, tc := range []struct {
+		marker  string
+		blocked bool
+	}{
+		{"foreign-marker", true}, {"hg_incarnation=999", true}, {"hg_incarnation=01", true}, {"", true},
+		{"hg_incarnation=1", false}, {"hg_incarnation=2", false},
+	} {
+		t.Run(tc.marker, func(t *testing.T) {
+			c := &keeperAuditConn{children: map[string][]string{
+				"/sentio/0/unsafe": {physical}, "/sentio/0/unsafe/" + physical + "/replicas": {"n"},
+				"/sentio/0/unsafe_inc": {physical}, "/sentio/0/unsafe_inc/" + physical: {"1"},
+				"/sentio/0/unsafe_inc/" + physical + "/1/replicas": {"n"},
+			}}
+			r, err := New(Config{Pinned: ddl.Pinned{UnsafeDB: "u", SafeDB: "s", PromoteDB: "p", NodeID: "n"}, SweepDecommissioned: true}, Deps{Conn: c, Arbiter: &fakeArbiter{nodeSet: []string{"n"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			protection := unattributableKeeperTables(snap, map[string][]string{physical: {tc.marker}})
+			r.sweepPurgedKeeperPaths(context.Background(), snap, nil, nil, protection, map[string]string{physical: sch.TableID})
+			want := 2
+			if tc.blocked {
+				want = 0
+			}
+			if len(c.execs) != want {
+				t.Fatalf("marker %q intended mutations %v; want %d", tc.marker, c.execs, want)
+			}
+		})
+	}
+}
+
+func TestKeeperAuditPureFakeRetriesPacesReportsAndNeverMutates(t *testing.T) {
+	ctx := context.Background()
+	sch := schemaFor(t, "audit")
+	inc := chainInc(t, 1, sch, wire.TableStatusActive)
+	physical := ddl.CHTableName(sch.TableID)
+	path := "/sentio/0/unsafe/" + physical
+	c := &keeperAuditConn{children: map[string][]string{
+		"/sentio/0/unsafe": {physical}, path + "/replicas": {"intruder", "n", "pool"},
+		"/sentio/0/unsafe_inc": {"stray"}, "/sentio/0/unsafe_inc/stray": {"bogus"},
+	}}
+	snap := wire.TableRegistrySnapshot{Incarnations: []wire.TableIncarnation{inc}}
+	r, clock, logs := auditedOwner(t, c, ddl.Pinned{UnsafeDB: "u", SafeDB: "s", PromoteDB: "p", NodeID: "n"}, newFakeView(), &fakeArbiter{nodeSet: []string{"pool"}})
+	r.auditKeeperIfDue(ctx, snap)
+	st := r.Stats()
+	if st.KeeperAuditRuns != 1 || len(st.KeeperFindings) != 2 || len(c.execs) != 0 {
+		t.Fatalf("audit stats %+v, mutations %v", st, c.execs)
+	}
+	st.KeeperFindings[0].Path = "changed"
+	if r.Stats().KeeperFindings[0].Path == "changed" {
+		t.Fatal("Stats aliases internal findings")
+	}
+	r.auditKeeperIfDue(ctx, snap)
+	if r.Stats().KeeperAuditRuns != 1 {
+		t.Fatal("audit ignored its interval")
+	}
+	before := logs.String()
+	clock.advance(DefaultKeeperAuditInterval)
+	r.auditKeeperIfDue(ctx, snap)
+	if r.Stats().KeeperAuditRuns != 2 || logs.String() != before {
+		t.Fatal("repeated findings logged again")
+	}
+	clock.advance(DefaultKeeperAuditInterval)
+	c.queryErr = fmt.Errorf("unit Keeper failure")
+	r.auditKeeperIfDue(ctx, snap)
+	if r.Stats().KeeperAuditRuns != 2 || len(r.Stats().KeeperFindings) != 2 {
+		t.Fatal("failed audit changed completed state")
+	}
+	c.queryErr = nil
+	r.auditKeeperIfDue(ctx, snap)
+	if r.Stats().KeeperAuditRuns != 3 {
+		t.Fatal("failed audit was not retried next pass")
+	}
+	r.cfg.SweepDecommissioned = false
+	clock.advance(DefaultKeeperAuditInterval)
+	r.auditKeeperIfDue(ctx, snap)
+	if r.Stats().KeeperAuditRuns != 3 || len(c.execs) != 0 {
+		t.Fatal("non-owner audited or audit mutated Keeper")
 	}
 }
 ```
@@ -12333,7 +13360,7 @@ func TestOwnerKeeperAuditDropsNothing(t *testing.T) {
 
 - [ ] **Step 24: Run the tests and see them fail**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && GOWORK=off go test ./dataplane/tableset/ -run 'TestNewDefaultsTheKeeperAuditInterval|TestOwnerKeeperAudit'`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; GOWORK=off go test ./dataplane/tableset/ -run 'TestNewDefaultsTheKeeperAuditInterval|TestOwnerKeeperAudit'`
 
 Expected: FAIL to build:
 
@@ -12747,9 +13774,9 @@ git log --format=%s "$(cat "$T61/base")"..HEAD || exit 1
 git diff --stat "$(cat "$T61/base")" HEAD | tail -1
 ```
 
-Expected: `gofmt clean`; `0` (gazelle changes nothing); `boundary ok`; the five subjects, newest first: `feat(tableset): the owner's report-only Keeper audit`, `feat(tableset): act on each incarnation's own Keeper path`, `feat(wire): NetworkPool and KnownKeeperReplica`, `feat(ddl): list both SI Keeper roots`, `feat(ddl): incarnation-scoped Keeper paths`; and the stat line ` 18 files changed, 2100 insertions(+), 94 deletions(-)`.
+Expected: `gofmt clean`; `0` (gazelle changes nothing); `boundary ok`; the five subjects, newest first: `feat(tableset): the owner's report-only Keeper audit`, `feat(tableset): act on each incarnation's own Keeper path`, `feat(wire): NetworkPool and KnownKeeperReplica`, `feat(ddl): list both SI Keeper roots`, `feat(ddl): incarnation-scoped Keeper paths`; and the eighteen owning files in the stat (line counts vary with the reviewed safety regression).
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel build --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //... && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
 
 Expected: `Build completed successfully`, every test target `PASSED` and the summary `Executed <n> out of <m> tests: <m> tests pass.` (the race build of CI's `test` job; the ClickHouse-gated tests skip there).
 
@@ -12802,11 +13829,13 @@ Expected: the target list (at `cfd4f42`: `//dataplane/chtest:chtest_test`, `//da
 --- PASS: TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers
 ```
 
-A `code: 999, message: Session expired` failure is the local Keeper's session timing out under load, not this change: run the block again. Any other failure: fix it before going on.
+A `code: 999, message: Session expired` failure is not a passing result. Preserve its logs, compare the identical bounded clean-base run and diagnose the difference before a bounded retry; never classify it as harmless or relax acceptance without evidence. Any failure or skip remains a stop.
 
 - [ ] **Step 29: Run `ddl` and `tableset` on devnet2's ClickHouse version**
 
 Restart the pair on `clickhouse/clickhouse-server:26.3.37.3`, the version devnet2 runs (the header's tech stack). The image pull is a remote read: needs explicit user confirmation in chat before running, unless `docker image inspect clickhouse/clickhouse-server:26.3.37.3` already succeeds.
+
+Confirm before running.
 
 ```bash
 set -eo pipefail
@@ -12860,11 +13889,11 @@ ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 ARBITER_CH_REPLICA=1 CH_USER=defaul
 python3 -I "$T61/check-tests.py" "$T61/ch-step-100.json" github.com/sentioxyz/arbiter-core/dataplane/ddl github.com/sentioxyz/arbiter-core/dataplane/tableset
 ```
 
-Expected: exactly `ok  	github.com/sentioxyz/arbiter-core/dataplane/ddl	<t>s` and `ok  	github.com/sentioxyz/arbiter-core/dataplane/tableset	<t>s` (measured on 26.3.51.7, the local 26.3 image, while drafting).
+Expected: the strict JSON gate completes both packages with no failure or skip. The exact 26.3.37.3 stage is mandatory; historical drafting on 26.3.51.7 does not satisfy it.
 
 - [ ] **Step 30: Stop the pair**
 
-Local only.
+Local only. Confirm before running.
 
 ```bash
 set -eo pipefail
@@ -18344,7 +19373,7 @@ Spec §6.4 (`MemberReady`, signed with the node's ed25519 key), §8.6 first bull
 Nothing here changes consensus state or devnet2: every step of the mode waits for its `stage3` switch, which no arbiter sets before S3-E2–E4, and the mode itself runs only with `member.Config.Consensus`, which nothing sets before S3-E4 Task 79's config keys and S3-F's values.
 
 Notes:
-- **Base.** The URWT worktree `the actual path retained in `$HOME/.cache/s3e1-task59/worktree.json`` of Task 59, on `urwt/codex/multi-source-s3e1`, holding Tasks 59–62's commits on `CORE_TAG_P4` (Plan S3-D Task 50); this task adds its commits to the same branch and opens the branch's one PR (contract §43). Step 1 checks, by their contract signatures, every name this task consumes from Tasks 59–62. The line anchors of the hunks below are those of the scratch base described under Measured; S3-D and Tasks 59–62 move some of them, so each hunk anchors on text and applies the intent where a line moved (the hunk rule of the Global Constraints).
+- **Base.** Task 59's actual retained JSON path (`$HOME/.cache/s3e1-task59/worktree.json`), on `urwt/codex/multi-source-s3e1` for this executing host, holding Tasks 59–62's commits on `CORE_TAG_P4` (Plan S3-D Task 50); this task adds its commits to the same branch and opens the branch's one PR (contract §43). Step 1 checks, by their contract signatures, every name this task consumes from Tasks 59–62. The line anchors of the hunks below are those of the scratch base described under Measured; S3-D and Tasks 59–62 move some of them, so each hunk anchors on text and applies the intent where a line moved (the hunk rule of the Global Constraints).
 - **One mode, one name beyond the contract.** Contract §42.3 lists the parts of the consensus mode but no type that runs them. `consensus.Mode` (`NewMode`, `ModeDeps`, `InstallView`, `(*Mode).Run`, `Status`, `Metrics`) is that runner: `member.Role` builds it in `New` with the member's own connections and runs it in startup step (9) beside the copyset, the feed and the serving server, handing it the feed's verified manifest store, the installer and the boot nonce of startup step (7). The mode builds Task 62's `VerifyRole` itself (it needs the manifest store, which exists only from step 7). Names added beyond contract §42.3 (Appendix B): `Mode`, `NewMode`, `ModeDeps`, `InstallView`, `InstallStateOf`, `ReplicaPaths`, `ReadLocalReplicas`, `ReplicaSyncTimeout`, `(*CheckpointSigner).Address`, `OffStatus`, `ModeOff`, `ModeConsensus`, `ClassLeaving`, the label constants `EvidenceReplay`, `EvidenceScan`, `EvidenceSubmitted`, `EvidenceRefused`, `CheckpointAccepted`, `CheckpointSwitchOff`, `CheckpointRefused`, `ReconcilerMetrics` / `NewReconcilerMetrics` (the reconciler process's two series, for S3-E4 Task 79), `sources.SourceMemberUnsafeHardlink`, `serve.Deps.Consensus`; the unexported `parts.bootNonce`, `(*Role).nodeIDCheckSet` and `(*Role).checkGovernedHost` with the refusal `member: node id %q is served as a member of group %d/%s hosted by indexer %d, not by this host %d: %w` (wrapping `copyset.ErrNodeIDInUse`) and the info line `member: the node id is in the purge node set as this member's own verifier registration`; tests `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica`, `TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration`, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce`, `TestConsensusMetricsExportEveryLabelIncludingZeros`, `TestVerifyRoleCountsItsEvidence`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestServingViewCarriesTheConsensusStatus`.
 - **Every step waits for its switch and for the registration.** Readiness runs only while the registry's `stage3.placement` is on, checkpoints only while `stage3.checkpoints` is on, and both only once the member registered as a VERIFIER in this process (`Config.Register`, S3-F step 4): Apply refuses either from a node that is not a registered verifier (Plan S3-E3 §52.1 refusal 5, §52.3 refusal 4), so a member that has not registered sends nothing. Purge reports do not wait for the registration, so a member that registered in an earlier run never holds a purge.
 - **The switch refusal and the FSM's refusals arrive alike.** The arbiter answers a member command before its switch with FAILED_PRECONDITION and the K67 text, and also maps every Apply refusal of `MemberReady` and `MemberCheckpoint` to FAILED_PRECONDITION with the FSM's text (Plan S3-E3 §52.1 RPC step 5, §52.3 RPC step 5). `dataplane.ErrStage3SwitchOff` therefore wraps both, as contract §42.3 defines it (any leader precondition without a NotLeader detail); the mode reads the switch refusal by its K67 text, counts it `switch_off` and logs it at info, and counts any other refusal `refused` and logs it at warn. Neither pages; both are retried at the next interval, and a refused checkpoint is signed again under the next `checkpoint_seq`.
@@ -18360,15 +19389,18 @@ Notes:
 - **Two pre-existing pins learn something beyond contract §42.** S3-C2 Task 34's `TestLocalNodeFeaturesAreUnchangedThroughP2` (`member/role_test.go`) pins exactly three features; it learns `stage3_v1` with the two pins contract §42.3 names (Appendix B: a contract issue, the test is outside §42's list). `sources.SourceNames` (pinned by S3-C2's `source_test.go`) stays the P2 list; the hard-link source's name is its own constant, and `member.Stats().Installs` carries `member_unsafe_hardlink` at zero only in consensus mode, so the P2/P3 member's series are unchanged.
 - **CI.** CI's `data-plane integration` job (`.github/workflows/ci.yml`) gains `//member/consensus:consensus_test`, unless Task 62 added it, so `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` runs on its two-node pair with shared Keeper; `//member/sources:sources_test`, where the hard-link test lives, is in the job already.
 - **Helper names.** The unexported helpers this task adds to `member/consensus` (`memberIdent`, `liveTablesOf`, `readinessTables`, `awaitingReadiness`, `statusOf`, `readyGroupCount`, `switchOff`, the `fixture*` and `mode*` test helpers) are chosen not to meet Task 62's; if one does, rename this task's and record it.
-- **Measured (2026-10-16).** In a scratch clone of arbiter-core `cfd4f42` (`CORE_TAG`) with Plan S3-C1 Tasks 23–24, S3-C2 Tasks 29–34 and S3-C4 Task 45 applied as their drafts write them, and minimal stand-ins of Tasks 59–62 (the contract §41–§42 signatures this task uses: the canonical types, `MemberReadyHash` / `SignMemberReady` / `MemberCheckpointHash` / `(*Signer).SignMemberCheckpoint` / `VerifyMemberCheckpoint`, the `authoritytest` member fixtures, `wire.MemberReady` / `MemberCheckpoint` and their request converters, the registry view of groups, `ddl.ZooKeeperPathFor` / `KeeperReplicasAt`, `tableset.KeeperScopeOf`, and a `member/consensus` with `Config`, `VerifyRole`, `NewVerifyRole`, `Quiescence`, `ReadQuiescence`, `UnsafeReconciler` and `ReconcilerStats`), against a stand-in of arbiter-proto `PROTO_TAG_P5` (Task 57's draft on S3-D Task 49's draft) and of housegate with S3-C1's helpers, every step below was applied in order with its own commands: each failing run failed with the messages given, each passing run passed, `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` passes except `//wire`'s two tests that the Task 60 stand-in leaves red at the base already (`TestBlockVerificationFromPBReadsEveryField`, `TestPromotionOutcomesConvertersCopyEveryField`), `go vet ./...` and `gofmt` are clean, `-race -count=3` passes on `member/consensus`, and each of 37 reverted fixes (each switch and registration gate, the published-seq and signer-rotation rules, the journal write, each purge condition, each exclusion rule, the live-incarnation check, the path and replica checks of the local replicas, the hard-link drop and miss, the source order and its label, the mode's start, the identity check, the serving status, `stage3_v1`) fails its named test. With Bazel 9.1.0 offline (housegate and the arbiter-proto stand-in as local paths), `bazel run //:gazelle` made exactly the BUILD changes each step gives, `bazel build //...` passed and `bazel test //...` passed every target but `//wire:wire_test` (the same two stand-in tests). The ClickHouse tests passed on `clickhouse/clickhouse-server:26.3` (26.3.51.7) with Keeper and `table_engines_require_grant`, and with CI's other gated targets on a local two-node `clickhouse/clickhouse-server:25.8` (25.8.28.1) pair with shared Keeper and CI's `default` password, through `go test` and through Bazel (the blocks of Steps 14 and 21). Step 19's `scripts/update-housegate.sh`, run offline on a `git archive` of `cfd4f42` (its `git_override` form) against a file proxy serving a stand-in housegate release under a scratch module cache (`BAZEL_BIN=true`), printed its five lines and changed exactly `go.mod` (the housegate line), `go.sum` (its two sums), and the `bazel_dep` version, the `# Resolved Housegate …` comment and the `git_override` commit in `MODULE.bazel` and in README's example. The ledger blocks of Steps 1 and 25 (the read, the run record, R1 with a stub `urwt-create.sh` that runs `git worktree add` and prints the same JSON, R2 to the plans branch, R4) ran against a local bare origin holding Plan S3-D's and this plan's Appendix C on `urwt/claude/ms-si-stage3-plans-cf` and printed the lines and the commit stat they expect. Every bash block passes `bash -n` and `shellcheck -S warning`, and every fish line `fish -n`.
+- **Historical drafting measurement (2026-10-16; stand-ins, not acceptance proof).** In a scratch clone of arbiter-core `cfd4f42` (`CORE_TAG`) with Plan S3-C1 Tasks 23–24, S3-C2 Tasks 29–34 and S3-C4 Task 45 applied as their drafts write them, and minimal stand-ins of Tasks 59–62 (the contract §41–§42 signatures this task uses: the canonical types, `MemberReadyHash` / `SignMemberReady` / `MemberCheckpointHash` / `(*Signer).SignMemberCheckpoint` / `VerifyMemberCheckpoint`, the `authoritytest` member fixtures, `wire.MemberReady` / `MemberCheckpoint` and their request converters, the registry view of groups, `ddl.ZooKeeperPathFor` / `KeeperReplicasAt`, `tableset.KeeperScopeOf`, and a `member/consensus` with `Config`, `VerifyRole`, `NewVerifyRole`, `Quiescence`, `ReadQuiescence`, `UnsafeReconciler` and `ReconcilerStats`), against a stand-in of arbiter-proto `PROTO_TAG_P5` (Task 57's draft on S3-D Task 49's draft) and of housegate with S3-C1's helpers, every step below was applied in order with its own commands: each failing run failed with the messages given, each passing run passed, `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` passes except `//wire`'s two tests that the Task 60 stand-in leaves red at the base already (`TestBlockVerificationFromPBReadsEveryField`, `TestPromotionOutcomesConvertersCopyEveryField`), `go vet ./...` and `gofmt` are clean, `-race -count=3` passes on `member/consensus`, and each of 37 reverted fixes (each switch and registration gate, the published-seq and signer-rotation rules, the journal write, each purge condition, each exclusion rule, the live-incarnation check, the path and replica checks of the local replicas, the hard-link drop and miss, the source order and its label, the mode's start, the identity check, the serving status, `stage3_v1`) fails its named test. With Bazel 9.1.0 offline (housegate and the arbiter-proto stand-in as local paths), `bazel run //:gazelle` made exactly the BUILD changes each step gives, `bazel build //...` passed and `bazel test //...` passed every target but `//wire:wire_test` (the same two stand-in tests). The ClickHouse tests passed on `clickhouse/clickhouse-server:26.3` (26.3.51.7) with Keeper and `table_engines_require_grant`, and with CI's other gated targets on a local two-node `clickhouse/clickhouse-server:25.8` (25.8.28.1) pair with shared Keeper and CI's `default` password, through `go test` and through Bazel (the blocks of Steps 14 and 21). Step 19's `scripts/update-housegate.sh`, run offline on a `git archive` of `cfd4f42` (its `git_override` form) against a file proxy serving a stand-in housegate release under a scratch module cache (`BAZEL_BIN=true`), printed its five lines and changed exactly `go.mod` (the housegate line), `go.sum` (its two sums), and the `bazel_dep` version, the `# Resolved Housegate …` comment and the `git_override` commit in `MODULE.bazel` and in README's example. The ledger blocks of Steps 1 and 25 (the read, the run record, R1 with a stub `urwt-create.sh` that runs `git worktree add` and prints the same JSON, R2 to the plans branch, R4) ran against a local bare origin holding Plan S3-D's and this plan's Appendix C on `urwt/claude/ms-si-stage3-plans-cf` and printed the lines and the commit stat they expect. Every bash block passes `bash -n` and `shellcheck -S warning`, and every fish line `fish -n`.
+- **Independent review source custody.** This candidate is replayed over the complete controller-approved Task62 core447 source (manifest `445e7badea6aa5b8280499caeb87b68189daaba39533cb7b2f98763d5875d959`), including the coherent post45→50→59→60→61 chain plus final constructor-only legacy memo, and uses complete Task58 HG935 source (manifest `a5715bad2e8fcb0aa5a93e38cc4543f2d1551935ed685ddc1fcf2743953e07a0`) and canonical proto57. Each input byte was independently verified before copying. No API stand-in, future version/sum or released tag is invented. Preserve the C4 query adapter, Task45 durable leases/readiness fences and final Task34 private Run/full-wire Verify binding, independent public/private schema clones and serialized terminal invalidation. Member/evidence materializers remain unmemoized. Formal C2/C3, actual full500, exact CH/confinement/MinIO and released-tag gates remain pending and distinct from local unit/race/Bazel proof. The historical drafting measurement below is not that proof.
+- **Independent local review measurement (2026-10-18).** Complete real predecessor/hg/proto inputs above reproduce all seven tests-first RED→GREEN stages. Final whole Go passes all31 packages (824 top-level tests,1871 passing events;268 explicit integration skips); vet and five-package race pass; enforced-offline canonical Bazel builds61 targets and passes all31 tests plain/race under the unchanged120s test bound. The independent constructor-only memo suite passes23 tests/33 events with0 skips after these changes.21 runtime assertion mutants are killed/restored, including the newly isolated purge holds and pure hardlink operation checks. Every one of the74 original Go fences remains byte-identical; two new unit-test fences close offline coverage gaps. Exact final text replays all469 source files/405 Go files byte-for-byte, including regenerated BUILD metadata and CI entry;428 non-owning predecessor files and complete HG935/proto57 stay exact. Actual CH/confinement/MinIO, formal C2/C3/full500 and released-tag execution remain separate pending gates. No local skip, fake-CLI result or source candidate is a release or ledger value.
 - **Remote actions.** Every fetch, module or image download, push, PR, check watch, merge, release run and ledger record below needs explicit user confirmation in chat, each for its own step. Nothing touches devnet2 or sea.
+- **Publication sidecars.** The retained Task59 worktree path is shared; this task also writes sidecars beside that exact path, outside the checkout: `.proto-tag-p5`, `.hg-tag-p5`, `.core-tag-p4`, `.core-tag-p5`, `.pr-url`, `.ch-accepted`, `.reviewed-head`, `.reviewed-tree`, `.merge`, `.release-dispatch`, `.release-prior.json`, `.release-run`, `.release-log` and `.release-verified`. Its private `$HOME/.cache/s3e1-task63/` keeps ledger/base/pair/PR files, resolved module JSON and pre-pin go.mod, plus derived merge/time files; each is validated before use. An existing release-dispatch record is a stop for reconciliation, never automatic redispatch.
 - **Values across commands.** Every block reloads the worktree from Task 59's retained JSON path, preserving absolute symlink spelling, and the Bash tool keeps no variables between calls, so every block sets `W` and `T63="$HOME/.cache/s3e1-task63"` itself. What the steps learn is kept in `$T63`, never in the worktree: `ledger.env` and `base` (Step 1), `evidence_counts.py` (Step 10), `pair.env` (Step 14), `pr-body.md` and `pr-url` (Step 22), `merge` and `merged-at` (Step 23), `cut-since`, `cut-id` and `tag` (Step 24); later blocks read them back, so no value is typed in by hand.
 
 **Files:**
 - Create: `dataplane/member_commands.go`, `dataplane/member_commands_test.go`; Modify `dataplane/BUILD.bazel` (gazelle)
-- Create: `member/consensus/checkpoint_seq.go`, `checkpoint.go`, `readiness.go`, `mode.go`, `purge.go`, `status.go`, `metrics.go`; tests `member/consensus/stage3_fixtures_test.go`, `checkpoint_seq_test.go`, `checkpoint_test.go`, `readiness_test.go`, `readiness_ch_test.go` (ClickHouse and Keeper), `mode_test.go`
+- Create: `member/consensus/checkpoint_seq.go`, `checkpoint.go`, `readiness.go`, `mode.go`, `purge.go`, `status.go`, `metrics.go`; tests `member/consensus/stage3_fixtures_test.go`, `checkpoint_seq_test.go`, `checkpoint_test.go`, `readiness_test.go`, `readiness_ch_test.go` (ClickHouse and Keeper), `mode_test.go`, `purge_regression_test.go` (each purge hold independently)
 - Modify: Task 62's `member/consensus/verify_role.go` (or whichever of its files holds them: the `VerifyRole` struct and its one `HandleReplayJob` and one `HandleScanRequest` call, Step 10's script); `member/consensus/BUILD.bazel` (gazelle)
-- Create: `member/sources/member_unsafe_hardlink.go`, `member/sources/member_unsafe_hardlink_ch_test.go` (ClickHouse and Keeper); Modify `member/sources/BUILD.bazel` (gazelle)
+- Create: `member/sources/member_unsafe_hardlink.go`, `member/sources/member_unsafe_hardlink_test.go` (pure intended-operation regressions), `member/sources/member_unsafe_hardlink_ch_test.go` (ClickHouse and Keeper); Modify `member/sources/BUILD.bazel` (gazelle)
 - Create: `member/consensus_mode.go`, `member/consensus_mode_test.go`
 - Modify: `member/config.go` (imports `:16`; `Config` after `Serve`, `:101-104`), `member/role.go` (`parts`, the field `bootNonce`; `Role` after `serving`, `:136`; `New`, `:158-166`; `Run`'s startup step (6), the `copyset.CheckNodeIDUnused` call, `:239-241`; `build`'s source list, `:352-354`, and its `parts` literal, `:388`; `runParts`, `:426` and `:455`), `member/stats.go` (imports `:11`; the source zeros, `:94-96`), `member/serving.go` (`newServing`, `:37` and `:58`), `member/role_test.go` (`TestLocalNodeFeaturesAreUnchangedThroughP2`, `:405-411`), `member/BUILD.bazel` (gazelle)
 - Modify: `member/serve/conditions.go` (imports `:13`; `ServingView`, `:62-66`), `member/serve/serve.go` (imports `:25`; `Deps.NodeID`, `:182-184`; `Server`, `:255`; `New`, `:284` and `:298-300`; `Serving`, `:334-340`; lines of S3-C4 Task 45's file after its review round 1, which added `Deps.StateDir` before `NodeID`); Create `member/serve/consensus_status_test.go`; Modify `member/serve/BUILD.bazel` (gazelle)
@@ -18691,7 +19723,7 @@ func TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal(t *testing.T) {
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //dataplane:dataplane_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //dataplane:dataplane_test --test_output=errors`
 
 Expected: `//dataplane:dataplane_test` FAILED TO BUILD with `dataplane/member_commands_test.go:118:14: c.SubmitMemberReady undefined (type *Client has no field or method SubmitMemberReady)`, `undefined: ErrStage3SwitchOff`, `c.SubmitMemberCheckpoint undefined (type *Client has no field or method SubmitMemberCheckpoint)` and `too many errors` (the compiler lists the first ten errors of a package). Gazelle adds `member_commands_test.go` to `dataplane_test`.
 
@@ -18762,32 +19794,11 @@ func (c *Client) submitStage3(ctx context.Context, call func(ctx context.Context
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l dataplane && bazel run //:gazelle && bazel test //dataplane:dataplane_test --test_output=errors && git diff -- dataplane/BUILD.bazel`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l dataplane)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //dataplane:dataplane_test --test_output=errors && git diff -- dataplane/BUILD.bazel`
 
-Expected: no file listed; `//dataplane:dataplane_test` PASSED (the two new tests and every existing one); the BUILD diff:
+Expected: no file listed; `//dataplane:dataplane_test` PASSED (the two new tests and every existing one); the current additive BUILD changes:
 
-```diff
-diff --git a/dataplane/BUILD.bazel b/dataplane/BUILD.bazel
-index 901fb2e..315f08f 100644
---- a/dataplane/BUILD.bazel
-+++ b/dataplane/BUILD.bazel
-@@ -6,6 +6,7 @@ go_library(
-         "client.go",
-         "genesis.go",
-         "manifests.go",
-+        "member_commands.go",
-         "member_reads.go",
-         "registry_follower.go",
-         "registry_schema.go",
-@@ -37,6 +38,7 @@ go_test(
-         "client_test.go",
-         "manifests_test.go",
-         "manifests_tracks_test.go",
-+        "member_commands_test.go",
-         "member_reads_test.go",
-         "registry_follower_size_test.go",
-         "registry_follower_test.go",
-```
+Gazelle adds `member_commands.go` and `member_commands_test.go` to `dataplane/BUILD.bazel`; preserve every predecessor source/dependency entry.
 
 ```bash
 set -eo pipefail
@@ -19183,7 +20194,7 @@ func TestPlanCheckpointExcludesTablesWithClosedReasons(t *testing.T) {
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors`
 
 Expected: `//member/consensus:consensus_test` FAILED TO BUILD with `member/consensus/checkpoint_seq_test.go:16:42: undefined: CheckpointSeqStore`, `undefined: OpenCheckpointSeqStore`, `undefined: NewCheckpointSigner`, `undefined: OwnerInstallState`, `undefined: TableInstallState`, `undefined: PlanCheckpoint` and `too many errors`. Gazelle adds the three files to `consensus_test` (Task 62's, or a new `go_test` when Task 62 has none).
 
@@ -19540,63 +20551,11 @@ func (s *CheckpointSigner) Sign(cp arbiter.MemberCheckpoint, published uint64) (
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l member/consensus && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l member/consensus)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
 
 Expected: no file listed; PASSED: `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit` (as root it logs that the read-only state dir check is skipped), `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestPlanCheckpointListsOnlyTheMembersGroupsOfOneOwner`, `TestPlanCheckpointExcludesTablesWithClosedReasons` and Task 62's tests. The BUILD diff, on the scratch base's Task 62 stand-in (Task 62's own library and test lists hold more files and deps; gazelle adds only what is missing):
 
-```diff
-diff --git a/member/consensus/BUILD.bazel b/member/consensus/BUILD.bazel
-index 34c7100..05bc71c 100644
---- a/member/consensus/BUILD.bazel
-+++ b/member/consensus/BUILD.bazel
-@@ -1,8 +1,10 @@
--load("@rules_go//go:def.bzl", "go_library")
-+load("@rules_go//go:def.bzl", "go_library", "go_test")
- 
- go_library(
-     name = "consensus",
-     srcs = [
-+        "checkpoint.go",
-+        "checkpoint_seq.go",
-         "config.go",
-         "quiescence.go",
-         "unsafe_reconciler.go",
-@@ -11,12 +13,34 @@ go_library(
-     importpath = "github.com/sentioxyz/arbiter-core/member/consensus",
-     visibility = ["//visibility:public"],
-     deps = [
-+        "//:arbiter-core",
-+        "//authority",
-         "//dataplane",
-         "//dataplane/evidence",
-         "//dataplane/tableset",
-+        "//member/install",
-+        "//wire",
-         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-         "@com_github_sentioxyz_arbiter_proto//gen/pb",
-         "@housegate//pkg/replay",
-         "@housegate//pkg/replay/payloadexec",
-     ],
- )
-+
-+go_test(
-+    name = "consensus_test",
-+    srcs = [
-+        "checkpoint_seq_test.go",
-+        "checkpoint_test.go",
-+        "stage3_fixtures_test.go",
-+    ],
-+    embed = [":consensus"],
-+    deps = [
-+        "//:arbiter-core",
-+        "//authority",
-+        "//authority/authoritytest",
-+        "//member/install",
-+        "//wire",
-+        "@housegate//pkg/replay",
-+    ],
-+)
-```
+Gazelle adds the checkpoint planner/store and their tests plus `stage3_fixtures_test.go` to `member/consensus/BUILD.bazel`; preserve the accepted Task62 policy/quiescence tests and all existing dependencies.
 
 ```bash
 set -eo pipefail
@@ -19822,7 +20781,7 @@ func TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica(t *testing.T) 
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors`
 
 Expected: FAILED TO BUILD with `member/consensus/readiness_ch_test.go:77:55: undefined: memberIdent`, `undefined: ReadLocalReplicas`, then `too many errors` (the compiler stops before `readiness_test.go`'s `undefined: ReplicaPaths`, `undefined: PlanReadiness` and `undefined: LocalReplicas`).
 
@@ -19987,7 +20946,7 @@ func memberIdent(id string) string {
 }
 ```
 
-In `.github/workflows/ci.yml`, job `integration-clickhouse`, step `data-plane integration`, add the target before `//member/copyset:copyset_test \` (`:113`) unless Task 62 listed it already:
+In `.github/workflows/ci.yml`, job `integration-clickhouse`, step `data-plane integration`, add the target before `//member/copyset:copyset_test \` (`:113`) unless Task 62 listed it already (the accepted predecessor does not list it yet; after adding it require exactly one occurrence):
 
 In `.github/workflows/ci.yml`, replace
 
@@ -20002,52 +20961,11 @@ with
             //member/copyset:copyset_test \
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l member/consensus && grep -c '//member/consensus:consensus_test' .github/workflows/ci.yml && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l member/consensus)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; grep -c '//member/consensus:consensus_test' .github/workflows/ci.yml && bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
 
-Expected: no file listed; `1`; PASSED (`TestPlanReadinessAnnouncesOnlySyncedGroups` passes and `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` skips: it runs in Step 14 and in CI); the BUILD diff:
+Expected: no file listed; `1`; PASSED (`TestPlanReadinessAnnouncesOnlySyncedGroups` passes and `TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` skips: it runs in Step 14 and in CI); the current additive BUILD changes:
 
-```diff
-diff --git a/member/consensus/BUILD.bazel b/member/consensus/BUILD.bazel
-index 05bc71c..e89db86 100644
---- a/member/consensus/BUILD.bazel
-+++ b/member/consensus/BUILD.bazel
-@@ -7,6 +7,7 @@ go_library(
-         "checkpoint_seq.go",
-         "config.go",
-         "quiescence.go",
-+        "readiness.go",
-         "unsafe_reconciler.go",
-         "verify_role.go",
-     ],
-@@ -16,6 +17,7 @@ go_library(
-         "//:arbiter-core",
-         "//authority",
-         "//dataplane",
-+        "//dataplane/ddl",
-         "//dataplane/evidence",
-         "//dataplane/tableset",
-         "//member/install",
-@@ -32,6 +34,8 @@ go_test(
-     srcs = [
-         "checkpoint_seq_test.go",
-         "checkpoint_test.go",
-+        "readiness_ch_test.go",
-+        "readiness_test.go",
-         "stage3_fixtures_test.go",
-     ],
-     embed = [":consensus"],
-@@ -39,8 +43,10 @@ go_test(
-         "//:arbiter-core",
-         "//authority",
-         "//authority/authoritytest",
-+        "//dataplane/chtest",
-         "//member/install",
-         "//wire",
-+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-         "@housegate//pkg/replay",
-     ],
- )
-```
+Gazelle adds `readiness.go`, `readiness_test.go` and `readiness_ch_test.go` to `member/consensus/BUILD.bazel`. The actual Task62 predecessor already has its DDL dependency; do not add a duplicate or replace the whole BUILD file.
 
 ```bash
 set -eo pipefail
@@ -20836,7 +21754,52 @@ func TestModeThreadsReplayStoragePolicy(t *testing.T) {
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors`
+Add the independent hold regression below. The original combined purge test still passes after deleting the table-held check, because its other holds mask that deletion; this test makes the same mutant fail and also keeps Task62 structural-ledger corruption fail-closed at this caller. Create `member/consensus/purge_regression_test.go`:
+
+```go
+package consensus
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestMemberPurgeChecksEachHoldIndependently isolates each hold; stacking
+// all three in one test can hide the removal of one of the three gates.
+func TestMemberPurgeChecksEachHoldIndependently(t *testing.T) {
+	for _, hold := range []string{"table", "replica", "unresolved", "corrupt ledger"} {
+		t.Run(hold, func(t *testing.T) {
+			h := newModeHarness(t, purgeSnapshot(), false)
+			switch hold {
+			case "table":
+				h.held[3] = true
+			case "replica":
+				h.replicas[3] = []string{fixtureNode}
+			case "unresolved":
+				q, err := OpenQuiescence(h.stateDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := q.Observe(41, []QuiescentTable{{TableID: "dex.pools", IncarnationSeq: 3}}); err != nil {
+					t.Fatal(err)
+				}
+			case "corrupt ledger":
+				if err := os.WriteFile(filepath.Join(h.stateDir, QuiescenceFile), []byte(`{"version":1}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.mode.purgeStep(context.Background())
+			if _, _, reports := h.sent(); len(reports) != 0 {
+				t.Fatalf("reported %v while the sole remaining hold was %s", reports, hold)
+			}
+		})
+	}
+}
+```
+
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors`
 
 Expected: FAILED TO BUILD with `member/consensus/mode_test.go:147:12: undefined: Mode`, `undefined: NewMode`, `undefined: ModeDeps`, `undefined: Metrics`, `undefined: verifyRunner`, `undefined: placementSwitchOffText`, `undefined: checkpointsSwitchOffText`, `undefined: CheckpointAccepted`, `undefined: CheckpointSwitchOff` and `too many errors`.
 
@@ -21781,64 +22744,17 @@ for path, text in edited.items():
         print(f"member/consensus/{path.name}: the verify role counts its evidence")
 ```
 
-Run (local): `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; python3 -I "$HOME/.cache/s3e1-task63/evidence_counts.py" "$W" && cd "$W" && gofmt -l member/consensus && git diff --stat -- member/consensus | tail -1`
+Run (local): `W="$HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1"; python3 -I "$HOME/.cache/s3e1-task63/evidence_counts.py" "$W" && cd "$W" && gofmt -l member/consensus && git diff --stat -- member/consensus | tail -1`
 
 Expected: `member/consensus/<file>.go: the verify role counts its evidence` (on the scratch base `verify_role.go`; with Task 62's code the file that holds `VerifyRole`'s dispatch), no file listed by `gofmt`, and ` 1 file changed, 6 insertions(+), 2 deletions(-)` on the scratch base: the field, its comment and a blank line, and the two wrapped calls (Step 9's four files are new and not in `git diff` yet). A `stop` line writes nothing: read the struct and the two calls in Task 62's code and apply the same two changes by hand (the field `metrics *Metrics`, then a blank line, as the struct's first field; each call `X.HandleReplayJob(...)` / `X.HandleScanRequest(...)` becomes `v.countEvidence(EvidenceReplay, X.HandleReplayJob(...))` / `v.countEvidence(EvidenceScan, X.HandleScanRequest(...))`, `v` the method's `*VerifyRole` receiver), and record it in Appendix B.
 
 - [ ] **Step 11: Run the mode's tests, and commit**
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/consensus:consensus_test --test_output=errors && bazel test --@rules_go//go/config:race --runs_per_test=3 //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/consensus:consensus_test --test_output=errors && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --@rules_go//go/config:race --runs_per_test=3 //member/consensus:consensus_test --test_output=errors && git diff -- member/consensus/BUILD.bazel`
 
-Expected: PASSED, every test of Steps 4, 6 and 8 and Task 62's (`TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` skips), also under the race detector three times; the BUILD diff:
+Expected: PASSED, every test of Steps 4, 6 and 8 and Task 62's (`TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica` skips), also under the race detector three times; the current additive BUILD changes:
 
-```diff
-diff --git a/member/consensus/BUILD.bazel b/member/consensus/BUILD.bazel
-index e89db86..79d25ac 100644
---- a/member/consensus/BUILD.bazel
-+++ b/member/consensus/BUILD.bazel
-@@ -6,8 +6,12 @@ go_library(
-         "checkpoint.go",
-         "checkpoint_seq.go",
-         "config.go",
-+        "metrics.go",
-+        "mode.go",
-+        "purge.go",
-         "quiescence.go",
-         "readiness.go",
-+        "status.go",
-         "unsafe_reconciler.go",
-         "verify_role.go",
-     ],
-@@ -23,6 +27,7 @@ go_library(
-         "//member/install",
-         "//wire",
-         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-+        "@com_github_prometheus_client_golang//prometheus",
-         "@com_github_sentioxyz_arbiter_proto//gen/pb",
-         "@housegate//pkg/replay",
-         "@housegate//pkg/replay/payloadexec",
-@@ -34,6 +39,7 @@ go_test(
-     srcs = [
-         "checkpoint_seq_test.go",
-         "checkpoint_test.go",
-+        "mode_test.go",
-         "readiness_ch_test.go",
-         "readiness_test.go",
-         "stage3_fixtures_test.go",
-@@ -43,10 +49,12 @@ go_test(
-         "//:arbiter-core",
-         "//authority",
-         "//authority/authoritytest",
-+        "//dataplane",
-         "//dataplane/chtest",
-         "//member/install",
-         "//wire",
-         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-+        "@com_github_prometheus_client_golang//prometheus",
-         "@housegate//pkg/replay",
-     ],
- )
-```
+Gazelle adds `metrics.go`, `mode.go`, `purge.go`, `status.go`, `mode_test.go` and the new `purge_regression_test.go` to the consensus BUILD, and the required Prometheus dependency. Keep the complete Task62 and checkpoint/readiness entries.
 
 ```bash
 set -eo pipefail
@@ -21994,7 +22910,7 @@ func TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles(t *testing
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member/sources:sources_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/sources:sources_test --test_output=errors`
 
 Expected: `//member/sources:sources_test` FAILED TO BUILD with `member/sources/member_unsafe_hardlink_ch_test.go:76:9: undefined: NewMemberUnsafeHardlink` and `undefined: SourceMemberUnsafeHardlink` (three errors).
 
@@ -22138,32 +23054,96 @@ func scratchPartHashes(ctx context.Context, conn clickhouse.Conn, s Scratch) ([]
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l member/sources && bazel run //:gazelle && bazel test //member/sources:sources_test --test_output=errors && git diff -- member/sources/BUILD.bazel`
+The original hard-link proof requires actual ClickHouse. Add this separate unit regression of the intended operations, using the existing `fakeConn`; it does not certify server hard-link/replication mechanics. Removing scratch duplicate/unneeded-part cleanup or pointing a DROP at the source fails its named assertion. Create `member/sources/member_unsafe_hardlink_test.go`:
 
-Expected: no file listed; PASSED (the new test skips without `ARBITER_CH_INTEGRATION=1`; it runs in Step 14 and in CI); the BUILD diff:
+```go
+package sources
 
-```diff
-diff --git a/member/sources/BUILD.bazel b/member/sources/BUILD.bazel
-index a1b7f8b..4fa4b5a 100644
---- a/member/sources/BUILD.bazel
-+++ b/member/sources/BUILD.bazel
-@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
- go_library(
-     name = "sources",
-     srcs = [
-+        "member_unsafe_hardlink.go",
-         "posture.go",
-         "remote_pull.go",
-         "restore.go",
-@@ -27,6 +28,7 @@ go_test(
-     srcs = [
-         "ch_test.go",
-         "fake_conn_test.go",
-+        "member_unsafe_hardlink_ch_test.go",
-         "posture_ch_test.go",
-         "posture_test.go",
-         "remote_pull_ch_test.go",
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+// TestMemberHardlinkPureFakeConfinesDropsAndKeepsOneHash exercises the
+// intended operations without claiming real ClickHouse hard-link mechanics.
+func TestMemberHardlinkPureFakeConfinesDropsAndKeepsOneHash(t *testing.T) {
+	conn := &fakeConn{}
+	kept := map[string]string{"a": "wanted", "b": "foreign", "c": "wanted"}
+	conn.rows = func(query string, args []any) ([][]any, error) {
+		if strings.Contains(query, "hash_of_all_files = ?") {
+			if !reflect.DeepEqual(args, []any{"hg_member_unsafe", "dex__pools", "wanted"}) {
+				t.Fatalf("source lookup arguments %v", args)
+			}
+			return [][]any{{"source_part"}}, nil
+		}
+		if !reflect.DeepEqual(args, []any{"hg_rstage", "member_b_01234567_1"}) {
+			t.Fatalf("scratch lookup arguments %v", args)
+		}
+		if strings.Contains(query, "name, hash_of_all_files") {
+			return [][]any{{"a", "wanted"}, {"b", "foreign"}, {"c", "wanted"}}, nil
+		}
+		var rows [][]any
+		for _, name := range []string{"a", "b", "c"} {
+			if _, ok := kept[name]; ok {
+				rows = append(rows, []any{name})
+			}
+		}
+		return rows, nil
+	}
+	conn.exec = func(query string) error {
+		if strings.HasSuffix(query, " DROP PART 'b'") {
+			delete(kept, "b")
+		} else if strings.HasSuffix(query, " DROP PART 'c'") {
+			delete(kept, "c")
+		}
+		return nil
+	}
+	src := NewMemberUnsafeHardlink(conn, "hg_member_unsafe")
+	got := src.Fetch(context.Background(), Need{Table: "dex__pools", PartPhysHash: "wanted", PartitionID: "p_a"}, testSchema("dex"), Scratch{Database: "hg_rstage", Table: "member_b_01234567_1"})
+	if got.Outcome != OutcomeFetched || got.Err != nil || !reflect.DeepEqual(got.Parts, []string{"a"}) {
+		t.Fatalf("fetch = %+v, remaining %+v", got, kept)
+	}
+	want := []string{
+		"exec ALTER TABLE `hg_rstage`.`member_b_01234567_1` ATTACH PARTITION 'a' FROM `hg_member_unsafe`.`dex__pools`",
+		"exec ALTER TABLE `hg_rstage`.`member_b_01234567_1` DROP PART 'b'",
+		"exec ALTER TABLE `hg_rstage`.`member_b_01234567_1` DROP PART 'c'",
+	}
+	if got := conn.matching("exec "); !reflect.DeepEqual(got, want) {
+		t.Fatalf("intended mutations %v, want %v", got, want)
+	}
+}
+
+func TestMemberHardlinkPureFakeMissAndAttachError(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "missing", false: "attach failure"}[missing], func(t *testing.T) {
+			conn := &fakeConn{rows: func(string, []any) ([][]any, error) {
+				if missing {
+					return nil, nil
+				}
+				return [][]any{{"source_part"}}, nil
+			}}
+			conn.exec = func(string) error { return errors.New("attach refused") }
+			got := NewMemberUnsafeHardlink(conn, "hg_member_unsafe").Fetch(context.Background(), Need{Table: "dex__pools", PartPhysHash: "wanted", PartitionID: "p_a"}, testSchema("dex"), Scratch{Database: "hg_rstage", Table: "member_b_01234567_1"})
+			if missing {
+				if got.Outcome != OutcomeMissed || got.Err != nil || len(conn.matching("exec ")) != 0 {
+					t.Fatalf("missing part mutated scratch: %+v, %v", got, conn.all())
+				}
+			} else if got.Err == nil || got.Outcome == OutcomeFetched || len(conn.matching("exec ")) != 1 {
+				t.Fatalf("attach failure not propagated: %+v, %v", got, conn.all())
+			}
+		})
+	}
+}
 ```
+
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l member/sources)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/sources:sources_test --test_output=errors && git diff -- member/sources/BUILD.bazel`
+
+Expected: no file listed; PASSED (the new test skips without `ARBITER_CH_INTEGRATION=1`; it runs in Step 14 and in CI); the current additive BUILD changes:
+
+Gazelle adds `member_unsafe_hardlink.go`, its ClickHouse test and its new pure unit test to `member/sources/BUILD.bazel`; preserve the complete earlier source set and dependencies.
 
 ```bash
 set -eo pipefail
@@ -22198,7 +23178,7 @@ Expected: `0`.
 
 - [ ] **Step 14: Run the two ClickHouse tests on a local pair**
 
-Start, on one Docker network, the two ClickHouse nodes with shared Keeper of CI's `integration-clickhouse` job (`.github/workflows/ci.yml`, the same image, Keeper files and `default` password file). Downloads (the image `clickhouse/clickhouse-server:25.8` from Docker Hub, about 750 MB, when it is not local yet): needs explicit user confirmation in chat before running.
+The existing user confirmation of the public CI-only credential default remains required. Read that value only from the already reviewed CI XML; never print it or pass it on client argv. Start, on one Docker network, the two ClickHouse nodes with shared Keeper of CI's `integration-clickhouse` job (`.github/workflows/ci.yml`, the same image, Keeper files and `default` password file). Downloads (the image `clickhouse/clickhouse-server:25.8` from Docker Hub, about 750 MB, when it is not local yet): needs explicit user confirmation in chat before running.
 
 ```bash
 set -eo pipefail
@@ -22602,7 +23582,7 @@ func TestServingViewCarriesTheConsensusStatus(t *testing.T) {
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel run //:gazelle && bazel test //member:member_test //member/serve:serve_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member:member_test //member/serve:serve_test --test_output=errors`
 
 Expected: both FAILED TO BUILD: `//member/serve:serve_test` with `member/serve/consensus_status_test.go:21:29: h.srv.Serving().Consensus undefined (type ServingView has no field or method Consensus)` and `unknown field Consensus in struct literal of type Deps`; `//member:member_test` with `member/consensus_mode_test.go:83:7: r.mode undefined (type *Role has no field or method mode)`, `r.ConsensusMetrics undefined (type *Role has no field or method ConsensusMetrics)`, `sr.Serving().Consensus undefined (type serve.ServingView has no field or method Consensus)` and `h.cfg.Consensus undefined (type Config has no field or method Consensus)`.
 
@@ -22945,7 +23925,7 @@ with
 	}
 ```
 
-In `member/stats.go`, replace
+The accepted predecessor already imports `sources` in `member/stats.go`; verify that import and skip this import-only pair when present. For a predecessor without it, replace
 
 ```go
 	"github.com/sentioxyz/arbiter-core/member/shadow"
@@ -23124,81 +24104,11 @@ with
 	"github.com/sentioxyz/arbiter-core/wire"
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l member && bazel run //:gazelle && bazel test //member/... --test_output=errors && git diff -- member/BUILD.bazel member/serve/BUILD.bazel`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l member)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; bazel run --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:gazelle && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //member/... --test_output=errors && git diff -- member/BUILD.bazel member/serve/BUILD.bazel`
 
-Expected: no file listed; every `//member/...` target PASSED, among them `TestConsensusConfigNilKeepsTheP2Role`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestServingViewCarriesTheConsensusStatus`, S3-C2's `TestRoleRefusesANodeIDInUse` (the P2 member's refusals unchanged), S3-C2's `TestRoleCallsOnlyReadRPCs` (no selector the member package must not hold is added) and S3-C4's `TestRoleWiresServeIntoTheInstaller` (a role without `Config.Serve` still answers `serve.ServingView{}`); the BUILD diff:
+Expected: no file listed; every `//member/...` target PASSED, among them `TestConsensusConfigNilKeepsTheP2Role`, `TestConsensusConfigWiresTheModeIntoTheRole`, `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`, `TestServingViewCarriesTheConsensusStatus`, S3-C2's `TestRoleRefusesANodeIDInUse` (the P2 member's refusals unchanged), S3-C2's `TestRoleCallsOnlyReadRPCs` (no selector the member package must not hold is added) and S3-C4's `TestRoleWiresServeIntoTheInstaller` (a role without `Config.Serve` still answers `serve.ServingView{}`); the current additive BUILD changes:
 
-```diff
-diff --git a/member/BUILD.bazel b/member/BUILD.bazel
-index 20363e0..c4b2651 100644
---- a/member/BUILD.bazel
-+++ b/member/BUILD.bazel
-@@ -4,6 +4,7 @@ go_library(
-     name = "member",
-     srcs = [
-         "config.go",
-+        "consensus_mode.go",
-         "lock.go",
-         "role.go",
-         "serving.go",
-@@ -16,6 +17,7 @@ go_library(
-         "//dataplane",
-         "//dataplane/chrestart",
-         "//dataplane/ddl",
-+        "//member/consensus",
-         "//member/copyset",
-         "//member/install",
-         "//member/manifestfeed",
-@@ -31,6 +33,7 @@ go_library(
- go_test(
-     name = "member_test",
-     srcs = [
-+        "consensus_mode_test.go",
-         "fake_arbiter_test.go",
-         "role_test.go",
-         "serving_test.go",
-@@ -40,10 +43,12 @@ go_test(
-     embed = [":member"],
-     deps = [
-         "//:arbiter-core",
-+        "//authority/authoritytest",
-         "//dataplane",
-         "//dataplane/chrestart",
-         "//dataplane/dastore",
-         "//dataplane/ddl",
-+        "//member/consensus",
-         "//member/copyset",
-         "//member/install",
-         "//member/manifestfeed",
-diff --git a/member/serve/BUILD.bazel b/member/serve/BUILD.bazel
-index caa2d90..511b55f 100644
---- a/member/serve/BUILD.bazel
-+++ b/member/serve/BUILD.bazel
-@@ -15,6 +15,7 @@ go_library(
-     visibility = ["//visibility:public"],
-     deps = [
-         "//dataplane",
-+        "//member/consensus",
-         "//wire",
-         "@com_github_prometheus_client_golang//prometheus",
-         "@housegate//pkg/replay",
-@@ -27,6 +28,7 @@ go_test(
-     srcs = [
-         "client_test.go",
-         "conditions_test.go",
-+        "consensus_status_test.go",
-         "fakes_test.go",
-         "handler_test.go",
-         "lease_test.go",
-@@ -38,6 +40,7 @@ go_test(
-     deps = [
-         "//dataplane/chtest",
-         "//dataplane/ddl",
-+        "//member/consensus",
-         "//wire",
-         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
-         "@com_github_prometheus_client_golang//prometheus",
-```
+Gazelle adds the consensus mode source/test to the member BUILD and the consensus status test to the serving BUILD, with their actual consensus/authority-test dependencies. Preserve all C4 lease/query/readiness and Task34 memo entries; final Step21 requires a clean second gazelle run over this complete source.
 
 ```bash
 set -eo pipefail
@@ -23287,7 +24197,7 @@ with
 	}
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel test //:arbiter-core_test //snode:snode_test //member:member_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:arbiter-core_test //snode:snode_test //member:member_test --test_output=errors`
 
 Expected: `//:arbiter-core_test` FAILED TO BUILD with `consensus_test.go:47:97: undefined: Stage3Feature`; `//snode:snode_test` FAILED TO BUILD with `snode/tracks_test.go:659:89: undefined: arbiter.Stage3Feature`; `//member:member_test` FAILED with `role_test.go:411: LocalNodeFeatures = [client_lanes_v1 signed_claims_v1 track_manifests_v1], want exactly [client_lanes_v1 signed_claims_v1 track_manifests_v1 stage3_v1] from CORE_TAG_P5`.
 
@@ -23321,7 +24231,7 @@ func LocalNodeFeatures() []string {
 }
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && gofmt -l consensus.go && bazel test //:arbiter-core_test //snode:snode_test //member:member_test //verifier:verifier_test --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; formatting="$(gofmt -l consensus.go)" || exit 1; [ -z "$formatting" ] || { printf '%s\n' "$formatting" >&2; exit 1; }; bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //:arbiter-core_test //snode:snode_test //member:member_test //verifier:verifier_test --test_output=errors`
 
 Expected: no file listed; the four targets PASSED (`verifier/tracks_test.go` compares the verifier's registration with `LocalNodeFeatures()` itself and passes unchanged).
 
@@ -23356,7 +24266,7 @@ Expected: `0`.
 
 - [ ] **Step 19: Pin housegate `HG_TAG_P5`, and commit**
 
-Downloads (housegate `HG_TAG_P5` through the Go module proxy, and Bazel's fetch of the pinned housegate commit): needs explicit user confirmation in chat before running.
+Downloads (housegate `HG_TAG_P5` through the Go module proxy, and Bazel's fetch of the pinned housegate commit): need explicit user confirmation in chat before running. The offline controls below intentionally stop if anything is not cached; a separately approved download scope may change only those controls, then must rerun exact resolved-version/commit/pin checks. A scratch local replace is verification custody, never a produced tag or pin.
 
 ```bash
 set -eo pipefail
@@ -23400,7 +24310,7 @@ PY63PIN
 
 Expected: the script's lines `Updated Housegate dependency:`, `  input:          <HG_TAG_P5>`, `  Go version:     <HG_TAG_P5>`, `  Bzlmod version: <HG_TAG_P5 without v>`, `  commit:         <40 hex>`; `git status --short` lists exactly ` M MODULE.bazel`, ` M MODULE.bazel.lock`, ` M README.md`, ` M go.mod` and ` M go.sum` (the script rewrites the `bazel_dep` version, the `git_override` commit and its `# Resolved Housegate …` comment in both `MODULE.bazel` and README's example; gazelle changes no `BUILD.bazel`); then `1`, `1`, `1`, `1`: housegate at `HG_TAG_P5`, arbiter-proto still at `PROTO_TAG_P5`, and the override commit equal to the tag's. If `go.mod` moves another module, or gazelle changes a `BUILD.bazel`, read why before going on (`HG_TAG_P5` adds Plans S3-C4 and S3-E1's housegate changes to `CORE_TAG_P4`'s `HG_TAG_P1`) and name it in the PR body.
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" && bazel build //... && bazel test //... --test_output=errors`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; cd "$W" || exit 1; bazel build --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //... && bazel test --repository_disable_download --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --repo_env=GOPROXY=off --repo_env=GOSUMDB=off //... --test_output=errors`
 
 Expected: the build passes and every test passes on the new pin (the ClickHouse-gated ones skip).
 
@@ -23481,7 +24391,7 @@ and, in § Compatibility, after its last `Multi-source storage integrity, stage 
 Multi-source storage integrity, stage 3 P5 (housegate spec 2026-10-14 §6–§10, §15, §16 row P5) adds, from the P5 arbiter-proto release, the v21 wire contract: the host-bound `VerifierEntry` fields, the `stage3` parameter with its switches (`arbiter.Stage3Params`, `ConsensusParamsUpdate.Stage3`), the commands `RebalanceGroup`, `ReselectVerifiers`, `MemberReady`, `MemberCheckpoint` and `MarkMemberLagging` (Raft slots 38–42, with their `authority` purposes and `wire` converters), `AdmissionCodeVerifiersUnavailable` and `AdmissionCodeCopiesBackpressure`, the registry view of groups, checkpoint sequences, scoped Keeper paths and purge members, and the selection record of `BlockVerification`. Every new canonical field is `omitempty`, so every earlier digest and golden is unchanged, and nothing proposes or sets any of them before the arbiter's v21 activation and its switch. Every binary built from this release advertises `stage3_v1` (`arbiter.Stage3Feature`, `arbiter.LocalNodeFeatures`), and an arbiter that pins this release reports it, so the arbiter pins it only together with its v21 decoder; a leader that predates it keeps the string without acting on it. The owner SNode's Keeper audit reports and drops nothing, and the member consensus mode runs only with `member.Config.Consensus`. Every component can still return to its previous image: no state file an earlier binary reads changes, and the member's new `checkpoint_seq.json` and `quiescence.json` are ignored by the P2/P3 member.
 ```
 
-Run: `W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; git -C "$W" diff --stat -- README.md | tail -1; grep -c '^### Member consensus mode (stage 3 P5)$' "$W/README.md"; grep -c '^Multi-source storage integrity, stage 3 P5 ' "$W/README.md"`
+Run: `set -eo pipefail; export GOWORK=off GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none; W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict);p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$HOME/.cache/s3e1-task59/worktree.json")" || exit 1; git -C "$W" diff --stat -- README.md | tail -1; grep -c '^### Member consensus mode (stage 3 P5)$' "$W/README.md"; grep -c '^Multi-source storage integrity, stage 3 P5 ' "$W/README.md"`
 
 Expected: ` 1 file changed, 18 insertions(+)` at the scratch base (the section's eight paragraphs and list items, their blank lines, the row and the compatibility paragraph), `1`, `1`.
 
@@ -23633,7 +24543,7 @@ else
 fi
 ```
 
-For the user in fish, the first line is `set W (python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["path"])' "$HOME/.cache/s3e1-task59/worktree.json"); or exit 1; set T63 "$HOME/.cache/s3e1-task63"`, and the `push` and `gh pr create` lines run unchanged. Expected: the push updates (or creates) `urwt/codex/multi-source-s3e1` on `origin`, and the PR URL `https://github.com/sentioxyz/arbiter-core/pull/<n>` is printed and kept in `pr-url` (an earlier task of this plan that opened the PR has its title and body replaced here).
+For the user in fish, save the complete approved Bash block to a file and invoke `bash -eo pipefail /absolute/path/to/block.sh`; the block itself loads the actual retained worktree path. Expected: the push updates (or creates) `urwt/codex/multi-source-s3e1` on `origin`, and the PR URL `https://github.com/sentioxyz/arbiter-core/pull/<n>` is printed and kept in `pr-url` (an earlier task of this plan that opened the PR has its title and body replaced here).
 
 - [ ] **Step 23: Checks, author validation and merge (requires explicit user confirmation)**
 
@@ -24513,21 +25423,24 @@ Served fields (cross-plan decisions D27 and D33). The read-only views above (`Da
 - `conformance/signed_claims_test.go` `TestSignedClaimsFieldNumbers` count map (`:85-92`): `VerifierEntry` 11, `ConsensusParamsUpdate` 14, `ConsensusMutableParams` 9, `TableRegistrySnapshot` 12, `TableIncarnation` 20; `TestSourceUnavailableAdmissionCodeIsTen` (`:121`): 14 values.
 - `conformance/tracks_test.go` `TestTracksFieldNumbers` count map (`:79-82`): `L3BlockTrack` 2, `ConsensusParamsUpdate` 14, `ConsensusMutableParams` 9, `TableRegistrySnapshot` 12; `TestIndexerQuarantinedAdmissionCodeIsEleven` (`:123`): 14 values; `TestTracksFieldsAbsentLeaveTheWireUnchanged`: its population loop sets only fields numbered below the field under test (`f.Number() < tc.number`), because later fields now follow `tracks_enabled` and `quarantined_indexers`.
 - `conformance/consensus_test.go` `TestConsensusAdminRPCSignatures`: method count 18 (S3-D Task 49 made it 16) and the rows `{"RebalanceGroup", "arbiter.RebalanceGroupCmd", "arbiter.Ack"}`, `{"MarkMemberLagging", "arbiter.MarkMemberLaggingCmd", "arbiter.Ack"}`.
+- `conformance/consensus_test.go` `TestConsensusUpdateContract`: append `stage3` / `MessageKind` to the `ConsensusParamsUpdate` and `ConsensusMutableParams` name/kind rows, and `stage3_state` / `MessageKind` to the `ConsensusParamsState` rows, retaining every prior entry and order.
+- `conformance/snapshot_query_fields_test.go` `snapshotQueryFields["L3BlockTrack"]`: append `group_key:string` after `indexer_id:uint64`, retaining its every-field wire round trip (`TestSnapshotQueryEveryFieldWireRoundTrip`).
 - `conformance/table_registry_read_test.go` `TestTableRegistryReadContract`: `TableIncarnation` rows `{"scoped_keeper_path", 19, BoolKind, false}`, `{"purge_members", 20, StringKind, true}`; `TableRegistrySnapshot` rows `{"groups", 10, MessageKind, true}`, `{"member_checkpoint_seqs", 11, MessageKind, true}`, `{"stage3", 12, MessageKind, false}`.
 - `conformance/snapshot_query_test.go`: `TestSnapshotQueryLedgerCoversEveryNewMessage` also accepts a `stage3ConsensusFields` entry; `assertSnapshotBaselineDescriptors` strips, first and before `tracksFields`, the map `stage3AppendedFields` = {`ConsensusMutableParams`: `stage3` 9 (message `.arbiter.Stage3Params`), `ConsensusParamsUpdate`: `stage3` 14 (`.arbiter.Stage3Params`), `ConsensusParamsState`: `stage3_state` 9 (`.arbiter.Stage3StateView`)}, each an appended singular message field (`tracksMessage`).
-- S3-A's `conformance/stage3_reads_test.go`, under cross-plan decision D25 (only its count literals change, by S3-D and this plan), exactly its three counts: the `BlockVerification` field-ledger length 13 → 22 (`stage3Fields["BlockVerification"]` gains the nine tokens `eligible_ring:[]string ring_position:uint32 marked_cursor_block:uint64 group_key:string group_members:[]string group_fill:bool group_databases:[]BlockGroupRef reselections:[]BlockReselection reselections_at_latch:uint32` after its 13 P0 tokens, which stay byte-identical); the `ConsensusAdmin` method count, `TestStage3RPCSignatures`'s `{pb.File_consensus_proto, "ConsensusAdmin", 16}` (S3-D Task 49's count under the same decision) → 18; the `RaftCommand` tag count in `TestStage3MessagesAreNotRaftReachable`, 36 → 41 oneof tags and tags 1–28 and 30–42 (the literal `36` becomes `41` in its two field-count checks, its failure message and its doc comment, the loop bound `n <= 37` becomes `n <= 42`, and "1-28 and 30-37" becomes "1-28 and 30-42" in its doc comment and failure message). No other line of the file changes: every other ledger entry, RPC row, helper and assertion stays byte-identical, and `git diff "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go` touches only these lines. S3-D's `conformance/p4_settle_test.go` and arbiter-core's S3-A `conformance/stage3_reads_test.go` are not edited.
+- **D25 APPROVED — exact append-only exception.** Only the existing ConsensusAdmin method counts, RaftCommand tag counts/ranges and BlockVerification field-ledger length may change by S3-D/S3-E1. Task57 may additionally append exactly the nine stage3 BlockVerification field tokens below to the existing ledger row, without modifying any of its thirteen existing field names/types/order; count/range-only comments and diagnostics may be synchronized. All other existing entries and never-edit rules remain byte-identical. S3-A's `conformance/stage3_reads_test.go`, under cross-plan decision D25 (the exact count/range/comment/diagnostic and nine-token append surface is user-approved, by S3-D and this plan), exactly its three counts: the `BlockVerification` field-ledger length 13 → 22 (`stage3Fields["BlockVerification"]` gains the nine tokens `eligible_ring:[]string ring_position:uint32 marked_cursor_block:uint64 group_key:string group_members:[]string group_fill:bool group_databases:[]BlockGroupRef reselections:[]BlockReselection reselections_at_latch:uint32` after its 13 P0 tokens, which stay byte-identical); the `ConsensusAdmin` method count, `TestStage3RPCSignatures`'s `{pb.File_consensus_proto, "ConsensusAdmin", 16}` (S3-D Task 49's count under the same decision) → 18; the `RaftCommand` tag count in `TestStage3MessagesAreNotRaftReachable`, 36 → 41 oneof tags and tags 1–28 and 30–42 (the literal `36` becomes `41` in its two field-count checks, its failure message and its doc comment, the loop bound `n <= 37` becomes `n <= 42`, and "1-28 and 30-37" becomes "1-28 and 30-42" in its doc comment and failure message). No other line of the file changes: every other ledger entry, RPC row, helper and assertion stays byte-identical, and `git diff "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go` touches only these lines. S3-D's `conformance/p4_settle_test.go` and arbiter-core's S3-A `conformance/stage3_reads_test.go` are not edited.
 
 Release gate: `buf breaking --against ".git#tag=$PROTO_TAG_P4"` (D26: always the unconditional `PROTO_TAG_P4`, its value read with `s3-ledger.py get`, never predicted); `TestSnapshotQueryDescriptorFixtureIdentities` proves both `.binpb` baselines unchanged.
 
 ### 40. housegate (Task 58)
 
-- Pin: arbiter-proto `PROTO_TAG_P5` in `go.mod` (from `v0.11.0`, `go.mod:15`), `go.sum` and the Bzlmod `go_deps` resolution (`MODULE.bazel`); no other dependency moves.
+- Pin: arbiter-proto `PROTO_TAG_P5` in `go.mod` (from `v0.11.0`, `go.mod:15`) and `go.sum`; Bzlmod reads that module through `go_deps.from_file`. `MODULE.bazel`, `MODULE.bazel.lock` and every `BUILD.bazel` stay unchanged at this pin; unexpected dependency drift stops the task.
 - `pkg/storageintegrity/arbiter_proto.go`: `var AdmissionCodeVerifiersUnavailable = pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE.String()`; `var AdmissionCodeCopiesBackpressure = pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE.String()`; `SubmitOutcomeFromSequencedAck` (`:404-429`) lists both codes with the coded terminal rejects (category `OutcomeTerminalReject`, `AdmissionCode` set, `RequiresAbort()` true, so the terminal-submit path removes the prepared parts); a code above 13 stays `OutcomeUnknown`.
 - `pkg/chproto/client_error.go` (beside `:83-107`), messages verbatim, each built and matched only here: `func VerifiersUnavailableMessage(tableID string) string` = `"storage_integrity: the verifiers of table " + tableID + " are not available yet; retry shortly (retryable)"`; `func IsVerifiersUnavailableMessage(message string) bool`; `func CopiesBackpressureMessage(tableID string) string` = `"storage_integrity: back-pressure: table " + tableID + " waits for its replica copies to catch up; retry later (retryable)"`; `func IsCopiesBackpressureMessage(message string) bool` (both through `isRefusalMessage`, so a `TrimSeqUnspentSuffix` tail is accepted and the table id must be non-empty and whitespace-free).
 - `storage_integrity_ingress.go` (beside `:838-866`): code 12 → `&chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted, Message: chproto.VerifiersUnavailableMessage(rec.TableID), Err: fmt.Errorf("arbiter %s: %s", …), KeepSession: true, SeqUnspent: true}` with the warn log `storage_integrity statement refused: the table's verifiers are not available` (fields `statement_id`, `table`, `reason`); code 13 → `&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: chproto.CopiesBackpressureMessage(rec.TableID), Err: …, KeepSession: true, SeqUnspent: true}`, `storageIntegrityBackpressureTotal.WithLabelValues(sicore.PhysicalTableName(rec.TableID)).Inc()` and the warn log `storage_integrity statement refused: the table's replica copies hold its cleanup`.
 - `pkg/proxy/relay.go` `isSessionPreservingIngressException` (`:2314-2330`): the 733 case also accepts `chproto.IsVerifiersUnavailableMessage(message)`; the 252 case is unchanged (the copies message carries the `storage_integrity: back-pressure:` prefix); the doc comment (`:2297-2313`) names both.
 - Named tests: `TestVerifiersUnavailableIsATerminalRejectWithItsCode`, `TestCopiesBackpressureIsATerminalRejectWithItsCode` (`pkg/storageintegrity/admission_code_test.go`; the existing `TestIndexerQuarantinedIsATerminalRejectWithItsCode` (`:71-86`) moves its unknown-code example from `pb.AdmissionCode(12)` to `pb.AdmissionCode(14)`, its comment from "Only code 11" to "Only codes 11-13", and nothing else); `TestVerifiersUnavailableMessage`, `TestCopiesBackpressureMessage` (`pkg/chproto/client_error_test.go`); `TestRelay_StagedVerifiersUnavailableRejection_KeepsSessionAndServesNextQuery`, `TestRelay_StagedCopiesBackpressureRejection_KeepsSessionAndServesNextQuery`, `TestRelay_DeferredUpstreamVerifiersUnavailable_KeepsSessionAndServesNextQuery` (`pkg/proxy/relay_reject_test.go`); `TestVerifiersUnavailableReachesTheClientAsARetryableRefusal`, `TestCopiesBackpressureReachesTheClientAsARetryableBackpressure` (`storage_integrity_table_state_runtime_test.go`).
-- Worktree `~/src/remotesrc/claude/housegate/multi-source-s3e1`, branch `urwt/claude/multi-source-s3e1`; PR title `feat(storage-integrity): stage-3 admission codes 12 and 13 at the ingress`; release `HG_TAG_P5` (§43).
+- Additional owned files/tests: `storage_integrity_ingress_unspent_test.go` (`TestConsumeAdmission_PostOrchestrateMarking`, verifiers/copy-floor rows), `pkg/proxy/relay_unspent_test.go` (both unspent markers), `TestRelay_DeferredUpstreamCopiesBackpressure_KeepsSessionAndServesNextQuery` in `pkg/proxy/relay_reject_test.go`, and the two refusal descriptions in `CLAUDE.md` and `README.md`. The unknown-code example is 14, both new codes require prepared-part abort, and the staged/deferred tests require a usable next query.
+- Worktree: the exact absolute path retained in Task 58 creation JSON, with runtime/branch chosen for the executing host (Codex uses `urwt/codex/multi-source-s3e1`); PR title `feat(storage-integrity): stage-3 admission codes 12 and 13 at the ingress`; release `HG_TAG_P5` (§43).
 
 ### 41. arbiter-core: canonical types, authority and wire (Tasks 59–60)
 
@@ -24671,7 +25584,9 @@ func VerifyMemberCheckpoint(ctx MessageContext, cp arbiter.MemberCheckpoint, jws
 ```
 The authority commands sign through `signWithContextPurpose` and verify through `verifyExactContext` (labels `rebalance group`, `reselect verifiers`, `mark member lagging`), the quarantine precedent (`authority/quarantine.go:13-125`); the consent through `signPayload` and `verifySignedBy` (the `SNodeEnrollment` precedent, `authority/snode_messages.go:16-77`); member ready as hex `ed25519.Sign(priv, []byte(hash))` (the verifier-message convention, `:175-205`); the checkpoint through `signPayload`/`verifySignedBy`. Member-message preimage: `{"context": MessageContext, "body": <body>}`. Hash refusals verbatim: `rebalance group: database_id must be non-empty`; `rebalance group: add and remove must each be sorted ascending without duplicates and share no node`; `reselect verifiers: expected_set must be three sorted, unique node ids`; `mark member lagging: node_id and database_id must be non-empty`; `mark member lagging: observed_entry.indexer_id %d must equal owner_indexer_id %d`; `group member consent: node ID and replica signer must be non-empty and the ed25519 key 32 bytes`; `member ready: node_id and database_id must be non-empty and generation at least 1`; `member checkpoint: checkpoint_seq must be at least 1 and snapshot_id non-empty`; `member checkpoint: entry.indexer_id %d must equal owner_indexer_id %d`; `member checkpoint: groups must be non-empty and sorted by database_id without duplicates`; `member checkpoint: group %s: excluded must be sorted by table_id without duplicates and name a known reason`. An empty `Add`, `Remove` or `Excluded` hashes as an absent one (`nilIfEmpty`).
 
-**Vectors (Task 59), new frozen files** `authority/authoritytest/stage3.go` and `authority/stage3_golden_test.go`, computed outside Go with the Plan S2-A pipeline (`sha256("housegate-replay-mvp-v0:" + domain + "\x00" + json)` through `shasum -a 256`; ES256K as `cast keccak` then `cast wallet sign --no-hash` with the fixture key; ed25519 with the fixture seed) and never regenerated. Fixture keys and ids: `MemberNodeIDB = "member-b"`, `MemberHostIndexerIDB uint64 = 1` (signed by `IndexerKeyHex1`), `func MemberKeyB() ed25519.PrivateKey` (seed of 32 bytes `0x0b`), `ReplicaKeyHexB = "0000000000000000000000000000000000000000000000000000000000000d44"` and `ReplicaAddrB` (its address, recorded with `cast wallet address`), `MemberFailureDomainB = "node:test-b"`. Fixtures: `RebalanceGroupCommand()` (`{0, "dex", 1, ["member-c"], ["member-b"], true}`), `ReselectVerifiersCommand()` (`{100, ["member-b", "verifier-1", "verifier-2"]}`), `MarkMemberLaggingCommand()` (`{"member-b", 0, "dex", {0, 90, 40}}`), `GroupMemberConsent()`, `MemberReadyBody()` (`{"member-b", 0, "dex", 1}`), `MemberCheckpoint()` (`{"member-b", 0, 1, [{"dex", 1, [{"dex.pools", "not_installed"}]}], "0xsnap", {0, 90, 40}}`), `MemberVerifierEntryB()`, `Stage3Update()` (`ActivationUpdate()` with `TracksEnabled` and `Stage3` = group_size 3, network_fill_default true, min_safe_copies 1, max_lag_publications 4, lag_low 2, evidence_timeout_l2_blocks 30, max_uncleaned_parts_per_partition 2400, max_uncleaned_parts_per_table 20000, every switch false, domains for indexers 0 and 1). Constants: `RebalanceGroupHash`, `RebalanceGroupJWS`, `ReselectVerifiersHash`, `ReselectVerifiersJWS`, `MarkMemberLaggingHash`, `MarkMemberLaggingJWS` (authority tokens in `ConsensusContext(2)` at `Iat`), `GroupMemberConsentHash`, `GroupMemberConsentJWS`, `MemberReadyHash`, `MemberReadySignature`, `MemberCheckpointHash`, `MemberCheckpointJWS`, `Stage3UpdateHash`.
+**Vectors (Task 59), new frozen files** `authority/authoritytest/stage3.go` and `authority/stage3_golden_test.go`, computed outside Go with the Plan S2-A pipeline (`sha256("housegate-replay-mvp-v0:" + domain + "\x00" + json)` through `shasum -a 256`; ES256K as `cast keccak` then `cast wallet sign --no-hash` with the fixture key; ed25519 with the fixture seed) and never regenerated. Fixture keys and ids: `MemberNodeIDB = "member-b"`, `MemberHostIndexerIDB uint64 = 1` (signed by `IndexerKeyHex1`), `func MemberKeyB() ed25519.PrivateKey` (seed of 32 bytes `0x0b`), `ReplicaKeyHexB = "0000000000000000000000000000000000000000000000000000000000000d44"` and `ReplicaAddrB` (its address, recorded with `cast wallet address`), `MemberFailureDomainB = "node:test-b"`. Fixtures: `RebalanceGroupCommand()` (`{0, "dex", 1, ["member-c"], ["member-b"], true}`), `ReselectVerifiersCommand()` (`{100, ["member-b", "verifier-1", "verifier-2"]}`), `MarkMemberLaggingCommand()` (`{"member-b", 0, "dex", {0, 90, 40}}`), `GroupMemberConsent()`, `MemberReadyBody()` (`{"member-b", 0, "dex", 1}`), `MemberCheckpoint()` (`{"member-b", 0, 1, [{"dex", 1, [{"dex.pools", "not_installed"}]}], "0xsnap", {0, 90, 40}}`), `MemberVerifierEntryB()`, `Stage3Update()` (`ActivationUpdate()` also enrolling indexer 1 through `SIIndexerEntry1(6_000_000)` and setting `MaxWriters` 2, with `TracksEnabled` and `Stage3` = group_size 3, network_fill_default true, min_safe_copies 1, max_lag_publications 4, lag_low 2, evidence_timeout_l2_blocks 30, max_uncleaned_parts_per_partition 2400, max_uncleaned_parts_per_table 20000, every switch false, domains for indexers 0 and 1). Constants: `RebalanceGroupHash`, `RebalanceGroupJWS`, `ReselectVerifiersHash`, `ReselectVerifiersJWS`, `MarkMemberLaggingHash`, `MarkMemberLaggingJWS` (authority tokens in `ConsensusContext(2)` at `Iat`), `GroupMemberConsentHash`, `GroupMemberConsentJWS`, `MemberReadyHash`, `MemberReadySignature`, `MemberCheckpointHash`, `MemberCheckpointJWS`, `Stage3UpdateHash`, `Stage3MemberUpdateHash` (the member-entry canonical-form update).
+
+`GroupMemberConsentHash` lowercases the replica signer before hashing, so checksum and lowercase spellings bind the same statement. Task 59 alone adds the exact `arbiter.L3BlockTrack.group_key` exemption to `TestPromotionOutcomesConvertersCopyEveryField`: promotion outcomes name the owner without a sealed header group key. Its exhaustive test remains intact; Task 60 owns the distinct sealed-header and selection-record key converters. The Task59→60 shared branch has the exact eligible-ring every-field RED between those steps, never an allowed final CORE_TAG_P5 failure.
 
 **Task 59 named tests:** `TestVerifierEntryEveryFieldSurvivesNormalize` (reflection over every field, the precedent of arbiter `fsm/signed_messages_test.go:181` `TestSameRegistrationCoversEveryField`), `TestPoolVerifierEntryKeepsItsV20CanonicalForm` (a pool-only update's canonical JSON and hash equal those of `CORE_TAG_P4`, checked against the existing `authoritytest.ActivationUpdateHash` (`TestActivationUpdateVector`, `authority/authoritytest/vectors_test.go:122`) and `TestConsensusParamsUpdateHashIsFrozen` (`authority/consensus_golden_test.go:13`), both unedited), `TestPoolVerifierEntryRefusesMemberFields`, `TestMemberVerifierEntryRules` (every `verifiers:` refusal above), `TestStage3ParamsValidate` (every `stage3:` refusal), `TestStage3SwitchesArePrefixes`, `TestNormalizeSortsFailureDomainsAndChecksThemAgainstSIIndexers`, `TestStage3UpdateHashIsFrozen`, `TestStage3AuthorityCommandVectorsAreFrozen`, `TestGroupMemberConsentVectorIsFrozen`, `TestMemberReadyVectorIsFrozen`, `TestMemberCheckpointVectorIsFrozen`, `TestStage3TokensDoNotCrossPurposes` (each token refused under every other purpose and under a different context), `TestMemberCheckpointHashRefusesMalformedCheckpoints`, `TestStage3CanonicalMirrorsMatchProto` (new `conformance/stage3_wire_test.go`: `assertMirror` for `Stage3Params`, `IndexerFailureDomain`, `RebalanceGroupCommand`/`ReselectVerifiersCommand`/`MarkMemberLaggingCommand` (`authority_jws` request-only), `MemberReadyBody` vs `pb.MemberReadyCmd` (`ed25519_signature` request-only), `MemberCheckpoint`, `CheckpointGroup`, `ExcludedTable`), `TestStage3AdmissionCodesMatchProto`. The existing `TestArbiterMirrorsMatchProto` passes unchanged once the `ConsensusParamsUpdate` and `VerifierEntry` fields exist.
 
@@ -24725,7 +25640,7 @@ func MemberCheckpointToRequest(c MemberCheckpoint) *pb.MemberCheckpointCmd
 func MemberCheckpointBodyFromPB(m *pb.MemberCheckpoint) (arbiter.MemberCheckpoint, error)
 func MemberCheckpointBodyToPB(v arbiter.MemberCheckpoint) *pb.MemberCheckpoint
 ```
-`MemberCheckpointBodyFromPB` refuses `wire: member checkpoint excludes %s with reason %v, which is not a known CheckpointExclusionReason` (UNSPECIFIED included); an absent `entry` decodes to `{IndexerID: 0, …}` and is refused by the hash. `wire.Command` (`wire/command.go:163-201`) gains, after `ReleaseIndexer`, `RebalanceGroup *RebalanceGroup`, `ReselectVerifiers *ReselectVerifiers`, `MemberReady *MemberReady`, `MemberCheckpoint *MemberCheckpoint`, `MarkMemberLagging *MarkMemberLagging`, each `json:",omitempty"`; `Encode` (`:204-382`) and `Decode` (`:385-531`) carry tags 38–42 through the request converters, `Decode` returning `MemberCheckpointFromRequest`'s error.
+`MemberCheckpointBodyFromPB` refuses `wire: member checkpoint excludes %s with reason %v, which is not a known CheckpointExclusionReason` (UNSPECIFIED included); a missing body is refused with `wire: member checkpoint body is required`, and a missing `entry` with `wire: member checkpoint entry is required`, through request, Raft and stored-registry decoding. A present owner-0 zero frontier remains valid; absence cannot be inferred from its Go zero value. `wire.Command` (`wire/command.go:163-201`) gains, after `ReleaseIndexer`, `RebalanceGroup *RebalanceGroup`, `ReselectVerifiers *ReselectVerifiers`, `MemberReady *MemberReady`, `MemberCheckpoint *MemberCheckpoint`, `MarkMemberLagging *MarkMemberLagging`, each `json:",omitempty"`; `Encode` (`:204-382`) and `Decode` (`:385-531`) carry tags 38–42 through the request converters, `Decode` returning `MemberCheckpointFromRequest`'s error.
 
 Registry (`wire/table_registry_snapshot.go`, `:61-131`, `:236-327`; new file `wire/stage3_registry.go`): `TableIncarnation` gains `ScopedKeeperPath bool` and `PurgeMembers []string`; `TableRegistrySnapshot` gains `Groups []DatabaseGroup`, `MemberCheckpointSeqs []MemberCheckpointSeq`, `Stage3 *arbiter.Stage3Params`;
 ```go
@@ -24785,7 +25700,11 @@ func (s TableRegistrySnapshot) PublishedCheckpointSeq(nodeID string, owner uint6
 
 BlockVerification: the `wire.BlockVerification` of Plan S3-C2 (Task 29, with `wire.BlockVerificationFromPB` and `dataplane.Client.GetBlockVerification`) gains `EligibleRing []string`, `RingPosition uint32`, `MarkedCursorBlock uint64`, `GroupKey string`, `GroupMembers []string`, `GroupFill bool`, `GroupDatabases []BlockGroupRef`, `Reselections []BlockReselection`, `ReselectionsAtLatch uint32`, with `type BlockGroupRef struct{ DatabaseID string; GroupGeneration uint64 }` and `type BlockReselection struct{ Replaced, Replacements []string; RingPosition uint32; CursorBlock uint64; AuthorityJWS string; AuthorityEpoch uint64 }`; if S3-C2's type mirrors the header's track, that mirror gains `GroupKey string`. Its decoder refuses `block verification: eligible_ring and group_members must be sorted ascending without duplicates` and `block verification: ring_position %d is outside an eligible ring of %d`.
 
-**Task 60 named tests:** `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestStage3CommandBytesAreFrozen` (new frozen `wire/stage3_golden_test.go`: one subtest per tag 38–42 from the `authoritytest` fixtures plus `update_consensus_params_with_stage3` from `Stage3Update()`; bytes from `protoc --encode=arbiter.RaftCommand` over `PROTO_TAG_P5`, the S2-A pipeline), `TestStage3CanonicalizeSortsAndDeduplicates`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestTableRegistrySnapshotCarriesGroupsSeqsScopedPathsAndStage3`, `TestTableRegistrySnapshotEveryStage3FieldRoundTrips` (reflection seeding, the `seedSnapshot` precedent), `TestTableRegistrySnapshotRefusesCorruptStage3Views` (every refusal above), `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero` (a member served with host 0, one with host 1 and a delisted one without a host survive `FromPB`/`ToPB` and `proto.Marshal` unchanged), `TestBlockVerificationCarriesTheSelectionRecord`, `TestGroupMemberReady`. Every existing wire and conformance golden passes unedited.
+The request converters retain their exact declared signatures in `wire/requests.go`; canonical command/body mirrors are in `wire/stage3.go`, and registry view types/converters in `wire/stage3_registry.go`. The shared strict descriptor decoder is unchanged and still rejects unknown fields at every depth.
+
+Transport isolation is binding: `VerifierEntriesFromPB` retains the prior nil-element-to-zero-value behavior before optional-host access; the converters detach mutable lists, byte slices, optional host pointers and nested checkpoint/observed-frontier fields in both directions. `Group` / `GroupsWithMember` remain snapshot-view lookups rather than transport clones. The regression names are `TestMemberCheckpointRequiresExplicitBodyAndEntry`, `TestVerifierEntriesNilPBElementKeepsItsZeroValue` and `TestStage3RegistryConvertersDetachMutableFields`.
+
+**Task 60 named tests:** `TestVerifierEntryEveryFieldSurvivesThePBRoundTrip`, `TestConsensusParamsUpdateWithStage3RoundTrips`, `TestStage3CommandsRoundTripThroughEncodeAndDecode`, `TestStage3CommandBytesAreFrozen` (new frozen `wire/stage3_golden_test.go`: one subtest per tag 38–42 spelling the same public fixture bodies directly in package wire (importing authoritytest would form a cycle), plus `update_consensus_params_with_stage3` with `Stage3Update()`'s complete two-indexer shape and `update_consensus_params_with_a_member` freezing all member-entry fields; bytes from `protoc --encode=arbiter.RaftCommand` over `PROTO_TAG_P5`, the S2-A pipeline), `TestStage3CanonicalizeSortsAndDeduplicates`, `TestDecodeRefusesAnUnknownExclusionReason`, `TestTableRegistrySnapshotCarriesGroupsSeqsScopedPathsAndStage3`, `TestTableRegistrySnapshotEveryStage3FieldRoundTrips` (reflection seeding, the `seedSnapshot` precedent), `TestTableRegistrySnapshotRefusesCorruptStage3Views` (every refusal above), `TestGroupMemberHostIndexerKeepsAbsenceAndIndexerZero` (a member served with host 0, one with host 1 and a delisted one without a host survive `FromPB`/`ToPB` and `proto.Marshal` unchanged), `TestBlockVerificationCarriesTheSelectionRecord`, `TestGroupMemberReady`. Every existing wire and conformance golden passes unedited.
 
 ### 42. arbiter-core: Keeper paths and the member consensus mode (Tasks 61–63)
 
@@ -24835,7 +25754,7 @@ type KeeperFinding struct {
 	KeeperFindings  []KeeperFinding // the last audit's findings, sorted by path then replica
 	KeeperAuditRuns uint64
 ```
-A replica is known iff `wire.TableRegistrySnapshot.KnownKeeperReplica(inc wire.TableIncarnation, pool []string, replica string) bool` is true, with `pool` = `wire.TableRegistrySnapshot.NetworkPool(purgeNodeSet []string) []string` of the arbiter's purge node set: the owner's SNode node id, a node of the network pool, a member, past member or Leaving member of `G(owner(inc), inc.DatabaseID)`, or a node of `inc.PurgeMembers` (spec §8.2: the owner, a pool verifier or a current or past member). `NetworkPool` is the purge node set, sorted and unique, without the SNode of every `si_indexers` entry and without every node the registry view names as a current, past or Leaving member of any group, a purge member of any incarnation or the node of a published `MemberCheckpointSeq`: the purge node set lists every registered member too, so another owner's SNode and a registered member of another group are unknown on the owner's paths. Before the signed-claims activation (no `si_indexers`, no groups) the pool is the whole purge node set. A scoped path whose seq is no `scoped_keeper_path` incarnation of that table, and every `KeeperRoots.NonIncarnation` path, is a `non_incarnation_root`. Warn logs verbatim: `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`). The audit drops nothing; the existing sweep's drops are unchanged. Series `sentio_node_storage_integrity_keeper_findings{reason}` (gauge, both reasons always exported) is reserved for sentio-node's export of `Stats.KeeperFindings` (S3-E4 Task 79).
+A replica is known iff `wire.TableRegistrySnapshot.KnownKeeperReplica(inc wire.TableIncarnation, pool []string, replica string) bool` is true, with `pool` = `wire.TableRegistrySnapshot.NetworkPool(purgeNodeSet []string) []string` of the arbiter's purge node set: the owner's SNode node id, a node of the network pool, a member, past member or Leaving member of `G(owner(inc), inc.DatabaseID)`, or a node of `inc.PurgeMembers` (spec §8.2: the owner, a pool verifier or a current or past member). `NetworkPool` is the purge node set, sorted and unique, without the SNode of every `si_indexers` entry and without every node the registry view names as a current, past or Leaving member of any group, a purge member of any incarnation or the node of a published `MemberCheckpointSeq`: the purge node set lists every registered member too, so another owner's SNode and a registered member of another group are unknown on the owner's paths. Before the signed-claims activation (no `si_indexers`, no groups) the pool is the whole purge node set. A scoped path whose seq is no `scoped_keeper_path` incarnation of that table, and every `KeeperRoots.NonIncarnation` path, is a `non_incarnation_root`. Warn logs verbatim: `keeper replica on an owner path is not the owner, a pool verifier or a current or past member` (fields `table`, `path`, `replica`) and `replicated-table root under the SI keeper roots is not an incarnation path` (field `path`). The audit drops nothing. On every owner pass, including desired scoped keys and backoff passes, `unattributableKeeperTables` protects unknown, noncanonical and wrong-physical-name local markers before either retired-path sweep can remove Keeper metadata. Known attributable markers retain the intended cleanup. `TestScopedSweepPreservesUnknownLocalKeeperMetadata`, `TestRetiredKeeperSweepsProtectUnknownMarkersOnBothRoots` and `TestKeeperAuditPureFakeRetriesPacesReportsAndNeverMutates` pin both roots, first/backoff passes and report-only pacing/retry/stat-copy behavior. Series `sentio_node_storage_integrity_keeper_findings{reason}` (gauge, both reasons always exported) is reserved for sentio-node's export of `Stats.KeeperFindings` (S3-E4 Task 79).
 
 **Task 61 named tests:** `TestZooKeeperPathForUnscopedIsByteIdentical`, `TestScopedZooKeeperPathIsNeverUnderTheLegacyRoot`, `TestIncarnationIntentsForUsesTheIncarnationPath`, `TestListKeeperRootsSeparatesIncarnationPathsFromOtherRoots` (ClickHouse and Keeper), `TestReconcilerCreatesAScopedIncarnationOnItsIncarnationPath`, `TestReconcilerPurgesAndSweepsBothPathKinds`, `TestClearDecommissionedCoversTheScopedRoot`, `TestSweepPurgedKeeperPathsCoversBothRoots`, `TestKnownKeeperReplicaCoversOwnerPoolMembersAndPurgeMembers`, `TestOwnerKeeperAuditReportsAnUnknownReplica`, `TestOwnerKeeperAuditReportsANonIncarnationRoot`, `TestOwnerKeeperAuditDropsNothing`, `TestSameNameRecreateAfterAPurgeOnBothPathKinds` (ClickHouse and Keeper, §17), `TestScopedRecreateSurvivesDroppingTheStaleLastUnscopedReplica` (ClickHouse and Keeper, §17: a stale last replica on `/sentio/0/unsafe/<t>` dropped after a scoped re-create leaves `/sentio/0/unsafe_inc/<t>/<seq>` and its writes intact). ClickHouse-gated tests use `dataplane/chtest` and the CI env `ARBITER_CH_INTEGRATION=1`, `ARBITER_CH_KEEPER=1`, `ARBITER_CH_REPLICA=1`, `CH_ADDR`, `CH_REPLICA_ADDR`.
 
@@ -24879,7 +25798,11 @@ func NewRegistrationSeq(stateDir string) *RegistrationSeq
 func (r *RegistrationSeq) Next(nowMillis uint64) (uint64, error) // max(last + 1, nowMillis), durable before return
 func VerifierRegistrationRequests(priv ed25519.PrivateKey, nodeID string, seq uint64, ctx authority.MessageContext) (*pb.NodeRegistration, *pb.NodeRef, error)
 ```
-`verifier` preserves the legacy submitted bytes, signing/log and registration behavior while delegating through evidence. Its fixed constructor clones caller config, wraps only the concrete `snapshotquery.CompositeExecutor` in private `newReplayExecutorMemo`, and supplies a second independent public schema clone. `handleReplayJob` uses per-dispatch private `memoEvidenceCore`: only Verify receives `withReplayMemoJob(ctx, originalPB)`; successful Verify followed by terminal InvalidArgument/Unauthenticated/PermissionDenied submission invalidates that private Run through `forgetReplayMemoRun(ctx)`. Submit retains its original context/leader retry; Role.Run retains one private generation and synchronous callback. Post-C4 SnapshotQueryReplayCore and all inherited memo/schema tests remain. Generic injected evidence/member materializers stay uncached; none of these private helpers is an exported evidence API. Scanner aliases, public signatures, registration.json and observable legacy log texts remain unchanged.
+`verifier` delegates byte for byte: `type CHScanner = evidence.CHScanner`, `NewScanner`/`NewRegistryScanner`/`NewReplayCore` keep their signatures, `Role` handles replay jobs and scans through an `evidence.Handler` with `NotReady: ErrAddedTableNotReady`, and `registration.json` keeps its file name and JSON shape (`{"registration_seq":N}`); every log message keeps its text and fields (`replay verify failed; refusing to attest`, `byte-side scan failed; refusing to attest`, `table-set transition adds a table this verifier has not created; refusing to attest`, `arbiter did not accept verifier evidence`).
+
+The shared `evidence.Deps` also has `NotReadyLog string`: empty selects the verifier's existing add-table refusal text. `CHScanner.Database() string`, `Registry() dataplane.RegistryView` and `SchemaFor(tableID string) (payloadexec.TableSchema, error)` preserve the scanner alias's existing checks. The shared `evidence.NewReplayCore` accepts an arbitrary injected materializer and adds no execution, member or evidence cache.
+
+The legacy `verifier.NewReplayCore` keeps its constructor-owned memo only around the fixed self-built legacy dispatcher. It owns separate deep copies of configuration tables/columns for the private executor and public schema-hash dependency, and preserves the post-C4 `SnapshotQueryReplayCore` adapter. The private `Role.Run` generation and deterministic full protobuf bytes (including unknown fields), plus explicit replay inputs, scope successful completed executor results to 128 entries / 8 MiB; query/reference/result-query lanes bypass the memo, and no failed or canceled execution is published. Snapshot/payload/schema validation, result validation, fresh signing, evidence submission and scans still run for every dispatch. Task 62's private Verify-only `memoEvidenceCore` adapter distinguishes a successful verification from readiness/pre-Verify failures before terminal context-refusal invalidation; submission retains the original context and leader retry. A reference `Role.Run` dispatches its subscription callbacks synchronously. Terminal `forgetReplayMemoRun` clears completed entries under that serial lifecycle; it is not an epoch barrier for concurrent redispatch using a captured private Run token. Such parallel dispatch is unsupported and would require a generation barrier before being introduced. Run close still prevents in-flight publication. No part of this preservation enables the memo on member/evidence or query executors.
 
 **42.3 Member consensus mode (Tasks 62–63, K66).** New package `member/consensus` (import `github.com/sentioxyz/arbiter-core/member/consensus`). Plan S3-C2's member role config (`member.Config` of contract §20–§24) gains `Consensus *consensus.Config`; nil keeps the P2/P3 member byte for byte (`TestConsensusConfigNilKeepsTheP2Role`).
 ```go
@@ -24913,17 +25836,23 @@ type ReconcilerConfig struct {
 	Interval       time.Duration // 0 = ddl.DefaultReconcileInterval
 }
 ```
+`ReconcilerConfig` additionally carries `NetworkID string`, `Tables []payloadexec.TableSchema` and `StoragePolicy string`, all from the member's existing configuration/pinned schema and policy. No independent policy choice is added. The readiness probe builds `ddl.MemberPinned` with that actual `Config.StoragePolicy`, so a correctly pinned member-disk replica is accepted before replay (`TestMemberReadinessChecksTheConfiguredStoragePolicy`).
+
 Task 62:
 - `func NewReplayMaterializer(networkID string, conn clickhouse.Conn, nodeID, bootNonce, storagePolicy string) (*chexec.Materializer, error)` wraps C1 contract §16's `NewMaterializerInWithStoragePolicy` for the member's replay prefix. It requires an explicit policy matching `[A-Za-z_][A-Za-z0-9_]{0,127}` after the original boot-nonce/name checks. Empty/malformed names refuse construction; a policy absent from ClickHouse fails CREATE with no default-policy retry (normal deferred DROP cleanup still runs). `Config.StoragePolicy` comes from the existing `member.Config.Pinned.StoragePolicy`; no new independent YAML choice is added. Tests: `TestNewVerifyRoleRefusesAnIncompleteConfig` (empty/malformed policy cases), `TestReplayMaterializerKeepsExplicitPolicyAndDoesNotFallBack`.
 - `type VerifyRole`; `func NewVerifyRole(cfg Config, d VerifyDeps) (*VerifyRole, error)`; `func (v *VerifyRole) Register(ctx context.Context) error` (RegisterNode then MarkActive as a VERIFIER through `evidence.VerifierRegistrationRequests` and `evidence.NewRegistrationSeq(cfg.StateDir)`, features `arbiter.LocalNodeFeatures()`; refused with `member consensus: Register is off` unless `cfg.Register`); `func (v *VerifyRole) Run(ctx context.Context) error` (`RunVerifierSubscription(ctx, cfg.NodeID, …)` into an `evidence.Handler` whose scanner is `evidence.NewCHScanner(networkID, tables, "hg_member_unsafe", conn, registry)`, whose replay core is `evidence.NewReplayCore` over `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, "hg_rstage", prefix, cfg.StoragePolicy)` under the member prefix `install.ScratchPrefix(NodeID, bootNonce) + "v"` (S3-C2 §22.2, with `member.Role`'s boot nonce; distinct from `shadow.ReplayPrefix`'s `…r`, so a still-running shadow and the verify role never share a scratch name, and S3-C2's startup drop under `install.NodePrefix` removes both; as `si_member` the replay issues only `CREATE TABLE … ENGINE = MergeTree`, `INSERT`, `SELECT` and `DROP TABLE … IF EXISTS` on its scratch, all inside spec §8.2's explicit `hg_rstage` rights as amended (`SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE, OPTIMIZE`, never `ALL`: cross-plan decision D36) and `TABLE ENGINE ON MergeTree`, so the verify role needs no right beyond S3-C2's `SI_MEMBER_GRANTS`), whose `TablesReady` requires a local `hg_member_unsafe` replica of every job table (`NotReady: ErrMemberTableNotReady`), and whose `Observe` writes the quiescence ledger; without `cfg.Register` it subscribes to nothing and waits for `ctx`); `type VerifyDeps struct{ Client *dataplane.Client; Registry dataplane.RegistryView; Conn clickhouse.Conn /* si_member */; Manifests replay.SnapshotStore; Payloads replay.PayloadStore; Logger *slog.Logger; Now func() time.Time; BootNonce string /* member.Role's, install.NewBootNonce's shape; NewVerifyRole refuses any other */ }`; `var ErrMemberTableNotReady = errors.New("member consensus: hg_member_unsafe table is not ready")`.
 - `type UnsafeReconciler`; `func NewUnsafeReconciler(cfg ReconcilerConfig, d ReconcilerDeps) (*UnsafeReconciler, error)`; `func (r *UnsafeReconciler) Run(ctx context.Context) error`; `func (r *UnsafeReconciler) Stats() ReconcilerStats` (`Replicas int`, `ReplicaAlreadyExists uint64`, `Failures map[string]uint64`); `type ReconcilerDeps struct{ DDLConn clickhouse.Conn /* si_member_ddl */; Registry dataplane.RegistryView; Arbiter tableset.Arbiter /* PurgeNodeSet only */; Logger *slog.Logger }`. It creates `hg_member_unsafe.<db__table>` with S3-C2's `ddl.MemberUnsafeIntent` at `ddl.ZooKeeperPathFor(cfg.KeeperShardID, tableID, tableset.KeeperScopeOf(inc))`, replica name `cfg.NodeID`, only while `cfg.CreateReplicas`, the node is in the purge node set (registered, not evicted), the registry's `Stage3.Purge` is on, and the node is in `G(owner, database).Members` or an unreleased `Leaving` record of it; it keeps a replica through Retiring and drops it (`DROP TABLE … SYNC` as `si_member_ddl`) at Purging once `ReadQuiescence(cfg.StateDir).Quiet(tableID, seq)`, and drops every replica of a group whose Leaving record for the node is `released`, each once its table is quiet; it never runs `SYSTEM DROP REPLICA`. On `REPLICA_ALREADY_EXISTS` it stops for that table with `var ErrReplicaAlreadyExists` and the text `member consensus: hg_member_unsafe.%s: replica %s already exists at %s; not dropping it (si_member_ddl holds no SYSTEM DROP REPLICA); the owner's sweep removes it after an eviction`.
 - Quiescence ledger (shared by both processes through the member state volume): `type QuiescentTable struct{ TableID string; IncarnationSeq uint64 }`; `type Quiescence`; `func OpenQuiescence(stateDir string) (*Quiescence, error)`; `func (q *Quiescence) Observe(blockSeq uint64, tables []QuiescentTable) error` (durable in `quiescence.json`, temp file, fsync and rename, before the job's replay); `func (q *Quiescence) Resolve(ctx context.Context, client *dataplane.Client, nodeID string) error` (run every `ResolveInterval`; a block resolves once `GetBlockVerification` shows `verdict_evaluated`, or `nodeID` is no longer in its `verifier_set`); `type QuiescenceLedger`; `func ReadQuiescence(stateDir string) (QuiescenceLedger, error)` (a missing file is an empty ledger); `func (l QuiescenceLedger) Quiet(tableID string, incarnationSeq uint64) bool` (no unresolved block names the table at that incarnation).
 
+Every successful `Quiescence.Observe` assigns a new private nonzero token to that block observation. `Resolve` snapshots its token and sequence before its RPC; it removes a completed observation only if the token still matches, so even an identical overlapping redelivery remains held. The token is process-local and does not change the version-1 JSON shape. `ReadQuiescence` requires an explicit blocks array, positive ascending unique block sequences, nonempty table lists and nonblank table IDs with positive incarnations, sorted uniquely. Missing file alone means the initial empty ledger; malformed/unknown-version/structurally corrupt records propagate an error and preserve the purge hold. Tests: `TestQuiescenceResolveCannotEraseAnOverlappingRedelivery`, `TestQuiescenceRejectsStructurallyCorruptRecords`.
+
 Task 63:
 - `dataplane` (new file `member_commands.go`): `var ErrStage3SwitchOff = errors.New("dataplane: the arbiter refuses this stage-3 command until its switch is on")`; `func (c *Client) SubmitMemberReady(ctx context.Context, cmd wire.MemberReady) error`; `func (c *Client) SubmitMemberCheckpoint(ctx context.Context, cmd wire.MemberCheckpoint) error` — nil on Ack, an error wrapping `ErrStage3SwitchOff` with the leader's message on a FAILED_PRECONDITION without NotLeader detail (`leaderPrecondition`), the gRPC error otherwise.
-- Readiness: `func PlanReadiness(snap wire.TableRegistrySnapshot, nodeID string, local LocalReplicas) []arbiter.MemberReadyBody` (one body per group where the node is a member with `!Ready()` and every physical incarnation of the group's database owned by its owner has an active, synced local replica, at the group's current generation); `type LocalReplicas map[string]bool` (physical table name → active and synced, read from `system.replicas` after `SYSTEM SYNC REPLICA` as `si_member`); signed with `authority.SignMemberReady`, sent every `ReadinessInterval` while the registry's `Stage3.Placement` is on.
+- Mode: `type Mode`; `func NewMode(cfg Config, d ModeDeps) (*Mode, error)`; `func (m *Mode) Run(ctx context.Context, manifests replay.SnapshotStore, inst InstallView, bootNonce string) error`; `func (m *Mode) Status() Status`; `func (m *Mode) Metrics() *Metrics`. `InstallView` has `Entry(owner uint64) (install.OwnerJournal, bool)`, `Tables(owner uint64) []install.TableState` and `Stats() install.Stats`. `ModeDeps` carries `Client *dataplane.Client`, `Registry dataplane.RegistryView`, `Conn clickhouse.Conn` (si_member), `Payloads replay.PayloadStore`, `MemberUnsafeDB string`, `Owners []uint64`, `Logger *slog.Logger` and `Now func() time.Time`; the running Role supplies these connections and its actual boot nonce, and the mode opens/closes none of them.
+- Readiness: `func PlanReadiness(snap wire.TableRegistrySnapshot, nodeID string, local LocalReplicas) []arbiter.MemberReadyBody` (one body per group where the node is a member with `!Ready()` and the group's nonempty set of live Pending/Active/Retiring incarnations owned by its owner each has an active, synced local replica; Purging is excluded because the reconciler drops it instead of creating it, at the group's current generation); `type LocalReplicas map[string]bool` (physical table name → active and synced, read from `system.replicas` after `SYSTEM SYNC REPLICA` as `si_member`); signed with `authority.SignMemberReady`, sent every `ReadinessInterval` while the registry's `Stage3.Placement` is on.
+- Supporting readiness APIs: `const ReplicaSyncTimeout = 30 * time.Second`, `func ReplicaPaths(snap wire.TableRegistrySnapshot, nodeID string, keeperShardID uint32) map[string]string`, and `func ReadLocalReplicas(ctx context.Context, conn clickhouse.Conn, memberUnsafeDB, nodeID string, paths map[string]string) (LocalReplicas, error)`. The replica must match its exact Keeper path and node ID, with no readonly/expired session; sync failures/timeouts hold readiness. `InstallStateOf(snap wire.TableRegistrySnapshot, owner uint64, j install.OwnerJournal, tables []install.TableState, stats install.Stats) OwnerInstallState` derives checkpoint exclusions from the actual owner journal/copy/audit/disk state, and `(*CheckpointSigner).Address() string` names the signing identity.
 - Checkpoints: `type OwnerInstallState struct{ SnapshotID string; Entry replay.TrackFrontier; Tables []TableInstallState }`, `type TableInstallState struct{ TableID string; Excluded arbiter.CheckpointExclusionReason /* "" = installed */ }` (an adapter over S3-C2's per-owner `member/install` journal); `func PlanCheckpoint(snap wire.TableRegistrySnapshot, nodeID string, owner uint64, st OwnerInstallState) (arbiter.MemberCheckpoint, bool)` (every group of `owner` with the node as a current member, sorted; `CheckpointSeq` left 0); `type CheckpointSeqStore`; `func OpenCheckpointSeqStore(stateDir string) (*CheckpointSeqStore, error)`; `func (s *CheckpointSeqStore) Next(owner uint64, replicaSigner string, published uint64) (uint64, error)` (= max(the journal's value under the same signer, `published` when it names the same signer) + 1, written to `checkpoint_seq.json` before it returns; shape `{"owners":[{"owner_indexer_id":0,"replica_signer":"0x…","checkpoint_seq":7}]}`); `type CheckpointSigner`; `func NewCheckpointSigner(replicaSignerKeyHex string, ctx authority.MessageContext, store *CheckpointSeqStore) (*CheckpointSigner, error)`; `func (s *CheckpointSigner) Sign(cp arbiter.MemberCheckpoint, published uint64) (wire.MemberCheckpoint, error)`; the loop runs every `CheckpointInterval` while `Stage3.Checkpoints` is on, per owner whose entry differs from the last accepted checkpoint, `published` from `PublishedCheckpointSeq`.
-- Hardlink byte source: in S3-C2's `member/sources`, `type MemberUnsafeHardlink struct{ Conn clickhouse.Conn; MemberUnsafeDB string }` and `func NewMemberUnsafeHardlink(conn clickhouse.Conn, memberUnsafeDB string) *MemberUnsafeHardlink`, implementing `sources.Source` with `Name()` `member_unsafe_hardlink` (a new value of S3-C2's metric label `source`): `ATTACH PARTITION … FROM hg_member_unsafe.<t>` into the fresh scratch, drop the scratch parts no need names, then continue at gate step 4; in consensus mode the source order is hardlink, owner pull, peer unsafe pull, restore (S3-C2 §22.3's bootstrap restore probe, for the first fetch of each copy while its owner has no journaled entry, moves the restore right before the owner pull and keeps the hardlink first).
+- Hardlink byte source: in S3-C2's `member/sources`, `type MemberUnsafeHardlink struct{ Conn clickhouse.Conn; MemberUnsafeDB string }` and `func NewMemberUnsafeHardlink(conn clickhouse.Conn, memberUnsafeDB string) *MemberUnsafeHardlink`, implementing `sources.Source` with `Name()` `member_unsafe_hardlink` (a new value of S3-C2's metric label `source`): `ATTACH PARTITION … FROM hg_member_unsafe.<t>` into the fresh scratch, retain exactly one scratch part with the need's hash_of_all_files and drop only every other scratch part, then continue at gate step 4; in consensus mode the source order is hardlink, owner pull, peer unsafe pull, restore (S3-C2 §22.3's bootstrap restore probe, for the first fetch of each copy while its owner has no journaled entry, moves the restore right before the owner pull and keeps the hardlink first).
 - Role wiring: `newConsensusMode` first requires `Config.Consensus.StoragePolicy` to equal the actual member's `Pinned.StoragePolicy`, together with its existing identity checks; `Mode.prepare` passes that config to the real verify-role constructor. An absent consensus config returns before these checks and keeps P2/P3 behavior, including an empty pinned policy when shadow is off. Named regressions: `TestModeThreadsReplayStoragePolicy`, `TestConsensusReplayPolicyMustMatchPinnedMemberPolicy`. `member.Role` runs the mode in startup step (9) with the feed's verified manifest store, its installer and the boot nonce it drew in startup step (7), which the verify role's replay scratch carries (`VerifyDeps.BootNonce`). With `Config.Consensus`, startup step (6) checks the node id with `copyset.CheckNodeIDUnused` against the purge node set without the member's own id, which its own VERIFIER registration puts there, so a registered member restarts (`TestConsensusModeAcceptsItsOwnRegistrationAtARestart`), and keeps S3-C2's SNode refusal; a group member with the member's id that the registry serves with another `host_indexer_id` is refused with `member: node id %q is served as a member of group %d/%s hosted by indexer %d, not by this host %d: %w` wrapping `copyset.ErrNodeIDInUse`. Without `Config.Consensus` step (6) is S3-C2's.
 - Purge reports: the main process reports a Purging incarnation in `PurgeMembers` through `dataplane.PurgeReporter` signed with the member key (`authority.VerifierMessageTablePurged`) once its `hg_member_unsafe` table and its own Keeper replica are gone and the table is quiet; one it never held is reported at once.
 - Status: S3-C4's `serve.ServingView` (contract §30.3, `GET /v1/serving`) gains the field `Consensus consensus.Status` with tag `json:"consensus"`; `Mode` is `off` without `member.Config.Consensus`, else `consensus`:
@@ -24943,172 +25872,156 @@ type GroupStatus struct {
 }
 ```
 - Metrics, as `consensus.NewMetrics() *consensus.Metrics` with `(*Metrics).Register(prometheus.Registerer) error`, exposed by `func (r *Role) ConsensusMetrics() *consensus.Metrics` and registered on the si-member process's own registry by sentio-node's `simember` (S3-C2 §24.4; wired by Plan S3-E4 Task 79): `sentio_node_si_member_consensus_registered` (gauge), `sentio_node_si_member_ready_groups` (gauge), `sentio_node_si_member_checkpoint_seq{owner}` (gauge), `sentio_node_si_member_checkpoints_total{owner,result}` (`accepted`, `switch_off`, `refused`), `sentio_node_si_member_evidence_total{kind,result}` (`replay`, `scan`; `submitted`, `refused`), `sentio_node_si_member_purge_reports_total`; the reconciler process serves `sentio_node_si_member_unsafe_replicas` (gauge) and `sentio_node_si_member_replica_already_exists_total`.
+- Additional source/status/metrics APIs: `sources.SourceMemberUnsafeHardlink = "member_unsafe_hardlink"`, kept out of the P2 `SourceNames` list. Pure fake source regressions `TestMemberHardlinkPureFakeConfinesDropsAndKeepsOneHash` and `TestMemberHardlinkPureFakeMissAndAttachError` check the exact ATTACH/DROP target boundary and zero-write miss/error cases; they do not replace the gated physical-byte proof. `TestMemberPurgeChecksEachHoldIndependently` pins table/Keeper/quiescence/error holds without one condition masking another. Status constants are `ModeOff = "off"`, `ModeConsensus = "consensus"`, `ClassLeaving = "leaving"`, with `func OffStatus() Status`. The reconciler process uses `type ReconcilerMetrics`, `func NewReconcilerMetrics(stats func() ReconcilerStats) *ReconcilerMetrics` and `func (m *ReconcilerMetrics) Register(r prometheus.Registerer) error`; this keeps its registry separate from the main member's series.
 - `consensus.go`: `const Stage3Feature = "stage3_v1"`; `LocalNodeFeatures()` returns `[client_lanes_v1 signed_claims_v1 track_manifests_v1 stage3_v1]`; `snode.nodeFeatures` still drops only `signed_claims_v1` without a claim signer.
 
 **Task 62 named tests:** `TestEvidenceHandlerSubmitsWhatTheVerifierSubmitted`, `TestVerifierRoleDelegatesToTheEvidenceHandler`, `TestVerifierRegistrationFileKeepsItsShape`, `TestMemberVerifyRoleRegistersAsAVerifierWithARegistrationSeq`, `TestMemberVerifyRoleRefusesToRegisterWhenRegisterIsOff`, `TestMemberVerifyRoleScansItsMemberUnsafeReplica`, `TestMemberReplayScratchLivesInRstageUnderTheMemberPrefix` (ClickHouse, run as `si_member` created by the S3-C2 Task 34 confinement harness from its grant list with D36's explicit `hg_rstage` rights: every scratch is `` `hg_rstage`.`<member prefix>replay_<n>` ``, created, filled, read back and dropped, and no statement is refused with 497), `TestUnsafeReconcilerCreatesReplicasOnlyWhenRegisteredPurgeOnAndPlaced`, `TestUnsafeReconcilerUsesTheIncarnationKeeperPath`, `TestUnsafeReconcilerStopsOnReplicaAlreadyExistsAndNeverDropsAReplica`, `TestUnsafeReconcilerKeepsTheReplicaThroughRetiringAndDropsItAtPurgingWhenQuiet`, `TestUnsafeReconcilerDropsAReleasedLeavingMembersReplicas`, `TestQuiescenceLedgerIsDurableBeforeTheJobRuns`, `TestQuiescenceResolvesALatchedOrReselectedBlock`, `TestMemberUnsafeReplicaAsSIMemberDDLReplicatesTheOwnersParts` (ClickHouse and Keeper, the S3-C2 Task 34 confinement harness with `table_engines_require_grant`).
 
-**Task 63 named tests:** `TestSubmitMemberReadyAcksAndMapsTheSwitchRefusal`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestPlanReadinessAnnouncesOnlySyncedGroups`, `TestReadinessLoopIdlesUntilThePlacementSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq` (§17), `TestPlanCheckpointListsOnlyTheMembersGroupsOfOneOwner`, `TestPlanCheckpointExcludesTablesWithClosedReasons`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles` (ClickHouse and Keeper), `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`, `TestMemberStatusCarriesReadinessAndCheckpointSeq`, `TestConsensusConfigNilKeepsTheP2Role`, and the review fixes' `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` and `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`; the pre-existing `TestLocalNodeFeatures` (`consensus_test.go:44-53`, four features with `stage3_v1` last) and the legacy-feature expectation of `snode/tracks_test.go:659` (`client_lanes_v1`, `track_manifests_v1`, `stage3_v1`) learn the feature, and nothing else in those files changes.
+**Task 63 named tests:** `TestSubmitMemberReadyAcksAndMapsTheSwitchRefusal`, `TestSubmitMemberCheckpointAcksAndMapsTheSwitchRefusal`, `TestPlanReadinessAnnouncesOnlySyncedGroups`, `TestReadinessLoopIdlesUntilThePlacementSwitch`, `TestCheckpointSeqIsAboveTheJournalAndThePublishedValue`, `TestCheckpointSeqIsDurableBeforeSubmit`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestMemberThatLostItsStateResumesFromThePublishedCheckpointSeq` (§17), `TestPlanCheckpointListsOnlyTheMembersGroupsOfOneOwner`, `TestPlanCheckpointExcludesTablesWithClosedReasons`, `TestCheckpointLoopIdlesUntilTheCheckpointsSwitch`, `TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles` (ClickHouse and Keeper), `TestMemberReportsAPurgeOnlyAfterTheDropAndQuiescence`, `TestMemberReportsAtOnceAPurgingIncarnationItNeverHeld`, `TestMemberStatusCarriesReadinessAndCheckpointSeq`, `TestConsensusConfigNilKeepsTheP2Role`, and the review fixes' `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` and `TestConsensusModeAcceptsItsOwnRegistrationAtARestart`; the pre-existing `TestLocalNodeFeatures` (`consensus_test.go:44-53`, four features with `stage3_v1` last), S3-C2's member role feature expectation (`member/role_test.go`) and the legacy-feature expectation of `snode/tracks_test.go:659` (`client_lanes_v1`, `track_manifests_v1`, `stage3_v1`) learn the feature, and nothing else in those files changes.
 
 ### 43. Release ledger, consumed names, repositories and commands (Tasks 57–63)
 
 **Ledger.** Produced, in order, each recorded into Appendix C of this plan file by the task that makes it: `PROTO_TAG_P5` (Task 57), `HG_TAG_P5` (Task 58), `CORE_TAG_P5` (Task 63). Appendix C has the S3-B D23 shape: the heading `## Appendix C: execution record`, the table `| Name | Value | Recorded by |` with rows `` | `PROTO_TAG_P5` |  | Task 57 | ``, `` | `HG_TAG_P5` |  | Task 58 | ``, `` | `CORE_TAG_P5` |  | Task 63 | `` (filled as `` | `NAME` | `<value>` | Task N | ``), then "Run records" with `- arbiter-proto release (Task 57):`, `- housegate release (Task 58):`, `- arbiter-core release (Task 63):`. Consumed: `PROTO_TAG_P4` (Plan S3-D, Task 49, produced unconditionally under D26; the base of Task 57 and of `buf breaking`), `HG_TAG_P3` (Plan S3-C4, Task 44), `CORE_TAG_P4` (Plan S3-D, Task 50); `PROTO_TAG` (Plan S3-A, Task 3) only as `PROTO_TAG_P4`'s own base. Values are read only with the ledger tool and never predicted.
 
-**Ledger tool and record procedure.** `$HOME/.cache/s3-ledger/s3-ledger.py` exactly as Plan S3-C1 contract §19 defines it (written by Task 22; verbs `ref`, `show`, `get`, `empty`, `set`), and S3-B's record procedure (D23) per recording task: R1 `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`, `ref` = `python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3e1`, a URWT worktree `multi-source-s3e1-ledger-<N>` of housegate at `$ref` (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3e1-ledger-<N> urwt/claude/multi-source-s3e1-ledger-<N> "$ref"`), the run record in `$HOME/.cache/s3-ledger/record-<N>.md`, `s3-ledger.py set`, one commit of this plan file only, `docs(plan): record <names> of Plan S3-E1 (Task <N>)`. The ledger copy (cross-plan decision D34) is the plans branch `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; `ref` prints whichever holds this plan file, and the record follows it. R2 (explicit user confirmation in chat): when `$ref` is `origin/urwt/claude/ms-si-stage3-plans-cf`, `git push origin HEAD:urwt/claude/ms-si-stage3-plans-cf` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-<N>-pr.md`. R3 (`origin/main` only; confirmed): `gh pr merge <number> --repo housegate/housegate --squash`. R4 (read-only): fetch again and `s3-ledger.py get` the task's names, which must print the values just written, else stop and ask. A task ends only after R4.
+**Ledger tool and record procedure.** Use the canonical `$HOME/.cache/s3-ledger/s3-ledger.py` from S3-C1 §19, with `ref`, `show`, `get`, `empty` and `set`, and S3-B D23's R1–R4 procedure. R1 fetches housegate after explicit confirmation, obtains `ref ... s3e1`, retains a new ledger URWT creation JSON with noclobber, and uses its returned absolute path verbatim; executing Codex uses runtime `codex`. Configure worktree-level `poetry <chen@sentio.xyz>` and `commit.gpgsign true` before a commit. The run record is `$HOME/.cache/s3-ledger/record-<N>.md`, and exactly this plan file is committed as `docs(plan): record <names> of Plan S3-E1 (Task <N>)`. Require a changed HEAD, `poetry <chen@sentio.xyz> G` and `git verify-commit`; signing cancellation stops for the user's terminal unlock, with no unsigned fallback.
+
+D34's ledger-copy ref remains `origin/urwt/claude/ms-si-stage3-plans-cf` until the stack merges, then `origin/main`; runtime selection does not rename that fixed remote ref. R2 publishes only the verified target after explicit confirmation: the fixed plans-cf ref, or a new PR against main. A rejected push stops for reconciliation without force. R3 applies only to a main-based ledger PR and requires separate confirmation. The canonical paginated REST primary-author/complete-message validator from C1 §19 checks primary poetry and no trailer or exactly the one canonical Claude trailer; ordinary task commits still require Claude. Bind the PR's checked head to local HEAD before and after REST, retain the exact repo/PR/worktree/head receipt across separate confirmation blocks, read it fail-closed, and squash with `--match-head-commit` set to that checked SHA. Never recapture an unchecked new HEAD as the merge expectation. Explicitly stop every validation/merge failure before a later `gh pr view` or other successful command. R4 fetches and reads the task's produced names through the canonical ledger tool, requiring the values just recorded. A task ends only after R4; no current review writes a ledger value or performs any publication. The canonical parser requires lowercase 40-hex string commit SHAs, unique across the full listing, nonempty pages of 1–100 commits, conservative total below 250, and final-listed SHA equal to the caller's checked head. All six E1 sites use one exact parser body with checked-head argv and success output `PR commit identities and pinned head verified`; malformed nested objects also fail closed. Outer before/after remote-head checks and atomic merge remain mandatory.
 
 **Consumed names (spelled as their source gives them).**
 - Plan S3-A: §1 `BlockVerification` fields 1–13, `L3BlockRef`, `SafeState.GetBlockVerification`, the hold RPCs (method counts only), the conformance helpers `stage3Fields`, `stage3MessageFiles()`, `stage3LedgerType`, `reachableTypes` (and `populateSnapshotField`, `assertSnapshotVariant`, which exist at arbiter-proto `1c6ae67`); §3 `dataplane/chtest` (`Open`, `OpenAs`, `EnvUser`, `EnvPassword`); §6 the release and pin commands.
 - Plan S3-B: §15 the record procedure (D23) and the Appendix C shape.
-- Plan S3-C1: §16 `chexec.NewMaterializerIn(networkID, conn, database, prefix)` and compatible `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)`, `chexec.ScanAllParts`, `payloadexec.VerifyLedger`, `replay.OwnerEntry`, `sitable.CopyTable`; §19 `s3-ledger.py`.
+- Plan S3-C1: §16 `chexec.NewMaterializerIn(networkID, conn, database, prefix)` and its compatible policy-aware `chexec.NewMaterializerInWithStoragePolicy(networkID, conn, database, prefix, storagePolicy)` (Task62 uses its already pinned `Config.StoragePolicy`), `chexec.ScanAllParts`, `payloadexec.VerifyLedger`, `replay.OwnerEntry`, `sitable.CopyTable`; §19 `s3-ledger.py`.
 - Plan S3-C2: §20–§24 `dataplane.Client.GetSafeWatermark`, `GetManifest`, `GetBlockVerification`, `wire.BlockVerification`, `wire.BlockVerificationFromPB`, `wire.TableRegistrySnapshot.ManifestOwner`, `ddl.MemberPinned`, `ddl.CopyIntent`, `ddl.MemberUnsafeIntent(m, t, incarnationSeq, zooKeeperPath)`, `ddl.ListMemberTables`, `copyset.Reconciler`, `sources.Source` (`Name()`, `Fetch(ctx, need, schema, scratch) Result`), `sources.NewOwnerPull`, `sources.NewPeerUnsafePull`, `sources.NewRestore`, `install.Installer` and its per-owner journal (`install.Journal`, `install.OwnerJournal`, `install.JournalFile`), `install.NodePrefix` (`<node_id>_`), `install.ScratchPrefix` (`<node_id>_<boot_nonce>_`), `install.ScratchName` (`<node_id>_<boot_nonce>_<n>`), `shadow.ReplayPrefix`, the `si_member` grant list `SI_MEMBER_GRANTS` of §23.2 (with spec §8.2's explicit `hg_rstage` rights, D36), `member.Role`, `member.Config`, `member.Stats`, the `simember` metrics collector of §24.4, the Task 34 confinement suite (`member/confinement`, `scripts/ci/clickhouse-member-confinement.sh`), `CORE_TAG_P2`; K29 member ids `member-a`, `member-b`, `member-c`; K30 the pod's `si-member` container and `si-member-reconciler` slot.
 - Plan S3-C4: §29–§32 `member/serve` (`serve.ServingView` and its authenticated `GET /v1/serving`), `HG_TAG_P3`, `CORE_TAG_P3`.
 - Plan S3-D: §33–§37 `CORE_TAG_P4`, `PROTO_TAG_P4` (unconditional, D26) and its settle surface (`ConsensusAdmin.SettleTrack` at method 14, `GetTrackSettle` at 15, the non-Raft stream fields `PromotionCommand.settle = 3` and `SNodeHello.settle = 2`, §33.2), `conformance/p4_settle_test.go` (not edited here).
 
-**Produced for later plans.** S3-E2–E4 and S3-F consume §39 (every proto name; `GroupMember.host_indexer_id` is filled by S3-E3 Task 71's `groupsToPB` and read by S3-E4 Task 79's `replica_hosts`, D27), §41 (canonical types, `Stage3Params.Validate`, the purposes and their functions, the wire converters and `Command` fields), §42 (`ddl.KeeperScope`, `ZooKeeperPathFor`, `tableset.KeeperScopeOf`, `KnownKeeperReplica`, the `consensus` package, `ErrStage3SwitchOff`, `Stage3Feature`), the K67 refusal texts, and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`. Facts for the first arbiter pin (S3-E2 Task 64): arbiter's `TestTableRegistryMirrorsProto` (`server/table_registry_test.go:26`) compares `fsm.TableIncarnation` json tags with `pb.TableIncarnation`, so Task64 records those two wire-only fields as Task69-owned pending fields while its FSM remains18 fields. The inherited manifest-owner adapter retains all18 mappings and explicitly requires exactly20 wire fields with both pending values exactly zero (including rejecting allocated-empty purge_members); Task69 later adds the owning FSM fields and complete20-field adapter. No new FSM JSON tag is introduced early at the pin; `TestL3BlockHeaderMirrorsProto` (`server/safestate_l3block_test.go:65`) compares only the header's top-level fields, and `fsm.L3BlockTrack` gains `group_key` (`omitempty`) with S3-E3 Task 72; every arbiter golden that hashes a `ConsensusParamsUpdate` or a `VerifierEntry` passes unchanged because the new canonical fields of §41 are `omitempty`, provided arbiter's `cloneVerifiers` (`fsm/signed_claims.go:93-102`) copies them (S3-E2 Task 64).
+**Produced for later plans.** S3-E2–E4 and S3-F consume §39 (every proto name; `GroupMember.host_indexer_id` is filled by S3-E3 Task 71's `groupsToPB` and read by S3-E4 Task 79's `replica_hosts`, D27), §41 (canonical types, `Stage3Params.Validate`, the purposes and their functions, the wire converters and `Command` fields), §42 (`ddl.KeeperScope`, `ZooKeeperPathFor`, `tableset.KeeperScopeOf`, `KnownKeeperReplica`, the `consensus` package, `ErrStage3SwitchOff`, `Stage3Feature`), the K67 refusal texts, and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`. Facts for the first arbiter pin (S3-E2 Task 64): arbiter's `TestTableRegistryMirrorsProto` (`server/table_registry_test.go:26`) compares `fsm.TableIncarnation` json tags with `pb.TableIncarnation`, so Task64's pin stages only those two fields in `stage3PendingProtoFields` with Task69 as their owner, retaining the complete existing18-field FSM mapping, exact20-field wire coverage and `TestManifestOwnerPendingStage3FieldsAreExactlyZero` (18/20 are field counts; proto tags remain19/20); Task69 then declares/maps `ScopedKeeperPath` and `PurgeMembers` (both `omitempty`), removes those two pending entries and replaces the intermediate zero gate with the complete20-field adapter, preserving all ownership/attribution assertions; no future FSM field is inserted at Task64 merely to satisfy the proto mirror; `TestL3BlockHeaderMirrorsProto` (`server/safestate_l3block_test.go:65`) compares only the header's top-level fields, and `fsm.L3BlockTrack` gains `group_key` (`omitempty`) with S3-E3 Task 72; every arbiter golden that hashes a `ConsensusParamsUpdate` or a `VerifierEntry` passes unchanged because the new canonical fields of §41 are `omitempty`, provided arbiter's `cloneVerifiers` (`fsm/signed_claims.go:93-102`) copies them (S3-E2 Task 64).
 
-**Repositories, worktrees, commands.** Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Reuse the owning task’s retained actual URWT JSON path rather than reconstructing a template. Arbiter-core Tasks59–63 share the one worktree created only by Task59 on `urwt/codex/multi-source-s3e1`; every later block reloads `$HOME/.cache/s3e1-task59/worktree.json`. The runtime follows the executing host (Codex uses `codex`). Do not create a second worktree when a retained attempt exists; reconcile it first. Task57 and Task58 own their respective arbiter-proto and housegate worktrees. Tasks59–63 open one PR, merged in Task63 before the release.
-- arbiter-proto checks: `make tools && make proto && git diff --exit-code -- gen/` (after the commit), `make lint`, `make test`, `buf breaking --against ".git#tag=$PROTO_TAG_P4"` with `PROTO_TAG_P4` read by `s3-ledger.py get` (D26; never `make breaking`, which compares a stale local `main`), and `git diff "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go`, whose hunks touch only D25's count lines (§39). Release: `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main -f dry_run=true`, then `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main`, watched with `gh run watch`; the tag from `gh release view --repo sentioxyz/arbiter-proto --json tagName --jq .tagName`, verified by content (`git show <tag>:proto/raftlog.proto | grep -c 'MarkMemberLaggingCmd mark_member_lagging = 42;'` prints `1`). PR title `feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`.
-- housegate: pin `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle`; checks `test -z "$(gofmt -l $(git ls-files '*.go'))"`, `bazel build //...`, `bazel test //... --test_output=errors`, and the PR's `Release tooling`, `Build` and `Integration (ClickHouse)` jobs (main-baseline rule). Release `gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto`, watched; the tag from the run log, verified by content and by `git rev-parse "$HG_TAG_P5^{commit}"`.
-- arbiter-core: pins `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle` (Task 59) and `bash scripts/update-housegate.sh $HG_TAG_P5` (Task 63); checks `bazel build //... && bazel test //...` and the ClickHouse-gated targets with the CI env of §42.1; release `gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main`, watched, the tag from `gh release list --repo sentioxyz/arbiter-core --limit 1 --json tagName --jq '.[0].tagName'`, verified by content (`git show <tag>:consensus.go | grep -c 'Stage3Feature = "stage3_v1"'` prints `1`). PR title `feat: stage-3 P5 canonical types, wire, scoped Keeper paths and the member consensus mode`.
+**Internal readiness ownership in the current E3 successor.** E1's served `pb.GroupMember`/`wire.GroupMember` remain their exact eight-field transport shape, including optional host8; they acquire no readiness proof field. E3 Task71 declares internal FSM `ReadyGeneration uint64`, `ReadySignature string` and `ReadyEpoch uint64` with the existing exact `omitempty` tags; Task72 consumes them; Task73 uniquely populates and validates readiness; Task75 appends the checkpoint/observed-entry pointers. ReadySignature/ReadyEpoch are internal proof state, not new E1 wire allocations. This is root-accepted E3 static intent. Fixed-tool Task70 source qualification is now separately accepted; actual71 and later source/serializer/snapshot/golden/runtime verification still require their own review and fresh grants. Task78 must eventually prove the entire pending-proto map empty, rather than treating an owning-task note as closure.
+
+**Repositories, worktrees, commands.** Local repositories are `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Tasks 57 and 58 retain their own creation JSON; Task 59 retains the arbiter-core JSON shared by Tasks 59–63. Worktree creation uses the executing host runtime (Codex: `codex`), persists the actual absolute symlink spelling returned by URWT, verifies clean branch/base/repository and refuses an existing failed or incomplete attempt until reconciled. No command reconstructs a worktree path from the template. Configure and verify poetry/G signatures as above. Separate task-local state retains actual producing tags, tested tree/commit receipts, publication heads and exact workflow run/tag/content receipts; those are local evidence, never predicted execution-ledger values.
+- arbiter-proto checks: `make tools && make proto && git diff --exit-code -- gen/` (after the commit), `make lint`, `make test`, `buf breaking --against ".git#tag=$PROTO_TAG_P4"` with `PROTO_TAG_P4` read by `s3-ledger.py get` (D26; never `make breaking`, which compares a stale local `main`), and `git diff "$PROTO_TAG_P4" -- conformance/stage3_reads_test.go`, whose exact count/range/comment/diagnostic and nine-token append surface is user-approved under D25 (§39). Release: `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main -f dry_run=true`, then `gh workflow run cut-release.yml --repo sentioxyz/arbiter-proto --ref main`, watched by that exact retained run ID with `gh run watch --exit-status`; the tag associated with that exact watched successful release run, verified by typed metadata, reviewed merge identity, annotated local/remote tag identity, frozen file/numstat/D25 surface and content (`git show <tag>:proto/raftlog.proto | grep -c 'MarkMemberLaggingCmd mark_member_lagging = 42;'` prints `1`). PR title `feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`.
+- housegate: pin `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle`; checks the active Go toolchain's gofmt result and exit status for the exact task-owned Go files (pre-existing whole-repository formatting findings are recorded separately), `bazel build //...`, `bazel test //... --test_output=errors`, and the PR's `Release tooling`, `Build` and `Integration (ClickHouse)` jobs (main-baseline rule). Release `gh workflow run release.yml --repo housegate/housegate --ref main -f bump=auto`, watched; the tag from the run log, verified by content and by `git rev-parse "$HG_TAG_P5^{commit}"`.
+- arbiter-core: pins `GOWORK=off go get github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5 && GOWORK=off go mod tidy && bazel mod tidy && bazel run //:gazelle` (Task 59) and `bash scripts/update-housegate.sh $HG_TAG_P5` (Task 63); checks `bazel build //... && bazel test //...` and the ClickHouse-gated targets with the CI env of §42.1; release `gh workflow run cut-release.yml --repo sentioxyz/arbiter-core --ref main`, watched, the tag bound to that exact successful watched release run and reviewed merge, never the newest release selected independently, verified by typed metadata, local/remote tag identity and content (`git show <tag>:consensus.go | grep -c 'Stage3Feature = "stage3_v1"'` prints `1`). PR title `feat: stage-3 P5 canonical types, wire, scoped Keeper paths and the member consensus mode`.
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; merges squash. TDD in every step (failing test → run, fail → minimal implementation → run, pass → commit). Code comments in English; markdown never hard-wrapped.
+- Verification-only Go/Bazel commands explicitly set `GOWORK=off GOPROXY=off GOSUMDB=off GOPRIVATE=none GONOPROXY=none`, use cached dependencies and enforced Bazel download refusal, and stop on an unavailable input. Execution-time pin/download actions remain separately confirmed remote steps. A completed-package JSON gate retains stdout/stderr/status and rejects missing, malformed, truncated, duplicate, failed or skipped integration events; printed PASS lines alone are not acceptance.
 - Remote actions — pushes, PRs, merges, release workflows, tags, ledger records — require explicit user confirmation in chat, each for its own step; commands handed to the user are fish.
 
+## Appendix B: drafting decisions, adversarial review facts and consistency evidence
 
-**Current C2 integration ownership (Task62).** The complete post-C4→61→private-memo425 predecessor is required before evidence extraction; Task62's accepted447 result and Task63's coherent469 successor retain the same constructor-only memo, full-wire Verify binding, two schema-isolation boundaries and terminal invalidation. Preserve the16 original memo tests and C4 snapshot-query tests. `TestMemberReadinessChecksTheConfiguredStoragePolicy`, `TestQuiescenceResolveCannotEraseAnOverlappingRedelivery` and `TestQuiescenceRejectsStructurallyCorruptRecords` are accepted Task62 tests, not permission to cache member/evidence/query execution or alter a frozen vector.
-
-The local-replica readiness intent also pins the member's actual `Config.StoragePolicy`: a wrong live policy refuses before replay/Submit; a matching non-default policy accepts. Quiescence Observe/Resolve retains per-entry token identity across overlapping redelivery, and malformed ledger records remain holds. These are the accepted owning Task62 boundaries, with the existing public signatures/files; member/evidence materializers remain uncached.
-
-**Task59–63 worktree custody (PR248, 2026-10-18).** Task59 alone creates the arbiter-core implementation worktree, using the executing Codex runtime, and exclusively persists the returned JSON as `$HOME/.cache/s3e1-task59/worktree.json`. Tasks60–63 load the same absolute lexical `path` and require `urwt/codex/multi-source-s3e1`; never create a second worktree to satisfy a consumer. Reconcile a retained attempt before resuming. D34’s `origin/urwt/claude/ms-si-stage3-plans-cf` is a separate ledger-copy ref and remains unchanged.
-## Appendix B: drafting decisions and cross-task facts
-
-Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
+This consistency candidate reconciles complete reviewed Tasks 57–63 and the coherent predecessor source proofs. Formal acceptance/counts remain with the controller; draft status and execution holds are retained by instruction. Original drafting measurements on stand-ins, old target counts and ClickHouse 26.3.51.7 are historical; they do not establish current complete-chain or exact-image acceptance. No release tag, ledger value, production change or live result is produced here.
 
 ### Task 57
 
-- Base anchors were read on a scratch PROTO_TAG_P4 stand-in. That tree is arbiter-proto origin/main 7a73f25 (PROTO_TAG v0.12.0) with Plan S3-D Task 49 applied as written (numstat 7 0 arbiter.proto, 46 0 consensus.proto, 446-line p4_settle_test.go). PROTO_TAG_P4 is not cut yet. Step 3 checks the anchors, that every name is free and every number is next, and that no old tag ever used a number this task adds.
-- At P4: VerifierEntry has 2 fields, ConsensusMutableParams 8, ConsensusParamsUpdate 13, ConsensusParamsState 8, TableIncarnation 18, TableRegistrySnapshot 9, L3BlockTrack 1, BlockVerification 13. RaftCommand has 36 tags (max 37, tag 29 unused). AdmissionCode has 12 values (max 11). ConsensusAdmin has 16 methods ending with GetTrackSettle. VerifierGateway has 4 ending with SubmitByteSideScan. TrackSettle is the last message of consensus.proto, and table_registry.proto imports only empty.proto.
-- Every proto hunk is a pure insertion: git diff -U0 -- proto/ shows 18 hunks with old side ',0'. Numstat is arbiter 60/0, consensus 105/0, raftlog 9/0, table_registry 200/0. table_registry.proto gains import "replay.proto" for TrackFrontier. VerifierEntry and L3BlockTrack keep their existing comments and gain the contract's text as insertions.
-- Exactly six generated files change: arbiter.pb.go, arbiter_grpc.pb.go, consensus.pb.go, consensus_grpc.pb.go, raftlog.pb.go and table_registry.pb.go. table_registry_grpc.pb.go and replay.pb.go keep their bytes.
-- Adding the fields breaks 15 existing tests. 13 are the pins contract §39 lists. The other 2 are TestConsensusUpdateContract (consensus_test.go rows 18-19, 24-25, 30-31) and TestSnapshotQueryEveryFieldWireRoundTrip (the L3BlockTrack entry at snapshot_query_fields_test.go:61). Both learn the additions the way Plan S2-A taught them the stage-2 fields.
-- TestTracksFieldsAbsentLeaveTheWireUnchanged must fill only the fields numbered below the one under test (f.Number() < tc.number). assertSnapshotBaselineDescriptors removes the stage3AppendedFields entries before it looks at tracksFields.
-- D25: in stage3_reads_test.go exactly six hunks change, at lines 34, 231, 252, 284-285, 287 and 289. p4_settle_test.go and the .binpb baselines are not edited. TestSnapshotQueryDescriptorFixtureIdentities stays green.
-- The commit is 19 files, 3912 insertions and 426 deletions, and creates conformance/stage3_test.go (606 lines).
-- Downstream at arbiter-core cfd4f42, arbiter 526a721, sentio-node 5d2f169 and housegate 862a7a8, using a replace: everything builds and vets. Four mirror tests fail because they see a new field: arbiter-core TestArbiterMirrorsMatchProto (stage3 and VerifierEntry 3-11) and TestPromotionOutcomesConvertersCopyEveryField (L3BlockTrack.group_key), arbiter server TestBlockVerificationToPBCarriesEveryField (eligible_ring) and TestTableRegistryMirrorsProto (scoped_keeper_path, purge_members). The verdict script reports 14 failure lines, each naming a new field.
-- Every ConsensusAdminServer and VerifierGatewayServer implementation embeds pb.Unimplemented*Server. None embeds Unsafe*, and no repository hand-writes a client of either service, so the four new RPCs compile everywhere without downstream edits.
-- The release number is read from the cut-release run, never predicted. The run must report PREVIOUS == PROTO_TAG_P4. The tag is then checked by content: the 'MarkMemberLaggingCmd mark_member_lagging = 42;' line, 19 changed files, the D25 hunks only, the tag pointing at the merge commit, and an annotated tag on origin.
-- Names added while drafting: URWT worktree/branch urwt/claude/multi-source-s3e1 at ~/src/remotesrc/claude/arbiter-proto/multi-source-s3e1 (the arbiter-proto work branch); URWT ledger worktree/branch urwt/claude/multi-source-s3e1-ledger-57 in housegate (record commit of PROTO_TAG_P5); Local cache dir $HOME/.cache/s3e1-task57/ (mode 700): ledger.env, pr-body.md, pr-url, merge, merged-at, downstream.txt, downstream.log, dry-run-since, dry-run-id, cut-since, cut-id, tag, transient tags/ and downstream/; $HOME/.cache/s3-ledger/record-57, record-57.md, record-57-pr.md, record-57-pr-url (record procedure files); Appendix C run record title 'arbiter-proto release (Task 57)'; Commit/PR title 'feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)'; No new Go top-level names beyond contract §39's stage3ConsensusFields, stage3ConsensusMessageFiles(), stage3AppendedFields and the nine TestStage3Consensus* tests
-- Verified while drafting: Applied the task to a fresh copy of the PROTO_TAG_P4 stand-in (work/e1/task-57/final/tree) using only the rendered task markdown, via final/extract.py: the Step 4 Go block, the Step 6-9 proto blocks at the anchors the steps name, and the Step 11 replace/insert pairs (22 edits). / Step 3 descriptor proof (buf build JSON): the output matched the expected block exactly. / Step 5: GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./conformance/ -run TestStage3Consensus -v failed with exactly the compile errors listed. / Step 10: protoc-gen-go v1.36.11, protoc-gen-go-grpc 1.5.1, make proto, buf lint. Git status, proto numstat and the 18 hunk headers all matched. The nine new tests pass. The 15 failing pins and each failure message match the step's prose. / Steps 12-13: gofmt is clean and go test ./conformance/ passes. The -v list matched exactly (durations normalized). make proto, make lint, make test and buf breaking --against .git#tag=<P4 stand-in> printed nothing, exit 0. The drift check is clean. The cached numstat (19 files) and the D25 diff matched exactly. / Step 15: running the commit block gave '19 files changed, 3912 insertions(+), 426 deletions(-)' and 'gen/ is current after the commit'; the message ends with Co-Authored-By. / Step 14: the downstream block ran offline (HOME stubbed, real module cache) in 54s. Its output matched the expected block (durations normalized) and the verdict was 'downstream: 14 failure line(s), each naming a field the stage-3 P5 contract appends'. / Earlier in drafting, Steps 1-3, 5-13 and 15-21 ran end to end against mock origins of arbiter-proto and housegate with a fake gh. R4 printed PROTO_TAG_P5=v0.14.0 from the mock Appendix C, and that replay's commit message is identical to the final one. / All 20 bash blocks pass bash -n, zsh -n and shellcheck -s bash. / Markdown check: inserted a blank line between the 11 Run:/Expected: line pairs so no paragraph is hard-wrapped. The re-render changed only those 11 blank lines and no code block. / No real repository or worktree was edited, nothing was fetched or pushed, and no cluster was touched.
+- Source: actual proto main `7a73f256865c333332f0ac28b17806b1e2bfcbd1` plus the complete reviewed Task 49 source. Exact TDD reproduces the new-test compile RED and all fifteen old-pin REDs, then whole-module race/vet, canonical local generation/lint and buf breaking against the exact source-level P4 predecessor pass. The actual change is nineteen files (+3912/-426), including precisely six regenerated Go files. All 61 original Go/proto fences, old binary/JSON fixtures, the complete P4 settle test and every D25-protected byte remain unchanged; The historical reviewer called the six substitutions approved under D25 before the count-only wording authorized the append. That was a real policy hold at that proof cut; the user has now approved exactly the append-only clarification, independently of historical source-test success.
+- The two additional old pins are `TestConsensusUpdateContract` names/kinds and `snapshotQueryFields["L3BlockTrack"]` (`group_key:string`); §39 now lists them. Both optional host pointers preserve absent versus indexer zero. The current-main downstream gate completes thirteen selected packages across four real repositories, allowing only four exact appended-field mirror failures, without treating gated skips as integration proof.
+- Publication uses retained actual URWT JSON, poetry/G/new-HEAD checks, complete REST primary-author/message validation and an atomic `--match-head-commit` bound to the exact checked SHA. The latest bounded Task 57 workflow reconciliation preserves every non-Bash fence and both canonical REST validator bodies; explicit merge failure stops before later diagnostics. Release gates bind the exact successful run/tag/merge, all reviewed files/numstats and D25 substitutions. No actual remote/release/ledger action ran.
 
 ### Task 58
 
-- Picked up the draft an earlier run left complete (24 steps). This run re-verified it from scratch and made one fix in Notes: storage_integrity_table_state_runtime_test.go also changed between 66d4df7 and origin/main 862a7a8 (S3-A housegate#238 added heldPendingState and its resolver test, +50 lines). The old note said only CLAUDE.md and README.md had changed.
-- housegate origin/main is 862a7a8. go.mod:15 pins arbiter-proto v0.11.0 and go.sum:279-280 holds its two hashes. MODULE.bazel:22-24 uses go_deps.from_file(go_mod) and already lists com_github_sentioxyz_arbiter_proto in use_repo, so the pin changes only go.mod (1 line) and go.sum (2 lines). Measured: bazel mod tidy and gazelle change nothing. The stage-2 pin commit 66d4df7 also left MODULE.bazel and the lockfile untouched; its one BUILD change was a new test file.
-- arbiter-proto v0.11.0, v0.12.0 and origin/main require grpc v1.82.0 and protobuf v1.36.11, the same versions housegate has. Any other dependency moving in Step 2 is a stop condition.
-- SubmitOutcomeFromSequencedAck is at pkg/storageintegrity/arbiter_proto.go:404-429 (coded-reject cases :415-424, default :426-427). AdmissionCodeIndexerQuarantined is at :394-400. TestIndexerQuarantinedIsATerminalRejectWithItsCode is at admission_code_test.go:71-86, with the unknown-code example at :81-83.
-- In the ingress, the INDEXER_QUARANTINED branch is storage_integrity_ingress.go:852-866. Local back-pressure counts under sicore.PhysicalTableName (:630, :821). The counter is defined at storage_integrity_backpressure.go:23-26. OutcomeCategory.RequiresAbort is at intake.go:321-323.
-- isSessionPreservingIngressException is at pkg/proxy/relay.go:2297-2330 on origin/main, with the 252 rule at :2321-2322 and the 733 case at :2323-2324. In the HG_TAG_P3 stand-in, S3-C4 Task 44 moves it down by 25 lines (733 case at :2348-2349; 22 before S3-C4's review round 1, whose `upstreamToClient` read hunk grew by three lines).
-- S3-C4 Task 44 adds TableRefusedMessage and IsIndexerQuarantinedReadMessage to client_error.go (isTableRefusalMessage moves to :145) and two tests to client_error_test.go (now 247 lines). S3-C4 Task 42 edits README.md:195 without touching Task 58's anchors. No S3-C1, C2, C3 or D task draft touches Task 58's files.
-- The agent's lane logic (pkg/plugins/sistatement/lanes.go:269-292) matches only the generic 'rejected by the arbiter: <CODE>' text, which codes 12 and 13 never produce once mapped. An agent older than HG_TAG_P5 closes its session on the 733 verifiers text, which fails closed.
-- Release: release.yml takes -f bump=auto (comment at :11-15). The 'Compute next tag' step prints 'Next tag: <tag> (<reason>)' (:124). CI jobs are 'Release tooling', 'Build' and 'Integration (ClickHouse)'. No CI job runs gofmt.
-- Two pre-existing findings at the base, both untouched by the task: gofmt -l reports pkg/config/agent_quickstart_test.go (housegate#228, 423e691), and go vet stops on intake_test.go:1802 'suspect or' with Go 1.26.3 and 1.27.1. The task runs go test ./pkg/storageintegrity/ with -vet=off; Bazel's test of that package passes.
-- Consumers: Task 63 (scripts/update-housegate.sh $HG_TAG_P5, which exists on arbiter-core origin/main), S3-E2 Task 64, S3-E4 Task 79 and S3-F, which turns on switch 3 only once every SI host runs HG_TAG_P5.
-- Names added while drafting: chproto unexported constants verifiersUnavailablePrefix, verifiersUnavailableSuffix, copiesBackpressurePrefix, copiesBackpressureSuffix (they join the existing refusal const block); test TestRelay_DeferredUpstreamCopiesBackpressure_KeepsSessionAndServesNextQuery (pkg/proxy/relay_reject_test.go): pins that the unchanged 252 rule covers code 13; eight rows in TestSessionPreservingIngressException: 'verifiers unavailable', '... under 392', '... under 252', '... without a table id', '... id with whitespace', 'copies back-pressure', '... under 733', '... under 392'; two marker rows in TestSessionPreservingIngressException_AcceptsMarker (733 verifiers text and 252 copies text, each with SeqUnspentSuffix); rows 'verifiers' and 'copy floor' in TestConsumeAdmission_PostOrchestrateMarking (storage_integrity_ingress_unspent_test.go); local-only state files beside the worktree: $W.proto-tag-p5, $W.hg-tag-p3, $W.pr-body.md, $W.pr-url, $W.merge, $W.hg-tag-p5; ledger files $HOME/.cache/s3-ledger/record-58.md, record-58 (worktree path and ref), record-58-pr.md and record-58-pr-url (these two only when the ledger copy is origin/main); ledger worktree URWT multi-source-s3e1-ledger-58, branch urwt/claude/multi-source-s3e1-ledger-58
-- Verified while drafting: Confirmed that the annotated source task-58.src.md renders byte for byte to the delivered task-58.md (before and after the one Notes fix), and that every replace/append hunk carries an apply directive. / Fresh clone of the HG_TAG_P3 stand-in (housegate origin/main 862a7a8 with S3-C4 Tasks 42-44 applied; stand-in arbiter-proto v0.14.0 = origin/main 7a73f25 plus contract §39's two enum values, served from a file GOPROXY). Applied Steps 2-18 mechanically and ran each step's own commands with GOWORK=off GOFLAGS=-mod=mod and the scratch proxy, Go 1.27.1. / Step 2: go.mod and go.sum changed; diff stat '2 files changed, 3 insertions(+), 3 deletions(-)'; all four packages ok. / Step 4 failed to compile at admission_code_test.go:97:67, :119, :130 and :131 as stated. Step 9 failed at client_error_test.go:254:12 (HG_TAG_P3) and :201:12 (plain origin/main), ending in 'too many errors'. / Step 14 failed with exactly the stated messages: storage_integrity_table_state_runtime_test.go:324 and :362, storage_integrity_ingress_unspent_test.go:125 for verifiers and copy_floor, relay_reject_test.go:449 'write 12 bytes: write pipe: i/o timeout', relay_reject_test.go:595 and relay_unspent_test.go:79. The staged tests and every copies test already passed, as the step says. / Steps 6, 11 and 16 passed, including the relay tests under -race -count=20. Step 18's diff stat was ' 2 files changed, 8 insertions(+), 5 deletions(-)'. Step 19's log showed the five commits; gofmt listed only pkg/config/agent_quickstart_test.go with both Go 1.27.1 and 1.26.3. / The same hunks applied unchanged to a plain origin/main 862a7a8 export, with identical failure and pass results. / The four packages pass with Go 1.26.3, go.mod's version. / The re-applied tree is byte-identical, in all 14 changed files, to the earlier Bazel-verified tree. There, offline Bazel 9.1.0 (bazel mod tidy, bazel run //:gazelle) left git status clean, and bazel test //... ended '67 tests pass.' (the earlier run measured 'Executed 20 out of 67 tests: 67 tests pass.'). / Mutation checks: each named test fails when its fix is reverted. Reverted fixes: code 12 removed from the case list, the code-13 counter increment, SeqUnspent on code 12, KeepSession on code 13, the relay's 733 matcher, and IsCopiesBackpressureMessage loosened to a prefix match. / Step 1's base checks printed 'HEAD contains <tag>', an empty diff stat, then 1, 1, 0, 2. / Step 23's content checks on a scratch tag printed 1, 3, 5, 2, 1, both 'contains' lines, the commit hash and an empty log. / Ledger simulation rebuilt fresh: s3-ledger.py extracted again from S3-C1 contract.md lines 168-453 (identical to the earlier copy), a local bare origin with this plan's Appendix C on urwt/claude/ms-si-stage3-plans-cf, and a stub urwt-create.sh. Step 1's reads and Step 24's R1, R2 and R4 printed the expected lines; the commit stat was 3 insertions and 2 deletions with one sub-item. A repeated R1 stops with 'is recorded already'. / All 29 extracted bash blocks and Run: lines pass bash -n and shellcheck -S style with no findings. All nine fish variants built from the text pass fish -n.
+- Source: actual HG main `bc8780f2a099c1f8a1f0316ded1858bb04d4c360`, complete reviewed Task 44 HG935 and complete 57-file P5 proto. All 32 original Go fences apply unchanged. Mapping/message compile REDs and ingress/deferred-session behavior REDs reproduce, then affected four-package race and canonical Bazel 4/4 pass; nine behavior mutations are killed/restored and relay race count20 plus twenty exact-boundary cases pass.
+- Codes 12/13 are terminal aborts, SeqUnspent and KeepSession; 12 maps to exact 733 verifiers refusal, 13 to exact 252 back-pressure/physical-table counter. Unknown14 remains OutcomeUnknown. Both staged and deferred lanes prove the next query is usable. The source pin changes only go.mod/go.sum; module/Bazel/generated drift stops. Complete actual release pin/gazelle/full Bazel and ClickHouse execution remain execution gates, not inferred from the affected-target proof.
+- Retained-path, signed/new-HEAD commits, strict formatter/JSON test gates, complete REST/atomic-head merges, exact watched-run and content/receipt checks replace printed success or latest-release guesses. Existing root config.Duration and storageintegrity suspect-or vet warnings are distinguished from affected-package/Bazel evidence.
 
 ### Task 59
 
-- origin/main on 2026-10-16: arbiter-core cfd4f42 (v0.15.0, S3-A merged as arbiter-core#50), arbiter-proto 7a73f25 (v0.12.0), housegate 862a7a8, arbiter 526a721; anchors in the task are cfd4f42's (go.mod arbiter-proto require :14; MODULE.bazel go_deps.from_file :28-29; consensus.go VerifierEntry :79-85, ConsensusParamsUpdate end :163-165; types.go :148-149; authority/consensus.go imports :9-11, doc+signature :25-26, tail :74-80, normalizeVerifiers :114-139 with the field rebuild at :125; wire/stage3_reads_test.go :128-134)
-- CORE_TAG_P4 pins PROTO_TAG_P4 (S3-D contract §34); the Task 59 pin changes exactly go.mod (1 line) and go.sum (2 lines); MODULE.bazel/lock and BUILD files unchanged at the pin (go_deps.from_file)
-- After the pin exactly two targets fail and nothing fails to build: //conformance:conformance_test TestArbiterMirrorsMatchProto (stage3 + nine VerifierEntry fields; the task's failing test for the root types, passes unedited afterwards) and //wire:wire_test with S3-A's TestPromotionOutcomesConvertersCopyEveryField (arbiter.L3BlockTrack.group_key is unset) and S3-C2's TestBlockVerificationFromPBReadsEveryField (arbiter.BlockVerification.eligible_ring has no case)
-- arbiter builds a PromotionOutcome's track as {IndexerID} only (arbiter fsm/reads_promotions.go:90, server/safestate_stage3.go:125), so exempting L3BlockTrack.group_key in the S3-A outcome every-field test is correct
-- All vectors recomputed independently outside Go on 2026-10-16 (python-built preimages from field order + shasum; cast keccak/cast wallet sign --no-hash; OpenSSL ed25519): RebalanceGroupHash 0x70ce7cf8..., ReselectVerifiersHash 0x0ceea0ed..., MarkMemberLaggingHash 0xc47f716f..., GroupMemberConsentHash 0x27b76cff..., MemberReadyHash 0xfbf286ed..., MemberCheckpointHash 0x7fb91939..., Stage3UpdateHash 0xc2d661ec..., Stage3MemberUpdateHash 0x0f2fec8d...; the method reproduces the existing ActivationUpdateHash 0xf3a4e05a...; every JWS and the ed25519 signature matched byte for byte; ReplicaAddrB = 0xeab0e192c789a8342f51891d8467de2acd7e416a, MemberKeyB public key 66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a
-- Step 22's outside-Go check uses public data only (no key on argv): shasum over written-out preimages, payload decode + cast wallet verify --no-hash against the expected address, openssl pkeyutl -verify -rawin with member-b's public key (needs OpenSSL >= 3; macOS LibreSSL lacks -rawin)
-- omitempty on lists makes nilIfEmpty an equivalent change in the hashes (an empty slice is omitted like nil); kept because contract §41 names it
-- The golden tests live in package authority_test (authoritytest imports authority); gazelle adds //authority/authoritytest to authority_test deps and rules_go recompiles the internal archive
-- Commit stats measured on the stand-in: Step 8 10 files +511/-7; Step 13 3 files +404/-6; Step 18 3 files +808; Step 24 4 files +338; total 17 files +2061/-13
-- TestStage3TokensDoNotCrossPurposes covers every earlier purpose at CORE_TAG_P4 including S3-D's SettleTrackPurpose, ArtifactDispositionAdminPurpose, QueryProfileActivationPurpose and SnapshotQueryAbortPurpose
-- Names added while drafting: authoritytest.Stage3MemberUpdateHash = 0x0f2fec8d9ab1ede1b5ba6cf312d12295e1358682262c297f26e4663a53b2432c (Stage3Update with MemberVerifierEntryB first in verifiers; freezes a member entry's canonical form); TestStage3FailureDomainLookupAndIsMember (root); TestStage3FieldsAreOmittedWhenUnset (root); TestStage3AuthorityCommandsAuthorizeOnlyFreshTokens (authority); TestStage3HashesRefuseMalformedMessages (authority); assertMirrorOrder (conformance helper: a canonical mirror lists its fields in proto field-number order); unexported authority: normalizeStage3, cloneVerifierEntry, validateVerifierStage3Fields, validFailureDomain, memberMessagePreimage, memberMessageHash, sortedUnique, sortedUniqueBy, knownExclusionReason; unexported authority domain constants: rebalanceGroupCommandDomain, reselectVerifiersCommandDomain, markMemberLaggingCommandDomain, groupMemberConsentDomain, memberReadyDomain (= MemberReadyPurpose), memberCheckpointDomain; test helpers: validStage3Params, withSwitches (root); testMemberEntry, stage3TestUpdate, memberOf, stage3TestMessages (authority); local files beside the worktree: $W.core-tag-p4, $W.proto-tag-p4, $W.proto-tag-p5 (read back by Tasks 60-63), $W.pin-test.log, $W.final-test.log, transient $W.step10.log and $W.vectors/
-- Verified while drafting: Built a CORE_TAG_P4 stand-in: git archive of arbiter-core origin/main cfd4f42 + S3-D Task 50's SettleTrackCommand/authority/settle.go and tests + S3-C2 Task 29's wire/block_verification.go and test, pinned to an arbiter-proto PROTO_TAG_P4 stand-in v0.13.0 (7a73f25 + Task 49) served from a scratch file module proxy with a scratch GOMODCACHE; PROTO_TAG_P5 stand-in v0.14.0 = Task 57's 19-file commit (protoc-gen-go v1.36.11, grpc v1.5.1); base suite green under go test and offline Bazel 9.1.0 / Local ledger origin with Appendix C rows (CORE_TAG_P4, PROTO_TAG_P4, PROTO_TAG_P5, empty CORE_TAG_P5) and the S3-C1 §19 ledger tool: Step 1's get/empty and base checks printed the expected values / Full replay: all 25 steps applied mechanically from the task template (identical to the rendered markdown: 46/46 code blocks byte-equal) and every step's own commands run with bazel --bazelrc (offline, --repository_disable_download, GOPROXY via --repo_env) and GOWORK=off go; every failing step failed with the quoted messages, every passing step passed; outputs diffed against the Expected blocks (steps 2, 3, 5, 10, 15, 20, 22, 25 and the commit stats) and matched / Final tree: go vet ./... clean; go test -race passes for root, authority, authoritytest, conformance; bazel build //... passes; bazel test //... fails only //wire:wire_test (S3-C2 test, owned by Task 60); also go test with Go 1.26.4 identical / Mutation checks: 14 of 15 reverts caught by their named tests (field rebuild, omitempty on weight, pool refusal, domain sort, counts rule, switch prefix, swapped purpose, constant digit, lowercase replica signer, member-ready domain, Stage3Params field order, tracks_enabled refusal, exact-context check, code 13); nilIfEmpty removal is an equivalent mutant (documented in the task) / Step 22 vector-check block run in bash and zsh: 15 expected lines; bash -n, zsh -n and shellcheck clean for all 20 command blocks/Run lines; the fish line passes fish -n
+- The complete real predecessor source and complete P5 proto support the exact canonical/root, normalizer, purpose and frozen-vector hunks; all 26 original Go fences remain unchanged. Root/member-entry fields preserve omitempty and host-zero presence, K58 explicit values, seven-switch prefix validation, exact domains and old golden bytes. Actual Foundry public-vector verification produces fifteen accepted lines; no constant was regenerated.
+- Actual TDD, race/vet and offline canonical Bazel prove the owning changes. The intermediate eligible-ring mirror failure belongs to Task 60 and is resolved in the coherent final chain; it is not an allowed final P5 failure. Final JSON gates require full package completion and exact producer diagnostics, not a substring or empty log. Inherited private-module bypass is disabled; the report retains the initial interrupted lookup deviation rather than claiming it never occurred.
 
 ### Task 60
 
-- Task 60 runs on Task 59's worktree $HOME/src/remotesrc/claude/arbiter-core/multi-source-s3e1 (branch urwt/claude/multi-source-s3e1); it only commits (3 commits, 12 files under wire/, 1804 insertions, 30 deletions); no push, PR or release (Task 63's); no remote actions except a conditional, confirmation-gated housegate fetch if the ledger read is stale.
-- Start state after Task 59's PROTO_TAG_P5 pin: exactly one red wire test, Plan S3-C2's TestBlockVerificationFromPBReadsEveryField ('arbiter.BlockVerification.eligible_ring has no case: BlockVerification and this test must carry it'); Task 60 fixes it first (cycle 1). Task 59's draft already exempts arbiter.L3BlockTrack.group_key in wire/stage3_reads_test.go, so Task 60 does not touch that file; Step 1 stops if the exemption is missing.
-- The strict decoder (validateCommandBytes) needs no change: it walks the pinned RaftCommand descriptor, so tags 38-42 and nested messages are checked once Decode has cases; tests prove 'wire: unknown arbiter.<Msg> field 9' for each new message incl. TrackFrontier.
-- Request converters live in wire/requests.go (existing precedent and the plan's File Structure), command mirrors plus Canonical/Body and MemberCheckpointBodyFromPB/ToPB in new wire/stage3.go, registry view types/converters in new wire/stage3_registry.go; Stage3ParamsFromPB/ToPB in wire/consensus.go (as S3-E2 Task 64's content check expects).
-- A pool VerifierEntry still encodes to arbiter-proto v0.11.0's exact bytes (pinned literal); host_indexer_id copied with cloneUint64 (absent nil, 0 kept); a Go exclusion reason outside the closed set encodes as UNSPECIFIED and is refused at decode.
-- TableRegistrySnapshotFromPB refuses corrupt stage-3 views with contract §41's six texts plus 'table registry snapshot: %w' around Stage3Params.Validate; the registry follower then keeps its last view and logs 'table registry snapshot refused' (dataplane/registry_follower.go:220-225), so S3-E2/E3 must never commit/serve a view this decoder refuses.
-- BlockHeaderView gains GroupKey (from header.track.group_key); BlockVerification gains fields 14-22 with BlockGroupRef/BlockReselection and the two refusals; the every-field fixture uses distinct header and seal keys so a swap is caught.
-- Goldens cannot import authoritytest (authoritytest -> authority -> wire import cycle), so bodies equal contract §41's fixture values are spelled out with placeholder tokens h.p.s/ab like preSignedClaimsGolden; update_consensus_params_with_stage3 is the v21 activation shape (Stage3Update's stage3 values, switches off) on legacyGoldenUpdate; update_consensus_params_with_a_member freezes VerifierEntry fields 3-11 inside a Raft command.
-- Golden hex computed with protoc --encode=arbiter.RaftCommand over the PROTO_TAG_P5 stand-in (reproduces record_cleanup_ack 62190a17... byte for byte); Step 14 re-proves it against the real PROTO_TAG_P5 proto files from the module cache before the commit, with a self-checking python comparison.
-- Names added while drafting: wire: sortedUnique, exclusionReasonFromPB, exclusionReasonToPB (wire/stage3.go, unexported); wire: memberClassFromPB, memberClassToPB, nodeIDs, groupsFromPB, groupMemberFromPB, groupsToPB, groupMemberToPB, memberCheckpointSeqsFromPB, memberCheckpointSeqsToPB (wire/stage3_registry.go, unexported); wire: blockReselectionFromPB, blockReselectionToPB, ascendingUnique (wire/block_verification.go, unexported); test helpers: stage3ParamsFixture, memberVerifierEntry, wireFieldNumbers, eachFlagAlone, mustMarshal (wire/stage3_test.go); test helpers: stage3ActivationGoldenUpdate, stage3MemberGoldenUpdate, stage3Golden (wire/stage3_golden_test.go); test helpers: stage3RegistryFixture (wire/stage3_registry_test.go), reselectionThroughReflection (wire/block_verification_test.go); subtest update_consensus_params_with_a_member of TestStage3CommandBytesAreFrozen (beyond contract §41's list); composed refusal text: table registry snapshot: group %d/%s: member %s: wire: member checkpoint excludes %s with reason %v, which is not a known CheckpointExclusionReason; local files: $HOME/.cache/s3e1-task60/{base,proto-tag-p5,golden/*.txtpb,golden/protoc.txt}
-- Verified while drafting: Scratch base: git archive of arbiter-core origin/main cfd4f42 (verified identical to origin/main) + Task 59 drafter's committed tree (work/e1/task-59/acA HEAD) + Plan S3-C2 Task 29's wire/block_verification.go and _test.go (byte-identical to task-29.md's code blocks) + replace to a PROTO_TAG_P5 stand-in (arbiter-proto 7a73f25 + S3-D Task 49 + Task 57, its conformance suite green offline). / Bazel 9.1.0 offline (--repository_disable_download) replay of every step on a fresh export: Step 1 one red test; Steps 3, 8, 17 failed with the exact compile errors quoted; Steps 5, 13, 20 passed; gazelle added only the five new files, no deps; bazel build //... and bazel test //... passed (17/17). / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... all ok; go vet ./wire/ clean; go test -race -count=3 ./wire/ ok. / 39 mutations (dropped/swapped/zeroed fields, skipped sorts/refusals, shared pointers) all killed by the task's tests. / protoc 36.1 --encode over the stand-in reproduced all 7 golden subtests and record_cleanup_ack; a deliberately altered text proto made Step 14's check stop with the expected message. / Every bash block passes bash -n and shellcheck -s bash; Steps 1, 6, 14, 15, 21, 22 blocks ran end to end against a copy of the scratch repo with a stub ledger tool. / The rendered markdown was parsed back (33 replace pairs, 5 new files) and applied to a fresh base export: result byte-identical to the tested tree; bash blocks and 8 text protos identical to the tested ones; fences balanced; no hard-wrapped prose; no TODO/TBD/placeholder phrases.
+- All original selection/command/registry hunks apply over the exact Task 59 source. Missing checkpoint body/entry previously became valid owner-0 zero values; direct/request/Raft and stored-registry regressions now require explicit presence, while a present owner-0 zero frontier is valid. Nil verifier elements retain their prior zero-value behavior. Independent two-direction alias tests cover lists, optional host pointers, nested checkpoints/frontiers and stage3 domains.
+- Whole-module Go/vet and offline Bazel build/race pass. Seven new frozen hex constants are unchanged; exact protoc validation requires eight unique lowercase-hex records including the immutable prior baseline. All non-owning predecessor bytes remain protected. `Group` and `GroupsWithMember` remain snapshot-view accessors; transport isolation is not claimed for those lookup views.
 
 ### Task 61
 
-- Anchors are at arbiter-core origin/main cfd4f42. For naming.go, table.go, reconciler.go and table_registry_snapshot.go they match the header's 8f0bc43, because S3-A changed only test and BUILD files there.
-- Changes in between that touch these files: S3-D Task 50 appends ReplicaIsActive and ScopedUnsafeRootChildren at the end of ddl/table.go (left unchanged); S3-C2 Task 29 puts ManifestOwner right after Owner, so KnownKeeperReplica goes between them; Task 60 adds ScopedKeeperPath, PurgeMembers and Groups (doc-commented) plus wire/stage3_registry.go. Nothing touches naming.go or reconciler.go.
-- Task 61 reads $W.core-tag-p4, which Task 59 writes beside the worktree, instead of the ledger.
-- With no scoped incarnation, every DDL and Keeper statement is byte-identical: Intents still renders the legacy path, and IncarnationIntentsFor replaces it only for a scoped scope.
-- The owner sweep's two new cases: (1) the legacy path of a key whose live incarnation is scoped (own stranded replica plus anything outside the purge node set); (2) the incarnation path of a Purged or Refused scoped incarnation it owns. No local table is dropped by either.
-- The Keeper audit runs only with SweepDecommissioned. snode.go already sets that, so the owner SNode gets the audit at the default 10 min interval with no config change. It runs at the first pass, then once per interval, after the sweep. Each finding is logged once, when it first appears, and it drops nothing.
-- KnownKeeperReplica also checks group.Leaving directly. E3 already merges a removed member into PastMembers, so this only guards against pruning.
-- Verification used a scratch export of origin/main cfd4f42 plus an S3-D Task 50 stand-in and a Task 60 stand-in (contract §41 fields). The markdown was applied with its own commands in zsh. Every fail output matched. The extracted tree is byte-identical to the tested tree.
-- Bazel race test: Executed 9 out of 17 tests: 17 tests pass. Integration through Bazel on ClickHouse 25.8.28.1: 5 of 5 targets pass, including the unchanged snode and verifier suites. On 26.3.51.7, ddl, tableset, snode and verifier all pass.
-- 17 mutation checks were run, each reverting one fix; every one was caught by at least one test of this task.
-- Parallel Bazel integration targets on a loaded host (load average 30–100) hit Keeper 'code: 999, Session expired' in pre-existing tests. The plan therefore uses --local_test_jobs=1, which passed.
-- Bash blocks run in zsh (the Bash tool's shell), where unquoted variables do not word-split, so the integration targets go through bazel --target_pattern_file, extracted from ci.yml.
-- Docker containers from the earlier interrupted attempt (s3e1-t61-a/b and their network) were removed. No scratch containers or networks remain.
-- Names added while drafting: TestEnsureTableForRemovesAStrandedReplicaOnlyOnItsOwnPath (ddl, ClickHouse; beyond contract §42.1); TestListKeeperRootsClassifiesChildren (ddl unit); TestKeeperScopeOfFollowsTheRegistryMark (tableset unit); TestLeftoverScopesKeepTheLegacyDropForUnscopedLeftovers (tableset unit); TestNewDefaultsTheKeeperAuditInterval (tableset unit); log text: keeper audit failed; the next pass retries it; unexported ddl: KeeperScope.validate, keeperRootPath, dropReplicaAtPath, canonicalIncarnationSeq; unexported tableset: target.scope, sweepRetiredPath, dropTables, leftoverScopes, auditKeeperIfDue, auditKeeper, keeperFindingOf; Reconciler fields keeperFindings, keeperAuditRuns, lastKeeperAudit; ddl test helpers: keeperFakeConn, nameRows, isolatedShard, strandReplicaAt, replicaState, createReplicatedAt; tableset test helpers: isolatedShard, isolatedPinned, scopedInc, fakeView.setSnap, peer, replicaOf, replicasAt, keeperRoots, hasScoped, insertUnsafe, unsafeRows, syncReplica, syncBuffer, auditedOwner, strayRoot; new test files: wire/known_keeper_replica_test.go, dataplane/ddl/{keeper_scope_test,keeper_scope_ch_test,keeper_roots_test,keeper_roots_ch_test}.go, dataplane/tableset/{keeper_scope_test,keeper_scope_ch_test,keeper_audit_test,keeper_audit_ch_test}.go; local cache dir $HOME/.cache/s3e1-task61/ (base, pair.env, targets); Docker names arbiter-core-s3e1-t61-ch-a/-b and network arbiter-core-s3e1-t61-ch
-- Verified while drafting: GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test (Go 1.27.1, plus Go 1.26.3 with -race) for ddl, tableset, wire, conformance: pass. go vet clean. gofmt clean. / The failing build at Steps 4, 9, 14, 19 and 24 reproduced exactly from the markdown text (diff of expected vs actual output). / ClickHouse-gated go test on the local 25.8.28.1 pair (CI topology, shared Keeper): ddl and tableset each pass with all 96 top-level tests and no skips. snode, verifier and chtest pass. Rerun on the same Keeper: pass. / Same suites on 26.3.51.7 (ddl, tableset, snode, verifier): pass. / bazel run //:gazelle after each step changed exactly the BUILD lines stated. bazel build //... passed. bazel test --build_tests_only race //... passed (17 of 17). / Bazel integration: all 5 ci.yml targets PASSED with --local_test_jobs=1 and -test.v; 0 FAIL/SKIP lines; 18 expected PASS lines matched. / Mutation checks: 17 of 17 fixes reverted, each caught. / All 23 bash blocks and 7 Run lines pass bash -n, zsh -n and shellcheck -s bash; fish lines pass fish -n; code fences balanced; no TBD or placeholder text. / The plan blocks for Steps 1–30 were run in zsh against a scratch worktree (stand-in branch, tag and $W.core-tag-p4) and printed the stated output. Step 29 used the local 26.3 image instead of 26.3.37.3.
-- Review fixes (AgentConnect round 1), finding 3 (network-pool identities, not the global purge node set): `KnownKeeperReplica` authorized the whole purge node set, which `GetPurgeNodeSet` fills with every registered, non-evicted SNode and verifier, so a registered member of an unrelated group, and another owner's SNode, passed as known on every owner path and the owner's audit never reported its replica, against spec §8.2; the negative fixtures had left those members out of the purge node set. Now `KnownKeeperReplica(inc, pool, replica)` takes the network pool, `NetworkPool(purgeNodeSet)` derives it (the purge node set without every `si_indexers` SNode and every node the registry view names as a current, past or Leaving member, a purge member or the node of a published checkpoint sequence), and the audit computes it once per audit; the unit test and `TestOwnerKeeperAuditReportsAnUnknownReplica` list every registered member in the purge node set and expect `member-x` (a registered member of another database's group), another owner's SNode, a purge member of another incarnation and a member known only by its checkpoint sequence to be unknown. Changed: Notes (what `KnownKeeperReplica` counts, the audit), Files, Interfaces, Steps 1, 13–17, 23–25 and 28, Review Focus 4, contract §42.1, Task 63's README paragraph. Residual, a user decision: the registry view does not serve the `verifiers` parameter, so a registered member that no group, purge list or checkpoint sequence names yet counts as a pool node; it holds no `hg_member_unsafe` replica before it is placed and `si_member_ddl` exists only from S3-F step 6, and serving the pool's node ids in the registry view (a new `TableRegistrySnapshot` field, filled when the view is served like `GroupMember.host_indexer_id`) would close it. Verified: this task applied mechanically from its text (every Create and replace block, in order) to a `git archive` of arbiter-core `origin/main` `cfd4f42` with a Task 60 stand-in (contract §41 fields); Steps 14 and 24 failed with exactly the outputs given; `gofmt`, `go vet` and `go test -race` of `ddl`, `tableset`, `wire` and `conformance` pass; on a local ClickHouse 25.8.28.1 pair in CI's topology the gated `ddl` and `tableset` suites pass, the four audit tests among them; the original code reproduced the defect (a registered `member-x` of `G(0, dex)` known on owner 1's path), and five `NetworkPool` mutations (the purge node set returned whole, or no exclusion of SNodes, current members, purge members or checkpoint sequences) and an audit that passes the whole purge node set each fail a test; Step 28's stat line is recomputed from the applied tree (80 insertions more than the drafted text).
+- Scoped Keeper roots are siblings, and unscoped DDL retains its old bytes. Both-root create/purge/sweep/leftover paths retain each incarnation's scope. `unattributableKeeperTables` protects unknown/noncanonical/wrong-name local markers, including desired scoped keys and backoff passes, before destructive retired-path cleanup. The actual old-source regression fails, then first/backoff/both-root regressions pass. Pure fake audit tests pin owner-only report/no-mutation behavior, retries, pacing, warn-once and detached Stats.
+- The network pool excludes all served owner SNodes and known current/past/Leaving/purge/checkpoint member identities; an unplaced registered member remains indistinguishable from a pool node in the current view. Serving a pool list is a recorded residual/user decision, not silently added wire schema. Actual CH25.8 and exact26.3.37.3/Keeper tests remain required; old 26.3.51.7 draft evidence and compiled/skipped integration tests are not current integration success.
 
 ### Task 62
 
-- Frozen submission bytes captured from the unmodified verifier at arbiter-core origin/main cfd4f42 (v0.15.0) via its own newVerifierFakeServer: attestation 0a0a76657269666965722d3112001a0a3078726563656970743922063078736967392801; byte-side scan hex as embedded in handler_test.go/evidence_delegation_test.go (scan_hash 0x2713bfcb...).
-- verifier/*.go sources are identical between 8f0bc43 and cfd4f42 (only BUILD.bazel and scanner_test.go changed); no S3-C1..S3-D plan edits a verifier source file.
-- Measured on clickhouse-server 26.3.51.7 with table_engines_require_grant and SI_MEMBER_DDL_GRANTS: si_member_ddl sees system.tables (name, comment, engine_full) of hg_member_unsafe, gets zero rows from system.columns, and 497 on system.replicas, system.zookeeper and system.detached_tables; hence the reconciler attributes tables by comment + engine_full head and the verify role runs ddl.VerifyProtocolTable as si_member.
-- As si_member_ddl, CREATE TABLE with UnsafeSettings (max_bytes_to_merge_at_max_space_in_pool = 0) passes the CONST profile; a stale replica named after the member at the path gives code 253 REPLICA_ALREADY_EXISTS; DROP TABLE ... SYNC as si_member_ddl removes the member's Keeper replica (and the incarnation node when last).
-- S3-C2 Task 30's TestMemberUnsafeIntentHasNoCallerInP2 fails as soon as verify_role.go names MemberUnsafeIntent; Task 30 itself says Task 62 replaces it, so Step 12 replaces it with TestMemberUnsafeIntentIsCalledOnlyByTheMemberConsensusMode.
-- The verify role's readiness gate covers statement targets and table-set transition adds (like the verifier's add gate) and never waits; Observe runs before the gate and replay.
-- Reconciler never drops a table it cannot attribute (no comment, unknown seq, engine_full not this node's replica at the exact incarnation path) to avoid deleting a later incarnation's Keeper subtree; drops only with DROP TABLE SYNC once Quiet; REPLICA_ALREADY_EXISTS stops that incarnation for the process life.
-- Task 62 makes four commits on urwt/claude/multi-source-s3e1 and pushes nothing; go.mod/go.sum/MODULE.bazel unchanged; Task 63 pushes and opens the PR.
-- Confinement runner now requires 17 tests (14 TestConfinement_ + 3 TestMember*).
-- Names added while drafting: evidence.Deps.NotReadyLog (warn text of a TablesReady refusal; empty = the verifier's 'table-set transition adds a table this verifier has not created; refusing to attest'); (*evidence.CHScanner).Database() string, Registry() dataplane.RegistryView, SchemaFor(tableID string) (payloadexec.TableSchema, error) (needed because verifier.CHScanner is now an alias: checkScannerRegistry and existing verifier tests read these); evidence handler warn line 'evidence observer failed; refusing to attest'; consensus.VerifyDeps.BootNonce string (member.Role's boot nonce; validated as 8 lowercase hex); consensus.ReconcilerConfig.NetworkID, Tables []payloadexec.TableSchema, StoragePolicy string (schemas via dataplane.IncarnationSchema; member storage policy of each replica); consensus.ReplayScratchPrefix(nodeID, bootNonce string) string = install.ScratchPrefix(nodeID, bootNonce) + "v"; consensus.NewReplayMaterializer(networkID string, conn clickhouse.Conn, nodeID, bootNonce string) (*chexec.Materializer, error); unexported errRegisterOff text 'member consensus: Register is off'; errSnapshotQueryNotServed 'member consensus: a member does not serve the snapshot-query lane'; member not-ready log 'a job table has no ready hg_member_unsafe replica on this member; refusing to attest'; reconciler logs 'member hg_member_unsafe replica created' / 'member hg_member_unsafe replica dropped' / 'member hg_member_unsafe reconcile failed; retrying' / 'hg_member_unsafe table is not this member's replica of a known incarnation at its Keeper path; leaving it for an operator'; verify role logs 'quiescence ledger resolve failed; retrying', 'snapshot query job dispatched to a member; refusing'; quiescence.json shape {"version":1,"blocks":[{"block_seq":N,"tables":[{"table_id":"db.t","incarnation_seq":S}]}]} and refusals 'member consensus: quiescence.json is corrupt: %w', 'member consensus: quiescence.json has version %d, want 1'; TestMemberUnsafeIntentIsCalledOnlyByTheMemberConsensusMode (replaces S3-C2 Task 30's TestMemberUnsafeIntentHasNoCallerInP2; allowed callers member/consensus/unsafe_reconciler.go and verify_role.go); added tests: TestEvidenceHandlerRunsObserveFirstAndRefusesWhenItFails, TestEvidenceHandlerGatesTheReplayOnTablesReady, TestEvidenceHandlerLogsWhatItRefusesAndWhatTheArbiterRejects, TestNewHandlerRefusesAnIncompleteConfig, TestRegistrationSeqIsDurableAndNeverGoesBack, TestVerifierRegistrationRequestsAreSignedWithTheEvidenceKey, TestCHScannerScansItsDatabaseThroughTheRegistry, TestMemberVerifyRoleRefusesAJobWithoutItsReplica, TestReplayScratchPrefixIsTheMembersOwnAndNotTheShadows, TestNewVerifyRoleRefusesAnIncompleteConfig, TestReadQuiescenceRefusesACorruptOrUnknownLedger, TestUnsafeReconcilerLeavesATableItCannotAttribute, TestUnsafeReconcilerRecreatesASameNameTableAfterThePurge, TestUnsafeReconcilerRunsAtEveryRegistryChange, TestNewUnsafeReconcilerRefusesAnIncompleteConfig, TestMemberUnsafeReconcilerStopsOnAStaleReplicaAndDropsNothing (confinement, ClickHouse+Keeper); scripts/ci/clickhouse-member-confinement.sh required list now greps '^func Test(Confinement_|Member)'; message 'no TestConfinement_ or TestMember function to run'
-- Verified while drafting: Scratch work dir <scratch> (core = git archive of arbiter-core origin/main cfd4f42 + stand-ins for S3-C2 Tasks 29/30/32/34 and S3-E1 Tasks 59-61 names; hg = housegate v0.20.0 + S3-C1 NewMaterializerIn/ScanAllParts/CopyTable stand-ins). / Applied the task step by step in apply/: every failing step produced the quoted compile/test failure messages; final GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... (Go 1.27.1) passed; -race -count=3 passed for verifier, dataplane/evidence, member/consensus, dataplane/ddl. / Mechanically replayed the rendered markdown (Create/Replace/hunk/perl/commit blocks) into a fresh checkout: resulting tree identical to the verified apply tree; the four commit blocks ran with their Co-Authored-By trailers. / Mutation checks: 20 of 21 rule reversions made the named tests fail (observer dropped, purge/registration conditions, stop not recorded, quiet check, Retiring, released flag, unscoped path forced, engine-head check, hg_unsafe scanned, Register/subscription ungated, each resolve rule, readiness check skipped, verifier text/replica id/add gate/features/state-file name); removing the fsync is unobservable as expected; the new guard fails on a stray caller. / Bazel 9.1.0 (Go SDK 1.26.3) offline with local_path_override of housegate: gazelle generated the four BUILD files shown; bazel build //... and bazel test //... passed (20 tests); later gazelle runs changed only stand-in BUILD files. / ClickHouse: fenced clickhouse/clickhouse-server:26.3 (26.3.51.7) with the access-control xml, embedded Keeper and an unfenced peer started like the runner: the 3 TestMember* tests and 13 non-S3 confinement tests passed (S3 restore test not run: no local MinIO image). / bash -n and zsh -n of all 14 bash blocks and 11 Run lines (zsh -n reports rc=1 for any '!' negation, a noexec quirk; executed forms work), shellcheck -s bash clean; runner passes bash -n, /bin/bash -n, shellcheck; gofmt clean; no TBD/placeholder text; prose unwrapped.
+- The complete coherent 425-file predecessor becomes 447 files; its final source manifest SHA256 is `445e7badea6aa5b8280499caeb87b68189daaba39533cb7b2f98763d5875d959`. This preparation independently verified all 447 hashes. The source preserves the full post-C4 query adapter/Task45 lease implementation and the separately audited constructor-owned legacy memo, including private executor/public schema isolation and the private serial Run invalidation boundary. The shared injected `evidence.NewReplayCore`, member executor and query lanes have no memo.
+- Actual policy readiness uses `Config.StoragePolicy`; the wrong-policy source is RED before the fix. Every successful Observe gets a private token, and an obsolete Resolve RPC cannot erase even an identical redelivery. Structural quiescence corruption propagates a hold, while missing file is initial empty state. Version-1 JSON shape is unchanged. The exact final rendered source replays all 383 Go files byte-identically.
+- Whole Go completes31 packages (797 top-level /1831 events,266 gated skips); vet/affected race and offline Bazel build61/race31 pass. The legacy owner sixteen memo tests, five independent audit tests and two focused serial-clear tests pass without altering their boundaries. Runtime mutations and actual workflow/runner/strict JSON fixtures reject adverse cases. MinIO uses the digest-pinned bitnamilegacy image with explicit minio entrypoint; complete confinement requires all17 tests, with no skipped event accepted. No Docker/CH/MinIO execution or released-pin proof was supplied by this review.
 
 ### Task 63
 
-- Scratch base: arbiter-core cfd4f42 (CORE_TAG) + S3-C1 Tasks 23-24 + S3-C2 Tasks 29-34 + S3-C4 Task 45 drafts + minimal Task 59-62 stand-ins, against a PROTO_TAG_P5 stand-in (Task 57 draft on S3-D Task 49 draft) and a housegate stand-in with S3-C1 helpers; S3-D's arbiter-core changes are not in the stand-in (they touch none of this task's files except consensus.go after ReleaseIndexerCommand).
-- Every failing step failed with the compiler messages the task quotes (line:col included) and every passing step passed; go test ./... passes except two //wire tests already red at the base because the Task 60 stand-in omits BlockVerification/L3BlockTrack stage-3 fields; go vet and gofmt clean; -race -count=3 on member/consensus passes; go.mod/go.sum unchanged by the code steps (prometheus testutil avoided because it would add github.com/kylelemons/godebug).
-- 37 mutations (each reverted fix) all fail their named test.
-- Bazel 9.1.0 offline (local_path_override housegate, local arbiter-proto stand-in with a hand-written gen/pb BUILD): gazelle diffs per step captured verbatim in the task; bazel build //... passes; bazel test //... passes all but //wire:wire_test (same two stand-in tests); race on //member/..., //dataplane, root passes.
-- ClickHouse: TestHardlinkSourceAttachesFromMemberUnsafeAndKeepsHashOfAllFiles and TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica pass on clickhouse-server 26.3 (26.3.51.7) with Keeper and table_engines_require_grant as a restricted user, and on a local CI-shaped 25.8.28.1 two-node pair with shared Keeper and CI's default password; the CI data-plane integration targets plus //member/consensus:consensus_test pass there through Bazel: Executed 12 out of 12 tests: 12 tests pass.
-- ATTACH PARTITION ... FROM a ReplicatedMergeTree hg_member_unsafe table into a MergeTree hg_rstage scratch works for a user holding only SELECT on hg_member_unsafe and the S3-C2 hg_rstage rights, and keeps hash_of_all_files and the row LtHash.
-- scripts/update-housegate.sh simulated offline on cfd4f42 (git_override form) with a file proxy and scratch GOMODCACHE: changes go.mod (1 line), go.sum (2), MODULE.bazel and README (version, Resolved comment, commit); MODULE.bazel.lock changes only with real Bazel.
-- Ledger blocks of Steps 1 and 25 ran against a local bare origin with S3-D's and S3-E1's Appendix C on urwt/claude/ms-si-stage3-plans-cf: empty/get output, record set, one-commit stat (3 insertions, 2 deletions with one sub-item), push and get CORE_TAG_P5 as expected.
-- Plan S3-E3 maps every Apply refusal of MemberReady/MemberCheckpoint to FAILED_PRECONDITION, so ErrStage3SwitchOff (contract definition) wraps FSM refusals too; the mode distinguishes the K67 switch text for the switch_off metric.
-- member/role_test.go TestRoleCallsOnlyReadRPCs and serving_test.go AST checks still pass with the wiring (no forbidden selectors in package member).
-- 114 code blocks: every bash block passes bash -n and shellcheck -S warning; fish lines pass fish -n; no hard-wrapped prose.
-- Names added while drafting: consensus.Mode, NewMode, ModeDeps, InstallView, (*Mode).Run/Status/Metrics; consensus.InstallStateOf(snap, owner, journal, tables, stats); consensus.ReplicaPaths, ReadLocalReplicas, ReplicaSyncTimeout; (*consensus.CheckpointSigner).Address; consensus.OffStatus, ModeOff, ModeConsensus, ClassLeaving; consensus label constants EvidenceReplay, EvidenceScan, EvidenceSubmitted, EvidenceRefused, CheckpointAccepted, CheckpointSwitchOff, CheckpointRefused; consensus.ReconcilerMetrics / NewReconcilerMetrics(stats func() ReconcilerStats) (the reconciler process's two series, for S3-E4 Task 79); VerifyRole.metrics field (unexported, added to Task 62's struct by a checked script); sources.SourceMemberUnsafeHardlink = "member_unsafe_hardlink" (kept out of SourceNames); serve.Deps.Consensus func() consensus.Status; member/consensus_mode.go: consensusMode interface, newConsensusMode, consensusStatus; tests TestReadLocalReplicasReportsOnlyTheIncarnationsSyncedReplica (ClickHouse+Keeper), TestModeRegistersBeforeItReportsAndRetriesARefusedRegistration, TestConsensusMetricsExportEveryLabelIncludingZeros, TestVerifyRoleCountsItsEvidence, TestConsensusConfigWiresTheModeIntoTheRole, TestServingViewCarriesTheConsensusStatus; refusal texts: member: Config.Consensus.%s %q differs from the member's %q; member: the consensus mode's verify role needs Deps.Payloads; member consensus: the ed25519 seed must be 32 bytes; member consensus: the replica_signer key is not a secp256k1 private key in hex
-- Verified while drafting: Go replay of all code steps in a fresh clone (replay.sh), logs of each fail/pass run compared with the task text / python3 -I mutate.py: 37 of 37 mutations caught / Bazel per-step gazelle replay (bzreplay.sh) and bazel build //... / bazel test //... / race subset offline / ClickHouse-gated runs on 26.3.51.7 (Keeper, engine fence) and on a local 25.8.28.1 CI-shaped pair, via go test and via the task's own Step 14 and Step 21 Bazel blocks / update-housegate.sh offline simulation with a file GOPROXY and scratch module cache / ledger simulation of Steps 1 and 25 (R1, R2, R4) against a local bare origin / lint_blocks.py over the generated markdown: bash -n, shellcheck -S warning, fish -n, python compile, hard-wrap check
-- Review fixes (AgentConnect round 1), finding 1 (the boot nonce Task 62's constructor requires): the draft's `Mode.prepare` built `VerifyDeps` without `BootNonce`, assuming `NewVerifyRole` drew its own nonce, but Task 62 adds `VerifyDeps.BootNonce` and its `NewReplayMaterializer` refuses an empty value, so every member with `Config.Consensus` failed in `prepare`, `Register` on or off, and the mode tests never saw it because they replace the constructor seam. Now `member.Role` keeps startup step (7)'s nonce in `parts.bootNonce`, `runParts` calls `(*Mode).Run(ctx, manifests, inst, bootNonce)` and `prepare(manifests, bootNonce)` sets `VerifyDeps.BootNonce`; the `consensusMode` interface and the role tests' `fakeMode` take the nonce, `TestModeBuildsTheRealVerifyRoleWithTheRolesBootNonce` (Step 8) builds the real verify role through `prepare` and `Run`, and `TestConsensusConfigWiresTheModeIntoTheRole` checks the role hands the mode the installer's nonce. Changed: Notes (one mode; the verify role's boot nonce), Files, Interfaces, Steps 8, 9, 11, 15 and 16, Review Focus 5, contract §42.3 (`VerifyDeps.BootNonce`, role wiring). Verified: Task 62's `bootNoncePattern`, `VerifyDeps`, `NewVerifyRole`, `ReplayScratchPrefix` and `NewReplayMaterializer` and this task's `prepare`, extracted verbatim from the plan into a scratch module with stubs for the rest (`chexec.NewMaterializerIn` with S3-C1's refusals): the drafted `prepare` fails with `member consensus: verify role: member consensus: boot nonce "" must be 8 lowercase hex characters (install.NewBootNonce)`, the fixed one builds the role with `testBootNonce` and refuses `""` and `nonce` with the texts the new test expects (`go test -race`); every changed Go block passes `gofmt`; Step 8's first error line (`mode_test.go:147:12`) is unchanged and Step 15's moves to `consensus_mode_test.go:83:7`. A full replay of the member package was not run (it needs S3-C2 Tasks 29–34, S3-C4 Task 45 and Tasks 57–62 with a regenerated arbiter-proto). Sibling: the Notes' other open question on Task 62 (whether `VerifyRole.Run` resolves the quiescence ledger) is closed against Task 62's text (`resolveLoop`, Register on or off), and Step 1 now also checks `VerifyDeps.BootNonce` and the two S3-C2 anchors Step 16 replaces.
-- Review fixes (AgentConnect round 1), finding 2 (the startup identity guard of a registered member): S3-C2 Task 34's startup step (6) refused any node id in `GetPurgeNodeSet`, which lists the member once it registered as a VERIFIER (S3-E2 Task 69 keeps the set unchanged), so every later start of a registered member, a pod replaced at S3-F step 6 included, ended with `ErrNodeIDInUse` before `runParts`. Now, with `Config.Consensus` only, step (6) checks the id against the purge node set without the member's own id (`nodeIDCheckSet`), keeps the SNode refusal, and refuses an id the registry serves as another host's group member (`checkGovernedHost`, wrapping `copyset.ErrNodeIDInUse`); S3-C2's code changes only through this task's `role.go` replacement, and `TestRoleRefusesANodeIDInUse` is unchanged. Changed: Notes (the node id at a restart), Files, Interfaces, Steps 15 and 16, the README's `Register` item, Review Focus 5, contract §42.3 (role wiring), a binding clarification. Residual, a user decision: the registry view does not carry the `verifiers` parameter, so the start cannot compare the id's entry key with the member's own; the arbiter checks it at every `RegisterNode`, and serving the entries' node ids and keys to members would let the start check it. Verified: S3-C2's `CheckNodeIDUnused` and `inUse`, and this task's `nodeIDCheckSet`, `checkGovernedHost` and step (6) replacement, extracted verbatim into a scratch module: the drafted step (6) refuses a registered consensus-mode restart (`copyset: node id "member-b" is already used by the purge node set (a registered SNode or verifier)`), the fixed one accepts it with or without a group and with a delisted member record, and refuses a P2 member with the same purge node set, an SNode's id and a member served by host 2 or host 0 with the texts `TestConsensusModeAcceptsItsOwnRegistrationAtARestart` expects, without changing the caller's purge node set (`go test -race`); the role-level test itself needs the S3-C2 harness and was not run.
+- Source: complete controller-approved Task62 core447, actual Task58 HG935 and canonical proto57. Final full task/report and complete exact replay freeze all469 source files /405 Go files, protecting428 predecessor files. All74 original Go fences remain byte-identical; two new test fences add the independent purge-hold and pure hardlink regressions. The actual additive CI consensus target and gazelle metadata preserve all prior source/BUILD entries; the already-present sources import is checked instead of blindly replaced.
+- Seven tests-first RED/GREEN stages pass. Whole Go completes31 packages /824 top-level tests /1871 passing events, with268 explicitly gated integration skips; vet/five-package race and independent memo23/33events zero-skip suite pass. Enforced-offline Bazel builds61 and passes31 plain/race targets within the unchanged120s bound.21 runtime assertion mutants are killed/restored. Fresh complete markdown replay reproduces469/405Go bytes and gazelle metadata exactly; no future release version/sum is invented.
+- `TestMemberPurgeChecksEachHoldIndependently` closes an actual omitted-table-hold mutation escape hidden by the old combined test. `TestMemberHardlinkPureFakeConfinesDropsAndKeepsOneHash` and `TestMemberHardlinkPureFakeMissAndAttachError` pin scratch-only cleanup/one hash/miss/error behavior; they supplement real CH hardlink/replication mechanics. Readiness covers nonempty live Pending/Active/Retiring groups, excluding Purging. Mode passes actual Role nonce/pinned policy and preserves restart identity checks, C4 durable leases/query adapter and private legacy memo; member/evidence execution stays uncached.
+- Retained-path/signing/fail-stop, observed Go/proto/Bzlmod pin gates, current-head/tree/required-CH receipts, release ID/publish-time/annotated-tag content and full R1–R4 flows pass inert extracted fixtures. Public CI credentials are read from the existing reviewed XML, supplied by environment/client config stdin, never literal/argv; the user-default confirmation remains required. No Docker/CH/MinIO, actual released pin/commit/PR/merge/release/ledger/live action ran.
 
-### Review fixes (AgentConnect round 1): cross-plan
+### Plan-level reconciliation and remaining gates
 
-- (1) Plan S3-C4's review fix 3 made `serve.Deps.StateDir` required (`serve: Deps.StateDir is required: the server records its leases there before it grants or renews one`), so Step 15's `TestServingViewCarriesTheConsensusStatus` gives its second `New` the S3-C4 harness's `StateDir: h.stateDir`, and the Files line cites the lines of S3-C4's fixed `serve.go`. Checked on S3-C4's fixed `member/serve` package with this task's eight `serve.go`/`conditions.go` hunks (each anchor once), a stub `member/consensus` holding this task's status types, and the test: without the field it fails with that refusal, with it `go test -race ./member/serve/` passes (every S3-C4 test too), gofmt and vet clean; this task's fifteen `member/` hunks each occur once on S3-C2's fixed Tasks 29–34 code with S3-C4's fixed Task 45 scripts and `member/serving.go` applied. (2) Plan S3-C2's review fix 245-4 (the bootstrap restore probe): a Notes bullet and contract §42.3's source-order sentence say the probe moves the restore right before the owner pull for the first fetch of each copy while its owner has no journaled entry, and keeps the hard-link source first; this task's code is unchanged. (3) Plan S3-E4's review finding 2: the Follow-ups line says Task 79's `replica_hosts` lists every current member, never filtered by `MemberReady`. (4) Plan S3-C4's review fix 4 grew Task 44's `upstreamToClient` read hunk of `pkg/proxy/relay.go` by three lines, so Task 58's `HG_TAG_P3` anchors of `isSessionPreservingIngressException` are now `:2326-2330` (doc) and `:2348-2349` (733 case), measured by replaying S3-C4's fixed relay hunks on housegate `862a7a8` (the result equals S3-C4's fixer's verified tree); both anchor texts still occur once, and no other file Task 58 edits changed line counts there (S3-C4's `CLAUDE.md` and `README.md` edits replace within one line). (5) Plan S3-C2's review fixes 245-1 and 245-2 moved lines of `member/role.go` (34 lines more in `member/role_test.go` before `TestLocalNodeFeaturesAreUnchangedThroughP2`), so the Files line's `member/role.go` and `member/role_test.go` numbers and Step 17's expected `role_test.go:411` are re-measured on S3-C2's fixed Tasks 29–34 text with S3-C4's fixed Task 45 applied (the run of Step 17's red test there prints exactly that line); every anchor text is unchanged.
+- The complete source chain is C4/Task45 core379 → P4 Task50 core400 → Task59 core407 → Task60 core412 → Task61 core423 → audited legacy memo core425 → Task62 core447. Root's coherent proofs build real serving/installer/lease/role code and preserve all83 C4 member files, D25 and goldens; no old partial-base scaffold claim replaces them. Task63 completes the local447→469 stage against actual Task58 HG935; actual released tags/pins remain pending.
+- Legacy memo invalidation is justified by actual synchronous reference Role subscription callbacks. An artificial captured private-token concurrent miss can publish after a terminal clear; that unsupported private-context reuse is not a supported lifecycle guarantee. Future concurrent dispatch requires an epoch barrier first. Independent real-Role queued-dispatch proof observes maxConcurrentVerify1, an empty memo before the second verification, CREATE2 and empty Run-exit state. Public schema aliases were a real defect and are fixed by a second independent deep clone; no caller-immutability assumption waives that fix.
+- Both separate full500 attempts FAILED: original9300-second alarm and memo-chain2935.12-second failure at the unchanged3-minute track0 publish-through-block255 wait. The memo-chain first3 cases passed, but those two historical attempts have no final500 owner oracle or runner-success marker; neither partial cases nor source-level race results closes either failed attempt. A later bounded full500 acceptance is recorded below without changing either failure. Its exact owned cleanup completed across3 absence rounds spanning30.236268s and all2001 source records retained zero drift; the publish target is not a reconstructed final watermark, and the logged CREATE/copy transport timeouts do not establish complete publish causality. Actual CH/Keeper/MinIO stages, recorded tags/pins, prerequisite live plan exits, formal E1 acceptance and cross-plan checks remain holds. Required K24/K25/K86, CI MinIO/default credentials and P6 budget decisions remain with the user. No value is predicted or written by this pass.
+- Names-index correction required: GroupMember fields1–8, with optional served host8 preserving absence and zero; current consumed policy-aware materializer and full ReconcilerConfig fields must be recorded. Later E2 Task64 extends Task36's exhaustive manifest-owner adapter/counts for wire TableIncarnation18→20 and corresponding FSM stages without weakening equality/D25. E4 Task79 threads NetworkID/Tables/StoragePolicy and uses every current member's optional served host; F Task83 retains corruption holds and read-only reconciler state mount.
 
-- **Tasks 62–63, member replay policy follow-up (sibling of the confirmed PR #245 finding).** The verify-role replay helper used legacy `NewMaterializerIn`, leaving its scratch on the server default policy. Added `consensus.Config.StoragePolicy`, sourced from the existing pinned member configuration, and the fifth `storagePolicy` argument to `NewReplayMaterializer`, which now calls C1's compatible `NewMaterializerInWithStoragePolicy`. The real Role requires equality with its actual `Pinned.StoragePolicy` before constructing Mode; actual `Mode.prepare` passes the complete config to Task 62's VerifyRole. Empty/malformed policy subcases fail against the old call and pass with the corrected path. The new actual CREATE-boundary test requires exactly one CREATE with the requested policy and propagates a missing-policy error without a default-disk retry, while permitting normal deferred DROP cleanup. Real Mode/VerifyRole and Role-binding regressions pass, as do consensus/member/shadow/confinement unit/race and vet. Consensus-off/shadow-off empty-policy compatibility stays unchanged. This bounded fix does not constitute the remaining E1 adversarial review or a new full integration run.
+### Canonical REST and release-attempt follow-up
 
-### Review fixes (AgentConnect currentC2integration)
+- The controller-approved canonical v2 parser has source SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`. Tasks57/58/63 each receive exactly two identical bodies with their already checked HEAD passed as argv1 and new success text. All203 non-Bash fences of those owning outputs remain unchanged. Lowercase40-hex string/unique commit identity,1–100-per-page/<250-total and final-list-head checks reject the real old success-path malformed-SHA defect; numeric nonfinal40-digit identities are rejected without str coercion.492 actual extracted dual-shell parser-pipeline controls and150 full checked-head/REST/atomic-merge controls pass, including CLI failure, head drift, stale/missing receipt and merge-failure no-fallthrough. Root alone adopts these bounded procedural changes; frozen reviewer artifacts remain unchanged.
+- Task57's release-dispatch block could be rerun successfully twice, overwriting cut-since and dispatching twice. Two actual old-block dual-shell REDs reproduce that behavior. The bounded fix refuses a retained attempt, writes its cut-since marker with noclobber before dispatch and leaves failed/ambiguous attempts for reconciliation; ten dual-shell controls cover first/duplicate/failed/empty-retained attempts. The separately rerunnable watch/read block stays unchanged. Release createdAt is metadata only; exact run/head/tag/content establish freshness. Task58 already retains its attempted dispatch and exact watched run/log tag; neither57 nor58 selects an unrelated latest release. Task63's distinct release-ID/publish-time strategy does not require replacing valid explicit-tag procedures elsewhere.
 
-Revision4c5f877cd415d1c972a4ec5b817c5ced0d958e51 had two real inherited-C2 conflicts. Task62 now carries the complete accepted extraction over coherent post-C4/private-memo425→447→469, retaining constructor-only memo, two independent schema clones, original-wire Verify-only binding, synchronous private Run lifecycle, terminal submission invalidation and uncached member/evidence execution. Task64's actual pin fallout includes the inherited manifest-owner failure and explicit18-FSM/20-wire exact-zero ownership; Task69 performs the complete20-field adapter/test/BUILD migration. Accepted Task68's rule6 delisting correction is included as the coherent633 predecessor of69. All imported runtime/test/BUILD fences are literal accepted owner bodies; current checked Git/format/signing/head/receipt procedures remain protected by the accepted procedural candidates.
+Historical v4 observation identity qualification: Replay distinct/repeated groups are deterministic canonical domain-job JSON digests at the actual wrapper (memo-chain50:51 groups per replica; failed memo-chain500:256/236/257), not universally injective full typed Go-value or full-wire identities. Domain JSON may collapse nil/allocated-empty omitempty shapes and omits protobuf unknown fields; the actual frozen producer normalizes zero-length repeated fields to nil, so this limitation does not establish such a variant in the measured fixture. Unary/dispatch observers separately hash real protobuf deterministically. CREATE counts and all raw timing/error/call counts remain measured unchanged. These counts support materialization reuse on that canonical fixture, not arbitrary-shape memo correctness, cache-hit accounting,500 completion or asymptotic scaling. Task34's production execution memo is a separate independently audited boundary: full deterministic pb.ReplayJob hash, private Role.Run generation, current dependencies and explicit prepared payloads; the historical v4 domain digest is not its key and this observation qualification establishes no new memo defect or correction.
 
-+This is publication of already accepted local fixes, not a new product/control campaign. Prior source/TDD/race/Bazel/mutation/replay evidence remains scoped to its owning reports:62's447/63's469 chain,64's615,68's633 and69's637. Root e970 retains69's original full-race FAIL, UNKNOWN cause and unquantified liveness risk; later isolated PASS is not reliability/nonregression proof. Task70 qualification, formal consistency, release/live/ledger and existing user execution stops remain separate. Task57/D25 and every unlisted task are byte-identical to the resynced published base; no vector/count decision is taken here.
+Observer history and current bounded result: observer-v2 was independently BLOCKED on A1 dynamic-context-equality panic; its historical RED evidence remains immutable. The fixed observer-v3 PREP was subsequently independently CLEAR before its one separately authorized actual50. All4 unchanged tests and runner/supervisor passed with final owner50blocks/0mismatches/1missedscan/0unverdicted; this satisfies the original50 criterion because missed/unverdicted are reported rather than failed. Exact-owned cleanup had3 absence observations spanning30.260913875s; the2004 source records and29 frozen PREP artifacts retained zero drift. The immutable actual50-v3 report was authored under the controller's wrong extra zero-error gate; that classification alone is superseded by the binding spec/contract and the new read-only membermiss addendum, while all raw evidence/counts stay intact. Soak block29's missed unsafe pull is retained; the particular cleanup-before-pull sequence is unproved and is not a prerequisite for accepting an explicitly allowed miss. Neither this50 nor observer clearance proves full500 completion: both earlier500 failures remain failures, and this50 does not discharge full500/release gates; the later full500 result has its own scope and receipt below, and no further run or assertion/budget/source/ledger change is authorized by this qualification.
 
-### Review fixes (AgentConnect PR248, 2026-10-18 14:45)
+### Combined K38 producer reconciliation (historical candidate measurement)
 
-Task59 now exclusively retains the actual URWT JSON in `$HOME/.cache/s3e1-task59/worktree.json`, creates the Codex branch `urwt/codex/multi-source-s3e1`, and checks the actual branch, base, clean state and repository before configuring signed poetry commits. Tasks60–63 reuse this same lexical absolute path, refuse malformed or incompatible receipts, and check the same branch; a retained attempt stops for reconciliation rather than creating another checkout. Tasks59/60/61/63 adopt the root-accepted procedural Bash master, including signed commits, checked reads and Task63’s confirmed release/ledger stages. Task62’s published private memo/schema/lifecycle and every code fence remain exact; its one stale Values-across-commands prose line now describes the retained JSON path and Codex branch. This pass preserves every published non-Bash source/test/BUILD fence and imports no deferred accepted source changes from Tasks60/61/63. D34’s fixed ledger-copy branch is unchanged. Verification is bounded static/inert handoff evidence; it adds no implementation, release, live or formal acceptance.
+The combined candidate includes the contract-correct Task34 evidence producer (helper SHA256 `3100bf6cc41fbd9c8ef8cc140ba77945b3c633befc963764eaf67c51a7bf6852`, full Task34 SHA256 `32e99973fbfe40ae9b3d4d33c6870c94fe5f73565f3f1d2d322d42634f4fe65f`). Its owning correction verified106 actual local CLI executions (46 inherited controls plus two15-pair sets); this merge adds no test or runtime result. Only the helper's m/u-zero conditions are removed; Task34's5627-line runtime prefix,156 protected C2 source/output fences, exact REST-v2 bodies and all other executable bytes remain unchanged. Historical strict-gate artifacts remain immutable and non-normative. The observer-v3 original50[50,0,1,0] remains a short50 PASS; both failed500 histories remain immutable. The later accepted full500 does not replace the newer affected-scope, release/live, devnet2 per-round scanned coverage, user-decision or empty-ledger requirements. This combined preparation is not formal acceptance or authorization for another run.
+
+### Current evidence reconciliation (2026-10-18; conditional, no execution)
+
+- The controller's full500 receipt SHA256 `f34c9ee7dc7c2665640909e7ad77662bbcd8efeb8f6311f32caf99514d4b0112` accepts the separately authorized memo-repaired product plus test-only observer-v3 old scope: all4 tests PASS, driverexit0, owner[500blocks,0mismatches,6missedscans,0unverdicted], cleanup3 observations spanning30.204460208769888s,2004 source files verified. K38 reports missed scans; it does not impose zero missed scans. This is bounded runtime evidence, not literal canonical/original pre-memo workflow proof, a new-source affected result, a release or ledger record. Both earlier full500 failures stay recorded.
+- The newer baseline root receipt SHA256 `f8924677ccb8472188f03e2681abbeba628c9197746652d311113bc918a5de7c` verifies source manifest `2b6c920fb909a737aa6de17d5e625770ccc107a74e4823c7bc51900cb2fbedec`, measured SQL25.8.33.6,63 top-level PASS,0FAIL and exactly five skips: `TestPipeline_BurstSamePartitionSealedAgainstGenesis`, `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement`, `TestPipeline_MemberCopyFollowsTheOwnerAcrossPromotions`, `TestPipeline_MemberKilledMidStreamResumesFromItsJournal`, `TestPipeline_MemberShadowSoak`. One product test invocation is recorded. The initial readiness exit210, absent outer Bazel/ps raw streams and283 absent intermediate artifacts remain qualified; declared-leaf/final-output closure is not a complete physical action-history proof. This baseline is separate from the subsequently root-accepted same-source affected race prerequisite (764 top-level PASS,16 exact skips,0FAIL,1123 nested PASS,one Bazel invocation; source2004/binaries unchanged), which is qualified in the current entry below. It supplies no replacement500, E1-specific Keeper/hardlink/confinement mechanics, formal consistency, release or ledger acceptance.
+- Task70 original terminal62-command/replay638 evidence retains its historical changed-tool HOLD. A later fixed-tool source qualification is now root-accepted separately; it does not rewrite the old HOLD/69 risk or supply actual71–78 execution/grants. Current E3 root-accepted static readiness intent assigns primitive declarations to71, consumption to72, population/validation to73 and checkpoint pointer declarations to75. E1's eight-field served member shape and D27 host-zero semantics remain unchanged.
+- Reconciled the exact E2 boundary in §43: Task64 handles FSM18/wire20 through pending Task69 fields and an exact-zero adapter; Task69 owns declaration/mapping and full20-field completion. Task78 later owns the empty pending-map test. E4 Task79 consumes actual NetworkID/Tables/StoragePolicy/boot nonce and every current member's optional served host without Ready filtering; F83 preserves the strict quiescence hold/read-only state mount. No later static contract is an actual producer receipt.
+- All seven E1 task parts, every executable/source/data fence in all11 parts and AppendixC are byte-identical to the root-indexed Git-read master. Prior source/signature/test inventories and procedural fixtures are reused at their pinned scopes, not rerun or relabelled as current runtime proof. The old135-test inventory contains132 definitions and3 external precedents; the89-function inventory remains inherited source evidence. Names-index still needs its owning cross-plan correction from GroupMember1–7 to1–8 and complete policy-aware/configuration/test details. Historical scoping's optionalP4/field homes are superseded by D26/current§39. Exact future execution tags, observed sums/commits and R1–R4 remain mandatory; all three ledger values stay empty.
+
+### Final-current documentary reconciliation (D25 exact clarification now approved)
+
+- C4 and D complete documentary consistency are root-adopted (D receipt `daf4f9cc1c81d8cd5cea286bd83e6c61e6e471626833a1b314fdad85bf186e33`). Task36 source2b6 baseline and affected race prerequisite are separately root-accepted; affected receipt `74f918f1987c6e7f413fbaa35f59fc4e6bee83d2283d9da8733ec2b3c7453992` records764PASS/16exactSKIP/0FAIL,1123 nested PASS,one Bazel invocation,2004 source hashes unchanged. Old f272 full500 remains its own bounded observer-v3 scope; no new-source full500 or causal/nonregression/reliability claim is made.
+- Task45 current local receipt `4fc391b77e9a0fdb83ddc65bd2e50f6dbe797e7de88db152bd61ae96d1da4e0d` closes its corrected34 core381/HG923 selected unit/ONErace and3 actualCH-test scope on26.3.37.3. It is not a new E1 Keeper/hardlink/MinIO/confinement run or a fresh381→469 replay. Task70 fixed-tool receipt `536479ab02273dd5348acc1eae09fa58aa3b4203f3c2e1a8ccb2b8990dcea05d` accepts638 source with3990 identities/19 exact skips and22 uncached targets per pass, preserving original70HOLD/69 risk and historical31-mutant scope. No actual71 grant follows. Future live/tag/mechanics conditions stay execution requirements, not documentary-consistency blockers.
+- Static owning-text audit compared all Go fences of59/60/61/63 against frozen owning tasks (26/71/69/76 exact) and checked complete named accepted469 source functions against their actual task bodies, with source manifest/hash binding and literal-preserving lexical comparison. Explicit checkpoint body/entry refusal, nil-verifier compatibility, mutable transport tests, both-root marker protection and independent purge/hardlink regressions are already in the selected text. No missing source-only repair was found; no implementation/TDD rewrite was required. V2 selected whole Task62 `38c6d0d7845c9007a74ebad5a780b9b89228f688bc02e8c08a189dff65bd1f3a`; V3 selects current whole `82e1d06ae1ec545032b8fe4607868bde4dad37b6951b5f86c564030067cf2e48`, whose only newer line reloads Task59 actual JSON/Codex shared branch and reuses/reconciles the worktree; every fence and memo behavior remains unchanged. Canonical REST and checked-capture/signing/head/atomic release procedures remain exact. This static correspondence is not source replay or fresh runtime evidence.
+- D25 is now explicitly user-approved (reply “可以，没问题” to the exact isolated clarification). Only the nine-token append after the original thirteen, reviewed count changes and count/range-only comments/diagnostics are allowed; all other freeze rules remain. The prior D25 policy hold is closed, with no other outstanding documentary blocker in root-reviewed V5 scope. Root has adopted this documentary consistency scope as recorded below; this publication preparation supplies no canonical mutation, additional formal-count increment, populated ledger, actual release or execution grant.
+
+### Historical root bounded source-review acceptance (2026-10-18; documentary V4 proof cut, D25 then unanswered)
+
+Root accepted exactly the seven506cd-selected local source/adversarial scopes through `agents/controller-candidate-inspection/task57-63-bounded-source-review-root-final.json`, SHA256 `15c23b83a1f3fbb876316403ce440b1b7785264f048f8fb11113ff2602406040`. Individual root receipts under the same directory bind each selected whole task, historical owning task/report, worker final source manifest, fresh fact inventory, root full review and qualified composition proof:
+
+| Task | Fresh declared source files | SHA256 of `taskNN-bounded-source-review-root-final.json` |
+|---|---:|---|
+| 57 | 57 | `325513d01c74be8f81b07034cf3f1ffb600ec0360da3bcabf5b246117aa61f0c` |
+| 58 | 935 | `2b94de93e64bc24b7b717327cb4529867fdff6eaf59f91cf6616520e56430680` |
+| 59 | 388 | `09995e940ee4564aaf27d386cd2fc1adf940b3e4b9d153c6fd1e5895e8046e4f` |
+| 60 | 393 | `217710c3b557d45bdd2177b68a11310e3ffdcaadbedcb043db3c0ef13b01b9d9` |
+| 61 | 404 | `7a23754872be5d5631c2d8e2344f77213d3656a215d7c4a6eff3fea77318c0e5` |
+| 62 | 447 | `cd7426f0a306147c9aa968c4184ce8bef078a5d9c020e28b77531466a686e9da` |
+| 63 | 469 | `f02aa4fa019028d271bad8ee6ad43e44beb4dd39ca0747ecc394314d32d38780` |
+
+- Fresh custody read3093 declared safe files exactly once across proto57/HG935/core388/393/404/447/469, with zero hash/custody mismatch. Facts were saved before comparison; hash-only manifests do not prove historical modes or absence of unlisted files. Root bound those facts and the selected same-code alignment; this documentary successor performs no new source read or test.
+- Historical Task50 core381 and Task59 input381 are equal to each other but not current accepted Task45 core381(21 missing/38 different common paths). Their original owning-stage tests remain old-base evidence. Separate composition379→400→407→412→423→425, then447→469, supplies current-C4 integration. Approved425 preserves every current45 serving/install/verifier/memo path plus whole role/serving bytes; the three exact config diffs show comment-only drift and legitimate63 consensus additions with Serve preserved. Later62/63-owned changes keep their recorded source/replay/test proof. HG923→42/43/44→935→58 and proto57 handoffs are explicitly attributed.
+- All recorded tests remain historical:57's expected additive downstream mirror REDs and59's eligible-ring wire RED are retained,60 supplies the owning closure, and all integration skips/cached targets/mechanics limitations remain explicit. No fresh product matrix or full raw-log recertification is invented. Verification-local go.mod aliases differ; current45 checksum union versus old425/469 sums remains qualified, not declared identical or a published pin. CH/Keeper/hardlink/MinIO/confinement, observed release pins and live/R4/ledger/user stops retain their exact execution scope.
+- Root full review `agents/review-57-63-root-final-bounded-source/result.md` SHA256 `b39b76765a612731a53f23d8157f642e0ce67a50e05477d1d7ad0329cd5bacbb` and seal `8c8dd939dc8c4c72162ab1d20fcb4ce8caeca14e22259445b6c15f436247cc2d` accept these bounded sources; they do not grant formal/canonical adoption. At that historical proof cut formal35/68 and consistency5/10 remained and D25 was unanswered; this successor closes only D25, without predicting adoption counts. Twenty additional bounded reviews57–71/83–87 make55 mixed evidence items; that is not55 formal reviews. All seven task texts, Appendix A, D25 content, code fences and empty Appendix C are unchanged from the selected V3. At that documentary proof cut root/independent review of the successor was still required; the later adoption is recorded below without a publication/readiness decision or downstream grant.
+
+### D25 approved documentary closure (V6)
+
+The user approved the exact nine-token append-only clarification; no new field/tag/type/order or product behavior was added. Root-reviewed V5 part/source/evidence scope is retained, with D25 policy wording and diagnostic/record labels synchronized only. Historical V5 N1 records indexed CLI exits/output rather than exact argv and remains qualified; V6 records its own official document CLI argv separately. All original six release-guard replacements, Go/proto bodies, old fixtures, protected thirteen-token prefix and empty Appendix C remain exact. Documentary consistency is complete in this scope and root adoption is recorded below; this publication preparation adds no formal increment or runtime/source/release/live authority.
+
+### Root documentary adoption and publication scope
+
+Root adopted E1 Tasks57–63 and plan consistency under `e1-v6-root-review-consistency-adoption.json` SHA256 `f52c1c743504808621d097d0f3ca50a87d6668895ab7d5ea1b91b64466182d55`, then E2 Tasks64–70 and plan consistency under `e2-v4-root-review-consistency-adoption.json` SHA256 `3927f0a61f796ceaf444b884e269d426a82b42e25104a1e24648bd43c4314873`. Publication remains pending. These receipts preserve every bounded source/proof scope and historical failure/CLI qualification; they create no new product execution, release/live approval, ledger value, Task72 source approval or Task73 grant. This publication-only prose preparation changes no task or code fence and adds no formal increment.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+| Name | Value | Recorded by |
+|---|---|---|
+| `PROTO_TAG_P5` |  | Task 57 |
+| `HG_TAG_P5` |  | Task 58 |
+| `CORE_TAG_P5` |  | Task 63 |
+
+### Run records
+
+- arbiter-proto release (Task 57):
+- housegate release (Task 58):
+- arbiter-core release (Task 63):
