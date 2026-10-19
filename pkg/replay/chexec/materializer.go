@@ -9,15 +9,21 @@
 //
 // MVP scope: payload-local INSERTs over the scalar whitelist. It materializes a
 // fresh scratch table per statement ("materialize only the new block in an empty
-// scratch table"), reads the rows back, and drops it. The heavy zero-copy
-// pre-state mechanics (FREEZE/ATTACH, mutation scratch) of Appendix C.5 remain
-// out of scope.
+// scratch table"), reads the rows back, and drops it. NewMaterializer keeps its
+// scratch tables in the connection's default database; NewMaterializerIn keeps
+// them in a named database under a prefix (spec 2026-10-14 §8.5: a member's
+// replay scratch lives in hg_rstage under its node-id prefix, which its startup
+// sweep drops). NewMaterializerInWithStoragePolicy additionally pins that
+// scratch to the member storage policy (spec §8.1), while both older
+// constructors retain their default-policy SQL. The heavy pre-state mechanics (FREEZE/ATTACH,
+// mutation scratch) of Appendix C.5 remain out of scope.
 package chexec
 
 import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,15 +42,80 @@ const rowIDColumn = "_hg_row_id"
 type Materializer struct {
 	networkID string
 	conn      clickhouse.Conn
-	counter   atomic.Uint64
+	// database and prefix place the replay scratch tables: both empty for
+	// NewMaterializer (unqualified _hg_replay_scratch_<n> in the connection's
+	// default database), both set by NewMaterializerIn
+	// (`<database>`.`<prefix>replay_<n>`).
+	database      string
+	prefix        string
+	storagePolicy string // empty preserves both legacy constructors verbatim
+	counter       atomic.Uint64
 }
 
 var _ payloadexec.Materializer = (*Materializer)(nil)
 
+var (
+	materializerDatabasePattern      = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+	materializerPrefixPattern        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,96}$`)
+	materializerStoragePolicyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+)
+
 // NewMaterializer builds a ClickHouse-backed materializer. networkID must match
-// the executor it is wired into (it derives the same _hg_row_id).
+// the executor it is wired into (it derives the same _hg_row_id). Its scratch
+// tables are the unqualified _hg_replay_scratch_<n> of the connection's
+// default database.
 func NewMaterializer(networkID string, conn clickhouse.Conn) *Materializer {
 	return &Materializer{networkID: networkID, conn: conn}
+}
+
+// NewMaterializerIn is NewMaterializer whose scratch tables are
+// `<database>`.`<prefix>replay_<n>` (n = 1, 2, … per materializer) in every
+// CREATE, INSERT, read-back and drop-on-exit, so a stage-3 member keeps its
+// replay scratch in hg_rstage under its own prefix (spec 2026-10-14 §8.5, last
+// paragraph). The database must exist; nothing here creates it. Both names
+// are interpolated into SQL, so the database must match [a-z_][a-z0-9_]* and
+// the prefix [A-Za-z0-9_-]{1,96}.
+func NewMaterializerIn(networkID string, conn clickhouse.Conn, database, prefix string) (*Materializer, error) {
+	if !materializerDatabasePattern.MatchString(database) {
+		return nil, fmt.Errorf("chexec: materializer database %q must match [a-z_][a-z0-9_]*", database)
+	}
+	if !materializerPrefixPattern.MatchString(prefix) {
+		return nil, fmt.Errorf("chexec: materializer prefix %q must match [A-Za-z0-9_-]{1,96}", prefix)
+	}
+	return &Materializer{networkID: networkID, conn: conn, database: database, prefix: prefix}, nil
+}
+
+// NewMaterializerInWithStoragePolicy keeps replay scratch on the named policy.
+// NewMaterializer and NewMaterializerIn retain their exact default-policy SQL.
+// Policy existence is checked by ClickHouse at CREATE; a missing policy fails
+// closed, without retrying on the default disk. The caller provisions the policy.
+func NewMaterializerInWithStoragePolicy(networkID string, conn clickhouse.Conn, database, prefix, storagePolicy string) (*Materializer, error) {
+	m, err := NewMaterializerIn(networkID, conn, database, prefix)
+	if err != nil {
+		return nil, err
+	}
+	if !materializerStoragePolicyPattern.MatchString(storagePolicy) {
+		return nil, fmt.Errorf("chexec: materializer storage policy %q must match [A-Za-z_][A-Za-z0-9_]{0,127}", storagePolicy)
+	}
+	m.storagePolicy = storagePolicy
+	return m, nil
+}
+
+// scratchTable is one replay scratch table: name for error texts, ref for SQL.
+type scratchTable struct {
+	name string
+	ref  string
+}
+
+// nextScratch names this materializer's next scratch table.
+func (m *Materializer) nextScratch() scratchTable {
+	n := m.counter.Add(1)
+	if m.database == "" {
+		name := fmt.Sprintf("_hg_replay_scratch_%d", n)
+		return scratchTable{name: name, ref: quoteIdent(name)}
+	}
+	table := fmt.Sprintf("%sreplay_%d", m.prefix, n)
+	return scratchTable{name: m.database + "." + table, ref: quoteIdent(m.database) + "." + quoteIdent(table)}
 }
 
 // Materialize executes one payload-local INSERT on a fresh scratch table and
@@ -70,11 +141,11 @@ func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.Table
 		wire[string(r.RowID)] = r
 	}
 
-	scratch := fmt.Sprintf("_hg_replay_scratch_%d", m.counter.Add(1))
+	scratch := m.nextScratch()
 	// Register cleanup before CREATE: a CREATE that commits server-side but
 	// returns a client error (timeout/reset) would otherwise leak the table.
 	// DROP ... IF EXISTS is a no-op if the CREATE never landed.
-	defer func() { _ = m.conn.Exec(context.Background(), "DROP TABLE IF EXISTS "+quoteIdent(scratch)) }()
+	defer func() { _ = m.conn.Exec(context.Background(), "DROP TABLE IF EXISTS "+scratch.ref) }()
 	if err := m.createScratch(ctx, scratch, schema); err != nil {
 		return nil, err
 	}
@@ -102,7 +173,7 @@ func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.Pre
 	}
 }
 
-func (m *Materializer) createScratch(ctx context.Context, table string, schema payloadexec.TableSchema) error {
+func (m *Materializer) createScratch(ctx context.Context, table scratchTable, schema payloadexec.TableSchema) error {
 	// Validate every column type against the supported set before interpolating
 	// it into DDL: defense-in-depth against a malformed anchored-DDL type, and a
 	// clear error instead of a confusing read-back scan failure later.
@@ -112,19 +183,22 @@ func (m *Materializer) createScratch(ctx context.Context, table string, schema p
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "CREATE TABLE %s (%s FixedString(32)", quoteIdent(table), rowIDColumn)
+	fmt.Fprintf(&b, "CREATE TABLE %s (%s FixedString(32)", table.ref, rowIDColumn)
 	for _, c := range schema.Columns {
 		fmt.Fprintf(&b, ", %s %s", quoteIdent(c.Name), c.Type)
 	}
 	b.WriteString(") ENGINE = MergeTree ORDER BY tuple()")
+	if m.storagePolicy != "" {
+		fmt.Fprintf(&b, " SETTINGS storage_policy = '%s'", m.storagePolicy)
+	}
 	if err := m.conn.Exec(ctx, b.String()); err != nil {
-		return fmt.Errorf("create scratch table %s: %w", table, err)
+		return fmt.Errorf("create scratch table %s: %w", table.name, err)
 	}
 	return nil
 }
 
-func (m *Materializer) insertRows(ctx context.Context, table string, rows []payloadexec.Row) error {
-	batch, err := m.conn.PrepareBatch(ctx, "INSERT INTO "+quoteIdent(table))
+func (m *Materializer) insertRows(ctx context.Context, table scratchTable, rows []payloadexec.Row) error {
+	batch, err := m.conn.PrepareBatch(ctx, "INSERT INTO "+table.ref)
 	if err != nil {
 		return fmt.Errorf("prepare insert batch: %w", err)
 	}
@@ -142,7 +216,7 @@ func (m *Materializer) insertRows(ctx context.Context, table string, rows []payl
 	return nil
 }
 
-func (m *Materializer) readBack(ctx context.Context, table string, schema payloadexec.TableSchema, wire map[string]payloadexec.Row) ([]payloadexec.Row, error) {
+func (m *Materializer) readBack(ctx context.Context, table scratchTable, schema payloadexec.TableSchema, wire map[string]payloadexec.Row) ([]payloadexec.Row, error) {
 	var sel strings.Builder
 	sel.WriteString("SELECT ")
 	sel.WriteString(rowIDColumn)
@@ -150,7 +224,7 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 		sel.WriteString(", ")
 		sel.WriteString(quoteIdent(c.Name))
 	}
-	fmt.Fprintf(&sel, " FROM %s", quoteIdent(table))
+	fmt.Fprintf(&sel, " FROM %s", table.ref)
 
 	chRows, err := m.conn.Query(ctx, sel.String())
 	if err != nil {

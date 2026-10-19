@@ -562,42 +562,12 @@ func writeFramed(h *blake3.Hasher, s string) {
 	_, _ = h.WriteString(s)
 }
 
-// verifyLedger enforces §5.4: for every partition the sum of its part
-// accumulators must equal the recorded partition root.
+// verifyLedger enforces §5.4 on the previous snapshot of every replay: for
+// every partition the sum of its part accumulators must equal the recorded
+// partition root. It is VerifyLedger, which the stage-3 manifest reader and
+// install gate share (spec 2026-10-14 §8.4).
 func verifyLedger(m replay.SafeSnapshotManifest) error {
-	for _, t := range m.Tables {
-		sums := map[string]*lthash.Hash{}
-		for _, p := range t.ActiveParts {
-			h, err := lthashFromHex(p.PartRowLtHash)
-			if err != nil {
-				return fmt.Errorf("table %s part %s: %w", t.TableID, p.PartName, err)
-			}
-			if sums[p.PartitionID] == nil {
-				sums[p.PartitionID] = lthash.New()
-			}
-			sums[p.PartitionID].AddHash(h)
-		}
-		declared := make(map[string]struct{}, len(t.PartitionRoots))
-		for _, pc := range t.PartitionRoots {
-			declared[pc.PartitionID] = struct{}{}
-			got := sums[pc.PartitionID]
-			if got == nil {
-				got = lthash.New()
-			}
-			if lthashHex(got) != pc.Root {
-				return fmt.Errorf("table %s partition %s: parts sum != root", t.TableID, pc.PartitionID)
-			}
-		}
-		// The invariant is bijective: a partition with active parts must also
-		// declare a commitment, else an orphan part contributes data summed into
-		// no partition root (§5.4 / "Registration arithmetic").
-		for partitionID := range sums {
-			if _, ok := declared[partitionID]; !ok {
-				return fmt.Errorf("table %s partition %s: active parts present with no partition root", t.TableID, partitionID)
-			}
-		}
-	}
-	return nil
+	return VerifyLedger(m)
 }
 
 func (e *Executor) sortedTableIDs() []string {
