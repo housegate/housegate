@@ -6,7 +6,7 @@
 
 **Goal:** Give the arbiter FSM the stage-3 group layer, all of it inert until its switch. Apply places a `DatabaseGroup` per (owner, database) by integer weighted rendezvous hashing when a database gains its first physical incarnation, and the `placement` switch-on backfills every existing database (genesis-origin ones included) and seals the open block at a recorded cutover. Groups change only through the authority-signed `RebalanceGroup` (Raft tag 38). That command checks a generation, seals first with the C10 discipline and records Leaving members with their frozen E. Blocks seal on (owner, `GroupKey`), headers sealed after the cutover carry `group_key`, transition blocks carry one key's changes, and the leader's grouping window keys on the same pair. Three more commands complete the layer. Members declare readiness with an ed25519-signed `MemberReady` (tag 40) and then enter eligible rings. The leader replaces dead, ineligible or timed-out verifiers of an unlatched block with an authority-signed `ReselectVerifiers` (tag 39), timed by the committed L2 registry cursor so it fires on a quiet track too. Replicate members sign `MemberCheckpoint`s (tag 41) with their `replica_signer`, under a durable `checkpoint_seq` per (member, owner), which drive per-(member, group) classes with bounded lag accounting and the authority-signed `MarkMemberLagging` (tag 42). Every rule replays on restore and every signature is re-verified under its own epoch. With every switch off, each Apply, snapshot and chain hash is byte for byte what Plan S3-E2's branch produces.
 
-**Architecture:** Every task is arbiter code on the shared P5 branch `urwt/claude/multi-source-s3e`, on top of Plan S3-E2's Tasks 64–70; no task cuts a release. Task 71 adds the group records:
+**Architecture:** Every task is arbiter code on the shared P5 branch `urwt/codex/multi-source-s3e`, on top of Plan S3-E2's Tasks 64–70; no task cuts a release. Task 71 adds the group records:
 - `fsm/stage3_groups.go`: `DatabaseGroup`, `GroupMember` (including the three readiness declarations; Task 73 populates them), `LeavingMember`, the durable `GroupGenerations`, and the E set `copyFloorSetLocked` that Plan S3-E4's floor reads.
 - `fsm/placement.go`: the exported pure placement function `PlaceGroup` and its frozen digest vectors.
 - Placement on `AddTable`, the backfill on the `placement` switch-on, group removal at the last purge, and `purge_members` accumulation.
@@ -79,7 +79,7 @@ Every name this plan consumes is listed with its source in contract §49. The um
   - The leader proposes none of tags 38–42 before its switch.
   - Every new state field is `omitempty`: before `placement` no group exists, no header carries `group_key` and no open block or `BlockVerification` carries a group seal, so each Apply, snapshot and chain hash is byte-identical to Plan S3-E2's branch.
   - Nothing here changes the v21 framing, writes v21 earlier, or changes a frozen constant.
-- **The `stage3_v1` release rule (K65):** this plan cuts no arbiter release, tag or image. Its commits stay on `urwt/claude/multi-source-s3e` until Plan S3-E4 Task 78 releases the branch as `ARBITER_TAG_P5`.
+- **The `stage3_v1` release rule (K65):** this plan cuts no arbiter release, tag or image. Its commits stay on `urwt/codex/multi-source-s3e` until Plan S3-E4 Task 78 releases the branch as `ARBITER_TAG_P5`.
 - **Determinism:**
   - Groups, keys, rings, re-selections and classes derive only from committed state and logged bytes.
   - The key reads committed group records and the `verifiers` listing, never node status. Eviction therefore never changes a chain hash or forces a seal (K73).
@@ -163,7 +163,7 @@ The spec and Plans S3-E1 and S3-E2 leave these details open. Each is resolved he
 | `PROTO_TAG_P5` | arbiter-proto release with every v21 number, built on Plan S3-D's unconditional `PROTO_TAG_P4` (D26): Raft tags 38–42, the five command messages, `ConsensusAdmin.RebalanceGroup` (method 16) and `MarkMemberLagging` (17), `L3BlockTrack.group_key`, the read `BlockVerification` fields from 14, the registry snapshot `groups` (with `GroupMember.host_indexer_id`, D27) and `member_checkpoint_seqs` (contract §39) | Plan S3-E1 Task 57, its Appendix C |
 | `HG_TAG_P5` | housegate release that classifies admission codes 12 and 13 (not read by this plan; pinned with the others) | Plan S3-E1 Task 58, its Appendix C |
 | `CORE_TAG_P5` | arbiter-core release with the canonical types, authority purposes, signers and verifiers, the wire commands for tags 38–42 and `stage3_v1` (contract §41–§42) | Plan S3-E1 Task 63, its Appendix C |
-| `ARBITER_TAG_P4` | the arbiter release the shared branch `urwt/claude/multi-source-s3e` starts from | Plan S3-D Task 51, its Appendix C |
+| `ARBITER_TAG_P4` | the arbiter release the shared branch `urwt/codex/multi-source-s3e` starts from | Plan S3-D Task 51, its Appendix C |
 
 This plan produces no ledger value. Task 71 Step 1 reads the four names above once, with `s3-ledger.py get` on each name's ledger copy (the plans-cf branch until the stage-3 plans PR merges, then main, D34; contract §49), and checks that the branch's `go.mod` pins the first three. Plan S3-E2 Task 64 made those pins; this plan never changes them. The branch's commits are released by Plan S3-E4 Task 78 as `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`. Appendix C of this plan holds only the sentence fixed in contract §49.
 
@@ -223,7 +223,7 @@ This plan produces no ledger value. Task 71 Step 1 reads the four names above on
 
 ## Task order and dependencies
 
-Plan S3-E2 complete on `urwt/claude/multi-source-s3e` (Tasks 64–70 committed, contract §44–§48) → 71 → 72 → 73 → 74 → 75 → Plan S3-E4 Tasks 76–78 on the same branch.
+Plan S3-E2 complete on `urwt/codex/multi-source-s3e` (Tasks 64–70 committed, contract §44–§48) → 71 → 72 → 73 → 74 → 75 → Plan S3-E4 Tasks 76–78 on the same branch.
 - **Task 71** needs:
   - S3-E2 Task 64: `Params.Stage3`, `Stage3State`, the switch rules and the per-group floor hook;
   - S3-E2 Task 66: `validateStage3State`;
@@ -250,11 +250,11 @@ Plan S3-E2 complete on `urwt/claude/multi-source-s3e` (Tasks 64–70 committed, 
 
 ## File Structure
 
-**Selected complete task texts:** Task71 `288ade1bef4abd29a654343f486d958b6004b5323c660d6e77812d2cb3d1a3a2`, Task72 `e8bb8428a0d2d252ae3b847c6e40dd833f8cb226bd3541f36199ed663e5fd78d`, Task73 `28d0a06f363332193b6b8e09096eb84b66da0b4dd1eda14b350432b34dbe9b47`, Task74 `325e0c4d0214c50998b28d0a981f32b104dc389353bc5cf2b6b693dc0cdabe67`, Task75 `60c6c8aa7185b8e017ee73b7b4964ace508eb7b6b653a0a212d141d0a228b42c`. These complete owning documents, not adapter-only manifests, are the selected task bodies. Tasks73/74 are format-only document successors: each joins its Step2 checkbox and heading onto one line; all fenced code/order/languages remain exact. Accepted source/profile evidence retains the original complete Task73 `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` and Task74 `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca` identities. V1 root adoption remains valid historical evidence; this V2 formatting delta awaits separate root approval and creates no formal increment. Their embedded PREP/WAIT statements and draft verification are historical text; current bounded acceptance is separately attributed in Appendix B. All five tasks have root-accepted bounded local source dispositions; Appendix B distinguishes them from historical task-internal PREP/WAIT cuts.
+**Selected complete task texts:** Task71 `288ade1bef4abd29a654343f486d958b6004b5323c660d6e77812d2cb3d1a3a2`, Task72 `f627cbd17afe1d3cefdded8abab9f265221822c5cc0c0c4b1ea5fa8594bd39c8`, Task73 `28d0a06f363332193b6b8e09096eb84b66da0b4dd1eda14b350432b34dbe9b47`, Task74 `d64c15b0f992ff164e10a315abe55df41bcb9ec8340854238330de4b71755e78`, Task75 `f2b8969ac4791d012855007e49fa42457aff436619fb1ad66aa620d569819d95`. These complete owning documents, not adapter-only manifests, are the selected task bodies. The historically approved format-only successor cut is assembled SHA256 `0a78590b4c2d1b657b7e92e0cdf278d135d1d66d90848944b41c572ab59df19f`: its Task73/74 Step2 checkbox/heading joins preserved all 381 fences. That historical guarantee and root documentary acceptance (`e3-v2-format-only-root-documentary-acceptance.json`) apply to that formatting delta, not to the current complete procedural successors. The current Task72/74/75 texts include this handoff candidate's procedural environment changes; their Go and product literals remain unchanged. Accepted source/profile evidence retains the original complete Task73 `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` and Task74 `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca` identities without retagging. The historical format successor was approved and published before this handoff candidate; independent review and root documentary acceptance of this handoff are recorded in Appendix B, with no formal increment. Their embedded PREP/WAIT statements and draft verification are historical text; current bounded acceptance is separately attributed in Appendix B. All five tasks have root-accepted bounded local source dispositions; Appendix B distinguishes them from historical task-internal PREP/WAIT cuts.
 
 Task line anchors retain their historical drafting coordinates. The actual predecessor/literal source reviews re-anchor them on the accepted local chain; the fresh ref metadata above is not a new line-anchor verification.
 
-**arbiter** (Tasks71–75; actual retained Task64 worktree JSON path and complete env.sh, branch `urwt/claude/multi-source-s3e`; the earlier literal home path is a historical template, not a current source path):
+**arbiter** (Tasks71–75; actual retained Task64 worktree JSON path and complete env.sh, branch `urwt/codex/multi-source-s3e`; the earlier literal home path is a historical template, not a current source path):
 - **New FSM files:** `fsm/stage3_groups.go` (71, 73, 75), `fsm/placement.go` (71), `fsm/rebalance_group.go` (71), `fsm/group_key.go` (72), `fsm/member_ready.go` (73), `fsm/reselect_verifiers.go` (74), `fsm/member_checkpoint.go`, `fsm/mark_member_lagging.go` (75).
 - **Edited FSM files:**
   - `fsm/stage3.go` (71, 72, 75); `fsm/state.go` (72: `OpenL3Block`, `L3BlockTrack`, `BlockVerification`; 74: `BlockVerification`, `ThreeWayVerdict`); `fsm/fsm.go` (dispatch arms 71, 73, 74, 75; the `sealReasons` field 72);
@@ -314,6 +314,9 @@ Task line anchors retain their historical drafting coordinates. The actual prede
 - **Placement preview:** `group preview` refuses while a listed host-bound entry is unregistered; a preview that models unregistered entries the way Apply does would need the leader's full node list, which no RPC serves (S3-E1 K64).
 - **`max_lag_publications` changes:** a lowered value trims each owner's `OwnerAdvances` at once, so lag never exceeds the new bound. A raised one only takes effect as new advances accrue. Plan S3-F's runbook should state that.
 - **The rest of P5 and P6:** the floor, strict mode, the Leaving release, the k raise, the narrowed drain gate, the integration harness and the release are Plan S3-E4. The switch-on of placement, re-selection and checkpoints is Plan S3-F. Mutation pre-state (§8.9), v22 and P8 have no task.
+
+**Formal worktree handoff correction (PR249 a10f5).** Current task selectors include procedural-only branch/env/expected-output corrections in Tasks72/74/75. Their Go/test/proto owning literals remain exact; prior root source receipts retain their original full-document hashes and bounded source scope rather than becoming new runtime evidence. Task64's retained env and observed formal task75-final-head govern E4 entry; no source-custody receipt is a signed Git HEAD.
+
 
 ---
 
@@ -9902,7 +9905,7 @@ git_read_72_4136="$(git rev-parse HEAD)" || exit 1
 echo task72-push-verified
 ```
 
-Expected: one line `   <old>..<new>  HEAD -> urwt/claude/multi-source-s3e`, `<old>` being Task 71's pushed commit. A rejected push means the remote branch moved: stop and ask; never force it.
+Expected: one line `   <old>..<new>  HEAD -> urwt/codex/multi-source-s3e`, `<old>` being Task 71's pushed commit. A rejected push means the remote branch moved: stop and ask; never force it.
 
 Static workflow note: success markers in Steps 1/25/26/27 are respectively `task72-entry-verified`, `task72-repository-checks-passed`, `task72-signed-commit-verified` and `task72-push-verified`. Historical drafting output examples are explanatory, not substitutes for these gates. Selected test commands parse exact go test JSON terminal results and refuse missing, skipped or extra terminal outcomes for the required names; a failed or empty test command cannot pass because a display filter succeeded. Formal runtime review must reconcile the illustrated Gazelle additions and exact source file list before committing.
 
@@ -14100,7 +14103,7 @@ with:
 		}
 ```
 
-Run `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -n 'func stage3FieldsPresent\|func validateStage3State' fsm/*.go` to find the two seams. Expected: one line in `fsm/snapshot.go` (`func stage3FieldsPresent(doc *snapshotDoc) bool {`) and one in `fsm/stage3_restore.go` (`func validateStage3State(st *State) error {`), where Task 66 put them. In `validateStage3State`, insert immediately before its final `return nil`, after the calls Tasks 70–73 added:
+Run `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -n 'func stage3FieldsPresent\|func validateStage3State' fsm/*.go` to find the two seams. Expected: one line in `fsm/snapshot.go` (`func stage3FieldsPresent(doc *snapshotDoc) bool {`) and one in `fsm/stage3_restore.go` (`func validateStage3State(st *State) error {`), where Task 66 put them. In `validateStage3State`, insert immediately before its final `return nil`, after the calls Tasks 70–73 added:
 
 ```go
 	if err := validateStage3Reselections(st); err != nil {
@@ -14262,7 +14265,7 @@ Expected: `ok  	github.com/sentioxyz/arbiter/fsm` (every earlier task's tests in
 Delete the two pin-fallout entries this task owns:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" || exit 1
 F="$(grep -l 'stage3PendingProtoFields = map' server/*_test.go)"; echo "$F"
 sed -i '' -E '/"BlockVerification\.(reselections|reselections_at_latch)":/d' "$F" && gofmt -w "$F"
 grep -rnE 'BlockVerification\.(reselections|reselections_at_latch)' server/
@@ -19984,7 +19987,7 @@ git_read_75_4676="$(git rev-parse HEAD)" || exit 1
 echo task75-push-verified
 ```
 
-Expected: `HEAD -> urwt/claude/multi-source-s3e` (a fast-forward of the branch Plan S3-E2 Task 70 pushed), then the same commit hash twice. A rejected push means the branch moved on the remote: stop and ask the user; never force-push.
+Expected: `HEAD -> urwt/codex/multi-source-s3e` (a fast-forward of the branch Plan S3-E2 Task 70 pushed), then the same commit hash twice. A rejected push means the branch moved on the remote: stop and ask the user; never force-push.
 
 Static workflow note: success requires the explicit task75 entry/pending-entry/full-checks/signed-commit/push verified markers. Original expected terminal examples and insertion counts are historical drafting notes, never acceptance substitutes. Step 13 requires exactly nineteen PASS plus four restore FAIL terminal results; Step 16 requires all twenty-three PASS. The actual observed task75-final-head and exact final subject become the next task’s predecessor obligation; a Markdown preparation hash is never source readiness.
 
@@ -20068,7 +20071,7 @@ The earlier appendices stay binding: Plan S3-A's §0–§6, Plan S3-B's §7–§
 - `groupLocked` and `currentGroupSealLocked` (§50, §51), `GroupSeal` (§51).
 
 **Branch, worktree and commands.**
-- One arbiter worktree for Plans S3-E2–S3-E4: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, created by Plan S3-E2 Task 64 with `bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter claude multi-source-s3e` (its JSON `path` is `$W`; agents prefix each Bash call with `W=<path>;`). Task 71 never creates it. If `$W` is absent, or `git -C "$W" log --oneline --grep='(S3-E2 Task 70)'` prints nothing, Task 71 stops: Plan S3-E2 is not done.
+- One arbiter worktree for Plans S3-E2–S3-E4: Task64 creates `urwt/codex/multi-source-s3e` with `bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/arbiter codex multi-source-s3e urwt/codex/multi-source-s3e origin/main`. It exclusively retains the returned JSON in `$HOME/.cache/s3e2-task64/worktree.json`; its complete `$HOME/.cache/s3e2-task64/env.sh` recovers `W` from that JSON, preserves the returned absolute spelling, verifies the branch/common repository and poetry/signing configuration, and loads exactly the retained `ledger.env`. Source that existing env in every Bash call; never recreate the worktree, guess its path or use a Claude checkout. Task71 requires its existing exclusive observed `$HOME/.cache/s3e2-task70/final-head.txt` predecessor, actual clean signed poetry/G HEAD and exact subject, not a history grep. Task75 later exclusively records the observed formal `"$T64/task75-final-head"`; Task76 must compare it with actual HEAD before any continuation. These are formal Git receipts, never the controller's HEAD-null SOURCE_CUSTODY input.
 - Pin check (Task 71, Step 1, read only; the housegate fetch only reads):
   1. `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`.
   2. `python3 -I $HOME/.cache/s3-ledger/s3-ledger.py get /Users/uranuswch/Dev/projects/sentio-network/housegate PROTO_TAG_P5 HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P4` (the S3-C1 §19 ledger tool). It reads each name on its plan's ledger copy: the plans-cf branch until the stage-3 plans PR merges, then `origin/main` (D34).
@@ -20077,6 +20080,7 @@ The earlier appendices stay binding: Plan S3-A's §0–§6, Plan S3-B's §7–§
 
 ```bash
 set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 cd "$W" || exit 1
 format_paths="$(mktemp "${TMPDIR:-/tmp}/s3e3-format.XXXXXX")" || exit 1
 git ls-files -z -- '*.go' > "$format_paths" || exit 1
@@ -20100,7 +20104,7 @@ bazel test //... --test_output=errors || exit 1
   - Task 75: `fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)`.
 
   Each message ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Code comments in English. Markdown never hard-wrapped.
-- Push: `git -C "$W" push origin HEAD:urwt/claude/multi-source-s3e`, only on explicit user confirmation in chat, never forced; a rejected push means the branch moved (stop and ask). No PR, merge, tag, release workflow or image belongs to this plan; Plan S3-E4 Task 78 opens the branch's PR and releases `ARBITER_TAG_P5`.
+- Push: only after explicit user confirmation, Task75 sources the retained Task64 environment, reads its already observed `"$T64/task75-final-head"`, checks actual clean signed HEAD equals it, and pushes that exact checked SHA to `urwt/codex/multi-source-s3e` as written in its final step. Never force a rejected E3 push. No PR, merge, tag, release workflow or image belongs to this plan; E4 Task78 continues the same returned worktree/branch and owns the later PR/release. No receipt value or ledger value is predicted here.
 - TDD: every step is failing test → run (fail) → minimal implementation → run (pass), in the existing `fsm`, `server`, `orchestrator`, `cmd/arbiter-admin`, `metrics` and `config` test styles. Apply-path FSM tests build state through Apply with the existing `fsm` test helpers, never by assigning fields of a live FSM. Restore tests build a `State` directly and corrupt one field, as the existing restore tests do. Determinism tests follow `fsm/determinism_tracks_test.go`.
 
 **Ledger.** This plan records no ledger name: no task makes a release, PR or live record. Appendix C holds the sentence "Plan S3-E3 records no ledger values; its commits are released by Plan S3-E4 Task 78 as `ARBITER_TAG_P5`." The names it consumes are read once, by Task 71 Step 1 above.
@@ -21087,6 +21091,18 @@ The final Task71–75 PREP procedures separate all56 audited Git comparison read
 Root's post-adoption document diff check found a trailing space on the standalone `- [ ] ` lines before Step2 in Tasks73/74 (prior assembled lines10020 and12317). Joined only those two checkbox/heading pairs. The owned old-whole→new-whole `git diff --no-index --check` now completes without whitespace diagnostics; complete forward/inverse and official raw-A+B+C roundtrip preserve all381 fenced literals, their order and languages. This is a documentary formatting check, not a new product/source/runtime verification.
 
 Original source/profile acceptance remains bound to Task73 `5c196f60073d0682077d0eebe3747565c04ea303f10c3d21d5c274d7b2ed988f` and Task74 `62e7dd4cc6c712d9357b55d7e07ab52c8a4bd3691dac0847f4c6926a1a9779ca`; current formatted complete documents are `28d0a06f363332193b6b8e09096eb84b66da0b4dd1eda14b350432b34dbe9b47` and `325e0c4d0214c50998b28d0a981f32b104dc389353bc5cf2b6b693dc0cdabe67`. Other three tasks, Appendix A/C and all code bytes remain unchanged. V1 root adoption is preserved, V2 root approval is pending, and this delta adds no formal credit or execution authority. No old source/runtime result, HOLD or limitation is rewritten.
+
+
+### PR249 a10f5 formal P5 handoff correction (procedural only)
+
+Task64 remains the exact producer of retained worktree.json/env.sh/ledger.env and the Codex branch. E3 §49/front and Tasks72/74/75 remove stale Claude branch/path examples; E4 continuation, replay helpers, PR body and release paths consume that existing env. Task76 reads Task75's existing observed final-head; Task76/77 exclusively record the same plain-SHA receipt convention for their signed chains. All Go/test/proto fences remain exact. Historical root source/document hashes retain their original cuts; these procedure-only document successors create no source/runtime/release/ledger/grant or formal increment. Actual76 profile/source custody remains separately owned and unchanged.
+
+
+### PR249 handoff correction: root documentary acceptance (2026-10-19)
+
+Reconciled the shared arbiter continuation with Task64's retained actual URWT JSON/environment and Codex branch, Task75's observed signed final head, and the future Task76/77 plain-SHA signed-chain handoffs. The original V1 audit remains blocked by its failed-status-read finding. The selected V2 closes that finding and the same push gate's ledger/lease read failures; a nonempty lease must match the existing producer's SHA shape. A separate metadata companion corrects two pre-freeze input modes without changing content. Independent V2 delta review and root documentary acceptance are complete; the current front distinguishes this procedural successor from the historically approved format-only cut.
+
+Complete forward/inverse document bindings, preserved product fences, changed-block Bash syntax and bounded inert failure fixtures were verified. Earlier product/source/runtime results retain their original identities and limits; no unchanged product campaign was repeated. This repair does not execute formal Git continuation, signing, push, PR/merge/release, ledger or live workflows and adds no source/runtime/grant or formal completion credit. Task76's frozen V4 product/TDD body remains separately selected for its future actual local review; only its one stale Expected branch word needs documentary composition, and canonical older product bodies must not replace it.
 ## Appendix C: execution record
 
 Plan S3-E3 records no ledger values; its commits are released by Plan S3-E4 Task 78 as `ARBITER_TAG_P5`.

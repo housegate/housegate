@@ -9,7 +9,7 @@
 **Architecture:**
 - Task 76 (arbiter): new `fsm/floor.go` with `floorLocked(pp)`, the one copy-floor predicate. `applyScheduleUnsafeCleanup` (Apply) and the WorkSet's `PublishedUncleaned` both call it, so the leader never proposes a cleanup Apply refuses. Strict mode turns the pressure bypass into admission code 13. The raise-k precondition sits in the Apply-only half of `applyUpdateConsensusParams`. The Leaving release is evaluated after every command that can satisfy it and is recorded once. Replicated gauges come through `MetricsSnapshot`; the leader-local `under_replicated` counter and held-cleanup age come through a new orchestrator `FloorMetrics`. Everything is inert until the `checkpoints` switch.
 - Task 77 (arbiter): new `fsm/drain_narrowed.go` with `TouchedTracks`, the narrowed gate and the floor-only exclusion. `DrainViewFor(draft)` answers exactly what Apply's drain gate will answer for that draft, while S3-A's `DrainView()` keeps the stage-2 answer. A consensus hold keeps its normalized draft and judges readiness on it. `arbiter-admin consensus update` picks issuance or drain when `--hold` is not given (K79).
-- Task 78 (arbiter): the frozen `fsm/testdata/pre_stage3_golden.json` and `TestPreActivationHistoryIsByteIdenticalAcrossStage3`; fake-cluster activation tests (`integration/stage3_p5_test.go`); the chpipeline stage-3 harness (three ClickHouse 26.3 servers, one Keeper, members in consensus mode, the pool) with the §10.4 switch order and the §17 integration list (K80); a new CI job; offline replay of copies of the devnet2 voter logs; full verification; one PR of branch `urwt/claude/multi-source-s3e`; release `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`. After the cut it rebuilds the one P5 rehearsal directory `$R5` from `ARBITER_TAG_P5`, including the `p5rehearsal` binary, so it holds every binary the P5 runbook runs (decision D37).
+- Task 78 (arbiter): the frozen `fsm/testdata/pre_stage3_golden.json` and `TestPreActivationHistoryIsByteIdenticalAcrossStage3`; fake-cluster activation tests (`integration/stage3_p5_test.go`); the chpipeline stage-3 harness (three ClickHouse 26.3 servers, one Keeper, members in consensus mode, the pool) with the §10.4 switch order and the §17 integration list (K80); a new CI job; offline replay of copies of the devnet2 voter logs; full verification; one PR of branch `urwt/codex/multi-source-s3e`; release `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`. After the cut it rebuilds the one P5 rehearsal directory `$R5` from `ARBITER_TAG_P5`, including the `p5rehearsal` binary, so it holds every binary the P5 runbook runs (decision D37).
 - Task 79 (sentio-node): pins `HG_TAG_P5`, `CORE_TAG_P5` and `PROTO_TAG_P5`, so every SNode advertises `stage3_v1` and the embedded ingress answers codes 12 and 13 retryably. It adds `storage-integrity member-consent-statement`, the inert `storage_integrity.member.consensus` keys (files only, never inline keys), the reconciler role `si-member --role reconciler`, the member consensus metrics and the keeper-findings export, and `replica_hosts` from the registry's `DatabaseGroup` once placed, read from the served `host_indexer_id` of each current member whether or not it has sent `MemberReady` (decision D27; contract §56). It keeps this widened scope so that Plan S3-F needs no code (decision D30), and runs as seven step groups, each test-first with its own commit (File Structure). Release `SN_COMMIT_P5` / `SN_DIGEST_P5`.
 - Task 80 (production): `charts/storage-integrity` gains the stage-3 consensus rule group behind `monitoring.stage3Consensus.enabled` (off) and the `arbiter.raft.snapshotBody` writer value (unset). It adds the rehearsal Pod example `docs/examples/storage-integrity-p5-rehearsal-pod.yaml`, the P5 image constants and their render tests. The voter sizing stays pinned; its re-check is a runbook precondition.
 - Task 81 (production): the P5 runbook `docs/storage-integrity-devnet2-stage3-p5-v21.md` (replay, rehearsal, verifiers, hosts and si-members, voters, activation, v21 check, rollback, operating rules) and the P5 PR (`P5_PR`), inert on merge. The runbook only reads `$R5` and keeps its live evidence under its own `$si_backup` (D37).
@@ -35,7 +35,7 @@
 **Prerequisites:** Plans S3-A and S3-B and the new plans S3-C1, S3-C2, S3-C3, S3-C4, S3-D, S3-E1, S3-E2 and S3-E3. Their Global Constraints and clarifications apply, and so do their contracts: §0–§6 and §7–§15 (S3-A, S3-B), §16–§19 (S3-C1, including the ledger tool of §19), §20–§24 (S3-C2, member config and process), §25–§28 (S3-C3, `siMember`, `MEMBER_IDS`), §29–§32 (S3-C4, Replica status and `replica_hosts`), §33–§37 (S3-D, `ARBITER_TAG_P4`, `SN_COMMIT_P4`, `DEVNET2_FAILURE_DOMAINS`, `P4_END`), §38–§43 (S3-E1, every proto number, canonical type, admission code, wire tag and the member consensus mode, `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5`), §44–§48 (S3-E2, `Params.Stage3`, the stage3 gate, the `arbiter-admin` stage-3 flags, the v21 container and interned body, the shared arbiter branch) and §49–§52 (S3-E3, groups, Leaving records, seal reason, checkpoints, classes). Tasks 76–78 continue the arbiter branch of Tasks 64–75; this plan's Appendix A continues the numbering (§53–§57), and every consumed name is listed at its head with its source section.
 
 **Base revisions.** Line anchors refer to the revisions read at `origin/main` on 2026-10-15:
-- arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169`. These are the spec's and Plan S3-A's bases. S3-A to S3-E3 move many of these lines, so the real base of Tasks 76–78 is branch `urwt/claude/multi-source-s3e` after Task 75, on top of `ARBITER_TAG_P4`.
+- arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169`. These are the spec's and Plan S3-A's bases. S3-A to S3-E3 move many of these lines, so the real base of Tasks 76–78 is branch `urwt/codex/multi-source-s3e` after Task 75, on top of `ARBITER_TAG_P4`.
 - production `75514e3de`. Its SI paths are byte-identical to Plan S3-B's base `9d3d0326b`: `git diff --stat 9d3d0326b 75514e3de -- charts/storage-integrity charts/sentio-node k8s-sea/sentio-network-devnet2 k8s-sea/clickhouse terraform docs scripts/storage-integrity` prints nothing.
 
 devnet2 expected when Task 82 starts, as the exit records of S3-B (`E_END`), S3-C1 (`P1_END`), S3-C3 (`P2_END`), S3-C4 (`P3_END`) and S3-D (`P4_END`) leave it:
@@ -52,7 +52,7 @@ devnet2 expected when Task 82 starts, as the exit records of S3-B (`E_END`), S3-
 
 - **Earlier plans apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies, and through them those of S1-A, S1-B, S2-A and S2-B. So do the cross-plan conventions and the Global Constraints of S3-C1 … S3-E3 (strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions). So do the cross-plan decisions D25–D40, which continue S3-B's D1–D24. This plan cites by number those that touch it: D25–D27, D30, D31, D33, D34, D36, D37, D39 and D40.
 - **Activation model.** Tasks 76–79 add behaviour only behind committed state: the `checkpoints` switch (Task 76's floor, metrics and admission refusal), `strict_copies` and a raised `min_safe_copies` (Task 76), `narrowed_drain` (Task 77) and the default-off `storage_integrity.member.consensus` keys (Task 79). With `stage3` unset or every switch off, every Apply answer, WorkSet, drain refusal and hold readiness is byte-identical to the P4 base, and the P5 binary writes v20 until `stage3` commits (S3-E2 contract §46). This plan adds no proto number, Raft tag, field or `ConsensusAdmin` method; every number it uses is S3-E1 contract §39's. Those numbers sit on the `PROTO_TAG_P4` base that S3-D produces unconditionally, where `RebalanceGroup` is `ConsensusAdmin` method 16 and `MarkMemberLagging` 17, of 18 (decision D26).
-- **Ordering.** Tasks 76 → 77 → 78 continue `urwt/claude/multi-source-s3e` after Task 75, and no arbiter release is cut from `main` between Task 64's pin and Task 78's cut (K65). Task 79 may start once `CORE_TAG_P5` and `HG_TAG_P5` exist and `SN_COMMIT_P4` is recorded (its branch starts from sentio-node `origin/main` at or after `SN_COMMIT_P4`, keeping the sentio-node release order). Task 80's branch starts from `origin/main` after `P4_PR` merged. Task 82 starts only once `P4_END` is on the ledger copy and `P5_PR` has merged. On devnet2 the order is replay and rehearsal first, then verifiers, hosts (b, c, a) with their si-members, voters (followers first, leader last), re-registration and the activation (K81).
+- **Ordering.** Tasks 76 → 77 → 78 continue `urwt/codex/multi-source-s3e` after Task 75, and no arbiter release is cut from `main` between Task 64's pin and Task 78's cut (K65). Task 79 may start once `CORE_TAG_P5` and `HG_TAG_P5` exist and `SN_COMMIT_P4` is recorded (its branch starts from sentio-node `origin/main` at or after `SN_COMMIT_P4`, keeping the sentio-node release order). Task 80's branch starts from `origin/main` after `P4_PR` merged. Task 82 starts only once `P4_END` is on the ledger copy and `P5_PR` has merged. On devnet2 the order is replay and rehearsal first, then verifiers, hosts (b, c, a) with their si-members, voters (followers first, leader last), re-registration and the activation (K81).
 - **One irreversible step.** The activation update of runbook §7.2 is the only consensus change of this plan and cannot be undone: from it on the voters write v21, which `ARBITER_TAG_P4` refuses, every later update carries `stage3`, and no component may run an image older than this plan's again. Before it, every component can return to its P4 image. After it, the only lever is the plain-body writer value (runbook §11).
 - **production rule (as Plan S3-B).** Chart, test, example-manifest and runbook changes go through one PR, `P5_PR` (Tasks 80–81), inert on merge (render-and-cmp of every release against `origin/main`). Image pins and single-value flips are single-service commits pushed to `main` after it merges. The outcome record is a docs-only PR. The rehearsal Pod is applied by hand (`kubectl apply --dry-run=server` first) and deleted in the same runbook section. No helmfile runs on `k8s-sea/clickhouse` (K22). Every live mutation needs explicit user confirmation in chat, for that step only.
 - **Runbook conventions (as Plan S3-B).**
@@ -115,7 +115,7 @@ The spec and the earlier plans leave these details open; each is resolved here a
 | Name | Meaning | Resolved by |
 |---|---|---|
 | `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` | the S3-E1 releases: every v21 number, codes 12 and 13 at the ingress, canonical types, wire tags 38–42, member consensus mode, `stage3_v1` in `LocalNodeFeatures` | Plan S3-E1, Appendix C |
-| `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4` | the arbiter release on every arbiter pod at `P4_END`; the replay's `old` build, the rollback image and the base of branch `urwt/claude/multi-source-s3e` | Plan S3-D, Appendix C |
+| `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4` | the arbiter release on every arbiter pod at `P4_END`; the replay's `old` build, the rollback image and the base of branch `urwt/codex/multi-source-s3e` | Plan S3-D, Appendix C |
 | `SN_COMMIT_P4` / `SN_DIGEST_P4` | the sentio-node release on every host at `P4_END`; the hosts' rollback image | Plan S3-D, Appendix C |
 | `DEVNET2_FAILURE_DOMAINS` | each enrolled indexer's `node:<hostname>`; the activation's `indexer_failure_domains` | Plan S3-D, Appendix C |
 | `P4_END` | the end of P4 on devnet2; Task 82 starts only after it | Plan S3-D, Appendix C |
@@ -162,7 +162,7 @@ Task 82 writes its values only once all three exist. Every value is read afterwa
 ## Task order and dependencies
 
 Plan S3-E3 complete on the branch (Task 75), with the S3-E1 ledger (`PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5`) and `ARBITER_TAG_P4` on the ledger copy:
-- 76 → 77 → 78 (arbiter, one branch `urwt/claude/multi-source-s3e`, released once as `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`).
+- 76 → 77 → 78 (arbiter, one branch `urwt/codex/multi-source-s3e`, released once as `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`).
 - 79 (sentio-node, `SN_COMMIT_P5` / `SN_DIGEST_P5`) needs `CORE_TAG_P5`, `HG_TAG_P5` and a sentio-node `main` at or after `SN_COMMIT_P4`, so it may run in parallel with 76–78.
 - 80 → 81 (production, one branch from `origin/main` after `P4_PR` merged, `P5_PR`). Task 80 needs `ARBITER_DIGEST_P5` and `SN_COMMIT_P5` / `SN_DIGEST_P5` for its constants and the rehearsal Pod image; its other hunks may be prepared earlier.
 - 82 (devnet2) needs `P5_PR` merged and `P4_END` recorded.
@@ -185,7 +185,7 @@ Within Task 82, the order is fixed: replay → rehearsal (`P5_REHEARSAL`) → ve
 
 Line anchors in the tasks refer to the base revisions of the header.
 
-**arbiter** (Tasks 76–78, branch `urwt/claude/multi-source-s3e`)
+**arbiter** (Tasks 76–78, branch `urwt/codex/multi-source-s3e`)
 - **Task 76:**
   - `fsm/floor.go` (new), `fsm/floor_test.go`, `fsm/floor_strict_test.go`, `fsm/floor_leaving_test.go`, `fsm/floor_raise_test.go` (new).
   - `fsm/apply.go` (`applyScheduleUnsafeCleanup` `:960-1020`; `applyEvictNode` `:121-149`), `fsm/reads_work.go` (`:317-364`), `fsm/reads_work_types.go` (`CleanupWork`, `WorkSet`), `fsm/admission.go` (`:133-158`), `fsm/consensus_updates.go` (`:51-87`, before `ConsensusEpoch++`), `fsm/watch.go` (`EventUnderReplicated`), `fsm/reads_metrics.go`.
@@ -273,7 +273,7 @@ Line anchors in the tasks refer to the base revisions of the header.
 
 Spec §9.3 makes a promotion's unsafe-part cleanup wait, from the `checkpoints` switch on, until enough counting members' checkpoints hold it ("Cleanup of promotion P of owner O requires, in Apply (`applyScheduleUnsafeCleanup`) and in the WorkSet alike: base(P) … and one of" the purge exemption, the pressure bypass and the count over distinct failure domains), with strict mode, the `under_replicated` signals and the precondition for raising k; §6.4 releases a Leaving member's copies once enough other copies hold its entry. Contract §53 and clarification K78 fix the names and texts. Today `applyScheduleUnsafeCleanup` (`fsm/apply.go:960-1020`) checks only the quarantine, the WorkSet (`fsm/reads_work.go:317-364`) lists a cleanup once the owner's published entry covers the promotion's block, nothing ever sets `LeavingMember.Released` (Plan S3-E3 §50 leaves it to this task) and any committed `min_safe_copies` is accepted. This task adds `fsm/floor.go` with the one predicate `floorLocked(pp)` that both callers ask, strict mode's code-13 `COPIES_BACKPRESSURE` at admission (`fsm/admission.go`, after Plan S3-E2 Task 70's `VERIFIERS_UNAVAILABLE` check), the raise-k precondition in the Apply-only half of `applyUpdateConsensusParams`, the Leaving release evaluated after every command that can meet it, the replicated gauges through `MetricsSnapshot`, the hint `EventUnderReplicated`, and the leader-local counter `arbiter_under_replicated_total{reason}` and gauge `arbiter_floor_held_cleanup_age_seconds` through a new `orchestrator.FloorMetrics`. With the switch off every Apply answer, WorkSet, admission answer and update is the one Task 75's branch gives.
 
-Worktree: Plan S3-E2 Task 64's URWT worktree (`W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, contract §48), with `HEAD` at Plan S3-E3 Task 75's last commit; every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own Bash call. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted, Plan S3-A merged); on the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints: Plan S3-E2 Tasks 64–70 and Plan S3-E3 Tasks 71–75 edit other lines of `fsm/apply.go`, `fsm/admission.go`, `fsm/consensus_updates.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `metrics/metrics.go`, `orchestrator/loop.go`, `cmd/arbiter/services.go` and the README, and the files `fsm/stage3.go`, `fsm/stage3_groups.go`, `fsm/stage3_fixture_test.go` and `fsm/stage3_params_test.go` are theirs. The task ends with two local commits; no step reaches a remote, so none needs a confirmation in chat: Task 64 did the only fetch, and Task 78 pushes the branch and opens its PR. If a `go` or `bazel` command below reports that it downloads or fetches anything, stop: that is a remote read and needs explicit user confirmation in chat before it runs.
+Worktree: source Task64's existing `$HOME/.cache/s3e2-task64/env.sh` in every Bash call. It restores `W` from the exclusively retained URWT JSON path and verifies `urwt/codex/multi-source-s3e`, common repository, poetry identity and signing configuration. Entry requires the actual clean signed Task75 HEAD equal to its already recorded `"$T64/task75-final-head"`; no Claude path or SOURCE_CUSTODY projection is a formal predecessor. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted, Plan S3-A merged); on the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints: Plan S3-E2 Tasks 64–70 and Plan S3-E3 Tasks 71–75 edit other lines of `fsm/apply.go`, `fsm/admission.go`, `fsm/consensus_updates.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `metrics/metrics.go`, `orchestrator/loop.go`, `cmd/arbiter/services.go` and the README, and the files `fsm/stage3.go`, `fsm/stage3_groups.go`, `fsm/stage3_fixture_test.go` and `fsm/stage3_params_test.go` are theirs. The task ends with two local commits; no step reaches a remote, so none needs a confirmation in chat: Task 64 did the only fetch, and Task 78 pushes the branch and opens its PR. If a `go` or `bazel` command below reports that it downloads or fetches anything, stop: that is a remote read and needs explicit user confirmation in chat before it runs.
 
 **Files:**
 - Create: `fsm/floor.go` (contract §53's `UnderReplicatedReason` and its constants, `FloorVerdict`, `floorActiveLocked`, `floorLocked`, `floorIncarnationLocked`, `floorMembersLocked`, `checkpointReflectsLocked`, `uncleanedPartsLocked`, `floorOnlyHeldLocked`, `raiseKRefusalLocked`, `leavingReleaseHoldsLocked`, `releaseLeavingMembersLocked`, and this task's helpers)
@@ -334,10 +334,22 @@ Notes:
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+predecessor="$(python3 -I -c 'import pathlib,re,sys;p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink();v=p.read_bytes();assert re.fullmatch(rb"[0-9a-f]{40}\n",v);print(v[:-1].decode("ascii"))' "$T64/task75-final-head")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$predecessor" ] || { echo "stop: actual HEAD differs from the retained formal predecessor" >&2; exit 1; }
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "stop: predecessor worktree is dirty" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s "$head")" || exit 1
+[ "$subject" = 'fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)' ] || { echo "stop: predecessor subject mismatch" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$head")" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$head" || exit 1
+[ ! -e "$T64/task76-final-head" ] && [ ! -L "$T64/task76-final-head" ] || { echo "stop: final-head receipt already exists; reconcile the previous attempt" >&2; exit 1; }
+cd "$W" || exit 1
 git rev-parse --abbrev-ref HEAD
 git status --porcelain
-git log -1 --format=%s
+printf '%s\n' "$subject"
 CORE="$(GOWORK=off go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-core)"
 for p in 'func (f *FSM) checkpointsOnLocked(' 'func (f *FSM) groupLocked(' 'func (f *FSM) copyFloorSetLocked(' 'func (f *FSM) groupsChangedLocked(' 'func indexerFailureDomain(' 'func entryCompare(' 'func findVerifierEntry(' 'func (f *FSM) verifierEntryLocked(' 'func (f *FSM) applyMemberCheckpoint(' 'func (f *FSM) applyRebalanceGroup(' 'func (f *FSM) applyMarkMemberLagging(' 'type MemberCheckpointRecord struct' 'func (f *FSM) verifiersUnavailableLocked(' 'func stage3FSM(' 'func stage3Update(' 'func turnOnStage3Switch(' 'func turnOnStage3SwitchesThrough(' 'func stage3MemberKey(' 'func stage3ReplicaSigner(' 'func memberConsent(' 'func withVerifier(' 'func rejectStage3Unchanged(' 'func stage3Previous(' 'func requireErrorContains('; do
   grep -rqF -- "$p" fsm || echo "missing in fsm: $p"
@@ -351,7 +363,7 @@ done
 GOWORK=off go test ./fsm/ ./orchestrator/ ./metrics/ ./cmd/arbiter/ -count=1
 ```
 
-Expected: `urwt/claude/multi-source-s3e`; no status line; the subject `fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)`; no `missing` line; `ok` for the four packages. Stop on anything else: Plans S3-E2 and S3-E3 land first, in order, on this one branch (contract §48), and every name above is consumed below.
+Expected: `urwt/codex/multi-source-s3e`; no status line; the subject `fsm: MemberCheckpoint, member classes and MarkMemberLagging (S3-E3 Task 75)`; no `missing` line; `ok` for the four packages. Stop on anything else: Plans S3-E2 and S3-E3 land first, in order, on this one branch (contract §48), and every name above is consumed below.
 
 - [ ] **Step 2: Write the copy-floor fixture and the floor tests**
 
@@ -2012,7 +2024,7 @@ If Plans S3-E2 or S3-E3 appended an event kind after `EventIndexerQuarantineChan
 - [ ] **Step 8: Run the FSM tests and see them fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -count=1 2>&1 | head -6
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./fsm/ -count=1 2>&1 | head -6
 ```
 
 Expected: the package does not build: `# github.com/sentioxyz/arbiter/fsm [github.com/sentioxyz/arbiter/fsm.test]`, then `undefined:` lines such as `undefined: FloorVerdict`, `undefined: groupMemberByID`, `undefined: UnderReplicatedDomainsBelowK` and `x.f.floorMembersLocked undefined (type *FSM has no field or method floorMembersLocked)`, and `FAIL github.com/sentioxyz/arbiter/fsm [build failed]`.
@@ -2913,7 +2925,7 @@ with:
 - [ ] **Step 19: Run the FSM tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestFloorSwitchOffIsByteIdentical|TestFloorIsDormantAtKOne|TestFloorApplyAndWorkSetAgreeOnEveryCleanup|TestFloorPublicationClausesRefuseAnUnpublishedPromotion|TestFloorHoldsCleanupUntilKMinusOneDomainsReflect|TestFloorCountsTwoMembersInOneDomainOnce|TestFloorParamsUpdateThatCollidesDomainsOnlyLowersTheCount|TestFloorExcludedTableDoesNotCount|TestFloorPurgeExemptionForANonActiveIncarnation|TestFloorPressureBypassPerPartitionAndPerTable|TestFloorEscapesRaiseUnderReplicated|TestFloorDomainsBelowKRaisesUnderReplicated|TestRejectedPartCleanupIsNeverGatedByTheFloor|TestCleanupScheduledBeforeTheCheckpointsSwitchIsNotRechecked|TestFloorKeepsTheQuarantineRefusal|TestStrictModeRequiresKMinusOneDomains|TestStrictModeKeepsLaggingMembersInE|TestStrictModeTurnsPressureIntoCopiesBackpressure|TestCopiesBackpressureLeavesStateUnchanged|TestCopiesBackpressureClearsOnceTheFloorIsMet|TestRaisingKRequiresCaughtUpCountingMembersInKMinusOneDomains|TestRaisingKRefusalLeavesStateUnchanged|TestRaisingKIgnoresNonActiveIncarnations|TestNonStrictLeavingReleaseUsesTheFrozenE|TestStrictLeavingReleaseWaitsWhenTheSoleCaughtUpMemberIsReplacedByABootstrappingOne|TestLeavingReleaseIsRecordedOnceAndNeverWithdrawn|TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand|TestLeavingReleaseAtKOneIsImmediate|TestFloorMetricsSnapshot|TestEventKindStringNamesEveryTransition|TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain|TestStage3RulesReplayOnRestore|TestStage3MinSafeCopiesAndGroupSizeNeverDecrease)$' -race -count=1 -v 2>&1 | grep -c '^--- PASS'
 cd "$W" && GOWORK=off go test ./fsm/ -race -count=1 && GOWORK=off go vet ./fsm/ && echo vet-clean
 cd "$W" && grep -rn 'time\.Now' fsm/ ; grep -n 'arbiter-proto' fsm/floor.go ; echo red-lines-checked
@@ -2924,12 +2936,12 @@ Expected: `33` (the 29 tests of contract §53, the event-kind test and Task 64's
 - [ ] **Step 20: Run gazelle and commit the FSM half**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go') fsm/floor.go fsm/floor_test.go fsm/floor_strict_test.go fsm/floor_raise_test.go fsm/floor_leaving_test.go)" && echo gofmt-clean
 cd "$W" && bazel run //:gazelle && git diff -- fsm/BUILD.bazel
 cd "$W" && git add fsm/floor.go fsm/floor_test.go fsm/floor_strict_test.go fsm/floor_raise_test.go fsm/floor_leaving_test.go fsm/apply.go fsm/reads_work_types.go fsm/reads_work.go fsm/admission.go fsm/consensus_updates.go fsm/stage3_groups.go fsm/watch.go fsm/reads_metrics.go fsm/stage3_params_test.go fsm/watch_test.go fsm/BUILD.bazel
 cd "$W" && git status --short
-cd "$W" && git commit -m "feat(stage3): the copy floor, strict backpressure, the Leaving release and the raise-k precondition (Task 76)
+cd "$W" && git commit -S -m "feat(stage3): the copy floor, strict backpressure, the Leaving release and the raise-k precondition (Task 76)
 
 From the checkpoints switch on, applyScheduleUnsafeCleanup and the
 WorkSet judge every new promotion cleanup with one predicate,
@@ -3033,7 +3045,7 @@ arbiter_under_replicated_total{reason="pressure_table"} 2
 - [ ] **Step 22: Run it and see it fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 2>&1 | head -4
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 2>&1 | head -4
 ```
 
 Expected: the build fails with `m.UnderReplicatedCleanup undefined (type *Metrics has no field or method UnderReplicatedCleanup)`, `m.FloorHeldCleanups undefined …` and `FAIL github.com/sentioxyz/arbiter/metrics [build failed]` (the gauge half compiles: `MetricsSnapshot` already has the fields).
@@ -3215,7 +3227,7 @@ with:
 - [ ] **Step 25: Run the metrics tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./metrics/ -count=1 -race && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./metrics/ -count=1 -race && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/metrics` (Plan S3-A's state-size, hold and track tests and Plan S3-E3's group tests among them) and `--- PASS: TestFloorMetrics`.
@@ -3371,7 +3383,7 @@ func TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange(t *testin
 - [ ] **Step 27: Run them and see them fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -count=1 2>&1 | head -4
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -count=1 2>&1 | head -4
 ```
 
 Expected: the build fails with `o.d.Floor undefined (type Deps has no field or method Floor)` and `o.observeFloorHeld undefined (type *Loop has no field or method observeFloorHeld)`, then `FAIL github.com/sentioxyz/arbiter/orchestrator [build failed]`.
@@ -3645,7 +3657,7 @@ with:
 - [ ] **Step 33: Run the orchestrator tests and see them pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./orchestrator/ -race -count=1 && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -race -count=50 2>&1 | tail -1
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./orchestrator/ -race -count=1 && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -race -count=50 2>&1 | tail -1
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/orchestrator` twice (the signer, rejected-cleanup, metrics and Plan S3-E3 member-lagging tests among the first run; fifty repetitions of the two new tests in the second).
@@ -3698,7 +3710,7 @@ func TestNewServerAndLoopWiresTheFloorMetrics(t *testing.T) {
 - [ ] **Step 35: Run it and see it fail**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 2>&1 | head -3
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 2>&1 | head -3
 ```
 
 Expected: the build fails with `unknown field floorMetrics in struct literal of type serviceRuntime` and `FAIL github.com/sentioxyz/arbiter/cmd/arbiter [build failed]`.
@@ -3795,7 +3807,7 @@ with:
 - [ ] **Step 38: Run the wiring test and see it pass**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -count=1 && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -count=1 && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/cmd/arbiter` and `--- PASS: TestNewServerAndLoopWiresTheFloorMetrics`.
@@ -3832,13 +3844,13 @@ A hold that stays active well past the drain an operator expects is the signal t
 The copy floor (Plan S3-E4 Task 76, K78) adds three replicated gauges, derived from committed state by every replica: `arbiter_floor_held_cleanups` (promotions whose cleanup only the floor holds) and `arbiter_under_replicated_groups` (groups whose |E| is below k − 1), both 0 before the `checkpoints` switch, and `arbiter_safe_copies_min{indexer_id}` (per owner, the fewest safe copies over its groups: 1 plus the distinct failure domains other than its own whose counting members' checkpoints equal its latest published entry and exclude nothing; absent before the switch). Declared domains are distinct Kubernetes nodes only through anti-affinity. Two series are leader-local: `arbiter_under_replicated_total{reason}` (`inactive_incarnation`, `pressure_partition`, `pressure_table`, `domains_below_k`; every reason exported from the start) counts the cleanups this leader proposed that Apply took under that reason, and `arbiter_floor_held_cleanup_age_seconds` is the age of the oldest promotion only the floor holds, measured from the first pass of this leader term that saw it held: 0 on a follower, it restarts at a leadership change, so it can understate after a failover and never overstates. An applied escape also emits the hint-only event `under_replicated`.
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -c '^\*\*Copy floor\*\* (housegate spec 2026-10-14' README.md && grep -c '^The copy floor (Plan S3-E4 Task 76, K78) adds' README.md`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -c '^\*\*Copy floor\*\* (housegate spec 2026-10-14' README.md && grep -c '^The copy floor (Plan S3-E4 Task 76, K78) adds' README.md`
 Expected: `1` and `1`.
 
 - [ ] **Step 40: Full verification**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go') $(git ls-files -o --exclude-standard '*.go'))" && echo gofmt-clean
 cd "$W" && GOWORK=off go vet ./... && echo vet-clean
 cd "$W" && GOWORK=off go test ./... -race -count=1 2>&1 | grep -E '^(--- FAIL|FAIL|panic)' || echo no-failures
@@ -3853,10 +3865,10 @@ Expected: `gofmt-clean`; `vet-clean`; `no-failures`; gazelle adds `"floor.go",` 
 - [ ] **Step 41: Commit the metrics, orchestrator and wiring half**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 cd "$W" && git add README.md cmd/arbiter/BUILD.bazel cmd/arbiter/app.go cmd/arbiter/services.go cmd/arbiter/floor_metrics_wiring_test.go metrics/BUILD.bazel metrics/metrics.go metrics/floor.go metrics/floor_test.go orchestrator/BUILD.bazel orchestrator/cleanup.go orchestrator/deps.go orchestrator/loop.go orchestrator/promotion.go orchestrator/floor_metrics.go orchestrator/floor_metrics_test.go
 cd "$W" && git status --short
-cd "$W" && git commit -m "feat(stage3): copy-floor metrics, the under_replicated counter and the held-cleanup age (Task 76)
+cd "$W" && git commit -S -m "feat(stage3): copy-floor metrics, the under_replicated counter and the held-cleanup age (Task 76)
 
 The collector exports arbiter_floor_held_cleanups,
 arbiter_under_replicated_groups and arbiter_safe_copies_min{indexer_id}
@@ -3872,9 +3884,33 @@ plan S3-E4 contract §53, K78).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 cd "$W" && git status --porcelain && git log --oneline -3
+
+base="$(python3 -I -c 'import pathlib,re,sys;p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink();v=p.read_bytes();assert re.fullmatch(rb"[0-9a-f]{40}\n",v);print(v[:-1].decode("ascii"))' "$T64/task75-final-head")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" merge-base --is-ancestor "$base" "$head" || exit 1
+count="$(git -C "$W" rev-list --count "$base..$head")" || exit 1
+[ "$count" = 2 ] || exit 1
+subjects="$(git -C "$W" log --reverse --format=%s "$base..$head")" || exit 1
+expected_subjects="$(printf '%s\n' 'feat(stage3): the copy floor, strict backpressure, the Leaving release and the raise-k precondition (Task 76)' 'feat(stage3): copy-floor metrics, the under_replicated counter and the held-cleanup age (Task 76)')" || exit 1
+[ "$subjects" = "$expected_subjects" ] || exit 1
+revisions="$(git -C "$W" rev-list --reverse "$base..$head")" || exit 1
+for revision in $revisions; do
+  identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$revision")" || exit 1
+  [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$W" verify-commit "$revision" || exit 1
+  message="$(git -C "$W" log -1 --format=%B "$revision")" || exit 1
+  python3 -I -c 'import re,sys;assert "uranuswch" not in sys.argv[1].lower();assert re.findall(r"^co-authored-by:[^\n]*$",sys.argv[1],re.I|re.M)==["Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"]' "$message" || exit 1
+done
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+python3 -I -c 'import pathlib,re,sys;assert re.fullmatch(r"[0-9a-f]{40}",sys.argv[2]);p=pathlib.Path(sys.argv[1]);assert not p.is_symlink();f=p.open("x");f.write(sys.argv[2]+"\n");f.close()' "$T64/task76-final-head" "$head" || exit 1
+echo task76-formal-final-head-recorded
 ```
 
 Expected: the status before the commit lists the sixteen staged paths, `A` for the five new files and `M` for the rest; after it the status is empty and the log shows this task's two commits on Plan S3-E3 Task 75's last commit, the newest subject ending in `(Task 76)` (Task 77's base check reads it). Nothing is pushed: Task 78 pushes the branch and opens its PR (contract §48, §55). Task 77 starts from here.
+
+Formal handoff: `task76-formal-final-head-recorded` means the two actual signed commits were checked against the unchanged observed Task75 receipt and `"$T64/task76-final-head"` was created exclusively. Existing receipts stop rather than overwrite. Task77 compares that exact observed SHA with actual clean signed HEAD; no Markdown/source-custody hash substitutes for it.
+
 
 ---
 
@@ -3882,7 +3918,7 @@ Expected: the status before the commit lists the sixteen staged paths, `A` for t
 
 Spec §10.1 ("After the `narrowed_drain` switch, the drain gate refuses an update only for in-flight work of the tracks it touches"; an update touches track T when it changes T's `si_indexers` entry, and changes to `verifiers` and `stage3` touch no track; a promoted unsafe part that only the copy floor holds is not in-flight work), §10.2 (leader drain mode records "each affected track's" frontier), §10.4 step 9 and Review Focus 3, as fixed by contract §54 and clarification K79 (the sunset of Plan S3-A's K6). Today `applyUpdateConsensusParams` runs the stage-2 gate `drainGateRefusalLocked` (`fsm/quarantine.go:203-256`) for every update (`fsm/consensus_updates.go:74-78`): any acknowledged promotion that still has a promoted unsafe part refuses every update, and from the `checkpoints` switch on (Task 76) a part that the copy floor holds stays promoted until a member checkpoints, so with k = 2 no update could ever pass. Plan S3-A's `DrainView` and both hold modes read that one gate, and `arbiter-admin consensus update` defaults to `--hold drain`. This task adds `fsm/drain_narrowed.go`: `TouchedTracks`, the narrowed gate (per touched track, in the stage-2 order, floor-held parts excluded), `floorHeldUnsafePartsLocked` and `DrainViewFor(draft)`, the answer Apply's drain gate gives that draft, while `DrainView()` keeps the stage-2 answer. Apply calls `drainRefusalForUpdateLocked(next.SIIndexers)`, which reads the committed switch, so the update that turns `narrowed_drain` on is still judged by the stage-2 gate. A consensus hold keeps its normalized draft and judges readiness and `drain_refusal` on it; a drain hold over a narrowed view records only the touched tracks' frontiers. `arbiter-admin` resolves an omitted `--hold` from the leader's committed `stage3`: issuance once `narrowed_drain` is on and the update touches no track, drain otherwise. With the switch off every Apply answer, drain view, hold and CLI default is the base's.
 
-This task continues the P5 branch `urwt/claude/multi-source-s3e`: its three commits land on Task 76's last commit. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted, Plan S3-A merged), which holds every Plan S3-A file edited here unchanged since Plan S3-A; `fsm/stage3.go` and `fsm/stage3_fixture_test.go` are Plan S3-E2 Task 64's, and `fsm/floor.go` is Task 76's. On the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints: Plan S3-E2 Task 65 edits other lines of `cmd/arbiter-admin/main.go` (the stage-3 flags, the carried `stage3`) and of `server/consensus_admin.go`, Plan S3-E3 and Task 76 add cases to `onStage3SwitchOnLocked` and paragraphs to the README's stage-3 section, and Task 76 edits other lines of `fsm/consensus_updates.go` (the raise-k precondition right after the drain gate and the tracks-activation refusal, the Leaving release before `ConsensusEpoch++`). No step of this task reaches a remote, so none needs a confirmation: Task 64 did the only fetch and Task 78 pushes the branch and opens its PR.
+This task continues the P5 branch `urwt/codex/multi-source-s3e`: its three commits land on the actual clean signed HEAD in Task76's exclusive `"$T64/task76-final-head"`. Every Bash call sources Task64's retained env rather than constructing a worktree path. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted, Plan S3-A merged), which holds every Plan S3-A file edited here unchanged since Plan S3-A; `fsm/stage3.go` and `fsm/stage3_fixture_test.go` are Plan S3-E2 Task 64's, and `fsm/floor.go` is Task 76's. On the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints: Plan S3-E2 Task 65 edits other lines of `cmd/arbiter-admin/main.go` (the stage-3 flags, the carried `stage3`) and of `server/consensus_admin.go`, Plan S3-E3 and Task 76 add cases to `onStage3SwitchOnLocked` and paragraphs to the README's stage-3 section, and Task 76 edits other lines of `fsm/consensus_updates.go` (the raise-k precondition right after the drain gate and the tracks-activation refusal, the Leaving release before `ConsensusEpoch++`). No step of this task reaches a remote, so none needs a confirmation: Task 64 did the only fetch and Task 78 pushes the branch and opens its PR.
 
 **Files:**
 - Create: `fsm/drain_narrowed.go` (`TouchedTracks`, `narrowedDrainOnLocked`, `drainRefusalForUpdateLocked`, `narrowedDrainRefusalLocked`, `floorHeldUnsafePartsLocked`, `DrainViewFor`)
@@ -3929,13 +3965,30 @@ Notes:
 
 - [ ] **Step 1: Check the worktree, its head and the inputs**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" status --porcelain; git -C "$W" branch --show-current; git -C "$W" log -1 --format=%s`
-Expected: no status line; `urwt/claude/multi-source-s3e`; a subject ending in `(Task 76)`. Otherwise stop: Tasks 64–76 land first, in order, on this one branch (contract §48), and this task needs Task 76's floor.
+Run the formal predecessor gate (local reads only):
+
+```bash
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+predecessor="$(python3 -I -c 'import pathlib,re,sys;p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink();v=p.read_bytes();assert re.fullmatch(rb"[0-9a-f]{40}\n",v);print(v[:-1].decode("ascii"))' "$T64/task76-final-head")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$predecessor" ] || { echo "stop: actual HEAD differs from the retained formal predecessor" >&2; exit 1; }
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "stop: predecessor worktree is dirty" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s "$head")" || exit 1
+[ "$subject" = 'feat(stage3): copy-floor metrics, the under_replicated counter and the held-cleanup age (Task 76)' ] || { echo "stop: predecessor subject mismatch" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$head")" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$head" || exit 1
+[ ! -e "$T64/task77-final-head" ] && [ ! -L "$T64/task77-final-head" ] || { echo "stop: final-head receipt already exists; reconcile the previous attempt" >&2; exit 1; }
+git -C "$W" branch --show-current || exit 1
+printf '%s\n' "$subject"
+```
+Expected: no status line; `urwt/codex/multi-source-s3e`; a subject ending in `(Task 76)`. Otherwise stop: Tasks 64–76 land first, in order, on this one branch (contract §48), and this task needs Task 76's floor.
 
 Run:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" || exit 1
 grep -c -e 'func (f \*FSM) floorActiveLocked() bool' -e 'func (f \*FSM) floorLocked(pp \*PendingPromotion) FloorVerdict' fsm/floor.go
 grep -c -e 'func (f \*FSM) stage3SwitchOnLocked(name string) bool' -e 'func (f \*FSM) onStage3SwitchOnLocked(name string)' -e 'Stage3SwitchNarrowedDrain *= "narrowed_drain"' fsm/stage3.go
 grep -c -e 'func stage3FSM(t \*testing.T) (\*FSM, \*authority.Signer)' -e 'func stage3Update(t \*testing.T, f \*FSM) arbiter.ConsensusParamsUpdate' -e 'func stage3WithSwitch(p \*arbiter.Stage3Params, name string) \*arbiter.Stage3Params' -e 'func turnOnStage3SwitchesThrough(t \*testing.T, f \*FSM, a \*authority.Signer, last string)' fsm/stage3_fixture_test.go
@@ -3952,7 +4005,7 @@ go doc github.com/sentioxyz/arbiter-proto/gen/pb Stage3Params.GetNarrowedDrain |
 
 Expected: `2`, `3`, `4`, `2`, `1`, `1`, `2`, `1`, `1`, `1`, nothing from the recursive grep, then `func (x *Stage3Params) GetNarrowedDrain() bool`. If a count differs, stop: Task 76's floor predicate, Task 64's switch seam and fixture, Plan S3-A's drain view and holds, the CLI's `--hold drain` default, both README anchors and the pinned `PROTO_TAG_P5` are this task's inputs, and nothing of this task exists yet.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ ./server/ ./cmd/arbiter-admin/ -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ ./server/ ./cmd/arbiter-admin/ -count=1`
 Expected: `ok` for the three packages (the branch is green before this task starts).
 
 - [ ] **Step 2: Write the failing fsm tests**
@@ -4449,7 +4502,7 @@ func TestDrainViewForBeforeTheSwitchIsTheStage2Gate(t *testing.T) {
 
 - [ ] **Step 3: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run 'TestTouchedTracks|TestNarrowedDrain|TestAnUpdateThatTouchesNoTrack|TestDrainViewFor|TestDrainViewKeepsTheStage2Refusal' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run 'TestTouchedTracks|TestNarrowedDrain|TestAnUpdateThatTouchesNoTrack|TestDrainViewFor|TestDrainViewKeepsTheStage2Refusal' -count=1`
 Expected: the test binary does not build, with (the compiler stops after ten errors):
 
 ```text
@@ -4861,15 +4914,15 @@ In `fsm/stage3.go`, inside `onStage3SwitchOnLocked`, insert this case right befo
 		// S3-E4 contract §54).
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -c 'Nothing to install: the drain gate reads the committed switch' fsm/stage3.go`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -c 'Nothing to install: the drain gate reads the committed switch' fsm/stage3.go`
 Expected: `1`.
 
 - [ ] **Step 8: Run the fsm tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l fsm)" && bazel run //:gazelle && git -C "$W" status --porcelain`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l fsm)" && bazel run //:gazelle && git -C "$W" status --porcelain`
 Expected: gofmt lists nothing (if it lists a file, run `gofmt -w` on it and repeat); gazelle adds `"drain_narrowed.go"` to the `srcs` of `//fsm:fsm` and `"drain_narrowed_test.go"` to the `srcs` of `//fsm:fsm_test`, in sorted position, and no dependency; the status lists exactly ` M fsm/BUILD.bazel`, ` M fsm/consensus_updates.go`, ` M fsm/reads_drain.go`, ` M fsm/stage3.go`, `?? fsm/drain_narrowed.go` and `?? fsm/drain_narrowed_test.go`.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run 'TestTouchedTracks|TestNarrowedDrain|TestAnUpdateThatTouchesNoTrack|TestDrainViewFor|TestDrainViewKeepsTheStage2Refusal' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run 'TestTouchedTracks|TestNarrowedDrain|TestAnUpdateThatTouchesNoTrack|TestDrainViewFor|TestDrainViewKeepsTheStage2Refusal' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
 Expected (timings omitted):
 
 ```text
@@ -4888,18 +4941,18 @@ ok  	github.com/sentioxyz/arbiter/fsm
 
 - [ ] **Step 9: Run the fsm checks**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go vet ./fsm/ && go test -race ./fsm/ -count=1 && go test ./fsm/ -run 'TestDrainView|TestPreActivationHistoryIsByteIdentical|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestDeterminism' -count=1 -v | grep -E '^--- (PASS|FAIL)'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go vet ./fsm/ && go test -race ./fsm/ -count=1 && go test ./fsm/ -run 'TestDrainView|TestPreActivationHistoryIsByteIdentical|TestL3CommitmentPreimagesAreFrozen|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease|TestDeterminism' -count=1 -v | grep -E '^--- (PASS|FAIL)'`
 Expected: vet prints nothing; `ok` for `fsm` with no data race; then only `--- PASS` lines, among them Plan S3-A's `TestDrainViewBeforeTheTracksActivation`, `TestDrainViewReportsInFlightBlocksPerTrack`, `TestDrainViewRefusalEqualsTheDrainGate` and `TestDrainViewOfAQuarantinedTrack` (unchanged), this task's three `TestDrainViewFor…`/`TestDrainViewKeeps…` tests, `TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestL3CommitmentPreimagesAreFrozen`, `TestL3TrackHeaderPreimagesAreFrozen`, `TestL3TransitionHeaderPreimageIsFrozen`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease` and every `TestDeterminism_*`, and no `--- FAIL`.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -n -e 'arbiter-proto' -e 'time\.' fsm/drain_narrowed.go; git -C "$W" status --porcelain -- fsm/testdata`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -n -e 'arbiter-proto' -e 'time\.' fsm/drain_narrowed.go; git -C "$W" status --porcelain -- fsm/testdata`
 Expected: nothing, then nothing (no proto import, no clock, no golden file changed).
 
 - [ ] **Step 10: Commit the fsm half**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add fsm/drain_narrowed.go fsm/drain_narrowed_test.go fsm/reads_drain.go fsm/consensus_updates.go fsm/stage3.go fsm/BUILD.bazel
-git -C "$W" commit -m "feat(stage3): narrowed drain gate and DrainViewFor, switch 9 (Task 77)
+git -C "$W" commit -S -m "feat(stage3): narrowed drain gate and DrainViewFor, switch 9 (Task 77)
 
 Once the stage3 narrowed_drain switch is committed, Apply refuses a
 consensus update for drain only for the in-flight work of the tracks
@@ -5145,7 +5198,7 @@ func TestDrainHoldRecordsOnlyTouchedTracksAfterTheNarrowedDrainSwitch(t *testing
 
 - [ ] **Step 12: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./server/ -run 'TestIssuanceHoldIsReadyForAnUpdateThatTouchesNoTrack|TestHoldReadinessFollowsTheDraft|TestDrainHoldRecordsOnlyTouchedTracksAfterTheNarrowedDrainSwitch' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./server/ -run 'TestIssuanceHoldIsReadyForAnUpdateThatTouchesNoTrack|TestHoldReadinessFollowsTheDraft|TestDrainHoldRecordsOnlyTouchedTracksAfterTheNarrowedDrainSwitch' -count=1`
 Expected: the test binary does not build. The compiler reports `fx.s.holdViewFor undefined (type *Server has no field or method holdViewFor)` three times, once per new test, at column 7 of its seam assignment in `server/consensus_hold_test.go`, then `FAIL	github.com/sentioxyz/arbiter/server [build failed]`.
 
 - [ ] **Step 13: Add the draft-aware seam in `server/server.go`**
@@ -5414,7 +5467,7 @@ func (s *Server) drainViewFor(draft arbiter.ConsensusParamsUpdate) fsm.DrainView
 
 - [ ] **Step 16: Run the server tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l server)" && go vet ./server/ && go test ./server/ -run 'TestIssuanceHoldIsReadyForAnUpdateThatTouchesNoTrack|TestHoldReadinessFollowsTheDraft|TestDrainHoldRecordsOnlyTouchedTracksAfterTheNarrowedDrainSwitch' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l server)" && go vet ./server/ && go test ./server/ -run 'TestIssuanceHoldIsReadyForAnUpdateThatTouchesNoTrack|TestHoldReadinessFollowsTheDraft|TestDrainHoldRecordsOnlyTouchedTracksAfterTheNarrowedDrainSwitch' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
 Expected (timings omitted):
 
 ```text
@@ -5424,15 +5477,15 @@ Expected (timings omitted):
 ok  	github.com/sentioxyz/arbiter/server
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test -race ./server/ -count=1 && go test -race ./server/ -run 'Hold|Drain|Issuance' -count=20 && bazel run //:gazelle && git -C "$W" status --porcelain`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test -race ./server/ -count=1 && go test -race ./server/ -run 'Hold|Drain|Issuance' -count=20 && bazel run //:gazelle && git -C "$W" status --porcelain`
 Expected: `ok` twice with no data race (every Plan S3-A hold test passes unchanged: none sets `holdViewFor`, and `holdView` keeps its meaning); gazelle changes nothing (no new file, every import is already a dependency); the status lists exactly ` M server/consensus_hold.go`, ` M server/consensus_hold_rpc.go`, ` M server/consensus_hold_test.go` and ` M server/server.go`.
 
 - [ ] **Step 17: Commit the server half**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add server/server.go server/consensus_hold.go server/consensus_hold_rpc.go server/consensus_hold_test.go
-git -C "$W" commit -m "feat(stage3): consensus holds judge the draft they were taken with (Task 77)
+git -C "$W" commit -S -m "feat(stage3): consensus holds judge the draft they were taken with (Task 77)
 
 PrepareConsensusUpdate keeps the normalized draft in the hold, and the
 issuance check, start and every GetConsensusHold read
@@ -5709,7 +5762,7 @@ func TestTouchedIndexersMatchesTheFSM(t *testing.T) {
 
 - [ ] **Step 19: Run them and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlagOverridesTheDefault|TestTouchedIndexersMatchesTheFSM' -count=1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlagOverridesTheDefault|TestTouchedIndexersMatchesTheFSM' -count=1`
 Expected: the test binary does not build. The compiler reports `undefined: touchedIndexers` once, in `TestTouchedIndexersMatchesTheFSM` of `cmd/arbiter-admin/consensus_hold_test.go`, then `FAIL	github.com/sentioxyz/arbiter/cmd/arbiter-admin [build failed]`.
 
 - [ ] **Step 20: Resolve the default hold in `cmd/arbiter-admin/main.go`**
@@ -5925,7 +5978,7 @@ func touchedIndexers(committed, target []arbiter.SIIndexerEntry) []uint64 {
 
 - [ ] **Step 21: Run the arbiter-admin tests and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l cmd)" && go vet ./cmd/arbiter-admin/ && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlagOverridesTheDefault|TestTouchedIndexersMatchesTheFSM' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l cmd)" && go vet ./cmd/arbiter-admin/ && go test ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlagOverridesTheDefault|TestTouchedIndexersMatchesTheFSM' -race -count=1 -v | grep -E '^--- |^ok|^FAIL'`
 Expected (timings omitted):
 
 ```text
@@ -5937,7 +5990,7 @@ Expected (timings omitted):
 ok  	github.com/sentioxyz/arbiter/cmd/arbiter-admin
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test -race ./cmd/arbiter-admin/ -count=1 && go test -race ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlag' -count=10`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test -race ./cmd/arbiter-admin/ -count=1 && go test -race ./cmd/arbiter-admin/ -run 'TestConsensusUpdateDefaultsTo|TestExplicitHoldFlag' -count=10`
 Expected: `ok` twice with no data race: every Plan S3-A, S3-E2 and S3-E3 arbiter-admin test passes unchanged, among them `TestConsensusUpdateHoldUnimplementedNamesHoldNone` (its update without `--hold` now resolves to drain, then meets the same Unimplemented refusal), `TestConsensusUpdateRejectsABadHoldFlag`, `TestCLIConsensusUpdateHoldsThroughServerAndFSM` and `TestCLIStage3ActivationThroughServerAndFSM` (the activation under the default, still drain).
 
 - [ ] **Step 22: Document the switch in `README.md`**
@@ -5960,26 +6013,26 @@ and in the section `## Multi-source storage integrity (stage-3 activation)` inse
 **Narrowed drain (switch 9).** Once `narrowed_drain` is committed (housegate spec 2026-10-14 §10.1), the drain gate refuses a consensus update only for the in-flight work of the tracks it touches. An update touches a track when it adds or changes that indexer's `si_indexers` entry (an enrolment or a signer rotation); a change of `verifiers`, `stage3`, the authority set or `max_writers` touches none, so it commits while any track has work in flight. For each touched track, in ascending order and skipping a quarantined one as the stage-2 gate does, the refusal names the first kind of work found: `consensus update touches track <id>, which has an unacknowledged promotion`, `… which has an unacknowledged cleanup command`, `… which has a promoted unsafe part waiting for something other than the copy floor` or `… which has an unacknowledged rejected-part cleanup`. A promoted unsafe part whose cleanup only the copy floor holds is not in-flight work; one that waits for its track's publication, for a cleanup the floor already allows or for another acknowledged promotion that lists it still is, and work whose track does not resolve counts for every touched track. The gate reads the committed switch, so the update that turns `narrowed_drain` on still meets the stage-2 gate. A consensus hold judges the draft it was taken with: its `ready` and `drain_refusal` are what Apply would answer for that draft, and a drain hold records the promotion frontiers of the touched tracks only, so the other tracks issue no promotion while it lives (their `tracks[]` entries report frontier 0 and nothing in flight) and never delay its readiness. Without `--hold`, `arbiter-admin consensus update` takes an issuance hold once the leader reports `stage3.narrowed_drain` and the update touches no track, and a drain hold otherwise, and prints `info: --hold defaults to <issuance|drain>: <reason>` on stderr; an explicit `--hold` wins.
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && grep -c '^\*\*Narrowed drain (switch 9)\.\*\*' README.md && grep -c 'takes a hold by default: without `--hold` it takes `--hold drain` until' README.md && git diff --numstat -- README.md`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -c '^\*\*Narrowed drain (switch 9)\.\*\*' README.md && grep -c 'takes a hold by default: without `--hold` it takes `--hold drain` until' README.md && git diff --numstat -- README.md`
 Expected: `1`, `1`, then `3	1	README.md` (the new paragraph and its empty line, and the rewritten paragraph).
 
 - [ ] **Step 23: Run the full checks**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && go vet ./... && go test ./... -count=1 2>&1 | grep -v 'no test files'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && go vet ./... && go test ./... -count=1 2>&1 | grep -v 'no test files'`
 Expected: gofmt and vet print nothing; `ok` for every package, `integration` and `integration/chpipeline` included (the chpipeline ClickHouse tests skip without their environment, as in CI's unit job).
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
 Expected: gazelle changes nothing; the status lists exactly ` M README.md`, ` M cmd/arbiter-admin/consensus_hold_test.go` and ` M cmd/arbiter-admin/main.go`; the build succeeds and every test target PASSes (CI's two Bazel steps).
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; git -C "$W" status --porcelain -- fsm/testdata conformance`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; git -C "$W" status --porcelain -- fsm/testdata conformance`
 Expected: `0`, then nothing, then nothing (the CI red lines hold, and no golden file and no `conformance` count changed: this task adds no proto method, tag or field).
 
 - [ ] **Step 24: Commit the CLI half and the README**
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add cmd/arbiter-admin/main.go cmd/arbiter-admin/consensus_hold_test.go README.md
-git -C "$W" commit -m "feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)
+git -C "$W" commit -S -m "feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)
 
 Without --hold, consensus update reads the leader's committed stage3:
 it takes an issuance hold once stage3.narrowed_drain is reported and
@@ -5994,17 +6047,41 @@ that judge their draft and the new default.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git -C "$W" status --porcelain
 git -C "$W" log --format=%s -3
+
+base="$(python3 -I -c 'import pathlib,re,sys;p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink();v=p.read_bytes();assert re.fullmatch(rb"[0-9a-f]{40}\n",v);print(v[:-1].decode("ascii"))' "$T64/task76-final-head")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" merge-base --is-ancestor "$base" "$head" || exit 1
+count="$(git -C "$W" rev-list --count "$base..$head")" || exit 1
+[ "$count" = 3 ] || exit 1
+subjects="$(git -C "$W" log --reverse --format=%s "$base..$head")" || exit 1
+expected_subjects="$(printf '%s\n' 'feat(stage3): narrowed drain gate and DrainViewFor, switch 9 (Task 77)' 'feat(stage3): consensus holds judge the draft they were taken with (Task 77)' 'feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)')" || exit 1
+[ "$subjects" = "$expected_subjects" ] || exit 1
+revisions="$(git -C "$W" rev-list --reverse "$base..$head")" || exit 1
+for revision in $revisions; do
+  identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$revision")" || exit 1
+  [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$W" verify-commit "$revision" || exit 1
+  message="$(git -C "$W" log -1 --format=%B "$revision")" || exit 1
+  python3 -I -c 'import re,sys;assert "uranuswch" not in sys.argv[1].lower();assert re.findall(r"^co-authored-by:[^\n]*$",sys.argv[1],re.I|re.M)==["Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"]' "$message" || exit 1
+done
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || exit 1
+python3 -I -c 'import pathlib,re,sys;assert re.fullmatch(r"[0-9a-f]{40}",sys.argv[2]);p=pathlib.Path(sys.argv[1]);assert not p.is_symlink();f=p.open("x");f.write(sys.argv[2]+"\n");f.close()' "$T64/task77-final-head" "$head" || exit 1
+echo task77-formal-final-head-recorded
 ```
 
 Expected: an empty status, then the three subjects of this task, newest first: `feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)`, `feat(stage3): consensus holds judge the draft they were taken with (Task 77)`, `feat(stage3): narrowed drain gate and DrainViewFor, switch 9 (Task 77)`. Task 78 starts from this commit.
+
+Formal handoff: `task77-formal-final-head-recorded` records the observed final SHA exclusively in `"$T64/task77-final-head"` after checking all three signed subjects/ancestry from Task76. Task78 requires actual clean signed HEAD equal to that receipt. These are future formal Git observations; the controller's SOURCE_CUSTODY records do not supply them.
+
 
 ---
 
 ## Task 78: arbiter — frozen pre-stage-3 history, activation and v21 integration, the chpipeline stage-3 harness and its CI job, the P5 release and the P5 rehearsal directory (S3-E4)
 
-Spec §10.3 (the activation with every switch off, v21 write-then-verify, voter restarts from v21 snapshots, the rehearsal on "a disposable three-voter cluster restored from a copy of the live state … and a forced-mismatch run"), §10.4 (the switch order, steps 1–10), §16 row P5 and §17 (FSM: "activation with a quarantined track, offline digest replay of the devnet2 log"; Integration: "three SNodes with members and the network pool on one Keeper; concurrent writes to every owner; killing one member mid-stream; quarantining an owner while its tables are read from members; one indexer down stalling only its own track"), as fixed by contract §55, clarifications K65, K80, K81 and K82 and decision D37. Tasks 64–77 built the stage-3 code on branch `urwt/claude/multi-source-s3e` with every switch off by default; nothing of it is released yet (K65). This task adds the proofs and ships it: the frozen pre-activation history `fsm/testdata/pre_stage3_golden.json`, captured once from `ARBITER_TAG_P4` and replayed by the branch; six activation and v21 tests on the in-process cluster; the chpipeline stage-3 harness (three ClickHouse 26.3 servers, one Keeper, three SNodes, the pool verifiers and one member per host in consensus mode) that turns every switch on in the order of §10.4 and runs the four §17 failure scenarios; CI job `integration-clickhouse-stage3`; the offline replay of the local devnet2 copies under `ARBITER_TAG_P4` and the branch; then the one PR of Tasks 64–78, its squash merge, the release `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`, `$R5` rebuilt from that tag with `p5rehearsal` and `p5-files.sha256`, and the ledger record.
+Spec §10.3 (the activation with every switch off, v21 write-then-verify, voter restarts from v21 snapshots, the rehearsal on "a disposable three-voter cluster restored from a copy of the live state … and a forced-mismatch run"), §10.4 (the switch order, steps 1–10), §16 row P5 and §17 (FSM: "activation with a quarantined track, offline digest replay of the devnet2 log"; Integration: "three SNodes with members and the network pool on one Keeper; concurrent writes to every owner; killing one member mid-stream; quarantining an owner while its tables are read from members; one indexer down stalling only its own track"), as fixed by contract §55, clarifications K65, K80, K81 and K82 and decision D37. Tasks 64–77 built the stage-3 code on branch `urwt/codex/multi-source-s3e` with every switch off by default; nothing of it is released yet (K65). This task adds the proofs and ships it: the frozen pre-activation history `fsm/testdata/pre_stage3_golden.json`, captured once from `ARBITER_TAG_P4` and replayed by the branch; six activation and v21 tests on the in-process cluster; the chpipeline stage-3 harness (three ClickHouse 26.3 servers, one Keeper, three SNodes, the pool verifiers and one member per host in consensus mode) that turns every switch on in the order of §10.4 and runs the four §17 failure scenarios; CI job `integration-clickhouse-stage3`; the offline replay of the local devnet2 copies under `ARBITER_TAG_P4` and the branch; then the one PR of Tasks 64–78, its squash merge, the release `ARBITER_TAG_P5` / `ARBITER_DIGEST_P5`, `$R5` rebuilt from that tag with `p5rehearsal` and `p5-files.sha256`, and the ledger record.
 
-This task continues the P5 branch: its three code commits land on Task 77's last commit in Task 64's URWT worktree `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`; the Bash tool keeps no variables between calls, so every command below sets `W` itself. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted); on the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints. Of the files edited here, Plan S3-D Task 51 edits other lines of `integration/cluster_test.go` (`testConfig`'s `max_track_settle`) and `integration/cluster_node_test.go` (`newServices`, `:103` and `:116`) and adds `integration/stage3_p4_test.go`, Plan S3-E2 Task 67 edits another line of `integration/cluster_test.go` (`testConfig`'s `SnapshotBody: "auto"`, `:137`), Plan S3-C2 Task 36 and Plan S3-D Task 51 edit other parts of `integration/chpipeline` and `.github/workflows/ci.yml` (Task 36 adds the `integration-clickhouse-member` job), and Plans S3-E2 to S3-E4 add paragraphs to the README's `## Multi-source storage integrity (stage-3 activation)` section; `integration/tracks_harness_test.go` is unchanged since `526a721`. No other task adds a file to package `integration`, and every helper this task adds there is new (checked against Plans S3-C2 to S3-E4).
+This task continues the P5 branch at the actual worktree path recovered by Task64's retained `env.sh` from its saved URWT JSON. Its three code commits land on Task77's observed final commit; every Bash call sources that existing environment because shell variables do not survive between calls. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted); on the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints. Of the files edited here, Plan S3-D Task 51 edits other lines of `integration/cluster_test.go` (`testConfig`'s `max_track_settle`) and `integration/cluster_node_test.go` (`newServices`, `:103` and `:116`) and adds `integration/stage3_p4_test.go`, Plan S3-E2 Task 67 edits another line of `integration/cluster_test.go` (`testConfig`'s `SnapshotBody: "auto"`, `:137`), Plan S3-C2 Task 36 and Plan S3-D Task 51 edit other parts of `integration/chpipeline` and `.github/workflows/ci.yml` (Task 36 adds the `integration-clickhouse-member` job), and Plans S3-E2 to S3-E4 add paragraphs to the README's `## Multi-source storage integrity (stage-3 activation)` section; `integration/tracks_harness_test.go` is unchanged since `526a721`. No other task adds a file to package `integration`, and every helper this task adds there is new (checked against Plans S3-C2 to S3-E4).
 
 Remote reads (fetches, module downloads, the image pull of Step 18, GitHub and the registry) and every remote write (push, PR, merge, the Cut Release dispatch, the ledger record's push, docs PR and merge) need explicit user confirmation in chat before running; so does Step 1's rewrite of commit authors, if one is needed. Steps 21–25, 30 and 31 are local and runbook-like: the agent runs each of their bash blocks from a new block file in this session's scratchpad (`<scratchpad>/s3e4-t78/<nn>-<what>.sh`, written with the Write tool, never edited after it ran) with `bash -eo pipefail <file> < /dev/null`, because the Bash tool's own shell is zsh (Plan S3-E2 Task 67's precedent). Commands the user runs in their own terminal are given in fish.
 
@@ -6022,7 +6099,7 @@ Remote reads (fetches, module downloads, the image pull of Step 18, GitHub and t
 - Modify: `.github/workflows/ci.yml` — job `integration-clickhouse-stage3` after Plan S3-C2's `integration-clickhouse-member`, and `docker-dev`'s `needs`
 - Modify: `README.md` — a last paragraph `**Integration and release checks (P5).**` in `## Multi-source storage integrity (stage-3 activation)`, right before `## Artifact disposition admission` (`:396` at `526a721`)
 - Test: the files above; unchanged and green: every golden and vector test (`TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the `l3_*` goldens, `TestDeterminism_*`, Plan S3-E2's v21 containers, Plan S3-E3's `l3_group_key` vectors), every test of Tasks 64–77, the stage-2 integration harness and the chpipeline 25.8 jobs
-- Local only, never committed: `$W.ledger-e4` (Step 2's ledger values), `$W.replay-e4.txt` (the replay evidence), `$W.rewrite-lease` and `$W.rewrite-before` (only if Step 1 rewrites authors), the PR body `~/src/remotesrc/claude/arbiter/multi-source-s3e.pr-body.md`, the capture export `$HOME/.cache/s3e4-task78/` (removed by Step 5), and `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal` (decision D37, mode 700): `helpers.sh`, the tool sources `statedigest/`, `v20check/`, `snapdump/`, `v21check/`, `p5rehearsal/p5rehearsal_test.go`, `old_tag.txt`, `new_tag.txt`, `bin/old`, `bin/new` (with `p5rehearsal`), `v21-fixture.container`, `merge-commit`, `cut-release.sh`, `arbiter-release`, `p5-files.sha256` and its work directories `src/`, `inputs/`, `out/`
+- Local only, never committed: `$W.ledger-e4` (Step 2's ledger values), `$W.replay-e4.txt` (the replay evidence), `$W.rewrite-lease` and `$W.rewrite-before` (only if Step 1 rewrites authors), the PR body `"$W.pr-body.md"`, the capture export `$HOME/.cache/s3e4-task78/` (removed by Step 5), and `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal` (decision D37, mode 700): `helpers.sh`, the tool sources `statedigest/`, `v20check/`, `snapdump/`, `v21check/`, `p5rehearsal/p5rehearsal_test.go`, `old_tag.txt`, `new_tag.txt`, `bin/old`, `bin/new` (with `p5rehearsal`), `v21-fixture.container`, `merge-commit`, `cut-release.sh`, `arbiter-release`, `p5-files.sha256` and its work directories `src/`, `inputs/`, `out/`
 - Modify after the release (housegate, on this plan's ledger copy, with the record procedure of Plan S3-C1 contract §19): Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md` (the `ARBITER_TAG_P5` and `ARBITER_DIGEST_P5` rows and the run record `arbiter P5 release (Task 78)`), one commit in the URWT worktree `multi-source-s3e4-ledger-78`
 
 **Interfaces:**
@@ -6051,13 +6128,29 @@ Notes:
 
 - [ ] **Step 1: Check the worktree, its head, its commit identity and the inputs**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; git -C "$W" status --porcelain; git -C "$W" branch --show-current; git -C "$W" log -1 --format=%s`
-Expected: no status line; `urwt/claude/multi-source-s3e`; `feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)`. Otherwise stop: Tasks 64–77 land first, in order, on this one branch (contract §48), and this task ships all of them.
+Run the formal predecessor gate (local reads only):
+
+```bash
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+predecessor="$(python3 -I -c 'import pathlib,re,sys;p=pathlib.Path(sys.argv[1]);assert p.is_file() and not p.is_symlink();v=p.read_bytes();assert re.fullmatch(rb"[0-9a-f]{40}\n",v);print(v[:-1].decode("ascii"))' "$T64/task77-final-head")" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$predecessor" ] || { echo "stop: actual HEAD differs from the retained formal predecessor" >&2; exit 1; }
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "stop: predecessor worktree is dirty" >&2; exit 1; }
+subject="$(git -C "$W" log -1 --format=%s "$head")" || exit 1
+[ "$subject" = 'feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)' ] || { echo "stop: predecessor subject mismatch" >&2; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$head")" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$head" || exit 1
+git -C "$W" branch --show-current || exit 1
+printf '%s\n' "$subject"
+```
+Expected: no status line; `urwt/codex/multi-source-s3e`; `feat(stage3): arbiter-admin defaults to an issuance hold after narrowed_drain (Task 77)`. Otherwise stop: Tasks 64–77 land first, in order, on this one branch (contract §48), and this task ships all of them.
 
 Set this worktree's commit identity (local config only) and check every commit of the branch:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
 echo "identity: $(git -C "$W" config user.name) <$(git -C "$W" config user.email)>"
 base="$(git -C "$W" merge-base origin/main HEAD)" || exit 1
@@ -6066,14 +6159,14 @@ git -C "$W" log --format='%an <%ae>' "$base..HEAD" | sort | uniq -c
 git -C "$W" log --format=%B "$base..HEAD" | grep -i '^co-authored-by:' | grep -vic 'noreply@anthropic.com'
 ```
 
-Expected: `identity: poetry <chen@sentio.xyz>`; the branch base (Task 64's `origin/main`) and the count of the commits of Tasks 64–77; exactly one author line `<count> poetry <chen@sentio.xyz>`; then `0` (no `Co-Authored-By` trailer other than Claude's). If another author is listed (Plan S3-E2 Task 64 set no worktree identity, so the commits of Tasks 64–77 carry whatever identity was configured), rewrite the authors before anything else, so that this task's evidence names the final commits and the squash merge adds no `Co-authored-by` trailer. Local history rewrite of commits that Plans S3-E2 and S3-E3 may already have pushed (the push of Step 27 then replaces the remote branch): needs explicit user confirmation in chat before running. Gate: "rewrite the author of every commit of urwt/claude/multi-source-s3e after <base> to poetry <chen@sentio.xyz>, keeping every tree, message and order". After a yes:
+Expected: `identity: poetry <chen@sentio.xyz>`; the branch base (Task 64's `origin/main`) and the count of the commits of Tasks 64–77; exactly one author line `<count> poetry <chen@sentio.xyz>`; then `0` (no `Co-Authored-By` trailer other than Claude's). If another author is listed (current Task64 sets poetry and signing explicitly; any imported historical nonconforming commits still require separate reconciliation), rewrite the authors before anything else, so that this task's evidence names the final commits and the squash merge adds no `Co-authored-by` trailer. Local history rewrite of commits that Plans S3-E2 and S3-E3 may already have pushed (the push of Step 27 then replaces the remote branch): needs explicit user confirmation in chat before running. Gate: "rewrite the author of every commit of urwt/codex/multi-source-s3e after <base> to poetry <chen@sentio.xyz>, keeping every tree, message and order". After a yes:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 base="$(git -C "$W" merge-base origin/main HEAD)" || exit 1
 [ ! -e "$W.rewrite-before" ] || { echo "$W.rewrite-before exists: the authors were rewritten once already; stop and ask"; exit 1; }
 git -C "$W" rev-parse HEAD > "$W.rewrite-before"
-git -C "$W" rev-parse -q --verify refs/remotes/origin/urwt/claude/multi-source-s3e > "$W.rewrite-lease" || : > "$W.rewrite-lease"
+git -C "$W" rev-parse -q --verify refs/remotes/origin/urwt/codex/multi-source-s3e > "$W.rewrite-lease" || : > "$W.rewrite-lease"
 git -C "$W" rebase --exec 'git commit --amend --no-edit --reset-author' "$base" || { echo "the rebase stopped: run git -C $W rebase --abort and ask"; exit 1; }
 git -C "$W" diff --quiet "$(cat "$W.rewrite-before")" HEAD && echo tree-unchanged
 [ "$(git -C "$W" log --format=%s "$base..HEAD")" = "$(git -C "$W" log --format=%s "$base..$(cat "$W.rewrite-before")")" ] && echo subjects-unchanged
@@ -6085,7 +6178,7 @@ Expected: `tree-unchanged`, `subjects-unchanged` and one author line `<count> po
 Check the inputs this task consumes and that none of its names exists yet:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" || exit 1
 for p in 'func \(f \*FSM\) Stage3Active\(\) bool' 'func \(f \*FSM\) Stage3SwitchOn\(name string\) bool' 'func \(f \*FSM\) Stage3ActivationNodes\(\)' 'snapshotVersionV21 += 21' 'func \(f \*FSM\) SetSnapshotBodyMode\(mode SnapshotBodyMode\) error' 'func \(f \*FSM\) SnapshotEncodingStats\(\) SnapshotEncodingStats' 'func RehydrateSnapshotBody\(' 'internSnapshotBodyFunc += ' 'func \(f \*FSM\) DrainViewFor\(draft arbiter.ConsensusParamsUpdate\) DrainView' 'FloorHeld +\[\]uint64' 'FloorHeldCleanups ' 'Stage3VotersMetadataKey += "arbiter-stage3-voters"' 'stage3PendingProtoFields = map' 'SnapshotBody +string'; do
   printf '%s => %s\n' "$p" "$(git -C "$W" grep -l -E "$p" -- fsm server config | tr '\n' ' ')"
 done
@@ -6125,7 +6218,7 @@ git -C "$h" show "REF:$p" | awk '/^The ledger tool `\$HOME\/\.cache\/s3-ledger\/
 Expected: the python program of Plan S3-C1 contract §19, from `#!/usr/bin/env python3` to `    main(sys.argv[1:])`. Write it, verbatim and with nothing else, to `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool (an earlier copy is the same text and is overwritten, Plan S3-C1 contract §19). Then check it and read the values (local reads):
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 python3 -I "$L/s3-ledger.py" show "$h" s3c1 \
   | awk '/^The ledger tool `\$HOME\/\.cache\/s3-ledger\/s3-ledger\.py` \(contract §19/{p=1; next} p && /^```python$/{f=1; next} f && /^```$/{exit} f' \
   | cmp - "$L/s3-ledger.py" && echo ledger-tool-verbatim
@@ -6145,7 +6238,7 @@ Expected: `ledger-tool-verbatim`; this plan's ledger copy (a ref); the five line
 Remote read (the arbiter tag fetch): needs explicit user confirmation in chat before running.
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; set -a; . "$W.ledger-e4"; set +a
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; set -a; . "$W.ledger-e4"; set +a
 git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter fetch -q origin --tags || exit 1
 git -C "$W" merge-base --is-ancestor "$ARBITER_TAG_P4^{commit}" HEAD && echo branch-carries-p4
 git -C "$W" merge-base --is-ancestor "$ARBITER_TAG_P4^{commit}" origin/main && echo main-carries-p4
@@ -6559,7 +6652,7 @@ func TestNoStage3ProtoFieldIsPending(t *testing.T) {
 
 - [ ] **Step 4: Run them and see the golden fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcrossStage3$' -count=1; go test ./server/ -run '^TestNoStage3ProtoFieldIsPending$' -count=1 -v | grep -E '^(--- |ok|FAIL)'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcrossStage3$' -count=1; go test ./server/ -run '^TestNoStage3ProtoFieldIsPending$' -count=1 -v | grep -E '^(--- |ok|FAIL)'`
 Expected: `--- FAIL: TestPreActivationHistoryIsByteIdenticalAcrossStage3` with `pre_stage3_golden_test.go:357: open testdata/pre_stage3_golden.json: no such file or directory` (nothing is captured yet); then `--- PASS: TestNoStage3ProtoFieldIsPending` and `ok`. If the server test fails, its message names the fields still pending: stop; their owning tasks (Tasks 69, 70, 72 and 74 per Plan S3-E2 Task 64's map) serve them before the release.
 
 - [ ] **Step 5: Capture the history once from `ARBITER_TAG_P4`**
@@ -6567,7 +6660,7 @@ Expected: `--- FAIL: TestPreActivationHistoryIsByteIdenticalAcrossStage3` with `
 Local only (a `git archive` export of a local tag; the build reads the module cache, and a module missing from it stops the build with `module lookup disabled by GOPROXY=off`: then rerun the `go test` line without `GOPROXY=off`, a remote read that needs explicit user confirmation in chat first).
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; set -a; . "$W.ledger-e4"; set +a
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; set -a; . "$W.ledger-e4"; set +a
 C="$HOME/.cache/s3e4-task78/capture-$ARBITER_TAG_P4"
 [ ! -e "$W/fsm/testdata/pre_stage3_golden.json" ] || { echo "the frozen history exists already: it is captured once; stop and ask"; exit 1; }
 [ ! -e "$C" ] || { echo "$C exists (an earlier attempt): ask before removing it"; exit 1; }
@@ -6585,18 +6678,18 @@ Expected: `pre_stage3_golden_test.go:353: captured; commit the file`, `--- SKIP:
 
 - [ ] **Step 6: Replay it on the branch and see the recapture refused**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcross' -count=1 -v | grep -E '^(--- |ok|FAIL)'; ARBITER_CAPTURE_PRE_STAGE3_GOLDEN=1 go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcrossStage3$' -count=1 2>&1 | grep -E 'exists; it is captured once|^(ok|FAIL)'; git -C "$W" status --porcelain`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcross' -count=1 -v | grep -E '^(--- |ok|FAIL)'; ARBITER_CAPTURE_PRE_STAGE3_GOLDEN=1 go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcrossStage3$' -count=1 2>&1 | grep -E 'exists; it is captured once|^(ok|FAIL)'; git -C "$W" status --porcelain`
 Expected: `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossStage3`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossTracks` and `ok` (the branch, with every stage-3 change of Tasks 64–77, replays the history of the release before stage 3 byte for byte); then `pre_stage3_golden_test.go:347: testdata/pre_stage3_golden.json exists; it is captured once from the release before stage 3 and never rewritten` and `FAIL`; then exactly `?? fsm/pre_stage3_golden_test.go`, `?? fsm/testdata/pre_stage3_golden.json` and `?? server/stage3_release_test.go`. A `pre-activation history replays differently from the release before stage 3:` failure is a consensus change before the activation: stop; it is a defect of Tasks 64–77, never a reason to touch the JSON.
 
 - [ ] **Step 7: Register the files and commit**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- fsm/BUILD.bazel server/BUILD.bazel`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- fsm/BUILD.bazel server/BUILD.bazel`
 Expected: the status adds ` M fsm/BUILD.bazel` and ` M server/BUILD.bazel`; gazelle adds `"pre_stage3_golden_test.go",` between `"pre_signed_claims_golden_test.go",` and `"pre_tracks_golden_test.go",` of `go_test(name = "fsm_test")` and `"stage3_release_test.go",` in sorted position to `go_test(name = "server_test")`, and no dependency (the fsm test target already lists `authoritytest`, go-ethereum's `crypto` and housegate's `lthash`; `data = glob(["testdata/**"])` covers the JSON).
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add fsm/pre_stage3_golden_test.go fsm/testdata/pre_stage3_golden.json fsm/BUILD.bazel server/stage3_release_test.go server/BUILD.bazel
-git -C "$W" commit -m "test(stage3): freeze the pre-activation history of the release before stage 3 (Task 78)
+git -C "$W" commit -S -m "test(stage3): freeze the pre-activation history of the release before stage 3 (Task 78)
 
 fsm/testdata/pre_stage3_golden.json is a post-tracks history with a
 third indexer, publications and cleanups on every track, a quarantine
@@ -7493,7 +7586,7 @@ func TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup(t *testing.T) {
 
 - [ ] **Step 9: Run them and see them fail to build**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/ -run '^(TestStage3|TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup)' -count=1 2>&1 | head -6`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/ -run '^(TestStage3|TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup)' -count=1 2>&1 | head -6`
 Expected: the package does not build: `integration/stage3_p5_test.go:251:12: tc.cfgs undefined (type *tracksCluster has no field or method cfgs)`, and the same at `:279:31` and `:291:19`; the cluster does not keep its nodes' configurations yet. Any other error: stop; a consumed name of Tasks 64–77 differs from contract §44–§54 (Step 1 checked them).
 
 - [ ] **Step 10: Extend the in-process cluster**
@@ -7615,16 +7708,16 @@ with:
 
 - [ ] **Step 11: Run them and see them pass**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l integration)" && go vet ./integration/ && go test ./integration/ -run '^(TestStage3|TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup)' -count=1 -race -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l integration)" && go vet ./integration/ && go test ./integration/ -run '^(TestStage3|TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup)' -count=1 -race -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
 Expected: `--- PASS:` for `TestStage3ActivationWithEverySwitchOffChangesNothingButTheEncoding`, `TestStage3ActivationExemptsAQuarantinedTracksSNode`, `TestStage3ActivationRefusesAnUnupgradedDataPlaneNode`, `TestStage3VotersRestartFromV21Snapshots`, `TestStage3ForcedPlainBodyAfterActivation` and `TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup`, then `ok`. A failure names the voter, the container byte or the refusal it saw; the tests read only contract names, so a failure is a defect of the task that owns the behaviour (64–77), fixed there in a new commit of this branch, never by weakening the test.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/ -count=1 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/ -count=1 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
 Expected: `ok` (the whole package: the stage-2 harness tests pass with the carried `stage3` and the new metadata key).
 
 Check the fixture writer (local; the file goes to a temporary directory):
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; f="$(mktemp -d)/v21.container"
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; f="$(mktemp -d)/v21.container"
 cd "$W" && ARBITER_WRITE_V21_FIXTURE="$f" go test ./integration/ -run '^TestStage3VotersRestartFromV21Snapshots$' -count=1 -v 2>&1 | grep -E "wrote |^(--- |ok)"
 od -An -tu1 -N6 "$f"
 rm -rf -- "$(dirname "$f")"
@@ -7634,13 +7727,13 @@ Expected: `wrote arb-<n>'s v21 container (<bytes> bytes) to <f>`, `--- PASS: Tes
 
 - [ ] **Step 12: Register the file and commit**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- integration/BUILD.bazel`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- integration/BUILD.bazel`
 Expected: ` M integration/BUILD.bazel`, ` M integration/cluster_node_test.go`, ` M integration/cluster_test.go`, ` M integration/tracks_harness_test.go` and `?? integration/stage3_p5_test.go`; gazelle adds `"stage3_p5_test.go",` after the stage-3 P0 and P4 test files of `go_test(name = "integration_test")` and no dependency (`authoritytest`, housegate's `replay`, `wire`, `config` and `fsm` are listed already).
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add integration/stage3_p5_test.go integration/tracks_harness_test.go integration/cluster_test.go integration/cluster_node_test.go integration/BUILD.bazel
-git -C "$W" commit -m "test(stage3): activation, v21 restarts and the narrowed drain on the in-process cluster (Task 78)
+git -C "$W" commit -S -m "test(stage3): activation, v21 restarts and the narrowed drain on the in-process cluster (Task 78)
 
 Six tests over the stage-2 tracks harness: the activation with every
 switch off changes nothing but the snapshot encoding; a quarantined
@@ -8274,7 +8367,7 @@ func TestStage3MemberReconcilerConfigMatchesRole(t *testing.T) {
 
 - [ ] **Step 14: Run them and see them fail to build**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go vet ./integration/chpipeline/ 2>&1 | head -4`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go vet ./integration/chpipeline/ 2>&1 | head -4`
 Expected: `vet: integration/chpipeline/stage3_test.go:54:10: undefined: stage3Harness` (the harness does not exist yet; `go test` lists `undefined: startStage3Harness` and the other harness names too).
 
 - [ ] **Step 15: Write the stage-3 harness**
@@ -9656,11 +9749,11 @@ func (h *stage3Harness) advanceCursor(t *testing.T, n uint64) {
 
 - [ ] **Step 16: Run them and see them skip, and fail when opted in without servers**
 
-Run the configuration regression without Docker first: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/chpipeline/ -run '^TestStage3MemberReconcilerConfigMatchesRole$' -count=1 -v`
+Run the configuration regression without Docker first: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/chpipeline/ -run '^TestStage3MemberReconcilerConfigMatchesRole$' -count=1 -v`
 Expected: `--- PASS: TestStage3MemberReconcilerConfigMatchesRole` and `ok`. This checks every member and the shared startup/restart path against the role's network id, genesis tables and pinned member storage policy; the integration run below must use the actual `CORE_TAG_P5` implementation of Task 62. A permissive reconciler stand-in cannot validate the switch-on tests.
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && test -z "$(gofmt -l integration/chpipeline)" && go vet ./integration/chpipeline/ && go test ./integration/chpipeline/ -run '^TestPipeline_Stage3' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'; ARBITER_CH_STAGE3=1 go test ./integration/chpipeline/ -run '^TestPipeline_Stage3SwitchOnInOrder$' -count=1 2>&1 | grep -E '^(--- |FAIL)|needs '`
-Expected: gofmt and vet are silent; seven `--- SKIP:` lines (`TestPipeline_Stage3SwitchOnInOrder`, `TestPipeline_Stage3FloorAtKTwoHoldsCleanupUntilAMemberCheckpoints`, `TestPipeline_Stage3ReselectionOnAQuietTrack`, `TestPipeline_Stage3EvictionVoidingKeepsALatchedVerdict`, `TestPipeline_Stage3KillOneMemberMidStream`, `TestPipeline_Stage3OneIndexerDownStallsOnlyItsTrack`, `TestPipeline_Stage3QuarantinedOwnersCopiesStayServed`), each after `set ARBITER_CH_STAGE3=1, CH_STAGE3_ADDRS and CH_STAGE3_KEEPER to run (scripts/ci/stage3-pipeline.sh)`, and `ok`; then `--- FAIL: TestPipeline_Stage3SwitchOnInOrder` with `stage3_test.go:36: ARBITER_CH_STAGE3=1 needs CH_STAGE3_ADDRS: three host:port addresses, comma-separated (servers a, b, c), got ""` and `FAIL` (an opted-in run never turns into a skip). Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && go test ./integration/chpipeline/ -count=1 2>&1 | tail -1`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l integration/chpipeline)" && go vet ./integration/chpipeline/ && go test ./integration/chpipeline/ -run '^TestPipeline_Stage3' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'; ARBITER_CH_STAGE3=1 go test ./integration/chpipeline/ -run '^TestPipeline_Stage3SwitchOnInOrder$' -count=1 2>&1 | grep -E '^(--- |FAIL)|needs '`
+Expected: gofmt and vet are silent; seven `--- SKIP:` lines (`TestPipeline_Stage3SwitchOnInOrder`, `TestPipeline_Stage3FloorAtKTwoHoldsCleanupUntilAMemberCheckpoints`, `TestPipeline_Stage3ReselectionOnAQuietTrack`, `TestPipeline_Stage3EvictionVoidingKeepsALatchedVerdict`, `TestPipeline_Stage3KillOneMemberMidStream`, `TestPipeline_Stage3OneIndexerDownStallsOnlyItsTrack`, `TestPipeline_Stage3QuarantinedOwnersCopiesStayServed`), each after `set ARBITER_CH_STAGE3=1, CH_STAGE3_ADDRS and CH_STAGE3_KEEPER to run (scripts/ci/stage3-pipeline.sh)`, and `ok`; then `--- FAIL: TestPipeline_Stage3SwitchOnInOrder` with `stage3_test.go:36: ARBITER_CH_STAGE3=1 needs CH_STAGE3_ADDRS: three host:port addresses, comma-separated (servers a, b, c), got ""` and `FAIL` (an opted-in run never turns into a skip). Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/chpipeline/ -count=1 2>&1 | tail -1`
 Expected: `ok` (the 25.8 tests skip without `ARBITER_CH_INTEGRATION`, as before).
 
 - [ ] **Step 17: Add the CI job, its scripts and the README paragraph**
@@ -10120,25 +10213,25 @@ In `README.md`, insert this paragraph as one line right before the line `## Arti
 **Integration and release checks (P5).** `fsm/testdata/pre_stage3_golden.json` is a pre-activation history captured once from the release before stage 3; `TestPreActivationHistoryIsByteIdenticalAcrossStage3` replays it byte for byte, and it is never recaptured (`ARBITER_CAPTURE_PRE_STAGE3_GOLDEN=1` refuses while the file exists). `integration/stage3_p5_test.go` runs the activation on the in-process cluster: every switch off, a quarantined track's unupgraded SNode exempt from the gate, voters restarting from v21, `raft.snapshot_body: plain`, and the narrowed drain committing an update while the copy floor holds a cleanup (`ARBITER_WRITE_V21_FIXTURE=<path>` also writes the leader's v21 container). The chpipeline stage-3 tests need three ClickHouse 26.3 servers and one Keeper and stay skipped unless `ARBITER_CH_STAGE3=1`, `CH_STAGE3_ADDRS` (servers a, b, c) and `CH_STAGE3_KEEPER` are set; `bash scripts/ci/stage3-pipeline.sh clickhouse/clickhouse-server:26.3.37.3` starts them on a private docker network from `scripts/ci/stage3-*.xml` (the member users with exactly their grant lists, never `ALL` on `hg_rstage`), runs every switch in the order of spec §10.4 and the §17 failure scenarios through Bazel, and removes the containers; CI's `integration-clickhouse-stage3` job runs it on every pull request.
 ```
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bash -n scripts/ci/stage3-pipeline.sh && shellcheck scripts/ci/stage3-pipeline.sh && xmllint --noout scripts/ci/stage3-clickhouse-config.xml scripts/ci/stage3-clickhouse-users.xml scripts/ci/stage3-keeper.xml && ruby -ryaml -e 'w = YAML.load_file(".github/workflows/ci.yml"); j = w["jobs"]; puts j["integration-clickhouse-stage3"]["steps"].last["run"]; puts j["docker-dev"]["needs"].join(",")' && (command -v actionlint > /dev/null && actionlint .github/workflows/ci.yml && echo actionlint-clean || echo "actionlint not installed")`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bash -n scripts/ci/stage3-pipeline.sh && shellcheck scripts/ci/stage3-pipeline.sh && xmllint --noout scripts/ci/stage3-clickhouse-config.xml scripts/ci/stage3-clickhouse-users.xml scripts/ci/stage3-keeper.xml && ruby -ryaml -e 'w = YAML.load_file(".github/workflows/ci.yml"); j = w["jobs"]; puts j["integration-clickhouse-stage3"]["steps"].last["run"]; puts j["docker-dev"]["needs"].join(",")' && (command -v actionlint > /dev/null && actionlint .github/workflows/ci.yml && echo actionlint-clean || echo "actionlint not installed")`
 Expected: no `shellcheck` or `xmllint` output; `bash scripts/ci/stage3-pipeline.sh clickhouse/clickhouse-server:26.3.37.3`; `test,integration-clickhouse,integration-clickhouse-hardlink,integration-clickhouse-stage3,anchor-bindings-provenance,anchor-anvil`; `actionlint-clean` (or `actionlint not installed`, which CI's own parse then covers).
 
 - [ ] **Step 18: Run the stage-3 job locally**
 
 The job's script needs docker and Bazel. If `docker image inspect clickhouse/clickhouse-server:26.3.37.3 > /dev/null` fails, the script's first `docker run` pulls the image from Docker Hub: a remote read that needs explicit user confirmation in chat before running. Then:
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bash scripts/ci/stage3-pipeline.sh clickhouse/clickhouse-server:26.3.37.3 2>&1 | grep -E '^(stage-3 |CH_STAGE3_ADDRS=)|--- (PASS|FAIL|SKIP): TestPipeline_Stage3|did not'; docker ps -a --filter name=arbiter-stage3- --format '{{.Names}}'; docker network ls --filter name=arbiter-stage3- --format '{{.Name}}'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bash scripts/ci/stage3-pipeline.sh clickhouse/clickhouse-server:26.3.37.3 2>&1 | grep -E '^(stage-3 |CH_STAGE3_ADDRS=)|--- (PASS|FAIL|SKIP): TestPipeline_Stage3|did not'; docker ps -a --filter name=arbiter-stage3- --format '{{.Names}}'; docker network ls --filter name=arbiter-stage3- --format '{{.Name}}'`
 Expected: `stage-3 servers ready: 26.3.37.3`, `CH_STAGE3_ADDRS=127.0.0.1:<a>,127.0.0.1:<b>,127.0.0.1:<c> CH_STAGE3_KEEPER=127.0.0.1:<k>`, the subtests and the seven tests as `--- PASS: TestPipeline_Stage3…` (`TestPipeline_Stage3SwitchOnInOrder` with its eleven subtests `activation` … `raise_k` in order), `stage-3 integration passed`; then no container and no network (the script removed them). The run takes tens of minutes (unmeasured while drafting; the job's timeout is 90 minutes). A failure prints the last 50 log lines of every container: a harness or ClickHouse-mechanics failure is fixed in this task's files; a failure of a switch's effect is a defect of the task that owns it (64–77), fixed there in a new commit of this branch. If the script was killed, remove what it left with `docker rm -fv` on the names `docker ps -a --filter name=arbiter-stage3-` prints and `docker network rm` on the network.
 
 - [ ] **Step 19: Register the files and commit**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- integration/chpipeline/BUILD.bazel`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- integration/chpipeline/BUILD.bazel`
 Expected: ` M .github/workflows/ci.yml`, ` M README.md`, ` M integration/chpipeline/BUILD.bazel`, `?? integration/chpipeline/harness_stage3_test.go`, `?? integration/chpipeline/stage3_test.go` and the four `?? scripts/ci/stage3-…` files; gazelle adds `"harness_stage3_test.go",` and `"stage3_test.go",` in sorted position to `go_test(name = "chpipeline_test")` and the dependencies `"@arbiter_core//authority/authoritytest"`, `"@arbiter_core//member/consensus"` and `"@arbiter_core//member/serve"` (the others are listed already by Plan S3-C2 Task 36's member harness).
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 git -C "$W" add integration/chpipeline/harness_stage3_test.go integration/chpipeline/stage3_test.go integration/chpipeline/BUILD.bazel scripts/ci/stage3-pipeline.sh scripts/ci/stage3-clickhouse-config.xml scripts/ci/stage3-clickhouse-users.xml scripts/ci/stage3-keeper.xml .github/workflows/ci.yml README.md
-git -C "$W" commit -m "test(stage3): chpipeline stage-3 harness with every switch in order, and its CI job (Task 78)
+git -C "$W" commit -S -m "test(stage3): chpipeline stage-3 harness with every switch in order, and its CI job (Task 78)
 
 Three SI hosts on three ClickHouse 26.3.37.3 servers that share one
 Keeper: three SNodes, the three pool verifiers and, from step 4, one
@@ -10163,7 +10256,7 @@ Expected: `poetry <chen@sentio.xyz>` and an empty status.
 
 - [ ] **Step 20: Full verification**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; set -a; . "$W.ledger-e4"; set +a; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && bazel run //:gazelle && git -C "$W" status --porcelain && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors && git -C "$W" diff --exit-code --diff-filter=MDR "$ARBITER_TAG_P4" HEAD -- fsm/testdata accumulator/testdata fsm/l3_commitment_golden_test.go fsm/l3_transition_golden_test.go fsm/l3_track_golden_test.go fsm/legacy_lane_golden_test.go fsm/pre_signed_claims_golden_test.go fsm/pre_tracks_golden_test.go && git -C "$W" log --format='%h %s' --diff-filter=MD "$ARBITER_TAG_P4..HEAD" -- fsm/testdata accumulator/testdata; bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; ./scripts/anchor-bindings.sh check && ./scripts/databases-bindings.sh check; git -C "$W" log --format=%s "$(git -C "$W" merge-base origin/main HEAD)..HEAD" | grep -c ' (Task 78)$'`
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; set -a; . "$W.ledger-e4"; set +a; cd "$W" && test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)" && bazel run //:gazelle && git -C "$W" status --porcelain && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors && git -C "$W" diff --exit-code --diff-filter=MDR "$ARBITER_TAG_P4" HEAD -- fsm/testdata accumulator/testdata fsm/l3_commitment_golden_test.go fsm/l3_transition_golden_test.go fsm/l3_track_golden_test.go fsm/legacy_lane_golden_test.go fsm/pre_signed_claims_golden_test.go fsm/pre_tracks_golden_test.go && git -C "$W" log --format='%h %s' --diff-filter=MD "$ARBITER_TAG_P4..HEAD" -- fsm/testdata accumulator/testdata; bazel query 'deps(//fsm:fsm, 1)' | grep -c com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; ./scripts/anchor-bindings.sh check && ./scripts/databases-bindings.sh check; git -C "$W" log --format=%s "$(git -C "$W" merge-base origin/main HEAD)..HEAD" | grep -c ' (Task 78)$'`
 Expected: gofmt lists nothing; gazelle changes nothing and the status is empty; the build succeeds and every target PASSes under the race build (CI's `test` job invocation), the four frozen pre-activation goldens, the `l3_*` goldens, Plan S3-E2's v21 containers and every `TestDeterminism_*` included; the `diff` (modified, deleted or renamed files only) is empty and the `log` prints nothing, so no golden or vector that existed at `ARBITER_TAG_P4` or was added by Tasks 64–78 has changed since; `0`; the `grep` prints nothing; both bindings checks pass; `3` (this task's commits). The ClickHouse jobs run in CI on the PR (Step 27); Step 18 ran the new one locally.
 
 **Offline replay and the P5 rehearsal directory (Steps 21–25, local only).** They replay the local copies of the devnet2 logs under `ARBITER_TAG_P4` (the voters' release and rollback target before the activation) and the branch head, prove that both write the same pre-v21 containers and restore each other's, that `ARBITER_TAG_P4` refuses every v21 container at its version byte while the branch restores both bodies, and dry-run the rehearsal binary. They change nothing in the worktree and write only `$R5` and `$W.replay-e4.txt`. Steps 30 and 31 rebuild `$R5` from the release after the cut.
@@ -10171,7 +10264,7 @@ Expected: gofmt lists nothing; gazelle changes nothing and the status is empty; 
 - [ ] **Step 21: Create `$R5` and write its sources**
 
 ```bash
-R5="$HOME/si-devnet2-multisource-s3e-rehearsal"; W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
+R5="$HOME/si-devnet2-multisource-s3e-rehearsal"; . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 [ ! -e "$R5" ] || { echo "$R5 exists: there is one P5 rehearsal directory and this task creates it (decision D37); stop and ask"; exit 1; }
 [ ! -e "$W.replay-e4.txt" ] || { echo "$W.replay-e4.txt exists: evidence is never overwritten; stop and ask"; exit 1; }
 mkdir -m 700 "$R5" && mkdir -p "$R5/statedigest" "$R5/v20check" "$R5/snapdump" "$R5/v21check" "$R5/p5rehearsal" "$R5/src" "$R5/out" && echo "created $R5"
@@ -10188,7 +10281,7 @@ Write `/Users/uranuswch/si-devnet2-multisource-s3e-rehearsal/helpers.sh` with th
 # survives between Bash calls.
 # shellcheck disable=SC2034 # the blocks that source this file read these
 R5="$HOME/si-devnet2-multisource-s3e-rehearsal"
-W="$HOME/src/remotesrc/claude/arbiter/multi-source-s3e"
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
 R="$HOME/si-devnet2-multisource-s3a-rehearsal"
 S2R="$HOME/si-devnet2-multisource-s2-rehearsal"
 LIVE="$HOME/si-devnet2-multisource-tracks"
@@ -10880,7 +10973,7 @@ echo "$ARBITER_TAG_P4" > "$R5/old_tag.txt"
 { echo "old $ARBITER_TAG_P4 $(git -C "$W" rev-parse "$ARBITER_TAG_P4^{commit}")"; echo "branch $(git -C "$W" rev-parse HEAD) $(git -C "$W" rev-parse --abbrev-ref HEAD)"; (cd "$R5" && shasum -a 256 statedigest/main.go v20check/main.go snapdump/main.go v21check/main.go p5rehearsal/p5rehearsal_test.go helpers.sh); } | tee "$REPLAY"
 ```
 
-Expected: one `inputs present` line; then the opening of `$W.replay-e4.txt`: `old <ARBITER_TAG_P4> <its commit>`, `branch <head> urwt/claude/multi-source-s3e` and six checksum lines, the first two `c5168a19360228da9be001633cb5cf1c2f5a0f49c45c8f90df3dc176c37ac7e4  statedigest/main.go` and `fccc6a876b79ba43f9211afb10e0448d432ee37f1c570b36560ded04c5d004ab  v20check/main.go` (Plan S3-A's recorded checksums; `v21check/main.go` was `86f3075476a1c8a8229e8c1e66332c49066be8639703ba7d8a8b0c4f160aee9a` as drafted). A different checksum for the first two, or a missing input: stop and find the original (Plans S3-A Task 11, S2-A Task 15, S2-B, S3-B Task 15); never rewrite those tools.
+Expected: one `inputs present` line; then the opening of `$W.replay-e4.txt`: `old <ARBITER_TAG_P4> <its commit>`, `branch <head> urwt/codex/multi-source-s3e` and six checksum lines, the first two `c5168a19360228da9be001633cb5cf1c2f5a0f49c45c8f90df3dc176c37ac7e4  statedigest/main.go` and `fccc6a876b79ba43f9211afb10e0448d432ee37f1c570b36560ded04c5d004ab  v20check/main.go` (Plan S3-A's recorded checksums; `v21check/main.go` was `86f3075476a1c8a8229e8c1e66332c49066be8639703ba7d8a8b0c4f160aee9a` as drafted). A different checksum for the first two, or a missing input: stop and find the original (Plans S3-A Task 11, S2-A Task 15, S2-B, S3-B Task 15); never rewrite those tools.
 
 - [ ] **Step 23: Build both trees and replay every copy**
 
@@ -10933,7 +11026,7 @@ Expected: `exit 1`; `voter 0 restored epoch=5 promotion_seq=59 drain_refusal=""`
 
 - [ ] **Step 26: Write the PR body**
 
-Write `~/src/remotesrc/claude/arbiter/multi-source-s3e.pr-body.md` (beside the worktree, never committed) with the Write tool:
+Source Task64's retained env, resolve `"$W.pr-body.md"` beside that actual returned worktree (never committed), then write that exact path with the Write tool:
 
 ```markdown
 Stage 3 P5 of the multi-source storage-integrity network, arbiter half (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §6–§10, §15–§17; housegate Plans S3-E2 Tasks 64–70, S3-E3 Tasks 71–75 and S3-E4 Tasks 76–78, contracts §44–§55). Every switch is off: nothing changes until the authority-signed activation, after it only the snapshot encoding, and each switch is turned on later by its own signed update, one at a time, in the order of spec §10.4.
@@ -10957,18 +11050,25 @@ Fill in the three tags and `<ARBITER_TAG_P4>` from `$W.ledger-e4`, the counts fr
 
 - [ ] **Step 27: Push the branch, open the PR and watch CI (requires explicit user confirmation)**
 
-Remote writes (push, PR): need explicit user confirmation in chat before running. Gate: "push urwt/claude/multi-source-s3e (Tasks 64–78) to sentioxyz/arbiter and open the P5 PR"; if Step 1 rewrote the authors and `$W.rewrite-lease` is not empty, the gate adds ", replacing the remote branch's history with the author-rewritten one (force with lease; irreversible for anyone who fetched the old commits)". After a yes:
+Remote writes (push, PR): need explicit user confirmation in chat before running. Gate: "push urwt/codex/multi-source-s3e (Tasks 64–78) to sentioxyz/arbiter and open the P5 PR"; if Step 1 rewrote the authors and `$W.rewrite-lease` is not empty, the gate adds ", replacing the remote branch's history with the author-rewritten one (force with lease; irreversible for anyone who fetched the old commits)". After a yes:
 
 ```bash
-W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; set -a; . "$W.ledger-e4"; set +a
-[ -z "$(git -C "$W" status --porcelain)" ] || { echo "the worktree has uncommitted changes; stop"; exit 1; }
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; set -a; . "$W.ledger-e4" || exit 1; set +a
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo "the worktree has uncommitted changes; stop"; exit 1; }
 git -C "$W" merge-base --is-ancestor "$ARBITER_TAG_P4^{commit}" HEAD || { echo "the branch does not contain $ARBITER_TAG_P4; stop"; exit 1; }
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$head")" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$head" || exit 1
 if [ -s "$W.rewrite-lease" ]; then
-  git -C "$W" push --force-with-lease="urwt/claude/multi-source-s3e:$(cat "$W.rewrite-lease")" origin HEAD:urwt/claude/multi-source-s3e || exit 1
+  lease="$(cat "$W.rewrite-lease")" || exit 1
+  [[ "$lease" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid rewrite lease; stop"; exit 1; }
+  git -C "$W" push --force-with-lease="urwt/codex/multi-source-s3e:$lease" origin "$head:urwt/codex/multi-source-s3e" || exit 1
 else
-  git -C "$W" push -u origin HEAD:urwt/claude/multi-source-s3e || exit 1
+  git -C "$W" push -u origin "$head:urwt/codex/multi-source-s3e" || exit 1
 fi
-cd "$W" && gh pr create --repo sentioxyz/arbiter --base main --head urwt/claude/multi-source-s3e --title 'multi-source SI stage 3 P5: snapshot v21, groups, owner-aware selection, checkpoints, copy floor, narrowed drain (every switch off)' --body-file ~/src/remotesrc/claude/arbiter/multi-source-s3e.pr-body.md
+cd "$W" && gh pr create --repo sentioxyz/arbiter --base main --head urwt/codex/multi-source-s3e --title 'multi-source SI stage 3 P5: snapshot v21, groups, owner-aware selection, checkpoints, copy floor, narrowed drain (every switch off)' --body-file "$W.pr-body.md"
 ```
 
 Expected: the push (a rejected push, because the remote branch moved, is never forced further: stop and ask) and the PR URL. Then (read-only, a remote read: confirmed with the push): `gh pr checks <n> --repo sentioxyz/arbiter --watch`.
@@ -11015,7 +11115,7 @@ git -C "$A" fetch -q origin
 git -C "$A" rev-parse origin/main > "$R5/merge-commit"
 git -C "$A" log -1 --format='%an <%ae>' origin/main
 git -C "$A" log -1 --format=%b origin/main | grep -i '^co-authored-by:' | grep -vic 'noreply@anthropic.com'
-git -C "$A" diff --stat urwt/claude/multi-source-s3e origin/main
+git -C "$A" diff --stat urwt/codex/multi-source-s3e origin/main
 ```
 
 Expected: the merge succeeds, `merge-commit` holds main's new head, the merge's author is `poetry <chen@sentio.xyz>` (the merging account) and `0` (GitHub added no `Co-authored-by` trailer for another identity; only Claude's, if any), and the `diff --stat` prints nothing (the squash carries exactly the branch's tree; if `main` moved meanwhile it lists only those other commits' files, which Step 30's replay of the release then covers; stop if any of them changes `go.mod`).
@@ -11032,7 +11132,8 @@ Write `/Users/uranuswch/si-devnet2-multisource-s3e-rehearsal/cut-release.sh` wit
 set -euo pipefail
 A=/Users/uranuswch/Dev/projects/sentio-network/arbiter
 R5="$HOME/si-devnet2-multisource-s3e-rehearsal"
-set -a; . "$HOME/src/remotesrc/claude/arbiter/multi-source-s3e.ledger-e4"; set +a
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+set -a; . "$W.ledger-e4" || exit 1; set +a
 MERGE="$(cat "$R5/merge-commit")"
 [ ! -e "$R5/arbiter-release" ] || { echo "$R5/arbiter-release exists: the release was cut already; stop"; exit 1; }
 git -C "$A" fetch -q --tags origin
@@ -11198,7 +11299,10 @@ git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" get "$h" ARBITER_TAG_P5 ARBITER_DIGEST_P5
 ```
 
-Expected: `ARBITER_TAG_P5=<the value written>` and `ARBITER_DIGEST_P5=<the value written>`. Anything else (for example the plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. It closes branch `urwt/claude/multi-source-s3e` (Tasks 64–78): Task 80 pins the chart to `ARBITER_DIGEST_P5`, Task 81's runbook reads `$R5` and the ledger, and Task 82 rolls the release. Run `wt remove` on this task's worktrees only when the user asks.
+Expected: `ARBITER_TAG_P5=<the value written>` and `ARBITER_DIGEST_P5=<the value written>`. Anything else (for example the plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. It closes branch `urwt/codex/multi-source-s3e` (Tasks 64–78): Task 80 pins the chart to `ARBITER_DIGEST_P5`, Task 81's runbook reads `$R5` and the ledger, and Task 82 rolls the release. Run `wt remove` on this task's worktrees only when the user asks.
+
+Handoff qualification: Step1 validates the actual signed Task77 HEAD against its original T64 receipt before any optional confirmed author rewrite. If that legacy rewrite is needed, preserve the original receipt and `$W.rewrite-before` as the pre-rewrite observation; later source/PR/release checks use the newly observed current branch head, never relabel the old receipt or controller SOURCE_CUSTODY as a new formal HEAD. Both the PR head and the release diff use Task64's checked `urwt/codex/multi-source-s3e`; the PR body and `.ledger-e4` paths derive from the retained actual `W`.
+
 
 ---
 
@@ -20980,7 +21084,7 @@ Plan S3-A's §0–§6, Plan S3-B's §7–§15 and the contracts of S3-C1 (§16�
   - **Stage3 gate:** `server/stage3_gate.go` with metadata key `arbiter-stage3-voters` and refusals prefixed `stage3 gate refused: `; the post-activation registration refusal.
   - **Snapshot v21:** `snapshotVersionV21 = 21`, the body-kind byte right after the version byte (0 plain, 1 interned), node config `raft.snapshot_body: auto|plain`, `arbiter_snapshot_encoding_fallback_total`, `arbiter_snapshot_body_bytes{kind}`, the forced-mismatch seam `internSnapshotBodyFunc` of Task 67.
   - **arbiter-admin:** `--stage3`, `--indexer-failure-domain id=N,domain=D` (repeated), `--stage3-max-lag-publications`, `--stage3-lag-low`, `--stage3-evidence-timeout-l2-blocks`, `--stage3-max-uncleaned-parts-per-partition`, `--stage3-max-uncleaned-parts-per-table`, `--stage3-switch NAME`, `--stage3-min-safe-copies`.
-  - **Branch:** `urwt/claude/multi-source-s3e` in worktree `~/src/remotesrc/claude/arbiter/multi-source-s3e`.
+  - **Branch/worktree:** source Task64's retained `$HOME/.cache/s3e2-task64/env.sh`; `W` is the exact returned path in its `worktree.json`, checked on `urwt/codex/multi-source-s3e`. Task76 requires actual clean signed HEAD equal to the existing `"$T64/task75-final-head"`; Task76/77 exclusively retain `task76-final-head`/`task77-final-head` after their signed commit chains for the next task. No SOURCE_CUSTODY/null-HEAD projection supplies a formal predecessor.
   - **Rehearsal directory:** `$HOME/si-devnet2-multisource-s3e-rehearsal` (§48) with its tools (`v21check` among them) and `rehearsal_build`. This plan calls it `$R5` and keeps it as the one P5 rehearsal directory (decision D37, §55).
 - S3-E3 §49–§52:
   - **Group state:** `Stage3State.Groups []*DatabaseGroup`, `DatabaseGroup{Owner uint64; DatabaseID string; Generation uint64; Salt string; NetworkFill bool; Members []GroupMember; Leaving []LeavingMember; PastMembers []string}`, `GroupMember{NodeID string; JoinedGeneration uint64; Class MemberClass; ReadyGeneration uint64; ReadySignature string; ReadyEpoch uint64; Checkpoint *MemberCheckpointRecord; ObservedEntry *replay.TrackFrontier}`.
@@ -21187,7 +21291,7 @@ A promoted unsafe part is floor-held, and so not in flight, exactly when it belo
 - **Release files:** `$R5/merge-commit` and `$R5/arbiter-release` (line 1 tag, line 2 digest), written by `$R5/cut-release.sh`, which follows the S3-A Task 11 Step 12 pattern.
 
 **Release.**
-- **PR:** one PR of `urwt/claude/multi-source-s3e` (Tasks 64–78) to arbiter `main`, titled `multi-source SI stage 3 P5: snapshot v21, groups, owner-aware selection, checkpoints, copy floor, narrowed drain (every switch off)`, body file `~/src/remotesrc/claude/arbiter/multi-source-s3e.pr-body.md`. Before it merges, `ARBITER_TAG_P4` must be on `main` (S3-D) and the branch must contain it.
+- **PR:** one PR of `urwt/codex/multi-source-s3e` (Tasks 64–78) to arbiter `main`, titled `multi-source SI stage 3 P5: snapshot v21, groups, owner-aware selection, checkpoints, copy floor, narrowed drain (every switch off)`, body file `"$W.pr-body.md"`. Before it merges, `ARBITER_TAG_P4` must be on `main` (S3-D) and the branch must contain it.
 - **Merge and cut:** squash merge, then `gh workflow run cut-release.yml --repo sentioxyz/arbiter --ref main`. The tag is recorded from `gh release view`, never predicted. `ARBITER_DIGEST_P5` is the `docker buildx imagetools inspect ghcr.io/sentioxyz/arbiter:$ARBITER_TAG_P5` digest, and its `org.opencontainers.image.revision` must equal the tag's commit.
 
 ### 56. sentio-node and the production chart (Tasks 79–80)
@@ -21379,7 +21483,7 @@ Run-record items: `arbiter P5 release` (Task 78), `sentio-node P5 release` (Task
 **Repositories and commands.**
 - **Local repositories:** `/Users/uranuswch/Dev/projects/sentio-network/<repo>`.
 - **Worktrees** (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> claude <name>`, whose JSON `path` is `$W`):
-  - arbiter `multi-source-s3e` (consumed, S3-E2 §48);
+  - arbiter `multi-source-s3e` is consumed only: do not call URWT again or infer a Claude path; load Task64's retained env/JSON as above (S3-E2 §48). The creation command in this list applies only to the other repositories;
   - sentio-node `multi-source-s3e4`;
   - production `multi-source-s3e4`, branch `urwt/claude/multi-source-s3e4` from `origin/main` after `P4_PR` merged, for Tasks 80–81;
   - production `multi-source-s3e4-live`, held at a detached, freshly fetched `origin/main` for Task 82 and checked clean before every commit.
@@ -21516,6 +21620,18 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - **Task 78, primary author gate (sibling of PR #244 round 3).** Step 28 now reads REST primary author separately from complete commit messages and checks coauthor trailers, permitting only `poetry <chen@sentio.xyz>` plus the canonical Claude trailer (historical merges may omit it). It refuses empty/truncated results and disallowed identities; seven fixture cases pass and the embedded validator matches the shared fix-pr244-r3 implementation.
 
 - **Tasks 78–79, policy consumers.** Task 78 shares one pinned policy between member and consensus config and extends its unconditional config regression. Task 79's loader copies the existing member file's policy; its complete-struct loader test passes with real upstream dependencies. Task 78 config race and sentio-node simember/config race pass. No additional YAML setting, guessed policy, live action or activation claim was introduced. E1/E4 contracts are synchronized; the final names-index pass must add the new Config field and five-argument helper.
+
+
+### PR249 a10f5 formal P5 handoff correction (procedural only)
+
+Task64 remains the exact producer of retained worktree.json/env.sh/ledger.env and the Codex branch. E3 §49/front and Tasks72/74/75 remove stale Claude branch/path examples; E4 continuation, replay helpers, PR body and release paths consume that existing env. Task76 reads Task75's existing observed final-head; Task76/77 exclusively record the same plain-SHA receipt convention for their signed chains. All Go/test/proto fences remain exact. Historical root source/document hashes retain their original cuts; these procedure-only document successors create no source/runtime/release/ledger/grant or formal increment. Actual76 profile/source custody remains separately owned and unchanged.
+
+
+### PR249 handoff correction: root documentary acceptance (2026-10-19)
+
+Reconciled the shared arbiter continuation with Task64's retained actual URWT JSON/environment and Codex branch, Task75's observed signed final head, and the future Task76/77 plain-SHA signed-chain handoffs. The original V1 audit remains blocked by its failed-status-read finding. The selected V2 closes that finding and the same push gate's ledger/lease read failures; a nonempty lease must match the existing producer's SHA shape. A separate metadata companion corrects two pre-freeze input modes without changing content. Independent V2 delta review and root documentary acceptance are complete; the current front distinguishes this procedural successor from the historically approved format-only cut.
+
+Complete forward/inverse document bindings, preserved product fences, changed-block Bash syntax and bounded inert failure fixtures were verified. Earlier product/source/runtime results retain their original identities and limits; no unchanged product campaign was repeated. This repair does not execute formal Git continuation, signing, push, PR/merge/release, ledger or live workflows and adds no source/runtime/grant or formal completion credit. Task76's frozen V4 product/TDD body remains separately selected for its future actual local review; only its one stale Expected branch word needs documentary composition, and canonical older product bodies must not replace it.
 ## Appendix C: execution record
 
 Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
