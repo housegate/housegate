@@ -2,6 +2,7 @@ package sitable
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -264,5 +265,54 @@ func TestStaticSchemaColumnsAreNotAliased(t *testing.T) {
 	table, ok := st.Current().Schema("db1.t")
 	if !ok || table.Schema.Columns[0].Name != "a" {
 		t.Fatalf("NewStatic must not alias the caller's schemas map slices, got %+v", table.Schema.Columns)
+	}
+}
+
+// TestCopyTableAppendsTheIncarnationToThePhysicalName pins the name of a
+// member's verified copy in hg_replica (spec 2026-10-14 §8.3, §20):
+// hg_replica.<db__table>__i<incarnation_seq>, the seq in decimal.
+func TestCopyTableAppendsTheIncarnationToThePhysicalName(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		seq  uint64
+		want string
+	}{
+		{"db1.t", 3, "db1__t__i3"},
+		{"a_b.c_d", 0, "a_b__c_d__i0"},
+		{"devuser1.s3_p1", 12, "devuser1__s3_p1__i12"},
+		{"db.t", 18446744073709551615, "db__t__i18446744073709551615"},
+	} {
+		if got := CopyTable(tc.id, tc.seq); got != tc.want {
+			t.Errorf("CopyTable(%q, %d) = %q, want %q", tc.id, tc.seq, got, tc.want)
+		}
+		if got := CopyTable(tc.id, tc.seq); !strings.HasPrefix(got, PhysicalTable(tc.id)+"__i") {
+			t.Errorf("CopyTable(%q, %d) = %q does not start with PhysicalTable + __i", tc.id, tc.seq, got)
+		}
+	}
+}
+
+// TestCopyTableIsInjectiveAcrossIncarnations: the digits after the last "__i"
+// give back the incarnation and the text before it the physical name, so two
+// incarnations of one table never share a copy, also when the table's own
+// name ends in "__i<digits>" (copies are incarnation-scoped, spec 2026-10-14
+// §8.3: a dropped and recreated name never adopts an old copy).
+func TestCopyTableIsInjectiveAcrossIncarnations(t *testing.T) {
+	for _, id := range []string{"db.t", "db.t__i7", "db__i1.x__i", "db.t__i"} {
+		seen := map[string]uint64{}
+		for _, seq := range []uint64{0, 1, 7, 10, 70, 71, 700, 18446744073709551615} {
+			name := CopyTable(id, seq)
+			cut := strings.LastIndex(name, "__i")
+			if cut < 0 {
+				t.Fatalf("CopyTable(%q, %d) = %q has no __i", id, seq, name)
+			}
+			back, err := strconv.ParseUint(name[cut+len("__i"):], 10, 64)
+			if err != nil || back != seq || name[:cut] != PhysicalTable(id) {
+				t.Fatalf("CopyTable(%q, %d) = %q does not split back into %q and %d", id, seq, name, PhysicalTable(id), seq)
+			}
+			if other, dup := seen[name]; dup {
+				t.Fatalf("CopyTable(%q, %d) = CopyTable(%q, %d) = %q", id, seq, id, other, name)
+			}
+			seen[name] = seq
+		}
 	}
 }
