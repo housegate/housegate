@@ -1515,9 +1515,9 @@ message BlockGroupRef {
   uint64 group_generation = 2;
 }
 
-// BlockReselection is one applied ReselectVerifiers: the replaced ids and
-// their replacements (both sorted), the ring position after it, the registry
-// cursor block it recorded, and its authority proof.
+// BlockReselection is one applied ReselectVerifiers: the replaced ids (sorted)
+// and corresponding replacements (in stored-ring walk order), the ring position
+// after it, the registry cursor block it recorded, and its authority proof.
 message BlockReselection {
   repeated string replaced = 1;
   repeated string replacements = 2;
@@ -26012,6 +26012,11 @@ The user approved the exact nine-token append-only clarification; no new field/t
 ### Root documentary adoption and publication scope
 
 Root adopted E1 Tasks57–63 and plan consistency under `e1-v6-root-review-consistency-adoption.json` SHA256 `f52c1c743504808621d097d0f3ca50a87d6668895ab7d5ea1b91b64466182d55`, then E2 Tasks64–70 and plan consistency under `e2-v4-root-review-consistency-adoption.json` SHA256 `3927f0a61f796ceaf444b884e269d426a82b42e25104a1e24648bd43c4314873`. Publication remains pending. These receipts preserve every bounded source/proof scope and historical failure/CLI qualification; they create no new product execution, release/live approval, ledger value, Task72 source approval or Task73 grant. This publication-only prose preparation changes no task or code fence and adds no formal increment.
+
+
+### BlockReselection ordering comment correction (documentary only)
+
+Task57 now describes sorted replaced IDs and their corresponding replacements in stored-ring walk order, matching current Task74/AppA §52.2. Only the three-line BlockReselection protobuf comment changes; all fields, tags, code, tests and assertions remain exact. Root accepted this scoped correction in `task57-reselection-order-comment-root-review.json`; existing E1 formal acceptance is unaffected. This documentary publication adds no formal increment, runtime result, source acceptance, release/live approval or ledger value.
 ## Appendix C: execution record
 
 | Name | Value | Recorded by |
