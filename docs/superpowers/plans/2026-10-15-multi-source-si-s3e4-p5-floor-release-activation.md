@@ -2,9 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-17): draft.** Tasks 76, 77, 80, 81 (2026-10-16) and Tasks 78, 79, 82 (2026-10-17; drafting facts at the end of Appendix B) are drafted and were verified by their drafters in scratch exports; no task has had its adversarial review yet; the plan consistency pass (which also writes Appendices B and C in final form) and the cross-plan pass have not run. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists what remains and how to finish it.
-
-**Goal:** Finish the P5 code layer of stage 3 and activate it on devnet2. The arbiter enforces the copy floor of spec §9.3 in Apply and in the leader's WorkSet through one predicate, with the purge and pressure escapes, strict mode and its retryable `COPIES_BACKPRESSURE` refusal, the `under_replicated` signals, the release of a Leaving member (§6.4) and the precondition for raising k; it narrows the drain gate to the tracks an update touches, with floor-held unsafe parts excluded (§10.1), and `arbiter-admin` defaults to an issuance hold once that switch is on. The whole stage-3 arbiter branch (Tasks 64–78) is proven in an integration harness with three SNodes, real members in consensus mode and the network pool, pinned against a frozen pre-stage-3 history, replayed offline against copies of the devnet2 logs and released once as `ARBITER_TAG_P5`. sentio-node ships the `stage3_v1` hosts, the member consent statement and the inert member key configuration (`SN_COMMIT_P5`). production adds the stage-3 alert rules and the plain-body writer value. devnet2 then runs an offline replay and a rehearsal on copies of the live state, rolls every component while it still writes v20, and commits the irreversible v21 activation with every switch off; the plan ends when every voter writes v21.
+**Goal:** Finish the P5 code layer of stage 3 and activate it on devnet2. The arbiter enforces the copy floor of spec §9.3 in Apply and in the leader's WorkSet through one predicate, with the purge and pressure escapes, strict mode and its retryable `COPIES_BACKPRESSURE` refusal, the `under_replicated` signals, the release of a Leaving member (§6.4) and the precondition for raising k; it narrows the drain gate to the tracks an update touches, with floor-held unsafe parts excluded (§10.1), and `arbiter-admin` defaults to an issuance hold only when the leader's committed `narrowed_drain` switch is on and the update touches no track, otherwise to drain; an explicit `--hold` wins. The whole stage-3 arbiter branch (Tasks 64–78) is proven in an integration harness with three SNodes, real members in consensus mode and the network pool, pinned against a frozen pre-stage-3 history, replayed offline against copies of the devnet2 logs and released once as `ARBITER_TAG_P5`. sentio-node ships the `stage3_v1` hosts, the member consent statement and the inert member key configuration (`SN_COMMIT_P5`). production adds the stage-3 alert rules and the plain-body writer value. devnet2 then runs an offline replay and a rehearsal on copies of the live state, rolls every component while it still writes v20, and commits the irreversible v21 activation with every switch off; the plan ends when every voter writes v21.
 
 **Architecture:**
 - Task 76 (arbiter): new `fsm/floor.go` with `floorLocked(pp)`, the one copy-floor predicate. `applyScheduleUnsafeCleanup` (Apply) and the WorkSet's `PublishedUncleaned` both call it, so the leader never proposes a cleanup Apply refuses. Strict mode turns the pressure bypass into admission code 13. The raise-k precondition sits in the Apply-only half of `applyUpdateConsensusParams`. The Leaving release is evaluated after every command that can satisfy it and is recorded once. Replicated gauges come through `MetricsSnapshot`; the leader-local `under_replicated` counter and held-cleanup age come through a new orchestrator `FloorMetrics`. Everything is inert until the `checkpoints` switch.
@@ -34,9 +32,15 @@
 
 **Prerequisites:** Plans S3-A and S3-B and the new plans S3-C1, S3-C2, S3-C3, S3-C4, S3-D, S3-E1, S3-E2 and S3-E3. Their Global Constraints and clarifications apply, and so do their contracts: §0–§6 and §7–§15 (S3-A, S3-B), §16–§19 (S3-C1, including the ledger tool of §19), §20–§24 (S3-C2, member config and process), §25–§28 (S3-C3, `siMember`, `MEMBER_IDS`), §29–§32 (S3-C4, Replica status and `replica_hosts`), §33–§37 (S3-D, `ARBITER_TAG_P4`, `SN_COMMIT_P4`, `DEVNET2_FAILURE_DOMAINS`, `P4_END`), §38–§43 (S3-E1, every proto number, canonical type, admission code, wire tag and the member consensus mode, `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5`), §44–§48 (S3-E2, `Params.Stage3`, the stage3 gate, the `arbiter-admin` stage-3 flags, the v21 container and interned body, the shared arbiter branch) and §49–§52 (S3-E3, groups, Leaving records, seal reason, checkpoints, classes). Tasks 76–78 continue the arbiter branch of Tasks 64–75; this plan's Appendix A continues the numbering (§53–§57), and every consumed name is listed at its head with its source section.
 
-**Base revisions.** Line anchors refer to the revisions read at `origin/main` on 2026-10-15:
-- arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169`. These are the spec's and Plan S3-A's bases. S3-A to S3-E3 move many of these lines, so the real base of Tasks 76–78 is branch `urwt/codex/multi-source-s3e` after Task 75, on top of `ARBITER_TAG_P4`.
-- production `75514e3de`. Its SI paths are byte-identical to Plan S3-B's base `9d3d0326b`: `git diff --stat 9d3d0326b 75514e3de -- charts/storage-integrity charts/sentio-node k8s-sea/sentio-network-devnet2 k8s-sea/clickhouse terraform docs scripts/storage-integrity` prints nothing.
+**Base revisions and reviewed source provenance.** The following revisions and line anchors are the historical drafting cut read at `origin/main` on 2026-10-15, not current-main source equality:
+- arbiter `fb42260` (v0.12.0), arbiter-core `8f0bc43` (v0.14.1), arbiter-proto `1c6ae67` (v0.11.0), housegate `66d4df7` (v0.19.0), sentio-node `5d2f169`. These are the spec's and Plan S3-A's bases. S3-A to S3-E3 move many of these lines, so the planned execution base of Tasks 76–78 is branch `urwt/codex/multi-source-s3e` after Task 75, on top of `ARBITER_TAG_P4`.
+- Historical production drafting observation: `75514e3de`. Its SI paths were byte-identical to Plan S3-B's base `9d3d0326b`: `git diff --stat 9d3d0326b 75514e3de -- charts/storage-integrity charts/sentio-node k8s-sea/sentio-network-devnet2 k8s-sea/clickhouse terraform docs scripts/storage-integrity` prints nothing.
+
+Current review provenance is separate from that drafting cut. S3-A is executed and S3-B has completed Task 21 (BRIEF §3); do not replay their former pending intent. The local arbiter chain continues the reviewed S3-E2/S3-E3 predecessors through Task 75, then Tasks 76–78: root receipt `task77-v6-root-source-acceptance.json` (`4f15238fa993aa306a6d2d13a9f4efb6db8b7c4fe77326e9679b3d9b1b3679f1`) accepts the bounded Task 77 source, and `task78-final-root-accepted-local-source-proof.json` (`7e9f596d1a631573731d5e79b52d5a6b31e4555fcea09cebe9f1e259b20929e8`) accepts the final Task 78 local source for Task 79. These are source-custody qualifications, not signed branch heads, release pins or R4/R5 evidence. Root receipt `task79-final-root-accepted-local-source-proof.json` (`3722a4013f062529c71e45a3a2e20ddfed0ad09a2c33d3542b7b09caee8a7e50`) accepts the bounded Task79 local source/review on 2026-10-20. Its source-proof preimage and this procedural task are distinguished in Appendix B; this is not a signed branch HEAD, released dependency pin, network smoke, real registration, image publication, R4/R5 or live execution. The shared branch and all ledger, release and live prerequisites below remain execution gates.
+
+The production review follows the owning-task order C1 Task 26 → C3 Tasks 37–38 → C4 Task 47 → D Task 53 → E4 Tasks 80–82. Root receipts `task80-bounded-source-root-acceptance.json` and `task80-81-82-verified-source-root-acceptance.json` qualify their retained bounded production fixtures (1772 and 1773 safe files respectively); the latter is a synthetic source proof, with the raw Task 81 runbook unfilled and genuine Task 78 source SHA absent. Neither it nor the source-intent-only receipt proves the complete current owning text against fresh main, actual Task 79 source, a release, rehearsal, R4 or live deployment. Future execution must bind the actual accepted predecessors and recorded release values.
+
+Fresh six-repository main-ref metadata dated 2026-10-20 (`final-six-repository-fresh-main-ref-metadata.json`, SHA256 `a0d008f11ebce33ac6bec30077923942a117e3c03c340c4c10d2f304221ef1bd`) records refs only; it does not refresh these historical anchors or establish that pending task code exists on main. The separate production equality receipt `production-fresh-origin-scoped-equality.json` (`ed3feee0609dead645c87467a39534c4751b4d28b6dc3e101b24049d6e1f93ee`) establishes equality between cached `a9f9b26686029cfae0fc8621ba41ac30e002624d` and fetched `938f4c26a0b728739c4c86446cc9ba50263f1f58` only for `charts/storage-integrity`, `scripts/storage-integrity` and `docs/storage-integrity-devnet2-dynamic-table-set.md`. It does not extend the old drafting comparison to other paths or prove a full production replay.
 
 devnet2 expected when Task 82 starts, as the exit records of S3-B (`E_END`), S3-C1 (`P1_END`), S3-C3 (`P2_END`), S3-C4 (`P3_END`) and S3-D (`P4_END`) leave it:
 - **Consensus parameters:** epoch `ENROLMENT_EPOCH`, because no plan between S3-B's enrolment and this one commits a parameter update; the runbook reads the epoch live and stops on any other value. Tracks enabled. `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, verifiers `verifier-1..3`, `max_writers` 3, `stage3` unset, snapshot v20.
@@ -67,7 +71,9 @@ devnet2 expected when Task 82 starts, as the exit records of S3-B (`E_END`), S3-
   - Member keys (ed25519 seed, `replica_signer` key) exist only as files mounted from Secrets, never in YAML, on argv or in logs; the consent command prints only the JWS.
   - A member's `replica_signer` key is made by the user in their own terminal, with Foundry `cast wallet new` or an equivalent the user prefers (decision D40). It reaches a host only as a Secret-mounted file. No task of this plan makes one: devnet2 registers no member in P5, and the tests use the S3-E1 fixture keys.
   - Agents never print, echo or pass a password or key on argv.
-- **Never edit.** The golden and vector files that S2-A, S3-A and the conventions list (`pre_tracks_golden.json`, the `l3_track_golden_test.go` constants, `conformance/stage3_reads_test.go`) and the frozen fixtures of S3-E1 to S3-E3. Decision D25's exception lets only S3-D and S3-E1 change the count literals of `conformance/stage3_reads_test.go`. This plan changes nothing in that file: it adds no method, tag or field. New frozen fixture: `fsm/testdata/pre_stage3_golden.json`, captured once from `ARBITER_TAG_P4` and never rewritten.
+- **Never edit.** The golden and vector files that S2-A, S3-A and the conventions list (`pre_tracks_golden.json`, the `l3_track_golden_test.go` constants, `conformance/stage3_reads_test.go`) and the frozen fixtures of S3-E1 to S3-E3. The exact user-approved D25 paragraph below remains binding, including only the six approved Task57 count/range/comment/diagnostic-context substitution pairs and its approved nine-token append. This plan changes nothing in that file: it adds no method, tag or field. New frozen fixture: `fsm/testdata/pre_stage3_golden.json`, captured once from `ARBITER_TAG_P4` and never rewritten.
+
+- D25 **`conformance/stage3_reads_test.go` exception — user-approved append-only clarification.** Only the existing ConsensusAdmin method counts, RaftCommand tag counts/ranges and BlockVerification field-ledger length may change by S3-D/S3-E1. Task57 may additionally append exactly the nine stage3 BlockVerification field tokens below to the existing ledger row, without modifying any of its thirteen existing field names/types/order; count/range-only comments and diagnostics may be synchronized. All other existing entries and never-edit rules remain byte-identical. Exact appended suffix: `eligible_ring:[]string ring_position:uint32 marked_cursor_block:uint64 group_key:string group_members:[]string group_fill:bool group_databases:[]BlockGroupRef reselections:[]BlockReselection reselections_at_latch:uint32`. Approved by the user (“可以，没问题”); no other freeze rule, release/live/user gate or historical outcome changes.
 - **Read views (decision D33).** This plan serves no new read-view field. `DrainView.Narrowed`, `TrackDrainView.Touched`, `WorkSet.FloorHeld` and `CleanupWork.UnderReplicated` are in-process Go fields with no proto change, and the floor reaches operators only through the contract §53 metrics. Its runbook and live task read only fields that are already served, such as `consensus show`'s parameters with `stage3`, the feature book, S3-A's drain and hold reads, and the metrics. S3-E2's cutover `IncarnationSeq`, S3-E3's `ReadyVerifyMembers` and `Reselection.ExpectedSet` stay unserved. The only registry-view field this plan needs that was not served before is `GroupMember.host_indexer_id`, which S3-E1 adds (decision D27).
 - **Ledger.** Values are recorded only by the tool and procedure of S3-C1 contract §19: `$HOME/.cache/s3-ledger/s3-ledger.py` and the record steps R1–R4 of S3-B decision D23, into this plan's Appendix C, which keeps the `| Name | Value | Recorded by |` shape. Each value is read only from the ledger copy, never predicted. Under decision D34 the ledger copy of this plan is housegate branch `urwt/claude/ms-si-stage3-plans-cf` until the plans PR merges, and `main` from then on. That is the first ref holding the plan file, as `s3-ledger.py ref` resolves it.
 - **Repository commands, worktrees, commits, releases:** contract §57, Plan S3-A contract §6 and Plan S3-B contract §15. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; code comments and runbook text are in English; markdown is never hard-wrapped; nothing uses placeholders.
@@ -190,29 +196,30 @@ Line anchors in the tasks refer to the base revisions of the header.
   - `fsm/floor.go` (new), `fsm/floor_test.go`, `fsm/floor_strict_test.go`, `fsm/floor_leaving_test.go`, `fsm/floor_raise_test.go` (new).
   - `fsm/apply.go` (`applyScheduleUnsafeCleanup` `:960-1020`; `applyEvictNode` `:121-149`), `fsm/reads_work.go` (`:317-364`), `fsm/reads_work_types.go` (`CleanupWork`, `WorkSet`), `fsm/admission.go` (`:133-158`), `fsm/consensus_updates.go` (`:51-87`, before `ConsensusEpoch++`), `fsm/watch.go` (`EventUnderReplicated`), `fsm/reads_metrics.go`.
   - S3-E3's `applyMemberCheckpoint`, `applyRebalanceGroup` and `applyMarkMemberLagging` files (release hook).
-  - `metrics/metrics.go`, `metrics/floor.go` (new); `orchestrator/deps.go`, `orchestrator/promotion.go`, `orchestrator/floor_metrics.go` (new); `cmd/arbiter/services.go` (wiring); `README.md`.
+  - `metrics/metrics.go`, `metrics/floor.go` and `metrics/floor_test.go` (new); `orchestrator/deps.go`, `orchestrator/loop.go`, `orchestrator/cleanup.go`, `orchestrator/promotion.go`, `orchestrator/floor_metrics.go` and `orchestrator/floor_metrics_test.go` (new); `cmd/arbiter/app.go`, `cmd/arbiter/services.go` (wiring) and `cmd/arbiter/floor_metrics_wiring_test.go` (new); `README.md`.
+  - `fsm/stage3_groups.go`, `fsm/stage3_params_test.go`, `fsm/watch_test.go`; gazelle registration in `fsm/BUILD.bazel`, `metrics/BUILD.bazel`, `orchestrator/BUILD.bazel` and `cmd/arbiter/BUILD.bazel`, including only the declared `//raftnode` dependency addition to `orchestrator_test`.
 - **Task 77:**
   - `fsm/drain_narrowed.go`, `fsm/drain_narrowed_test.go` (new); `fsm/reads_drain.go` (S3-A Task 7); `fsm/consensus_updates.go` (`:74-78`).
-  - `server/consensus_hold.go`, `server/consensus_hold_rpc.go` (S3-A Task 8), `server/consensus_hold_test.go`.
+  - `fsm/stage3.go`, `fsm/BUILD.bazel`; `server/server.go`, `server/consensus_hold.go`, `server/consensus_hold_rpc.go` (S3-A Task 8), `server/consensus_hold_test.go`.
   - `cmd/arbiter-admin/main.go`, `cmd/arbiter-admin/consensus_hold_test.go`; `README.md`.
 - **Task 78:**
-  - `fsm/pre_stage3_golden_test.go`, `fsm/testdata/pre_stage3_golden.json` (new).
-  - `integration/stage3_p5_test.go` (new), `integration/tracks_harness_test.go`; `integration/chpipeline/harness_stage3_test.go`, `integration/chpipeline/stage3_test.go` (new), `integration/chpipeline/BUILD.bazel`.
+  - `fsm/pre_stage3_capture_test.go`, `fsm/pre_stage3_golden_test.go`, `fsm/testdata/pre_stage3_golden.json` and `server/stage3_release_test.go` (new).
+  - `integration/stage3_p5_test.go` (new), `integration/tracks_harness_test.go`, `integration/cluster_test.go`, `integration/cluster_control_test.go`, `integration/cluster_node_test.go`; `integration/chpipeline/harness_stage3_test.go`, `integration/chpipeline/stage3_test.go` (new); gazelle registration in `fsm/BUILD.bazel`, `server/BUILD.bazel`, `integration/BUILD.bazel` and `integration/chpipeline/BUILD.bazel`.
   - `scripts/ci/stage3-pipeline.sh`, `scripts/ci/stage3-clickhouse-config.xml`, `scripts/ci/stage3-clickhouse-users.xml`, `scripts/ci/stage3-keeper.xml` (new); `.github/workflows/ci.yml`; `README.md`.
   - Throwaway, never committed: the PR body beside the worktree, and `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal`. `$R5` is the one P5 rehearsal directory (decision D37): S3-E2 Task 67's directory, created by this task if it is missing. It gets `new_tag.txt`, `bin/new` rebuilt from `ARBITER_TAG_P5`, `p5rehearsal/p5rehearsal_test.go`, `bin/new/p5rehearsal`, `v21-fixture.container`, `merge-commit`, `arbiter-release`, `cut-release.sh` and, last, `p5-files.sha256`.
 
-**sentio-node** (Task 79, branch `urwt/claude/multi-source-s3e4`). Task 79 keeps its widened scope (decision D30). Its drafter writes it as these seven step groups, in this order. Each group is test-first (failing test, run, code, run) and ends in its own commit, and no group starts before the previous one is green:
-1. **Pins.** `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`; tests `TestPinnedArbiterCoreAdvertisesStage3V1` and `TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably`.
-2. **Consent command.** `commands/storage_integrity.go`; `standalone/storage_integrity_member_consent.go`, `standalone/storage_integrity_member_consent_test.go` (new); `standalone/BUILD.bazel`; the four `TestMemberConsentStatement…` tests.
-3. **Member consensus keys.** `config/si_member.go` (S3-C2's file: `StorageIntegrityMemberConsensus`, the `Consensus` field, the inline-key refusals), `config/si_member_test.go`; `simember/consensus_keys.go`, `simember/consensus_keys_test.go` (new: `loadMemberConsensusConfig`, the mode and consent checks); `simember/run.go` (sets `member.Config.Consensus`); tests `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation`, `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys`.
-4. **Reconciler role.** `config/si_member.go` (`StorageIntegrityMemberReconciler`, the `Reconciler` field, `StorageIntegrityMemberDDLClickhousePasswordEnv`); `commands/si_member.go` (`--role`); `simember/reconciler.go`, `simember/reconciler_test.go` (new); tests `TestSIMemberReconcilerRoleRunsTheUnsafeReconcilerAsItsOwnUser` and `TestSIMemberReconcilerRoleRefusals`.
-5. **Metrics.** `simember/run.go` and `simember/metrics.go` (S3-C2's: `role.ConsensusMetrics()` on the si-member registry); the host's keeper-findings export on the embedded HouseGate registry. That export goes in the existing `standalone/storage_integrity_reconciler_metrics.go` collector (`storageIntegrityReconcilerCollector`, which already reads `tableset.Stats` through `TableSetStats()`), with `standalone/storage_integrity_reconciler_metrics_test.go`; tests `TestSIMemberRegistersTheConsensusMetrics` and `TestKeeperFindingsAreExportedWithEveryReason`.
-6. **`replica_hosts`.** `storageintegrityadapter/tablestate/replica_hosts.go`, `replica_hosts_test.go` (new: `ReplicaHostsFromGroups` over the served `host_indexer_id`, decision D27), and S3-C4's status and info wiring; the three `TestReplicaHosts…` tests.
+**sentio-node** (Task 79, branch `urwt/codex/multi-source-s3e4`). Task 79 keeps its widened scope (decision D30). Its drafter writes it as these seven step groups, in this order. Each group is test-first (failing test, run, code, run) and ends in its own commit, and no group starts before the previous one is green:
+1. **Pins.** `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`; `standalone/storage_integrity_stage3_pin_test.go`; tests `TestPinnedArbiterCoreAdvertisesStage3V1` and `TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably`.
+2. **Consent command.** `commands/storage_integrity.go`; `standalone/storage_integrity_member_consent.go`, `standalone/storage_integrity_member_consent_test.go` (new); `standalone/BUILD.bazel`, `commands/storage_integrity_test.go`; the four `TestMemberConsentStatement…` tests.
+3. **Member consensus keys.** `config/si_member_consensus.go` (new: `StorageIntegrityMemberConsensus` and its validation/refusals), `config/si_member.go` (the `Consensus` field and existing loader), `config/si_member_test.go`, `config/BUILD.bazel`; `simember/consensus_keys.go`, `simember/consensus_keys_test.go` (new: `loadMemberConsensusConfig`, the mode and consent checks); `simember/run.go` (sets `member.Config.Consensus`), `simember/run_test.go`, `simember/BUILD.bazel`; tests `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation`, `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys`.
+4. **Reconciler role.** `config/si_member_reconciler.go` (new: `StorageIntegrityMemberReconciler`, `StorageIntegrityMemberDDLClickhousePasswordEnv` and reconciler validation/loading), `config/si_member.go` (the `Reconciler` field); `commands/si_member.go` (`--role`), `commands/si_member_test.go`; `commands/BUILD.bazel` stays unchanged (no new import); `simember/reconciler.go`, `simember/reconciler_test.go` (new); tests `TestSIMemberReconcilerRoleRunsTheUnsafeReconcilerAsItsOwnUser` and `TestSIMemberReconcilerRoleRefusals`.
+5. **Metrics.** `simember/run.go` (`role.ConsensusMetrics()` on the si-member registry; existing `simember/metrics.go` stays unchanged); the host's keeper-findings export on the embedded HouseGate registry. That export goes in the existing `standalone/storage_integrity_reconciler_metrics.go` collector (`storageIntegrityReconcilerCollector`, which already reads `tableset.Stats` through `TableSetStats()`), with `standalone/storage_integrity_reconciler_metrics_test.go` and `standalone/storage_integrity_table_state_test.go`; tests `TestSIMemberRegistersTheConsensusMetrics` and `TestKeeperFindingsAreExportedWithEveryReason`.
+6. **`replica_hosts`.** `storageintegrityadapter/tablestate/replica_hosts.go`, `replica_hosts_test.go` (new: `ReplicaHostsFromGroups` over the served `host_indexer_id`, decision D27), `storageintegrityadapter/tablestate/model.go`, `arbitercore.go`, `replica.go` and `BUILD.bazel` (all in that directory); S3-C4's existing RPC/info consumers remain unchanged; the three `TestReplicaHosts…` tests.
 7. **Docs and release.** `README.md` (member key files, with the user-made `replica_signer` key of decision D40; the consent command; the reconciler role); S3-B §15's checks; the PR; `SN_COMMIT_P5` / `SN_DIGEST_P5` and their ledger record.
 
-**production** (Tasks 80–81, branch `urwt/claude/multi-source-s3e4`; Task 82 from `multi-source-s3e4-live`)
+**production** (Tasks 80–81, branch `urwt/codex/multi-source-s3e4`; Task 82 from `multi-source-s3e4-live`)
 - **Task 80:**
-  - `charts/storage-integrity/values.yaml`, `values.schema.json`, `templates/arbiter.yaml` (`raft:` block), `templates/monitoring.yaml` (S3-B Task 13, rule group `<fullname>.arbiter-stage3`), `templates/validate.yaml`.
+  - `charts/storage-integrity/values.yaml`, `values.schema.json`, `templates/arbiter.yaml` (`raft:` block), `templates/monitoring.yaml` (S3-B Task 13, rule group `<fullname>.arbiter-stage3`), `templates/validate.yaml`, `templates/_helpers.tpl` (arbiter configuration checksum).
   - `charts/storage-integrity/tests/test_render.py`; `docs/examples/storage-integrity-p5-rehearsal-pod.yaml` (new); `.github/workflows/storage-integrity-chart.yml` (paths).
 - **Task 81:** `docs/storage-integrity-devnet2-stage3-p5-v21.md` (new); `docs/storage-integrity-devnet2-multi-source-tracks.md` (pointer to the P5 runbook in §11).
 - **Task 82 commits:**
@@ -275,9 +282,10 @@ Spec §9.3 makes a promotion's unsafe-part cleanup wait, from the `checkpoints` 
 
 Worktree: source Task64's existing `$HOME/.cache/s3e2-task64/env.sh` in every Bash call. It restores `W` from the exclusively retained URWT JSON path and verifies `urwt/codex/multi-source-s3e`, common repository, poetry identity and signing configuration. Entry requires the actual clean signed Task75 HEAD equal to its already recorded `"$T64/task75-final-head"`; no Claude path or SOURCE_CUSTODY projection is a formal predecessor. Line anchors are arbiter `526a721` (`v0.13.0`, `origin/main` when this plan was drafted, Plan S3-A merged); on the branch every hunk is found by its quoted lines under the hunk rule of the Global Constraints: Plan S3-E2 Tasks 64–70 and Plan S3-E3 Tasks 71–75 edit other lines of `fsm/apply.go`, `fsm/admission.go`, `fsm/consensus_updates.go`, `fsm/reads_work.go`, `fsm/reads_work_types.go`, `metrics/metrics.go`, `orchestrator/loop.go`, `cmd/arbiter/services.go` and the README, and the files `fsm/stage3.go`, `fsm/stage3_groups.go`, `fsm/stage3_fixture_test.go` and `fsm/stage3_params_test.go` are theirs. The task ends with two local commits; no step reaches a remote, so none needs a confirmation in chat: Task 64 did the only fetch, and Task 78 pushes the branch and opens its PR. If a `go` or `bazel` command below reports that it downloads or fetches anything, stop: that is a remote read and needs explicit user confirmation in chat before it runs.
 
+
 **Files:**
 - Create: `fsm/floor.go` (contract §53's `UnderReplicatedReason` and its constants, `FloorVerdict`, `floorActiveLocked`, `floorLocked`, `floorIncarnationLocked`, `floorMembersLocked`, `checkpointReflectsLocked`, `uncleanedPartsLocked`, `floorOnlyHeldLocked`, `raiseKRefusalLocked`, `leavingReleaseHoldsLocked`, `releaseLeavingMembersLocked`, and this task's helpers)
-- Create: `fsm/floor_test.go` (the copy-floor fixture and sixteen tests), `fsm/floor_strict_test.go` (five), `fsm/floor_raise_test.go` (three), `fsm/floor_leaving_test.go` (five)
+- Create: `fsm/floor_test.go` (the copy-floor fixture, sixteen original tests and two committed-reason regressions), `fsm/floor_strict_test.go` (five), `fsm/floor_raise_test.go` (three), `fsm/floor_leaving_test.go` (five)
 - Modify: `fsm/apply.go` — `applyScheduleUnsafeCleanup` (`:960-1020`: the floor right after the quarantine check `:997-1004`, before the pending-duplicate check `:1005`; the hint after `EventCleanupScheduled` `:1018`); `applyEvictNode` (`:121-149`: the registry version after `n.Reason = c.Reason` `:139`, the release after the purge completion, before the final `EventMembershipChanged` `:147`)
 - Modify: `fsm/reads_work_types.go` — `CleanupWork` (`:54-57`) gains `UnderReplicated`; `WorkSet` (`:72-94`, Plan S3-E2 Task 70's `Unmarkable` last on the branch) gains `FloorHeld` as its last field
 - Modify: `fsm/reads_work.go` — the `PublishedUncleaned` loop of `WorkSet` (`:324-367`)
@@ -298,7 +306,7 @@ Worktree: source Task64's existing `$HOME/.cache/s3e2-task64/env.sh` in every Ba
 - Create: `cmd/arbiter/floor_metrics_wiring_test.go`
 - Modify: `cmd/arbiter/app.go` (the assertion after `:42`, `run` `:82`, `:89`, `:107`), `cmd/arbiter/services.go` (`serviceRuntime` after `holdMetrics` `:44`, `Deps.Floor` after `Issuance` `:162`)
 - Modify: `README.md` — two paragraphs at the end of Plan S3-E2 Task 65's section `## Multi-source storage integrity (stage-3 activation)` (right before `## Artifact disposition admission`, `:396` at `526a721`) and one after the consensus-hold paragraph of `## Metrics` (`:435`)
-- Modify (gazelle): `fsm/BUILD.bazel`, `metrics/BUILD.bazel`, `orchestrator/BUILD.bazel`, `cmd/arbiter/BUILD.bazel` (new files only, no dependency)
+- Modify (gazelle): `fsm/BUILD.bazel`, `metrics/BUILD.bazel`, `orchestrator/BUILD.bazel`, `cmd/arbiter/BUILD.bazel` (new files plus exactly one standalone `"//raftnode",` in the unique `go_test(name = "orchestrator_test")` deps; no other dependency change)
 - Test: the files above; unchanged and green: every golden test (`TestPreActivationHistoryIsByteIdenticalAcrossTracks`, `TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `TestLegacyHistoryIsByteIdenticalAcrossTheLaneRelease`, the L3 preimage tests, Plan S3-E2 Task 66's and Task 67's v21 goldens, Plan S3-E3's placement and group-key goldens), every `TestDeterminism_*`, Plan S3-E3's group, checkpoint and class tests, Plan S3-A's drain and hold tests, `orchestrator/signer_test.go` and `orchestrator/rejected_cleanup_test.go` (which call `scheduleCleanup`)
 
 **Interfaces:**
@@ -308,7 +316,7 @@ Worktree: source Task64's existing `$HOME/.cache/s3e2-task64/env.sh` in every Ba
   - Plan S3-E1 (contract §39–§41, through Task 64's pin of `CORE_TAG_P5`): `arbiter.AdmissionCodeCopiesBackpressure` (13); `arbiter.Stage3Params{MinSafeCopies, StrictCopies, MaxUncleanedPartsPerPartition, MaxUncleanedPartsPerTable, IndexerFailureDomains, LagLow}`, `arbiter.IndexerFailureDomain`; `arbiter.VerifierEntry{NodeID, Ed25519Pubkey, HostIndexerID, ReplicaSigner, ConsentJWS, Weight, FailureDomain, Verify, Replicate, Counts, SharedRMT}`; `arbiter.MemberCheckpoint`, `arbiter.CheckpointGroup`, `arbiter.ExcludedTable`, `arbiter.ExclusionNotInstalled`, `arbiter.ExclusionDiverged`, `arbiter.EvictNodeCommand`; `(*authority.Signer).SignMemberCheckpoint`, `SignRebalanceGroupWithContext`, `SignMarkMemberLaggingWithContext`; `wire.RebalanceGroup` and `wire.MarkMemberLagging` with `Canonical()`, `wire.MemberCheckpoint`.
   - Base (`526a721`): `promotionTrackLocked` (`fsm/tracks.go:334`), `publishedTrackFrontierLocked` (`:215`), `indexerQuarantinedLocked` (`:344`), `incarnationOwnerLocked` (`:98`), `promotionBlockLocked` (`fsm/reads_promotions.go:106`, Plan S3-A), `splitTableKey` (`fsm/table_registry.go:233`), the scan of `manifestTableOwnerLocked` (`fsm/reads_manifest.go:448-463`), `registryChangedLocked` (`fsm/apply_table_registry.go:28`), `SubmitResult`, `Event`, `emit`; fsm test helpers `mustApply`, `mkLog`, `applyExpectReject` (`fsm/fsm_test.go`), `snapshotBytes` (`fsm/snapshot_test.go:30`), `rejectTracksUnchanged`, `trackSNode`, `trackEnvelope`, `admitTrack`, `bindTrackClaim`, `verifyBlock`, `promoteTrack`, `ackTrackPromotion`, `passTrackBlock`, `setPublishedTrackFrontiers` (`fsm/tracks_fixture_test.go`), `signedConsensusUpdate` (`fsm/consensus_updates_test.go:26`), `testAccount`, `submit` (`fsm/admission_test.go`), `siEntry` (`fsm/signed_claims_params_test.go:45`), `snodeSigner`, `partCleanup`, `partCleanupAck` (`fsm/pre_tracks_golden_test.go`), `signedRC` (`fsm/rc_owner_parking_test.go:15`), `lthashHex` (`fsm/threeway_test.go:18`), `mustSeal`, `anchorFinal`, `publishManifestInputs`, `ownedAddCmd`, `ev`, `retireCmd`, `rejectBlockQ`, `trackQ`, `quarantineQ`, `releaseQ`, `rejectedCleanupQ`, `messageContextFor`, `authorityContextFor`, `drain` (`fsm/watch_test.go:22`), `authoritytest.MustSigner`, `authoritytest.Iat`; orchestrator test helpers `newHarness`, `authorityParamsO`, `seedGenesisWriterAndVerifiers`, `driveToQuorum`, `ackPromotionViaNode`, `testParamsO`, and `(*Loop).anchorBlock`, `issuePromotion`, `publishManifest`, `handlePromotionRows`, `afterRescan`, `now`; metrics test helper `laneSnapshot` (`metrics/client_lanes_test.go:12`); cmd/arbiter test helpers `genesisTestConfig`, `applyTestDefaults`, `newFSM`, `newServerAndLoop`.
 - Produces (contract §53 verbatim; the names marked "added" are this task's own and are recorded in Appendix B):
-  - fsm (`fsm/floor.go`): `type UnderReplicatedReason string` with `UnderReplicatedNone` (`""`), `UnderReplicatedInactiveIncarnation` (`inactive_incarnation`), `UnderReplicatedPressurePartition` (`pressure_partition`), `UnderReplicatedPressureTable` (`pressure_table`), `UnderReplicatedDomainsBelowK` (`domains_below_k`); `FloorVerdict{BaseRefusal, Escape, K, Required, EDomains, ReflectingDomains, Allowed, FloorOnly, UnderReplicated}`; `floorActiveLocked() bool`, `floorLocked(pp *PendingPromotion) FloorVerdict`, `floorIncarnationLocked(tableID string) *TableIncarnation`, `floorMembersLocked(g *DatabaseGroup, strict bool) map[string][]string`, `checkpointReflectsLocked(cp *MemberCheckpointRecord, databaseID, tableID string, pp *PendingPromotion) bool`, `uncleanedPartsLocked(tableID string) (perPartition map[string]int, total int)`, `floorOnlyHeldLocked() []uint64`, `raiseKRefusalLocked(next Params) string`, `leavingReleaseHoldsLocked(g *DatabaseGroup, m *LeavingMember) bool`, `releaseLeavingMembersLocked() bool`. Added: `var UnderReplicatedReasons []UnderReplicatedReason`, `func floorNeed(k uint32) uint32`, `func (f *FSM) floorRefusalLocked(pp *PendingPromotion, v FloorVerdict) string`, `func groupMemberByID(g *DatabaseGroup, node string) *GroupMember`, `func (f *FSM) promotionUncleanedLocked(pp *PendingPromotion) bool`, `func (f *FSM) copiesBackpressureLocked(tableID string) (SubmitResult, bool)`, `func (f *FSM) caughtUpDomainsLocked(g *DatabaseGroup, params Params) map[string]bool`, `func (f *FSM) nodeEvictedLocked(node string) bool`, `func checkpointExcludesNothing(cp *MemberCheckpointRecord, databaseID string) bool`, `func (f *FSM) registryVersionLocked() uint64`, `func (f *FSM) releaseLeavingAtEndLocked(version uint64)`, `func (f *FSM) floorMetricsLocked() (held, underReplicatedGroups uint64, safeCopies []MetricSafeCopies)`.
+  - fsm (`fsm/floor.go`): `type UnderReplicatedReason string` with `UnderReplicatedNone` (`""`), `UnderReplicatedInactiveIncarnation` (`inactive_incarnation`), `UnderReplicatedPressurePartition` (`pressure_partition`), `UnderReplicatedPressureTable` (`pressure_table`), `UnderReplicatedDomainsBelowK` (`domains_below_k`); `FloorVerdict{BaseRefusal, Escape, K, Required, EDomains, ReflectingDomains, Allowed, FloorOnly, UnderReplicated}`; `floorActiveLocked() bool`, `floorLocked(pp *PendingPromotion) FloorVerdict`, `floorIncarnationLocked(tableID string) *TableIncarnation`, `floorMembersLocked(g *DatabaseGroup, strict bool) map[string][]string`, `checkpointReflectsLocked(cp *MemberCheckpointRecord, databaseID, tableID string, pp *PendingPromotion) bool`, `uncleanedPartsLocked(tableID string) (perPartition map[string]int, total int)`, `floorOnlyHeldLocked() []uint64`, `raiseKRefusalLocked(next Params) string`, `leavingReleaseHoldsLocked(g *DatabaseGroup, m *LeavingMember) bool`, `releaseLeavingMembersLocked() bool`. Added: `type CleanupApplied struct{ UnderReplicated UnderReplicatedReason }` (nonpersistent response only for a new switch-on promotion cleanup; legacy/off/idempotent answers stay `Applied{}`), `var UnderReplicatedReasons []UnderReplicatedReason`, `func floorNeed(k uint32) uint32`, `func (f *FSM) floorRefusalLocked(pp *PendingPromotion, v FloorVerdict) string`, `func groupMemberByID(g *DatabaseGroup, node string) *GroupMember`, `func (f *FSM) promotionUncleanedLocked(pp *PendingPromotion) bool`, `func (f *FSM) copiesBackpressureLocked(tableID string) (SubmitResult, bool)`, `func (f *FSM) caughtUpDomainsLocked(g *DatabaseGroup, params Params) map[string]bool`, `func (f *FSM) nodeEvictedLocked(node string) bool`, `func checkpointExcludesNothing(cp *MemberCheckpointRecord, databaseID string) bool`, `func (f *FSM) registryVersionLocked() uint64`, `func (f *FSM) releaseLeavingAtEndLocked(version uint64)`, `func (f *FSM) floorMetricsLocked() (held, underReplicatedGroups uint64, safeCopies []MetricSafeCopies)`.
   - fsm, elsewhere: `CleanupWork.UnderReplicated UnderReplicatedReason`; `WorkSet.FloorHeld []uint64`; `EventUnderReplicated` (`String()` `under_replicated`); `MetricsSnapshot.FloorHeldCleanups uint64`, `.UnderReplicatedGroups uint64`, `.SafeCopiesMin []MetricSafeCopies`; `type MetricSafeCopies struct{ IndexerID, Copies uint64 }`.
   - Refusals, verbatim: `copy floor: promotion %d is not acknowledged`; `copy floor: promotion %d covers block %d above owner %d's published safe_block_seq %d`; `copy floor: promotion %d is above owner %d's published applied_promotion_seq %d`; `copy floor: promotion %d of %s needs reflecting checkpoints in %d distinct failure domains other than owner %d's, has %d`; `consensus update raises stage3.min_safe_copies to %d: %s (incarnation %d, owner %d) has caught-up counting members in %d distinct failure domains other than its owner's, needs %d`; `SubmitResult{Code: arbiter.AdmissionCodeCopiesBackpressure}` with `storage-integrity copy floor: partition %s of %s holds %d uncleaned promoted parts (max_uncleaned_parts_per_partition %d) whose cleanup waits for member checkpoints (strict_copies); retry later` or `storage-integrity copy floor: %s holds %d uncleaned promoted parts (max_uncleaned_parts_per_table %d) whose cleanup waits for member checkpoints (strict_copies); retry later`; the quarantine text `indexer %d is quarantined; no new cleanup is scheduled`, unchanged. Added: `copy floor: promotion %d belongs to no track`.
   - orchestrator: `type FloorMetrics interface{ UnderReplicatedCleanup(reason string); FloorHeldCleanups(count int, oldest time.Duration) }`, `Deps.Floor FloorMetrics` (nil disables), the leader-local `Loop.floorHeldSince map[uint64]time.Time`. Added: `func (o *Loop) FloorMetrics() FloorMetrics`, `func (o *Loop) proposeCleanup(ctx context.Context, cw fsm.CleanupWork) (applied bool, err error)` (`scheduleCleanup` keeps its signature as its wrapper), `func (o *Loop) resetFloorHeld()`, `func (o *Loop) observeFloorHeld(held []uint64)`.
@@ -320,16 +328,15 @@ Worktree: source Task64's existing `$HOME/.cache/s3e2-task64/env.sh` in every Ba
 Notes:
 - **Switch-off identity (contract §53).** Every new branch tests `floorActiveLocked()`, the committed `checkpoints` switch, first: `applyScheduleUnsafeCleanup` skips the floor, the WorkSet keeps today's rows with an empty reason and no `FloorHeld`, admission returns before counting anything, `releaseLeavingMembersLocked` records nothing and `floorMetricsLocked` returns zeros. `raiseKRefusalLocked` acts only on an update that raises `min_safe_copies`, which Plan S3-E2's Params-only rule refuses before the `checkpoints` and `narrowed_drain` switches. No state field, snapshot member, Raft tag or proto number is added (`CleanupWork.UnderReplicated` and `WorkSet.FloorHeld` are in-process Go fields, decision D33), so every container stays byte-identical and the frozen goldens run unchanged; `TestFloorSwitchOffIsByteIdentical` pins the stage-2 answers in the cases where the floor would answer otherwise.
 - **One predicate (Review Focus 1).** `floorLocked` checks base(P) in contract §53's order (acknowledged; the owner's published entry covers the promotion's block, then its sequence; the owner not quarantined), then counts the distinct failure domains of the members of E whose checkpoint for the group reflects the promotion and does not exclude its table. `Required` is min(k − 1, |E|), k − 1 in strict mode. Apply refuses with `BaseRefusal` or the count text and leaves state unchanged; the WorkSet lists a cleanup exactly when the verdict allows it, with the verdict's reason, and puts a `FloorOnly` promotion in `FloorHeld`. `TestFloorApplyAndWorkSetAgreeOnEveryCleanup` drives five histories that reach every verdict and checks, for every acknowledged promotion with uncleaned parts, that Apply schedules exactly what the WorkSet lists and that `FloorHeld` equals `floorOnlyHeldLocked()`.
-- **An escape is recorded only where the count would hold.** The escapes are alternatives to the count clause (spec §9.3 "and one of"), so `floorLocked` evaluates them only for a promotion the count does not allow, in contract §53's order: not Active, then, outside strict mode, the partition above `max_uncleaned_parts_per_partition`, then the table above `max_uncleaned_parts_per_table` ("above" is strictly greater). At k = 1 the count always holds, so nothing escapes and nothing raises `under_replicated`: the floor is dormant and only the publication clauses bite (`TestFloorIsDormantAtKOne`, which also exceeds the table bound). A cleanup allowed while |E| < k − 1 is `domains_below_k` (recorded in Appendix B).
+- **An escape is recorded only where the count clause fails.** The escapes are alternatives to the count clause (spec §9.3 "and one of"), so `floorLocked` evaluates them only for a promotion the count does not allow, in contract §53's order: not Active, then, outside strict mode, the partition above `max_uncleaned_parts_per_partition`, then the table above `max_uncleaned_parts_per_table` ("above" is strictly greater). At k = 1 the count always holds, so nothing escapes and nothing raises `under_replicated`: the floor is dormant and only the publication clauses bite (`TestFloorIsDormantAtKOne`, which also exceeds the table bound). A cleanup allowed while |E| < k − 1 is `domains_below_k` (recorded in Appendix B).
 - **base(P) for a promotion without a track.** `floorLocked` refuses it with the added text `copy floor: promotion %d belongs to no track`. Such a promotion predates the tracks activation, whose drain gate left none of them with an uncleaned part, and the WorkSet never lists one after that activation (`fsm/reads_work.go:336-341`), so the two callers keep agreeing (recorded in Appendix B). A promotion Apply cannot find is `not acknowledged`; `expectedSourceLocked` refuses it before the floor on every committed history.
 - **A pending cleanup is not checked again.** The floor runs only for a cleanup with no pending command, so the idempotent re-schedule of a pending one (the legacy audit-proof path included) and a cleanup scheduled before the switch keep today's answers (`TestCleanupScheduledBeforeTheCheckpointsSwitchIsNotRechecked`, whose cleanup stays pending across the switch-on under a quarantine, the only way the stage-2 drain gate lets one).
 - **Strict mode.** The count needs k − 1 domains, `lagging` members stay in E (S3-E3's `copyFloorSetLocked(g, true, "")`) and both pressure escapes are off; the purge exemption remains. Admission refuses a statement for table T with code 13 and state unchanged while T holds a partition above the partition bound or more parts than the table bound and some acknowledged promotion of T is `FloorOnly`; the bounds are counted first and the held promotions only above a bound, which is the same conjunction and keeps admission cheap. The partition message names the first such partition in ascending id. `env.TargetTableID` is the table checked.
 - **Raising k.** `raiseKRefusalLocked` runs after the drain gate and the tracks-activation refusal and before any mutation, for every Active incarnation in registry order, and counts with `caughtUpDomainsLocked` under `next`, so an update that raises k and also stops a member counting or moves its domain is judged on what it commits (`TestRaisingKRequiresCaughtUpCountingMembersInKMinusOneDomains`). Plan S3-E2 Task 64 has three tests that commit `min_safe_copies` 2 on a network without members; Step 6 moves each onto this precondition (the copy-floor fixture commits k = 2 with a caught-up member, or the update sets only `strict_copies`, which has no state precondition) and keeps what each pins. A later test of the branch that commits a raise without member checkpoints fails with the raise refusal and needs the same move.
-- **The Leaving release.** Outside strict mode it counts the members of the frozen E that are still current members of the group, listed and non-evicted, with checkpoints at or past the Leaving member's entry that exclude none of the group's tables, over distinct current failure domains other than the owner's; a frozen member that is itself Leaving no longer counts, so two members removed together never release each other. In strict mode it counts the group's current E (lagging included). k and `strict_copies` are the committed ones; at k = 1 the release holds at once. Contract §50 has this task evaluate the release at the start of `groupsChangedLocked`, which `applyMemberCheckpoint`, `applyRebalanceGroup` and `applyMarkMemberLagging` call last, so the release is recorded at their end inside their own bump; `applyUpdateConsensusParams` (before `ConsensusEpoch++`) and `applyEvictNode` (after the purge completion) call `releaseLeavingAtEndLocked`, which bumps the registry version for a release only if the Apply has not bumped it already (one bump per Apply). A recorded release is never cleared. `TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand` clears the record by hand before each of the five commands, the one direct state edit of these tests: a met condition that no Apply evaluated yet, which committed histories never hold once the floor is on (recorded in Appendix B, with the choices of this paragraph).
-- **Metrics (K78).** `arbiter_floor_held_cleanups` and `arbiter_under_replicated_groups` are exported from the start (0 before the switch), `arbiter_safe_copies_min{indexer_id}` only for owners with a group once the switch is on. The leader-local counter counts a `PublishedUncleaned` row's reason only when `proposeCleanup` reports that its proposal returned no error, and every reason series exists at 0 from the start. The held-cleanup age is the oldest age over `WorkSet.FloorHeld`, measured from the first pass of this leader term that saw each promotion held; `Run` resets it when a term starts and when it ends, so a follower reports 0. `FloorHeldCleanups`' count argument is not exported again (the replicated gauge is the record).
+- **The Leaving release.** Outside strict mode it counts the members of the frozen E that are current members or not-yet-Released Leaving members, still listed and non-evicted, with checkpoints at or past the Leaving member's entry that exclude none of the group's tables, over distinct current failure domains other than the owner's. Already Released Leaving members never count. Evaluation follows canonical group/node order and marks each release immediately, so a later record cannot rely on one released earlier in the pass. In strict mode it counts the group's current E (lagging included). k and `strict_copies` are the committed ones; at k = 1 the release holds at once. Contract §50 has this task evaluate the release at the start of `groupsChangedLocked`, which `applyMemberCheckpoint`, `applyRebalanceGroup` and `applyMarkMemberLagging` call last, so the release is recorded at their end inside their own bump; `applyUpdateConsensusParams` (before `ConsensusEpoch++`) and `applyEvictNode` (after the purge completion) call `releaseLeavingAtEndLocked`, which bumps the registry version for a release only if the Apply has not bumped it already (one bump per Apply). A recorded release is never cleared. `TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand` clears the record by hand before each of the five commands, the one direct state edit of these tests: a met condition that no Apply evaluated yet, which committed histories never hold once the floor is on (recorded in Appendix B, with the choices of this paragraph).
+- **Metrics (K78).** `arbiter_floor_held_cleanups` and `arbiter_under_replicated_groups` are exported from the start (0 before the switch), `arbiter_safe_copies_min{indexer_id}` only for owners with a group once the switch is on. The leader-local counter counts only a new switch-on cleanup's `CleanupApplied.UnderReplicated` returned by that committed Apply, before streaming; stale WorkSet tags, rejected proposals and legacy/idempotent `Applied{}` responses add nothing, and every reason series exists at 0 from the start. The held-cleanup age is the oldest age over `WorkSet.FloorHeld`, measured from the first pass of this leader term that saw each promotion held; `Run` resets it when a term starts and when it ends, so a follower reports 0. `FloorHeldCleanups`' count argument is not exported again (the replicated gauge is the record).
 - **The fixture.** Contract §53 builds `newFloorFixture` "on S3-E3's checkpoint fixture (§52)", which S3-E3's contract does not name; it is built here on Plan S3-E2 Task 64's fixture through committed commands only: it enrols one host indexer per member (keys from `floorHostSigner`, SNodes never registered, activation blocks 1000 + id), lists the members with Task 64's keys and a consent of the host's key, registers them, turns the switches on in §10.4 order, lets Plan S3-E3's placement backfill place them, signs every checkpoint with `stage3ReplicaSigner` through `applyMemberCheckpoint`, and drives Leaving records and lagging members through signed `RebalanceGroup` and `MarkMemberLagging`. Members never send `MemberReady`, so every eligible ring stays the network pool and `verifyBlock`'s pool evidence stays valid. Indexer 1 (`db.t`, the genesis table of database `db`) is the owner the tests promote; indexer 0's group `G(0, db0)` holds the same members and is checkpointed too, because raising k needs every Active incarnation. A track that owes a manifest entry issues no promotion, so every promotion but the last of a history is published before the next.
 - **fsm red lines.** `fsm/floor.go` imports `cmp`, `fmt`, `slices`, `sort` and arbiter-core only: no arbiter-proto, no clock; `floorLocked` and its helpers only read, so the WorkSet, `MetricsSnapshot` and Task 77's `DrainViewFor` call them under the read lock.
-- **Checked while drafting** (2026-10-16): every code block of this task was applied, step by step, to a `git archive` export of arbiter `526a721` carrying Plan S3-E2 Tasks 64–70 and Plan S3-E3 Tasks 71–72 as their drafting trees had them that day, a scratch stand-in of Plan S3-E3 Task 75 written from contract §52.3 (the record per listed group, the durable `checkpoint_seq`, the acceptance checks the fixture meets, the classes at acceptance and `MarkMemberLagging`; no lag accrual) and arbiter-core and arbiter-proto replace modules carrying Plan S3-E1's contract, with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test`. Observed: Step 8's build failure; Step 19's 33 passes under `-race` and the whole fsm package passing; Steps 22, 27 and 35's build failures and Steps 25, 33 and 38's passes; `go test ./... -race -count=1` passing, `go vet ./...` clean, `gofmt` silent, no `time.Now` in `fsm/`. Each of 38 single-point mutations (no floor in Apply or in the WorkSet; the floor re-checking a pending cleanup; members counted instead of domains; k − 1 outside strict mode; an escape taken where the count holds; either bound at "at or above"; pressure in strict mode; no purge exemption; each base clause dropped; exclusions ignored; reflection ignoring the block; no `domains_below_k`; no hint; no backpressure, or backpressure without a floor-held promotion; no raise check, the raise judged on the committed listing, ignoring exclusions or counting non-Active incarnations; the release on the current E outside strict mode or on the frozen E in strict mode, while the floor is off, withdrawn, missing after an eviction, an update or in `groupsChangedLocked`, or bumping twice; the owner's domain counted in E; the held gauge at zero; counting a refused cleanup; no age reset at the start or at the end of a term; ages not kept across passes; no wiring) fails at least one named test, and the age test passed 200 runs under `-race`. Bazel was not run (no offline module for the stubbed tags); Step 40 runs it on the branch.
 
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
@@ -1436,6 +1443,68 @@ func TestFloorMetricsSnapshot(t *testing.T) {
 	mustApply(t, f, x.evictCmd(floorMemberB))
 	expect("one member lagging, the other evicted", gauges{0, 1, []MetricSafeCopies{{0, 2}, {floorOwner, 1}}})
 }
+
+// TestCleanupAppliedReasonUsesCheckpointAtCommit: a legitimate checkpoint
+// between WorkSet and Apply removes the pressure escape even while pressure
+// persists. The committed response, not the retained row, is authoritative.
+func TestCleanupAppliedReasonUsesCheckpointAtCommit(t *testing.T) {
+	x, single, _ := floorPressure(t)
+	p := single[0]
+	row, listed := x.work(p)
+	if !listed || row.UnderReplicated != UnderReplicatedPressureTable {
+		t.Fatalf("initial row %+v listed %v, want pressure_table", row, listed)
+	}
+	x.checkpoint(floorMemberB, floorOwner)
+	if v := x.verdict(p); !v.Allowed || v.UnderReplicated != UnderReplicatedNone {
+		t.Fatalf("after reflecting checkpoint: %+v, want count success with no escape", v)
+	}
+	if _, total := x.f.uncleanedPartsLocked("db.t"); total <= 2 {
+		t.Fatalf("pressure unexpectedly disappeared: total %d", total)
+	}
+	cmd := x.cleanupCmd(p)
+	if got := x.f.Apply(mkLog(t, cmd)); got != (CleanupApplied{}) {
+		t.Fatalf("committed checkpoint reason: %+v, want new cleanup without escape", got)
+	}
+	before := snapshotBytes(t, x.f)
+	if got := x.f.Apply(mkLog(t, cmd)); got != (Applied{}) {
+		t.Fatalf("idempotent result: %+v, want legacy Applied", got)
+	}
+	if !slices.Equal(before, snapshotBytes(t, x.f)) {
+		t.Fatal("idempotent cleanup changed snapshot bytes")
+	}
+}
+
+// TestCleanupAppliedReasonUsesEvictionAtCommit: a signed eviction, unlike
+// a consensus update, is allowed while promoted unsafe parts remain. Evict
+// the sole reflecting member after WorkSet: E becomes empty and a new
+// cleanup is allowed with domains_below_k. No row is manually relabelled.
+func TestCleanupAppliedReasonUsesEvictionAtCommit(t *testing.T) {
+	x := newFloorFixture(t, floorFixtureOptions{K: 2, MemberDomains: map[string]string{floorMemberB: floorDomainB}})
+	p := x.promote(floorOwner)
+	x.publish()
+	x.checkpoint(floorMemberB, floorOwner)
+	row, listed := x.work(p)
+	if !listed || row.UnderReplicated != UnderReplicatedNone {
+		t.Fatalf("initial row %+v listed %v, want count success", row, listed)
+	}
+	if v := x.verdict(p); v.EDomains != 1 || len(v.ReflectingDomains) != 1 {
+		t.Fatalf("before eviction: %+v, want the sole member reflecting", v)
+	}
+	mustApply(t, x.f, x.evictCmd(floorMemberB))
+	if n := x.f.st.Nodes[floorMemberB]; n == nil || n.Status != NodeEvicted {
+		t.Fatalf("member after signed eviction: %+v", n)
+	}
+	if x.f.st.PendingCleanups[p] != nil {
+		t.Fatal("the retained WorkSet promotion already has a pending cleanup")
+	}
+	if v := x.verdict(p); !v.Allowed || v.UnderReplicated != UnderReplicatedDomainsBelowK || v.K != 2 || v.EDomains != 0 || v.Required != 0 {
+		t.Fatalf("after committed eviction: %+v, want k2, E0, required0 and domains_below_k", v)
+	}
+	want := CleanupApplied{UnderReplicated: UnderReplicatedDomainsBelowK}
+	if got := x.f.Apply(mkLog(t, x.cleanupCmd(p))); got != want {
+		t.Fatalf("committed eviction reason: %+v, want %+v", got, want)
+	}
+}
 ```
 
 - [ ] **Step 3: Write the strict-mode tests**
@@ -1771,6 +1840,76 @@ func TestNonStrictLeavingReleaseUsesTheFrozenE(t *testing.T) {
 	if !x.leaving(floorOwner, "db", floorMemberB).Released {
 		t.Fatal("the frozen E's checkpoint did not release the Leaving member")
 	}
+
+	// Option A: two peers removed in the same signed Apply must not release
+	// each other. Legal input construction and checkpoint orders do not choose
+	// the survivor; the canonical Leaving node order does.
+	for _, strict := range []bool{false, true} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("same-apply/strict=%v/reverse=%v", strict, reverse), func(t *testing.T) {
+				order := []string{floorMemberB, floorMemberC, floorMemberD}
+				if reverse {
+					slices.Reverse(order)
+				}
+				domains := map[string]string{}
+				for _, node := range order {
+					domains[node] = map[string]string{floorMemberB: floorDomainB, floorMemberC: floorDomainC, floorMemberD: floorDomainD}[node]
+				}
+				x := newFloorFixture(t, floorFixtureOptions{K: 2, Strict: strict, MemberDomains: domains})
+				f := x.f
+				e0 := groupMemberByID(x.group(floorOwner, "db"), floorMemberD).Checkpoint.Checkpoint.Entry
+				p := x.promote(floorOwner)
+				x.publish()
+				checkpoints := []string{floorMemberB, floorMemberC}
+				if reverse {
+					slices.Reverse(checkpoints)
+				}
+				for _, node := range checkpoints {
+					x.checkpoint(node, floorOwner)
+				}
+				x.clean(p)
+				e1 := f.publishedTrackFrontierLocked(floorOwner)
+				if e0 == e1 || groupMemberByID(x.group(floorOwner, "db"), floorMemberD).Checkpoint.Checkpoint.Entry != e0 {
+					t.Fatal("the retained current member must still hold E0 below the removal entry E1")
+				}
+				g := x.group(floorOwner, "db")
+				cmd := wire.RebalanceGroup{OwnerIndexerID: floorOwner, DatabaseID: "db", ExpectedGeneration: g.Generation,
+					Remove: []string{floorMemberB, floorMemberC}, NetworkFill: true}
+				token, err := x.a.SignRebalanceGroupWithContext(cmd.Canonical(), authorityContextFor(t, f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				cmd.AuthorityJWS = token
+				version := f.registryVersionLocked()
+				mustApply(t, f, wire.Command{RebalanceGroup: &cmd})
+				if f.registryVersionLocked() != version+1 {
+					t.Fatal("the signed removal and its releases must share one registry bump")
+				}
+				b, c := x.leaving(floorOwner, "db", floorMemberB), x.leaving(floorOwner, "db", floorMemberC)
+				if b.Entry != e1 || c.Entry != e1 || b.Member.Checkpoint.Checkpoint.Entry != e1 || c.Member.Checkpoint.Checkpoint.Entry != e1 ||
+					!slices.Equal(b.FrozenE, []string{floorMemberC, floorMemberD}) || !slices.Equal(c.FrozenE, []string{floorMemberB, floorMemberD}) ||
+					b.FrozenEDomains != 2 || c.FrozenEDomains != 2 {
+					t.Fatal("the same Apply must freeze each peer before removal, retaining both signed E1 checkpoints")
+				}
+				if strict {
+					if b.Released || c.Released {
+						t.Fatal("strict release must use current E; its sole member still has E0")
+					}
+				} else if !b.Released || c.Released {
+					t.Fatal("non-strict sequential FrozenE release must release b and retain c; released b cannot release c")
+				}
+				version = f.registryVersionLocked()
+				x.checkpoint(floorMemberD, floorOwner)
+				if f.registryVersionLocked() != version+1 || !x.leaving(floorOwner, "db", floorMemberB).Released || !x.leaving(floorOwner, "db", floorMemberC).Released {
+					t.Fatal("the surviving current E1 checkpoint must finish release monotonically with one bump")
+				}
+				version = f.registryVersionLocked()
+				if f.releaseLeavingMembersLocked() || f.registryVersionLocked() != version {
+					t.Fatal("already recorded releases must not be recorded or bumped again")
+				}
+			})
+		}
+	}
 }
 
 // TestStrictLeavingReleaseWaitsWhenTheSoleCaughtUpMemberIsReplacedByABootstrappingOne:
@@ -2024,7 +2163,34 @@ If Plans S3-E2 or S3-E3 appended an event kind after `EventIndexerQuarantineChan
 - [ ] **Step 8: Run the FSM tests and see them fail**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./fsm/ -count=1 2>&1 | head -6
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['undefined: FloorVerdict', 'undefined: groupMemberByID', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
 ```
 
 Expected: the package does not build: `# github.com/sentioxyz/arbiter/fsm [github.com/sentioxyz/arbiter/fsm.test]`, then `undefined:` lines such as `undefined: FloorVerdict`, `undefined: groupMemberByID`, `undefined: UnderReplicatedDomainsBelowK` and `x.f.floorMembersLocked undefined (type *FSM has no field or method floorMembersLocked)`, and `FAIL github.com/sentioxyz/arbiter/fsm [build failed]`.
@@ -2069,6 +2235,14 @@ const (
 // UnderReplicatedReasons lists every non-empty reason, in export order.
 var UnderReplicatedReasons = []UnderReplicatedReason{UnderReplicatedInactiveIncarnation, UnderReplicatedPressurePartition,
 	UnderReplicatedPressureTable, UnderReplicatedDomainsBelowK}
+
+// CleanupApplied is returned only for a newly installed promotion cleanup
+// while checkpoints are on. Its reason is the verdict in that committed
+// Apply, never the earlier WorkSet tag. It is not state or snapshot data;
+// off-path, pending/idempotent and legacy results remain Applied{}.
+type CleanupApplied struct {
+	UnderReplicated UnderReplicatedReason
+}
 
 // FloorVerdict is spec §9.3 for one acknowledged promotion.
 type FloorVerdict struct {
@@ -2423,8 +2597,9 @@ func checkpointExcludesNothing(cp *MemberCheckpointRecord, databaseID string) bo
 
 // leavingReleaseHoldsLocked is the release condition of Leaving member m of
 // group g (spec §6.4). Outside strict mode: the members of m's frozen E that
-// are still current members of g, listed and non-evicted, with checkpoints at
-// or past m's entry that exclude none of g's tables, cover
+// are current members or not-yet-Released Leaving members of g, listed and
+// non-evicted, with checkpoints at or past m's entry that exclude none of g's
+// tables, cover
 // min(k - 1, frozen |E|) distinct current failure domains other than the
 // owner's. In strict mode: the members of g counted as E is now (lagging
 // included; m is never a current member), with such checkpoints, cover
@@ -2453,6 +2628,17 @@ func (f *FSM) leavingReleaseHoldsLocked(g *DatabaseGroup, m *LeavingMember) bool
 	domains := map[string]bool{}
 	for _, node := range candidates {
 		member := groupMemberByID(g, node)
+		if member == nil && !params.StrictCopies {
+			// A frozen peer still retains its copies until its own release.
+			// The caller marks releases immediately in canonical node order.
+			for i := range g.Leaving {
+				peer := &g.Leaving[i]
+				if peer.Member.NodeID == node && !peer.Released {
+					member = &peer.Member
+					break
+				}
+			}
+		}
 		if member == nil || member.Checkpoint == nil {
 			continue
 		}
@@ -2468,7 +2654,8 @@ func (f *FSM) leavingReleaseHoldsLocked(g *DatabaseGroup, m *LeavingMember) bool
 
 // releaseLeavingMembersLocked records every Leaving member whose release
 // condition holds for the first time (LeavingMember.Released, never
-// cleared), in group and node order, and reports whether it recorded one.
+// cleared), sequentially in canonical group and node order. Mark each release
+// immediately: a later record cannot count an already released frozen peer.
 // It runs at the end of every command that can satisfy a release; the
 // caller folds a recorded release into its Apply's one registry bump.
 func (f *FSM) releaseLeavingMembersLocked() bool {
@@ -2555,8 +2742,10 @@ with:
 	// scheduled only when floorLocked allows it, the predicate the WorkSet
 	// lists cleanups by. A cleanup already pending, scheduled before the
 	// switch included, is not checked again.
+	_, pendingCleanup := f.st.PendingCleanups[c.Cleanup.PromotionSeq]
+	newFloorCleanup := f.floorActiveLocked() && !pendingCleanup
 	var underReplicated UnderReplicatedReason
-	if _, pending := f.st.PendingCleanups[c.Cleanup.PromotionSeq]; f.floorActiveLocked() && !pending {
+	if newFloorCleanup {
 		pp := f.st.PendingPromotions[c.Cleanup.PromotionSeq]
 		if pp == nil {
 			return Rejected{Reason: fmt.Sprintf("copy floor: promotion %d is not acknowledged", c.Cleanup.PromotionSeq)}
@@ -2583,6 +2772,9 @@ with:
 	f.emit(Event{Kind: EventCleanupScheduled, PromotionSeq: cl.PromotionSeq})
 	if underReplicated != UnderReplicatedNone {
 		f.emit(Event{Kind: EventUnderReplicated, PromotionSeq: cl.PromotionSeq})
+	}
+	if newFloorCleanup {
+		return CleanupApplied{UnderReplicated: underReplicated}
 	}
 	return Applied{}
 ```
@@ -2925,10 +3117,62 @@ with:
 - [ ] **Step 19: Run the FSM tests and see them pass**
 
 ```bash
+set -eo pipefail
 . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
-cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestFloorSwitchOffIsByteIdentical|TestFloorIsDormantAtKOne|TestFloorApplyAndWorkSetAgreeOnEveryCleanup|TestFloorPublicationClausesRefuseAnUnpublishedPromotion|TestFloorHoldsCleanupUntilKMinusOneDomainsReflect|TestFloorCountsTwoMembersInOneDomainOnce|TestFloorParamsUpdateThatCollidesDomainsOnlyLowersTheCount|TestFloorExcludedTableDoesNotCount|TestFloorPurgeExemptionForANonActiveIncarnation|TestFloorPressureBypassPerPartitionAndPerTable|TestFloorEscapesRaiseUnderReplicated|TestFloorDomainsBelowKRaisesUnderReplicated|TestRejectedPartCleanupIsNeverGatedByTheFloor|TestCleanupScheduledBeforeTheCheckpointsSwitchIsNotRechecked|TestFloorKeepsTheQuarantineRefusal|TestStrictModeRequiresKMinusOneDomains|TestStrictModeKeepsLaggingMembersInE|TestStrictModeTurnsPressureIntoCopiesBackpressure|TestCopiesBackpressureLeavesStateUnchanged|TestCopiesBackpressureClearsOnceTheFloorIsMet|TestRaisingKRequiresCaughtUpCountingMembersInKMinusOneDomains|TestRaisingKRefusalLeavesStateUnchanged|TestRaisingKIgnoresNonActiveIncarnations|TestNonStrictLeavingReleaseUsesTheFrozenE|TestStrictLeavingReleaseWaitsWhenTheSoleCaughtUpMemberIsReplacedByABootstrappingOne|TestLeavingReleaseIsRecordedOnceAndNeverWithdrawn|TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand|TestLeavingReleaseAtKOneIsImmediate|TestFloorMetricsSnapshot|TestEventKindStringNamesEveryTransition|TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain|TestStage3RulesReplayOnRestore|TestStage3MinSafeCopiesAndGroupSizeNeverDecrease)$' -race -count=1 -v 2>&1 | grep -c '^--- PASS'
-cd "$W" && GOWORK=off go test ./fsm/ -race -count=1 && GOWORK=off go vet ./fsm/ && echo vet-clean
-cd "$W" && grep -rn 'time\.Now' fsm/ ; grep -n 'arbiter-proto' fsm/floor.go ; echo red-lines-checked
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race -run '^(TestFloorSwitchOffIsByteIdentical|TestFloorIsDormantAtKOne|TestFloorApplyAndWorkSetAgreeOnEveryCleanup|TestFloorPublicationClausesRefuseAnUnpublishedPromotion|TestFloorHoldsCleanupUntilKMinusOneDomainsReflect|TestFloorCountsTwoMembersInOneDomainOnce|TestFloorParamsUpdateThatCollidesDomainsOnlyLowersTheCount|TestFloorExcludedTableDoesNotCount|TestFloorPurgeExemptionForANonActiveIncarnation|TestFloorPressureBypassPerPartitionAndPerTable|TestFloorEscapesRaiseUnderReplicated|TestFloorDomainsBelowKRaisesUnderReplicated|TestRejectedPartCleanupIsNeverGatedByTheFloor|TestCleanupScheduledBeforeTheCheckpointsSwitchIsNotRechecked|TestFloorKeepsTheQuarantineRefusal|TestStrictModeRequiresKMinusOneDomains|TestStrictModeKeepsLaggingMembersInE|TestStrictModeTurnsPressureIntoCopiesBackpressure|TestCopiesBackpressureLeavesStateUnchanged|TestCopiesBackpressureClearsOnceTheFloorIsMet|TestRaisingKRequiresCaughtUpCountingMembersInKMinusOneDomains|TestRaisingKRefusalLeavesStateUnchanged|TestRaisingKIgnoresNonActiveIncarnations|TestNonStrictLeavingReleaseUsesTheFrozenE|TestStrictLeavingReleaseWaitsWhenTheSoleCaughtUpMemberIsReplacedByABootstrappingOne|TestLeavingReleaseIsRecordedOnceAndNeverWithdrawn|TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand|TestLeavingReleaseAtKOneIsImmediate|TestFloorMetricsSnapshot|TestEventKindStringNamesEveryTransition|TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain|TestStage3RulesReplayOnRestore|TestStage3MinSafeCopiesAndGroupSizeNeverDecrease|TestCleanupAppliedReasonUsesCheckpointAtCommit|TestCleanupAppliedReasonUsesEvictionAtCommit)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestFloorSwitchOffIsByteIdentical': 'pass', 'TestFloorIsDormantAtKOne': 'pass', 'TestFloorApplyAndWorkSetAgreeOnEveryCleanup': 'pass', 'TestFloorPublicationClausesRefuseAnUnpublishedPromotion': 'pass', 'TestFloorHoldsCleanupUntilKMinusOneDomainsReflect': 'pass', 'TestFloorCountsTwoMembersInOneDomainOnce': 'pass', 'TestFloorParamsUpdateThatCollidesDomainsOnlyLowersTheCount': 'pass', 'TestFloorExcludedTableDoesNotCount': 'pass', 'TestFloorPurgeExemptionForANonActiveIncarnation': 'pass', 'TestFloorPressureBypassPerPartitionAndPerTable': 'pass', 'TestFloorEscapesRaiseUnderReplicated': 'pass', 'TestFloorDomainsBelowKRaisesUnderReplicated': 'pass', 'TestRejectedPartCleanupIsNeverGatedByTheFloor': 'pass', 'TestCleanupScheduledBeforeTheCheckpointsSwitchIsNotRechecked': 'pass', 'TestFloorKeepsTheQuarantineRefusal': 'pass', 'TestStrictModeRequiresKMinusOneDomains': 'pass', 'TestStrictModeKeepsLaggingMembersInE': 'pass', 'TestStrictModeTurnsPressureIntoCopiesBackpressure': 'pass', 'TestCopiesBackpressureLeavesStateUnchanged': 'pass', 'TestCopiesBackpressureClearsOnceTheFloorIsMet': 'pass', 'TestRaisingKRequiresCaughtUpCountingMembersInKMinusOneDomains': 'pass', 'TestRaisingKRefusalLeavesStateUnchanged': 'pass', 'TestRaisingKIgnoresNonActiveIncarnations': 'pass', 'TestNonStrictLeavingReleaseUsesTheFrozenE': 'pass', 'TestStrictLeavingReleaseWaitsWhenTheSoleCaughtUpMemberIsReplacedByABootstrappingOne': 'pass', 'TestLeavingReleaseIsRecordedOnceAndNeverWithdrawn': 'pass', 'TestLeavingReleaseIsEvaluatedAfterEveryTriggeringCommand': 'pass', 'TestLeavingReleaseAtKOneIsImmediate': 'pass', 'TestFloorMetricsSnapshot': 'pass', 'TestEventKindStringNamesEveryTransition': 'pass', 'TestStage3FloorAboveOneNeedsCheckpointsAndNarrowedDrain': 'pass', 'TestStage3RulesReplayOnRestore': 'pass', 'TestStage3MinSafeCopiesAndGroupSizeNeverDecrease': 'pass', 'TestCleanupAppliedReasonUsesCheckpointAtCommit': 'pass', 'TestCleanupAppliedReasonUsesEvictionAtCommit': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./fsm/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+go vet ./fsm/ || exit 1
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+if git grep -n 'arbiter-proto' -- fsm/floor.go; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+echo task76-fsm-checks-passed
 ```
 
 Expected: `33` (the 29 tests of contract §53, the event-kind test and Task 64's three tests); `ok  	github.com/sentioxyz/arbiter/fsm`, every golden, determinism, Plan S3-E2 and Plan S3-E3 test included; `vet-clean`; only `red-lines-checked` (no clock and no arbiter-proto in the fsm library).
@@ -3045,7 +3289,34 @@ arbiter_under_replicated_total{reason="pressure_table"} 2
 - [ ] **Step 22: Run it and see it fail**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 2>&1 | head -4
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['m.UnderReplicatedCleanup undefined', 'm.FloorHeldCleanups undefined', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
 ```
 
 Expected: the build fails with `m.UnderReplicatedCleanup undefined (type *Metrics has no field or method UnderReplicatedCleanup)`, `m.FloorHeldCleanups undefined …` and `FAIL github.com/sentioxyz/arbiter/metrics [build failed]` (the gauge half compiles: `MetricsSnapshot` already has the fields).
@@ -3227,7 +3498,61 @@ with:
 - [ ] **Step 25: Run the metrics tests and see them pass**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./metrics/ -count=1 -race && GOWORK=off go test ./metrics/ -run '^TestFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+for repeat in $(seq 1 1); do
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./metrics/ -count=1 -run '^(TestFloorMetrics)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestFloorMetrics': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+done
+echo task76-selected-tests-verified
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/metrics` (Plan S3-A's state-size, hold and track tests and Plan S3-E3's group tests among them) and `--- PASS: TestFloorMetrics`.
@@ -3241,11 +3566,15 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
+	"github.com/hashicorp/raft"
+	"github.com/sentioxyz/arbiter/raftnode"
 	"github.com/sentioxyz/arbiter/fsm"
 )
 
@@ -3281,9 +3610,8 @@ func (r *floorMetricsRecorder) calls() ([]string, []floorHeldCall) {
 }
 
 // TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied: the loop counts a
-// PublishedUncleaned row's under_replicated reason only once its proposal
-// returned no error (plan S3-E4 contract §53, K78): a row Apply refuses and a
-// row without a reason count nothing.
+// committed reason, not a manually tagged WorkSet row. This legacy/off
+// fixture returns Applied{}, so even forged row labels count nothing.
 func TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied(t *testing.T) {
 	params, signer := authorityParamsO(t)
 	f, node, _, _, _, o, _ := newHarness(t, params, signer)
@@ -3323,8 +3651,8 @@ func TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied(t *testing.T) {
 	if err := o.handlePromotionRows(ctx, rows); err != nil {
 		t.Fatal(err)
 	}
-	if reasons, _ := floor.calls(); !slices.Equal(reasons, []string{"pressure_table"}) {
-		t.Fatalf("counted %v, want [pressure_table]", reasons)
+	if reasons, _ := floor.calls(); len(reasons) != 0 {
+		t.Fatalf("counted %v on legacy Applied, want none", reasons)
 	}
 	if ws, err = f.WorkSet(); err != nil || len(ws.ScheduledUnackedCleanups) != 1 {
 		t.Fatalf("scheduled cleanups %+v, %v; want the taken one", ws.ScheduledUnackedCleanups, err)
@@ -3349,22 +3677,38 @@ func TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange(t *testin
 	if _, held := floor.calls(); !slices.Equal(held, []floorHeldCall{{1, 0}, {2, 30 * time.Second}, {1, 10 * time.Second}}) {
 		t.Fatalf("reported %+v", held)
 	}
+	// Isolate this term-exit assertion from queued FSM/wake rescans: an
+	// empty later WorkSet must not clear the injected state for the defer.
+	o.d.Events = nil
+	o.wake = nil
+	o.d.Cfg.RetryInterval = time.Hour
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	_, earlier := floor.calls()
 	var atFirstPass []floorHeldCall
-	var first sync.Once
+	passes := 0
 	o.afterRescan = func() {
-		first.Do(func() {
-			_, atFirstPass = floor.calls()
-			// The term sees promotion 7 held, as a pass over a held cleanup
-			// does; the run then ends, as a leadership loss ends it.
-			now = now.Add(5 * time.Second)
-			o.observeFloorHeld([]uint64{7})
-			cancel()
-		})
+		passes++
+		if passes != 1 {
+			t.Fatalf("unexpected rescan %d after the term-exit fixture was armed", passes)
+		}
+		_, atFirstPass = floor.calls()
+		// Establish nonempty state inside Run, after its initial reset/pass,
+		// so only the end-of-term defer can clear it before the assertion.
+		now = now.Add(5 * time.Second)
+		o.observeFloorHeld([]uint64{7})
+		_, active := floor.calls()
+		if len(o.floorHeldSince) != 1 || active[len(active)-1] != (floorHeldCall{1, 0}) {
+			t.Fatalf("inside the leader run: since %v, last report %+v; want one held cleanup", o.floorHeldSince, active[len(active)-1])
+		}
+		cancel()
 	}
-	_ = o.Run(ctx)
+	if err := o.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader run returned %v, want context canceled", err)
+	}
+	if passes != 1 {
+		t.Fatalf("leader run completed %d fixture passes, want exactly one", passes)
+	}
 	if got := atFirstPass[len(earlier):]; !slices.Equal(got, []floorHeldCall{{0, 0}, {0, 0}}) {
 		t.Fatalf("a leader run reported %+v up to its first pass, want none before the pass and the pass's none", got)
 	}
@@ -3378,12 +3722,162 @@ func TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange(t *testin
 		t.Fatalf("after a new term: %+v, want the age restarted at 0", held[len(held)-1])
 	}
 }
+
+// floorOutcomeNode keeps the real proposal/error path and substitutes only
+// an accepted legacy response. FSM causal tests above establish which
+// outcome a real switch-on Apply returns; these tests isolate its consumer.
+type floorOutcomeNode struct {
+	raftnode.ConsensusNode
+	result any
+	used   bool
+}
+
+type floorOutcomeFuture struct {
+	raft.ApplyFuture
+	result any
+}
+
+func (n *floorOutcomeNode) Apply(cmd []byte, timeout time.Duration) raft.ApplyFuture {
+	f := n.ConsensusNode.Apply(cmd, timeout)
+	result := any(fsm.Applied{})
+	if !n.used {
+		result, n.used = n.result, true
+	}
+	return floorOutcomeFuture{ApplyFuture: f, result: result}
+}
+
+func (f floorOutcomeFuture) Response() any {
+	actual := f.ApplyFuture.Response()
+	if _, ok := actual.(fsm.Applied); !ok {
+		return actual // never turn a rejection into a successful response
+	}
+	return f.result
+}
+
+type floorFailSend struct {
+	SNodeDirectory
+	floor  *floorMetricsRecorder
+	calls  int
+	atSend [][]string
+}
+
+func (s *floorFailSend) Send(_ string, _ *pb.PromotionCommand) error {
+	s.calls++
+	// Observe the real metric receiver at the send boundary, not only
+	// after proposeCleanup returns: a late increment must fail this test.
+	reasons, _ := s.floor.calls()
+	s.atSend = append(s.atSend, reasons)
+	return errors.New("floor metric regression: cleanup send failed after Apply")
+}
+
+// TestLoopCountsCommittedCleanupReasonBeforeStreaming: response labels beat
+// stale WorkSet labels, duplicate Applied{} adds no count, and a failing
+// Send after commit cannot erase its counter. This is a response-seam test,
+// not a substitute for the FSM checkpoint/eviction interleavings.
+func TestLoopCountsCommittedCleanupReasonBeforeStreaming(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rowReason  fsm.UnderReplicatedReason
+		result     any
+		want       []string
+		failSend   bool
+	}{
+		{"checkpoint removed pressure", fsm.UnderReplicatedPressureTable, fsm.CleanupApplied{}, nil, false},
+		{"eviction added reason", fsm.UnderReplicatedNone, fsm.CleanupApplied{UnderReplicated: fsm.UnderReplicatedDomainsBelowK}, []string{"domains_below_k"}, false},
+		{"retry is not a new cleanup", fsm.UnderReplicatedPressureTable, fsm.CleanupApplied{UnderReplicated: fsm.UnderReplicatedPressureTable}, []string{"pressure_table"}, false},
+		{"failed send keeps committed count", fsm.UnderReplicatedNone, fsm.CleanupApplied{UnderReplicated: fsm.UnderReplicatedPressureTable}, []string{"pressure_table"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params, signer := authorityParamsO(t)
+			f, node, _, _, _, o, _ := newHarness(t, params, signer)
+			ctx := context.Background()
+			seedGenesisWriterAndVerifiers(t, node)
+			driveToQuorum(t, node, f)
+			ws, err := f.WorkSet()
+			if err != nil || len(ws.UnanchoredVerified) != 1 {
+				t.Fatalf("unanchored work: %+v, %v", ws.UnanchoredVerified, err)
+			}
+			if err := o.anchorBlock(ctx, ws.UnanchoredVerified[0]); err != nil {
+				t.Fatal(err)
+			}
+			if ws, err = f.WorkSet(); err != nil || len(ws.PromotablePending) != 1 {
+				t.Fatalf("promotable work: %+v, %v", ws.PromotablePending, err)
+			}
+			if err := o.issuePromotion(ctx, ws.PromotablePending[0]); err != nil {
+				t.Fatal(err)
+			}
+			ackPromotionViaNode(t, node, f, 1)
+			if err := o.publishManifest(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if ws, err = f.WorkSet(); err != nil || len(ws.PublishedUncleaned) != 1 {
+				t.Fatalf("cleanup work: %+v, %v", ws.PublishedUncleaned, err)
+			}
+			floor := &floorMetricsRecorder{}
+			o.d.Floor = floor
+			o.d.Node = &floorOutcomeNode{ConsensusNode: o.d.Node, result: tc.result}
+			failedSend := &floorFailSend{SNodeDirectory: o.d.SNodes, floor: floor}
+			if tc.failSend {
+				o.d.SNodes = failedSend
+			}
+			row := ws.PublishedUncleaned[0]
+			row.UnderReplicated = tc.rowReason
+			// First is new; the same retained row's second proposal is an
+			// accepted pending retry and returns legacy Applied{}.
+			for range 2 {
+				if applied, err := o.proposeCleanup(ctx, row); !applied || err != nil {
+					t.Fatalf("proposal applied=%v err=%v", applied, err)
+				}
+			}
+			if reasons, _ := floor.calls(); !slices.Equal(reasons, tc.want) {
+				t.Fatalf("committed reasons %v, want %v", reasons, tc.want)
+			}
+			if tc.failSend {
+				if failedSend.calls == 0 {
+					t.Fatal("cleanup never reached the failing post-commit sender")
+				}
+				for i, reasons := range failedSend.atSend {
+					if !slices.Equal(reasons, tc.want) {
+						t.Fatalf("send %d observed reasons %v, want committed count %v before streaming", i, reasons, tc.want)
+					}
+				}
+			}
+		})
+	}
+}
 ```
 
 - [ ] **Step 27: Run them and see them fail**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -count=1 2>&1 | head -4
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['o.d.Floor undefined', 'o.observeFloorHeld undefined', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
 ```
 
 Expected: the build fails with `o.d.Floor undefined (type Deps has no field or method Floor)` and `o.observeFloorHeld undefined (type *Loop has no field or method observeFloorHeld)`, then `FAIL github.com/sentioxyz/arbiter/orchestrator [build failed]`.
@@ -3434,6 +3928,8 @@ with:
 	Floor FloorMetrics
 }
 ```
+
+If an earlier task appended fields after `Issuance`, preserve every such field and append `Floor` after the last of them instead (hunk rule): it is the struct's last field. In particular, keep Task 64's `Settles SettleSource` and its comment unchanged.
 
 - [ ] **Step 29: Create the held-cleanup timing**
 
@@ -3578,9 +4074,9 @@ func (o *Loop) scheduleCleanup(ctx context.Context, cw fsm.CleanupWork) error {
 }
 
 // proposeCleanup signs cw's cleanup, proposes it and streams it to its
-// source. applied reports whether the proposal returned no error, which is
-// what the copy floor's under_replicated counter counts (K78); a streaming
-// error after it is still returned.
+// source. applied reports whether the proposal returned no error. Only a
+// new switch-on CleanupApplied outcome carries the committed metric reason;
+// count it before streaming so a later send failure cannot erase the commit.
 func (o *Loop) proposeCleanup(ctx context.Context, cw fsm.CleanupWork) (applied bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -3600,7 +4096,8 @@ func (o *Loop) proposeCleanup(ctx context.Context, cw fsm.CleanupWork) (applied 
 		o.d.Logger.Warn("sign cleanup failed", "promotion_seq", cw.PromotionSeq, "rejected_block_seq", cw.Cleanup.RejectedBlockSeq, "err", err)
 		return false, nil
 	}
-	if _, err := o.propose(ctx, wire.Command{ScheduleUnsafeCleanup: &wire.ScheduleUnsafeCleanup{Cleanup: cw.Cleanup, AuthorityJWS: jws}}); err != nil {
+	result, err := o.propose(ctx, wire.Command{ScheduleUnsafeCleanup: &wire.ScheduleUnsafeCleanup{Cleanup: cw.Cleanup, AuthorityJWS: jws}})
+	if err != nil {
 		if errors.Is(err, ErrRejected) {
 			return false, nil
 		}
@@ -3608,6 +4105,9 @@ func (o *Loop) proposeCleanup(ctx context.Context, cw fsm.CleanupWork) (applied 
 			return false, fmt.Errorf("schedule unsafe cleanup rejected_block_seq %d: %w", cw.Cleanup.RejectedBlockSeq, err)
 		}
 		return false, fmt.Errorf("schedule unsafe cleanup seq %d: %w", cw.PromotionSeq, err)
+	}
+	if committed, ok := result.(fsm.CleanupApplied); ok && committed.UnderReplicated != fsm.UnderReplicatedNone && o.d.Floor != nil {
+		o.d.Floor.UnderReplicatedCleanup(string(committed.UnderReplicated))
 	}
 	return true, o.streamCleanupSigned(ctx, cw.Cleanup, jws)
 }
@@ -3641,14 +4141,10 @@ In `orchestrator/promotion.go` (`:39-43`; the rejected-part loop below keeps `sc
 with:
 
 ```go
-	// A cleanup the copy floor let through an escape, or with |E| below
-	// k - 1, counts as under-replicated only once Apply took it (K78).
+	// proposeCleanup counts only the committed new-cleanup outcome, before
+	// streaming; the WorkSet reason can be stale by the time Apply runs.
 	for _, cw := range ws.PublishedUncleaned {
-		applied, err := o.proposeCleanup(ctx, cw)
-		if applied && cw.UnderReplicated != fsm.UnderReplicatedNone && o.d.Floor != nil {
-			o.d.Floor.UnderReplicatedCleanup(string(cw.UnderReplicated))
-		}
-		if err != nil {
+		if _, err := o.proposeCleanup(ctx, cw); err != nil {
 			return err
 		}
 	}
@@ -3657,10 +4153,64 @@ with:
 - [ ] **Step 33: Run the orchestrator tests and see them pass**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./orchestrator/ -race -count=1 && GOWORK=off go test ./orchestrator/ -run 'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange' -race -count=50 2>&1 | tail -1
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+for repeat in $(seq 1 50); do
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./orchestrator/ -count=1 -race -run '^(TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied|TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange|TestLoopCountsCommittedCleanupReasonBeforeStreaming)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestLoopCountsUnderReplicatedCleanupsOnlyWhenApplied': 'pass', 'TestFloorHeldCleanupAgeIsLeaderLocalAndRestartsOnLeadershipChange': 'pass', 'TestLoopCountsCommittedCleanupReasonBeforeStreaming': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+done
+echo task76-selected-tests-verified
 ```
 
-Expected: `ok  	github.com/sentioxyz/arbiter/orchestrator` twice (the signer, rejected-cleanup, metrics and Plan S3-E3 member-lagging tests among the first run; fifty repetitions of the two new tests in the second).
+Expected: `ok  	github.com/sentioxyz/arbiter/orchestrator` twice (the signer, rejected-cleanup, metrics and Plan S3-E3 member-lagging tests among the first run; fifty repetitions of the three metrics/age tests in the second).
 
 - [ ] **Step 34: Write the failing wiring test**
 
@@ -3710,7 +4260,34 @@ func TestNewServerAndLoopWiresTheFloorMetrics(t *testing.T) {
 - [ ] **Step 35: Run it and see it fail**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 2>&1 | head -3
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=['unknown field floorMetrics', 'build failed']
+assert (rc!=0)==True,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not True:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
 ```
 
 Expected: the build fails with `unknown field floorMetrics in struct literal of type serviceRuntime` and `FAIL github.com/sentioxyz/arbiter/cmd/arbiter [build failed]`.
@@ -3749,13 +4326,13 @@ with:
 In `cmd/arbiter/app.go` (`:89`), replace:
 
 ```go
-		promotionMetrics, registryMetrics, streamMetrics, evidenceMetrics, admissionMetrics, holdMetrics = m, m, m, m, m, m
+		promotionMetrics, registryMetrics, streamMetrics, evidenceMetrics, admissionMetrics, holdMetrics, settleMetrics = m, m, m, m, m, m, m
 ```
 
 with:
 
 ```go
-		promotionMetrics, registryMetrics, streamMetrics, evidenceMetrics, admissionMetrics, holdMetrics = m, m, m, m, m, m
+		promotionMetrics, registryMetrics, streamMetrics, evidenceMetrics, admissionMetrics, holdMetrics, settleMetrics = m, m, m, m, m, m, m
 		floorMetrics = m
 ```
 
@@ -3807,7 +4384,61 @@ with:
 - [ ] **Step 38: Run the wiring test and see it pass**
 
 ```bash
-. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && GOWORK=off go test ./cmd/arbiter/ -count=1 && GOWORK=off go test ./cmd/arbiter/ -run '^TestNewServerAndLoopWiresTheFloorMetrics$' -count=1 -v 2>&1 | grep -E '^--- '
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter/ -count=1 > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+for repeat in $(seq 1 1); do
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./cmd/arbiter/ -count=1 -run '^(TestNewServerAndLoopWiresTheFloorMetrics)$' > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={'TestNewServerAndLoopWiresTheFloorMetrics': 'pass'};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+done
+echo task76-selected-tests-verified
 ```
 
 Expected: `ok  	github.com/sentioxyz/arbiter/cmd/arbiter` and `--- PASS: TestNewServerAndLoopWiresTheFloorMetrics`.
@@ -3844,23 +4475,157 @@ A hold that stays active well past the drain an operator expects is the signal t
 The copy floor (Plan S3-E4 Task 76, K78) adds three replicated gauges, derived from committed state by every replica: `arbiter_floor_held_cleanups` (promotions whose cleanup only the floor holds) and `arbiter_under_replicated_groups` (groups whose |E| is below k − 1), both 0 before the `checkpoints` switch, and `arbiter_safe_copies_min{indexer_id}` (per owner, the fewest safe copies over its groups: 1 plus the distinct failure domains other than its own whose counting members' checkpoints equal its latest published entry and exclude nothing; absent before the switch). Declared domains are distinct Kubernetes nodes only through anti-affinity. Two series are leader-local: `arbiter_under_replicated_total{reason}` (`inactive_incarnation`, `pressure_partition`, `pressure_table`, `domains_below_k`; every reason exported from the start) counts the cleanups this leader proposed that Apply took under that reason, and `arbiter_floor_held_cleanup_age_seconds` is the age of the oldest promotion only the floor holds, measured from the first pass of this leader term that saw it held: 0 on a follower, it restarts at a leadership change, so it can understate after a failover and never overstates. An applied escape also emits the hint-only event `under_replicated`.
 ```
 
-Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && grep -c '^\*\*Copy floor\*\* (housegate spec 2026-10-14' README.md && grep -c '^The copy floor (Plan S3-E4 Task 76, K78) adds' README.md`
+Run through the Bash plan runner:
+
+```bash
+set -eo pipefail
+. "$HOME/.cache/s3e2-task64/env.sh" || exit 1
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+[ "$(grep -c '^\*\*Copy floor\*\* (housegate spec 2026-10-14' README.md)" = 1 ] || exit 1
+[ "$(grep -c '^The copy floor (Plan S3-E4 Task 76, K78) adds' README.md)" = 1 ] || exit 1
+echo task76-docs-verified
+```
 Expected: `1` and `1`.
 
 - [ ] **Step 40: Full verification**
 
 ```bash
+set -eo pipefail
 . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
-cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go') $(git ls-files -o --exclude-standard '*.go'))" && echo gofmt-clean
-cd "$W" && GOWORK=off go vet ./... && echo vet-clean
-cd "$W" && GOWORK=off go test ./... -race -count=1 2>&1 | grep -E '^(--- FAIL|FAIL|panic)' || echo no-failures
-cd "$W" && bazel run //:gazelle && git status --short
-cd "$W" && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors
-cd "$W" && git diff --exit-code HEAD~1 -- fsm/testdata accumulator/testdata fsm/l3_track_golden_test.go && echo goldens-unchanged
-cd "$W" && bazel query 'deps(//fsm:fsm, 1)' | grep com_github_sentioxyz_arbiter_proto; grep -rn 'time\.Now' fsm/; echo red-lines-checked
+export GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOSUMDB=off GONOPROXY=none GOPRIVATE=none GONOSUMDB=none
+cd "$W" || exit 1
+list="$(mktemp "$T64/task76-format.XXXXXX")" || exit 1
+git ls-files -z -- '*.go' > "$list" || exit 1
+git ls-files -z -o --exclude-standard -- '*.go' >> "$list" || exit 1
+python3 -I - "$list" <<'PY76'
+import pathlib,subprocess,sys
+files=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert files.pop()==b'' and files
+assert len(files)==len(set(files))
+for p in files:
+ r=subprocess.run(['gofmt','-l',p.decode()],capture_output=True)
+ assert r.returncode==0 and not r.stdout and not r.stderr,(p,r.returncode,r.stdout,r.stderr)
+PY76
+go vet ./... || exit 1
+out="$(mktemp "$T64/task76-test.XXXXXX")" || exit 1
+if go test -json ./... -count=1 -race > "$out" 2>&1; then rc=0; else rc=$?; fi
+python3 -I - "$out" "$rc" <<'PY76'
+import json,pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();rc=int(sys.argv[2]);expected={};tokens=[]
+assert (rc!=0)==False,(rc,text[-2000:])
+rows=[]
+for line in text.splitlines():
+ try:row=json.loads(line)
+ except json.JSONDecodeError:
+  assert tokens,line
+  continue
+ assert isinstance(row,dict);rows.append(row)
+for pattern,action in expected.items():
+ matched={r['Test'] for r in rows if isinstance(r.get('Test'),str) and re.fullmatch(pattern,r['Test']) and '/' not in r['Test']}
+ assert matched,(pattern,'not run')
+ for name in matched:
+  outcomes=[r.get('Action') for r in rows if r.get('Test')==name and r.get('Action') in ('pass','fail','skip')]
+  assert outcomes==[action],(name,outcomes)
+for token in tokens:assert token in text,token
+assert rows and any('Test' not in r and r.get('Action') in ('pass','fail') for r in rows)
+if not False:assert not any(r.get('Action')=='fail' for r in rows)
+print('task76-test-results-verified')
+PY76
+before_build="$(mktemp "$T64/task76-orchestrator-build-before.XXXXXX")" || exit 1
+git show HEAD:orchestrator/BUILD.bazel > "$before_build" || exit 1
+bazel run --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //:gazelle || exit 1
+diff="$(git diff --unified=0 -- '*.bazel')" || exit 1
+python3 -I - "$diff" "$before_build" "$W/orchestrator/BUILD.bazel" <<'PY76'
+import difflib,pathlib,re,sys
+
+def need(ok, reason):
+    if not ok:raise AssertionError(reason)
+
+def normalize_declared_test_dependency(before, after):
+    # Only the directly imported Task76 raftnode dependency of this exact test target.
+    import ast
+    added=[line[2:].strip() for line in difflib.ndiff(before.splitlines(),after.splitlines()) if line.startswith('+ ')]
+    if '"//raftnode",' not in added:return after
+    need(added.count('"//raftnode",')==1,'one declared raftnode dependency addition required')
+    def target_deps(text):
+        targets=[]
+        for node in ast.walk(ast.parse(text)):
+            if not isinstance(node,ast.Call) or not isinstance(node.func,ast.Name) or node.func.id!='go_test':continue
+            names=[k.value for k in node.keywords if k.arg=='name']
+            if len(names)==1 and isinstance(names[0],ast.Constant) and names[0].value=='orchestrator_test':targets.append(node)
+        need(len(targets)==1,'unique orchestrator_test target required')
+        deps=[k.value for k in targets[0].keywords if k.arg=='deps']
+        need(len(deps)==1 and isinstance(deps[0],ast.List) and all(isinstance(e,ast.Constant) and type(e.value)is str for e in deps[0].elts),'literal exact target dependency list required')
+        return deps[0].elts
+    old,new=target_deps(before),target_deps(after)
+    need(all(e.value!='//raftnode' for e in old) and sum(e.value=='//raftnode' for e in new)==1,'raftnode must be newly added only to orchestrator_test deps')
+    need([e.value for e in new if e.value!='//raftnode']==[e.value for e in old],'other target dependencies changed')
+    leaf=next(e for e in new if e.value=='//raftnode');lines=after.splitlines(True)
+    need(leaf.lineno==leaf.end_lineno and re.fullmatch(r'[ \t]*"//raftnode",[ \t]*\n',lines[leaf.lineno-1])is not None,'standalone exact declared dependency line required')
+    # The original no-removal/exact new-source predicate checks every remaining byte-line delta.
+    return ''.join(lines[:leaf.lineno-1]+lines[leaf.lineno:])
+
+def validate_declared_gazelle_delta(before, after, diff):
+    normalized = normalize_declared_test_dependency(before, after)
+    need(normalized != after, 'the declared new orchestrator_test raftnode dependency is required')
+    added = []
+    for line in diff.splitlines():
+        if line.startswith(('+++', '---')):continue
+        need(not line.startswith('-'), 'Gazelle removed a line: ' + line)
+        if line.startswith('+'):added.append(line[1:].strip())
+    need(added.count('"//raftnode",') == 1, 'one standalone declared dependency diff line required')
+    added.remove('"//raftnode",')
+    need(sorted(added) == sorted(['"floor.go",', '"floor_test.go",', '"floor_metrics.go",', '"floor_metrics_test.go",', '"floor_metrics_wiring_test.go",']), 'unexpected Gazelle source additions: ' + repr(added))
+
+validate_declared_gazelle_delta(pathlib.Path(sys.argv[2]).read_text(), pathlib.Path(sys.argv[3]).read_text(), sys.argv[1])
+PY76
+git add -- README.md cmd/arbiter/BUILD.bazel cmd/arbiter/app.go cmd/arbiter/services.go cmd/arbiter/floor_metrics_wiring_test.go metrics/BUILD.bazel metrics/metrics.go metrics/floor.go metrics/floor_test.go orchestrator/BUILD.bazel orchestrator/cleanup.go orchestrator/deps.go orchestrator/loop.go orchestrator/promotion.go orchestrator/floor_metrics.go orchestrator/floor_metrics_test.go || exit 1
+statusfile="$(mktemp "$T64/task76-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY76'
+import pathlib,sys
+expected=['README.md', 'cmd/arbiter/BUILD.bazel', 'cmd/arbiter/app.go', 'cmd/arbiter/services.go', 'cmd/arbiter/floor_metrics_wiring_test.go', 'metrics/BUILD.bazel', 'metrics/metrics.go', 'metrics/floor.go', 'metrics/floor_test.go', 'orchestrator/BUILD.bazel', 'orchestrator/cleanup.go', 'orchestrator/deps.go', 'orchestrator/loop.go', 'orchestrator/promotion.go', 'orchestrator/floor_metrics.go', 'orchestrator/floor_metrics_test.go']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY76
+bazel build --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none //... || exit 1
+bazel test --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none --build_tests_only --@rules_go//go/config:race //... --test_output=errors || exit 1
+deps="$(bazel query --repository_disable_download --repo_env=GOPROXY=off --repo_env=GOSUMDB=off --repo_env=GONOPROXY=none --repo_env=GOPRIVATE=none --repo_env=GONOSUMDB=none 'deps(//fsm:fsm, 1)')" || exit 1
+[ -n "$deps" ] || exit 1
+case "$deps" in *com_github_sentioxyz_arbiter_proto*) exit 1;; esac
+if git grep -n 'time\.Now' -- fsm; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+if git grep -n 'arbiter-proto' -- fsm/floor.go; then exit 1; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+base="$(cat "$T64/task76-base-sha")" || exit 1
+[[ "$base" =~ ^[0-9a-f]{40}$ ]] || exit 1
+changes="$(mktemp "$T64/task76-protected.XXXXXX")" || exit 1
+git diff --name-status -z "$base" > "$changes" || exit 1
+python3 -I - "$changes" <<'PY76'
+import pathlib,sys
+r=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert r.pop()==b'' and len(r)%2==0
+for status,p in zip(r[::2],r[1::2]):
+ assert status in (b'A',b'M'),status
+ assert b'testdata/' not in p and not p.endswith(b'_golden_test.go') and p!=b'conformance/stage3_reads_test.go',p
+PY76
+statusfile="$(mktemp "$T64/task76-staged.XXXXXX")" || exit 1
+git status --porcelain -z > "$statusfile" || exit 1
+python3 -I - "$statusfile" <<'PY76'
+import pathlib,sys
+expected=['README.md', 'cmd/arbiter/BUILD.bazel', 'cmd/arbiter/app.go', 'cmd/arbiter/services.go', 'cmd/arbiter/floor_metrics_wiring_test.go', 'metrics/BUILD.bazel', 'metrics/metrics.go', 'metrics/floor.go', 'metrics/floor_test.go', 'orchestrator/BUILD.bazel', 'orchestrator/cleanup.go', 'orchestrator/deps.go', 'orchestrator/loop.go', 'orchestrator/promotion.go', 'orchestrator/floor_metrics.go', 'orchestrator/floor_metrics_test.go']
+rows=pathlib.Path(sys.argv[1]).read_bytes().split(b'\0');assert rows.pop()==b''
+seen=[]
+for row in rows:
+ assert row[:2] in (b'A ',b'M ') and row[2:3]==b' ',row
+ seen.append(row[3:].decode())
+assert len(seen)==len(set(seen)) and set(seen)==set(expected),(seen,expected)
+PY76
+echo task76-full-checks-passed
 ```
 
-Expected: `gofmt-clean`; `vet-clean`; `no-failures`; gazelle adds `"floor.go",` to `go_library(name = "metrics")` (before `"metrics.go",`), `"floor_test.go",` to `go_test(name = "metrics_test")` (after `"consensus_hold_test.go",`), `"floor_metrics.go",` to `go_library(name = "orchestrator")` (after `"dispatch_ledger.go",`), `"floor_metrics_test.go",` to `go_test(name = "orchestrator_test")` (after `"evm_anchor_test.go",`) and `"floor_metrics_wiring_test.go",` to `go_test(name = "arbiter_test")` (after `"consensus_restart_test.go",`), no dependency, and the status lists exactly ` M README.md`, ` M cmd/arbiter/BUILD.bazel`, ` M cmd/arbiter/app.go`, ` M cmd/arbiter/services.go`, ` M metrics/BUILD.bazel`, ` M metrics/metrics.go`, ` M orchestrator/BUILD.bazel`, ` M orchestrator/cleanup.go`, ` M orchestrator/deps.go`, ` M orchestrator/loop.go`, ` M orchestrator/promotion.go`, `?? cmd/arbiter/floor_metrics_wiring_test.go`, `?? metrics/floor.go`, `?? metrics/floor_test.go`, `?? orchestrator/floor_metrics.go` and `?? orchestrator/floor_metrics_test.go`; Bazel builds and every test target passes under race (CI's command, `.github/workflows/ci.yml`); `goldens-unchanged` (no golden or vector file differs from Plan S3-E3 Task 75's last commit, `HEAD~1`); only `red-lines-checked`.
+Expected: `gofmt-clean`; `vet-clean`; `no-failures`; gazelle adds `"floor.go",` to `go_library(name = "metrics")` (before `"metrics.go",`), `"floor_test.go",` to `go_test(name = "metrics_test")` (after `"consensus_hold_test.go",`), `"floor_metrics.go",` to `go_library(name = "orchestrator")` (after `"dispatch_ledger.go",`), `"floor_metrics_test.go",` to `go_test(name = "orchestrator_test")` (after `"evm_anchor_test.go",`) and `"floor_metrics_wiring_test.go",` to `go_test(name = "arbiter_test")` (after `"consensus_restart_test.go",`), plus exactly one new standalone `"//raftnode",` in the unique `go_test(name = "orchestrator_test")` deps (absent in the checked `git show HEAD:orchestrator/BUILD.bazel` before-image, with every other dependency retained in the same order), no removals or other additions, and the status lists exactly ` M README.md`, ` M cmd/arbiter/BUILD.bazel`, ` M cmd/arbiter/app.go`, ` M cmd/arbiter/services.go`, ` M metrics/BUILD.bazel`, ` M metrics/metrics.go`, ` M orchestrator/BUILD.bazel`, ` M orchestrator/cleanup.go`, ` M orchestrator/deps.go`, ` M orchestrator/loop.go`, ` M orchestrator/promotion.go`, `?? cmd/arbiter/floor_metrics_wiring_test.go`, `?? metrics/floor.go`, `?? metrics/floor_test.go`, `?? orchestrator/floor_metrics.go` and `?? orchestrator/floor_metrics_test.go`; Bazel builds and every test target passes under race (CI's command, `.github/workflows/ci.yml`); `goldens-unchanged` (no golden or vector file differs from Plan S3-E3 Task 75's last commit, `HEAD~1`); only `red-lines-checked`.
 
 - [ ] **Step 41: Commit the metrics, orchestrator and wiring half**
 
@@ -4000,10 +4765,57 @@ grep -c 'fs.StringVar(&holdName, "hold", "drain", ' cmd/arbiter-admin/main.go
 grep -c '^\*\*CLI\.\*\* `arbiter-admin consensus update ... --stage3 ' README.md
 grep -c '^\*\*CLI\.\*\* `arbiter-admin consensus update` takes a hold by default (`--hold drain`): ' README.md
 grep -rn -e 'func TouchedTracks' -e 'DrainViewFor' -e 'holdViewFor' -e 'func defaultHoldMode' fsm/ server/ cmd/
-go doc github.com/sentioxyz/arbiter-proto/gen/pb Stage3Params.GetNarrowedDrain | tail -1
+proto_dir="$(go list -m -f '{{.Dir}}' github.com/sentioxyz/arbiter-proto)" || exit 1
+[ -n "$proto_dir" ] || exit 1
+case "$proto_dir" in /*) ;; *) exit 1 ;; esac
+case "$proto_dir" in *$'\n'*|*$'\r'*) exit 1 ;; esac
+[ -d "$proto_dir/gen/pb" ] && [ ! -L "$proto_dir/gen/pb" ] || exit 1
+[ ! -e "$T64/task77-doc-gopath" ] && [ ! -L "$T64/task77-doc-gopath" ] || exit 1
+mkdir -m 700 "$T64/task77-doc-gopath" || exit 1
+doc_proto="$T64/task77-doc-gopath/src/github.com/sentioxyz/arbiter-proto"
+python3 -I - "$proto_dir" "$doc_proto" <<'PY77'
+import hashlib,os,pathlib,stat,sys
+source,dest=map(pathlib.Path,sys.argv[1:])
+def snapshot(root):
+    files={};dirs={'.':stat.S_IMODE(root.stat().st_mode)}
+    for base,names,leaves in os.walk(root,followlinks=False):
+        names[:]=sorted(n for n in names if n!='.git')
+        for name in names:
+            p=pathlib.Path(base)/name
+            assert not p.is_symlink() and p.is_dir(), 'directory alias'
+            dirs[str(p.relative_to(root))]=stat.S_IMODE(p.stat().st_mode)
+        for name in sorted(n for n in leaves if n!='.git'):
+            p=pathlib.Path(base)/name;rel=str(p.relative_to(root))
+            assert rel not in {'k8s-sea/clickhouse/clickhouse.yaml','k8s-sea/clickhouse/clickhouse-extra.yaml'}, 'protected path'
+            before=p.lstat();assert stat.S_ISREG(before.st_mode) and not p.is_symlink(), 'nonregular file'
+            with p.open('rb') as stream:
+                opened=os.fstat(stream.fileno())
+                assert (opened.st_dev,opened.st_ino,opened.st_mode)==(before.st_dev,before.st_ino,before.st_mode), 'source identity changed before open'
+                data=stream.read()
+            after=p.lstat()
+            assert (before.st_dev,before.st_ino,before.st_mode,before.st_size,before.st_mtime_ns)==(after.st_dev,after.st_ino,after.st_mode,after.st_size,after.st_mtime_ns), 'source changed'
+            files[rel]=(hashlib.sha256(data).hexdigest(),stat.S_IMODE(after.st_mode),data)
+    return files,dirs
+before,dirs=snapshot(source)
+assert before and not dest.exists() and not dest.is_symlink()
+dest.parent.mkdir(parents=True,exist_ok=True,mode=0o700);dest.mkdir(mode=0o700)
+for name in sorted(dirs,key=lambda n:(n.count('/'),n)):
+    if name!='.':(dest/name).mkdir(mode=0o700)
+for name,(_,mode,data) in before.items():
+    with (dest/name).open('xb') as stream:assert stream.write(data)==len(data)
+    (dest/name).chmod(mode)
+for name in sorted(dirs,key=lambda n:n.count('/'),reverse=True):(dest/name).chmod(dirs[name])
+assert snapshot(source)==(before,dirs) and snapshot(dest)==(before,dirs), 'documentation copy differs'
+PY77
+[ "$?" -eq 0 ] || exit 1
+(
+  cd "$doc_proto" || exit 1
+  env GO111MODULE=off GOFLAGS= GOPATH="$T64/task77-doc-gopath" go doc github.com/sentioxyz/arbiter-proto/gen/pb Stage3Params.GetNarrowedDrain
+) >"$T64/task77-proto-doc.txt" || exit 1
+grep -qF 'func (x *Stage3Params) GetNarrowedDrain() bool' "$T64/task77-proto-doc.txt" || exit 1
 ```
 
-Expected: `2`, `3`, `4`, `2`, `1`, `1`, `2`, `1`, `1`, `1`, nothing from the recursive grep, then `func (x *Stage3Params) GetNarrowedDrain() bool`. If a count differs, stop: Task 76's floor predicate, Task 64's switch seam and fixture, Plan S3-A's drain view and holds, the CLI's `--hold drain` default, both README anchors and the pinned `PROTO_TAG_P5` are this task's inputs, and nothing of this task exists yet.
+Expected: `2`, `3`, `4`, `2`, `1`, `1`, `2`, `1`, `1`, `1`, nothing from the recursive grep, then silent success after the exact `func (x *Stage3Params) GetNarrowedDrain() bool` signature is checked in the retained `$T64/task77-proto-doc.txt`. If a count differs, stop: Task 76's floor predicate, Task 64's switch seam and fixture, Plan S3-A's drain view and holds, the CLI's `--hold drain` default, both README anchors and the pinned `PROTO_TAG_P5` are this task's inputs, and nothing of this task exists yet.
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ ./server/ ./cmd/arbiter-admin/ -count=1`
 Expected: `ok` for the three packages (the branch is green before this task starts).
@@ -5226,6 +6038,9 @@ In `server/server.go` (`Server`, `:134-137`), replace
 	// holdView reads the drain state a hold records and reports; nil reads
 	// FSM.DrainView. Only tests set it.
 	holdView func() fsm.DrainView
+	// settles is this leader's track settles (track_settle.go): leader-local,
+	// never replicated, ended in OnLeadershipLost.
+	settles *TrackSettles
 }
 ```
 
@@ -5238,6 +6053,9 @@ with
 	// holdViewFor is holdView for one draft, read first when set; nil reads
 	// FSM.DrainViewFor (drainViewFor). Only tests set it.
 	holdViewFor func(draft arbiter.ConsensusParamsUpdate) fsm.DrainView
+	// settles is this leader's track settles (track_settle.go): leader-local,
+	// never replicated, ended in OnLeadershipLost.
+	settles *TrackSettles
 }
 ```
 
@@ -5998,13 +6816,13 @@ Expected: `ok` twice with no data race: every Plan S3-A, S3-E2 and S3-E3 arbiter
 In `README.md`, in the section `## Stage-3 reads and consensus holds`, replace the first sentence of its `**CLI.**` paragraph
 
 ```markdown
-**CLI.** `arbiter-admin consensus update` takes a hold by default (`--hold drain`): it signs the draft, takes the hold, polls it every second (progress and the hold id on stderr), re-reads the parameters, signs the final update with the frozen `promotion_seq`, re-runs its gates and submits under the hold.
+**CLI.** `arbiter-admin consensus update` takes a hold by default (`--hold drain`): it signs the draft, takes the hold, polls it every second (progress and the hold id on stderr), re-reads the parameters, signs the final update with the frozen `promotion_seq`, re-runs its gates and submits under the hold. `--hold issuance` submits the draft instead; `--hold none` keeps the flow without a hold and is the only mode a leader older than this release supports (the CLI says so: `leader does not support consensus holds (arbiter older than this arbiter-admin); upgrade the leader or pass --hold none`; `hold-status` and `hold-release` answer the same). `--hold-timeout` (default `10m`) is requested as the hold's timeout and extends `--timeout` for the whole operation. A draft a promotion overtook before the leader checked it is signed again, at most five times. Any exit before the submit releases the hold, and so does a failed submit, whose outcome may be unknown: committed or not, the epoch and promotion-sequence preconditions keep the release safe, and the error names the hold id (and `arbiter-admin consensus hold-release --address LEADER --hold-id ID` if that release fails too). `arbiter-admin consensus hold-status --address LEADER --hold-id ID` prints a hold and `consensus hold-release --address LEADER --hold-id ID` releases one.
 ```
 
 with
 
 ```markdown
-**CLI.** `arbiter-admin consensus update` takes a hold by default: without `--hold` it takes `--hold drain` until the leader reports `stage3.narrowed_drain`, and from then on `--hold issuance` for an update that touches no track (Plan S3-E4 K79; the section on the stage-3 activation has the rule), printing its choice on stderr. With `--hold drain` it signs the draft, takes the hold, polls it every second (progress and the hold id on stderr), re-reads the parameters, signs the final update with the frozen `promotion_seq`, re-runs its gates and submits under the hold.
+**CLI.** `arbiter-admin consensus update` takes a hold by default: without `--hold` it takes `--hold drain` until the leader reports `stage3.narrowed_drain`, and from then on `--hold issuance` for an update that touches no track (Plan S3-E4 K79; the section on the stage-3 activation has the rule), printing its choice on stderr. With `--hold drain` it signs the draft, takes the hold, polls it every second (progress and the hold id on stderr), re-reads the parameters, signs the final update with the frozen `promotion_seq`, re-runs its gates and submits under the hold. `--hold issuance` submits the draft instead; `--hold none` keeps the flow without a hold and is the only mode a leader older than this release supports (the CLI says so: `leader does not support consensus holds (arbiter older than this arbiter-admin); upgrade the leader or pass --hold none`; `hold-status` and `hold-release` answer the same). `--hold-timeout` (default `10m`) is requested as the hold's timeout and extends `--timeout` for the whole operation. A draft a promotion overtook before the leader checked it is signed again, at most five times. Any exit before the submit releases the hold, and so does a failed submit, whose outcome may be unknown: committed or not, the epoch and promotion-sequence preconditions keep the release safe, and the error names the hold id (and `arbiter-admin consensus hold-release --address LEADER --hold-id ID` if that release fails too). `arbiter-admin consensus hold-status --address LEADER --hold-id ID` prints a hold and `consensus hold-release --address LEADER --hold-id ID` releases one.
 ```
 
 and in the section `## Multi-source storage integrity (stage-3 activation)` insert this paragraph as one line right before the paragraph that begins ``**CLI.** `arbiter-admin consensus update ... --stage3 ``, with one empty line after it:
@@ -6086,12 +6904,14 @@ This task continues the P5 branch at the actual worktree path recovered by Task6
 Remote reads (fetches, module downloads, the image pull of Step 18, GitHub and the registry) and every remote write (push, PR, merge, the Cut Release dispatch, the ledger record's push, docs PR and merge) need explicit user confirmation in chat before running; so does Step 1's rewrite of commit authors, if one is needed. Steps 21–25, 30 and 31 are local and runbook-like: the agent runs each of their bash blocks from a new block file in this session's scratchpad (`<scratchpad>/s3e4-t78/<nn>-<what>.sh`, written with the Write tool, never edited after it ran) with `bash -eo pipefail <file> < /dev/null`, because the Bash tool's own shell is zsh (Plan S3-E2 Task 67's precedent). Commands the user runs in their own terminal are given in fish.
 
 **Files:**
+- Create: `fsm/pre_stage3_capture_test.go` (`TestPreStage3GoldenCaptureIsExclusive`; exclusive fresh/repeated/regular/directory/live-link/dangling-link capture checks)
 - Create: `fsm/pre_stage3_golden_test.go` (`preStage3GoldenPath`, `preStage3Signer`, `runPreStage3History`, `TestPreActivationHistoryIsByteIdenticalAcrossStage3`)
 - Create: `fsm/testdata/pre_stage3_golden.json` (written once by Step 5's capture from `ARBITER_TAG_P4`, never edited)
 - Create: `server/stage3_release_test.go` (`TestNoStage3ProtoFieldIsPending`, Plan S3-E2 contract §44)
 - Create: `integration/stage3_p5_test.go` (the six tests of contract §55 and their fakes)
 - Modify: `integration/tracks_harness_test.go` — `signUpdate` carries the committed `stage3` (after `:196`), `update` sends `server.Stage3VotersMetadataKey` with the activation (after `:219-220`)
 - Modify: `integration/cluster_test.go` — `cluster` gains `cfgs` (`:57-58`), its literal (`:97`) and the start loop (`:106-107`) fill it
+- Modify: `integration/cluster_control_test.go` — replace only `notLeaderHint` no-detail fallthrough; retain typed `pb.NotLeader` including empty address
 - Modify: `integration/cluster_node_test.go` — `startNode` applies `raft.snapshot_body` (after `:39-42`)
 - Create: `integration/chpipeline/harness_stage3_test.go`, `integration/chpipeline/stage3_test.go`
 - Modify: `fsm/BUILD.bazel`, `server/BUILD.bazel`, `integration/BUILD.bazel`, `integration/chpipeline/BUILD.bazel` (gazelle)
@@ -6112,7 +6932,7 @@ Remote reads (fetches, module downloads, the image pull of Step 18, GitHub and t
   - Plan S3-C2 (§23–§24) and S3-C4 (§31): `SI_MEMBER_GRANTS`, `SI_MEMBER_DDL_GRANTS` and the `si_member_ddl` profile constraint, `member.New`, `member.Role`, `member.Peer`, `serve.ServingView`, `serve.DatabaseView`; Plan S3-C3 K41's by-name engine grants of the protocol users; `MEMBER_IDS`'s member ids (K29).
   - Plan S3-A (§6) and earlier: the rehearsal sources `$HOME/si-devnet2-multisource-s3a-rehearsal/{statedigest,v20check,snapdump}/main.go` (checksums `c5168a19…` and `fccc6a87…`), the stage-2 samples `$HOME/si-devnet2-multisource-s2-rehearsal/sample{14,19}`, Plan S3-A's devnet2 copy `$HOME/si-devnet2-multisource-tracks/arbiter-0-raft-after.tgz`, Plan S3-B's P0 copies `$HOME/si-devnet2-stage3-p0/arbiter-{0,1,2}-raft.tgz` and `.yaml`, and, when Plan S3-D's owner-rebuild runbook ran, its copies `$HOME/si-devnet2-stage3-p4-rebuild/arbiter-{0,1,2}-raft.tgz` and `.yaml`; the integration harness (`startTracksCluster`, `signUpdate`, `update`, `waitUpdate`, `updateOnce`, `prepareHold`, `submitHeld`, `assertHoldGone`, `consensusStateNow`, `workSet`, `waitPublished`, `leaderState`, `poll`, `legacyGolden`, `snodeSigner`, `snapshotBytes`, `testParams`); the chpipeline helpers of Plan S3-C2 Task 36.
 - Produces (contract §55, verbatim): `const preStage3GoldenPath = "testdata/pre_stage3_golden.json"`, `func runPreStage3History(t *testing.T) legacyGolden`, `TestPreActivationHistoryIsByteIdenticalAcrossStage3`, env `ARBITER_CAPTURE_PRE_STAGE3_GOLDEN`, the refusals `%s exists; it is captured once from the release before stage 3 and never rewritten` and `pre-activation history replays differently from the release before stage 3:\n%s`; `TestStage3ActivationWithEverySwitchOffChangesNothingButTheEncoding`, `TestStage3ActivationExemptsAQuarantinedTracksSNode`, `TestStage3ActivationRefusesAnUnupgradedDataPlaneNode`, `TestStage3VotersRestartFromV21Snapshots`, `TestStage3ForcedPlainBodyAfterActivation`, `TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup`, env `ARBITER_WRITE_V21_FIXTURE`; `type stage3Harness struct`, `func startStage3Harness(t *testing.T) *stage3Harness`, `func (h *stage3Harness) startConsensusMember(t *testing.T, ownerIndex int, nodeID string)`, `func (h *stage3Harness) update(t *testing.T, mutate func(*arbiter.Stage3Params))`, `func (h *stage3Harness) switchOn(t *testing.T, step string)`, the steps `activation`, `purge`, `eviction_voiding`, `owner_aware_selection`, `members_listed`, `placement`, `members_ready`, `reselection`, `checkpoints`, `narrowed_drain`, `raise_k`, `chMemberA = "member-a"`, `chMemberB = "member-b"`, `chMemberC = "member-c"`, the seven `TestPipeline_Stage3*` tests, env `ARBITER_CH_STAGE3`, `CH_STAGE3_ADDRS`, `CH_STAGE3_KEEPER`; CI job `integration-clickhouse-stage3` and `scripts/ci/stage3-pipeline.sh`, `stage3-clickhouse-config.xml`, `stage3-clickhouse-users.xml`, `stage3-keeper.xml`; `$R5` with `old_tag.txt`, `new_tag.txt`, `bin/old/{statedigest,v20check,snapdump}`, `bin/new/{statedigest,v21check,snapdump,p5rehearsal}`, `p5rehearsal/p5rehearsal_test.go`, `v21-fixture.container`, `merge-commit`, `arbiter-release`, `cut-release.sh`, `p5-files.sha256`; the PR; `ARBITER_TAG_P5`, `ARBITER_DIGEST_P5` and the run record `arbiter P5 release`. Plan S3-E2 contract §44's `TestNoStage3ProtoFieldIsPending`.
-- Produces (this task's own names, recorded in Appendix B): `preStage3Signer`; integration `stage3DomainIndexer0`, `stage3DomainIndexer1`, `stage3UpdateTimeout`, `stage3ActivationParams`, `withStage3Switch`, `withoutStage3`, `registerSNodeAdvertising`, `registerVerifierAdvertising`, the `tracksCluster` methods `activateStage3`, `switchOn`, `waitStage3Update`, `writeOn`, `writeBothAndSettle`, `waitDrained`, `app`, `snapshotVoter`, `newestContainer`, `restartVoter`, `waitQuiet`, `group`, `memorySink`, `stateDigest`, `containerDigest`, `plainContainer`, `requireContainer`, `fakeMember` (`newFakeMember`, `entry`, `register`, `checkpoint`), `memberOf`, the `cluster.cfgs` field; chpipeline `stage3IntegrationEnv`, `stage3AddrsEnv`, `stage3KeeperEnv`, `stage3Steps`, `stage3SIDatabases`, `stage3Host`, `stage3Member`, `(*stage3Member).reconcilerConfig`, `TestStage3MemberReconcilerConfigMatchesRole`, `requireStage3CH`, `requireKeeperOK`, `stage3Conn`, `stage3Schema`, `writeEveryOwner`, `requireStepEffect`, `runStepsThrough`, `floorHeld`, `quarantine`, `release`, `servedDatabase`, the pool verifiers' databases `hg_unsafe_pool`, `hg_safe_pool`, `hg_promote_pool`, `hg_pool_replay` and the docker network aliases `stage3-ch-a`, `stage3-ch-b`, `stage3-ch-c`, `stage3-keeper`; the CI config's `allow_zookeeper_write`; `$R5/helpers.sh` with `rehearsal_build old|new`, `digest_lines`, `rehearsal_replay`, `rehearsal_inputs`, `rehearsal_v21`, `rehearsal_p5 linux|host`; the evidence `$W.replay-e4.txt`, `$W.ledger-e4`; the PR body file.
+- Produces (this task's own names, recorded in Appendix B): `preStage3Signer`; `writePreStage3GoldenExclusive`, `TestPreStage3GoldenCaptureIsExclusive`, `TestStage3RegistrationRetryDistinguishesBusinessRefusal`; integration `stage3DomainIndexer0`, `stage3DomainIndexer1`, `stage3UpdateTimeout`, `stage3ActivationParams`, `withStage3Switch`, `withoutStage3`, `registerSNodeAdvertising`, `registerVerifierAdvertising`, the `tracksCluster` methods `activateStage3`, `switchOn`, `waitStage3Update`, `writeOn`, `writeBothAndSettle`, `waitDrained`, `app`, `snapshotVoter`, `newestContainer`, `restartVoter`, `waitQuiet`, `group`, `memorySink`, `stateDigest`, `containerDigest`, `plainContainer`, `requireContainer`, `fakeMember` (`newFakeMember`, `entry`, `register`, `checkpoint`), `memberOf`, the `cluster.cfgs` field; chpipeline `stage3IntegrationEnv`, `stage3AddrsEnv`, `stage3KeeperEnv`, `stage3Steps`, `stage3SIDatabases`, `stage3Host`, `stage3Member`, `(*stage3Member).reconcilerConfig`, `TestStage3MemberReconcilerConfigMatchesRole`, `requireStage3CH`, `requireKeeperOK`, `stage3Conn`, `stage3Schema`, `writeEveryOwner`, `requireStepEffect`, `runStepsThrough`, `floorHeld`, `quarantine`, `release`, `servedDatabase`, the pool verifiers' databases `hg_unsafe_pool`, `hg_safe_pool`, `hg_promote_pool`, `hg_pool_replay` and the docker network aliases `stage3-ch-a`, `stage3-ch-b`, `stage3-ch-c`, `stage3-keeper`; the CI config's `allow_zookeeper_write`; `$R5/helpers.sh` with `rehearsal_build old|new`, `digest_lines`, `rehearsal_replay`, `rehearsal_inputs`, `rehearsal_v21`, `rehearsal_p5 linux|host`; the evidence `$W.replay-e4.txt`, `$W.ledger-e4`; the PR body file.
 
 Notes:
 - **The frozen history (contract §55).** `runPreStage3History` founds the pre-tracks network of `pre_tracks_golden_test.go` (indexer 1 on s1 owns `db.t`, indexer 0 on s0 owns `db0.x`, verifiers v1..v3), activates tracks, enrols a third indexer (2 on s2, owning `db2.z`, with `authoritytest`'s stranger key as its enrolment key), writes, verifies, promotes, acknowledges, publishes and cleans one statement on every track, quarantines and releases track 1, rejects a block of track 0 and cleans its rejected part after the release, and lists a fourth verifier, first refused and then admitted by the stage-2 drain gate. It carries no stage-3 field. Every signature is fixed (`authoritytest.Iat`, deterministic ECDSA and ed25519) and the history uses its own helpers rather than the fsm fixtures that read the wall clock, so the answers, chain hashes and v20 container are a pure function of the binary: two captures while drafting were byte-identical. The test asserts the counts of the capture, 106 answers, seven sealed blocks and `snapshotVersionV20` (Appendix B). The file compiles against `ARBITER_TAG_P4` (it uses only names that exist there) and against the branch.
@@ -6125,6 +6945,8 @@ Notes:
 - **Offline replay and `$R5` (contract §55, decision D37).** `$R5` does not exist before this task: Plan S3-E2 Task 67 replays in its own `$T` and removes it (S3-E2 contract §48), so this task creates `$R5` fresh with mode 700 and stops if it exists; contract §55's sentences "If S3-E2 Task 67 already made it, Task 78 continues it" and "S3-E2 §48's `$R5/v21check/main.go`" are stale under D37 (Appendix B), and `v21check` is Task 67's Step 32 text, copied verbatim. Its refusal line is `restore_refused version <n> body <kind>: <error>` (Task 67's text), not contract §55's `restore_refused version <n>: <error>`, which is the old build's `v20check` line; nothing parses either beyond the prefix. The replay inputs are the local copies of the devnet2 logs that earlier plans left (the stage-2 samples, Plan S3-A's devnet2 copy, Plan S3-B's P0 copies of the three voters and, if present, Plan S3-D's owner-rebuild copies); fresh copies of the live voters are the P5 runbook's §2.3, which runs `$R5`'s binaries before the first roll (Task 81). `bin/old` comes from `ARBITER_TAG_P4`, `bin/new` from the branch head and, after the cut, from the `ARBITER_TAG_P5` export, which must replay to the branch's lines. `v21-fixture.container` is the leader's container from `TestStage3VotersRestartFromV21Snapshots` run in the `ARBITER_TAG_P5` export with `ARBITER_WRITE_V21_FIXTURE`. `p5rehearsal` is the in-package test binary of `$R5/p5rehearsal/p5rehearsal_test.go`, built from the `ARBITER_TAG_P5` export for linux/amd64 (`file` reads `ELF 64-bit LSB executable, x86-64, … dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2`: housegate's purego binding makes every arbiter binary glibc-interpreted, which is why the arbiter image the rehearsal Pod runs is debian); its interface is contract §57's and Task 81's (`-rehearsal.dir` with `rehearsal-copy-<i>.tgz` and `arbiter-<i>.yaml`, `-rehearsal.params`, the key from `ARBITER_AUTHORITY_PRIVATE_KEY_HEX` only, the printed lines, `rehearsal-v21-<i>.container`). Before the cut a host build of it is dry-run on the P0 copies with a throwaway key, which must restore the three voters to one digest and then be refused by the authority allowlist. `p5-files.sha256` is written last and lists exactly the eight files Task 81 checks.
 - **Release (contract §55, K65).** One PR of Tasks 64–78 to `main`; `ARBITER_TAG_P4` must be on `main` and in the branch. Every PR commit must be authored by `poetry <chen@sentio.xyz>` before the squash merge (otherwise GitHub adds a `Co-authored-by` trailer for the other address), which Step 1 makes true for the whole branch, by a confirmed rewrite if an earlier task committed under another identity. `cut-release.sh` refuses unless the newest arbiter tag is still `ARBITER_TAG_P4` (no release between Task 64's pin and this cut), `main` carries the merge and pins exactly `PROTO_TAG_P5`, `CORE_TAG_P5` and `HG_TAG_P5`; it records the tag from `gh release view` and the digest from the registry, never a prediction, and checks the image's revision label.
 - **Verification while drafting** (Appendix B). No P5 tag, no Tasks 64–77 code and no real `CORE_TAG_P5` exist yet, so every file was checked in `git archive` exports in the drafting session's scratchpad: arbiter `526a721` for the frozen history (captured twice, byte-identical; 106 answers, seven blocks, v20; the recapture refusal and the red line of Step 4 observed), and a stand-in tree of `526a721` plus compile stubs of the consumed Plan S3-E1–E4 names (arbiter-proto `7a73f25` with contract §39 applied and regenerated, arbiter-core `cfd4f42` with stub packages, arbiter with stub `fsm`, `server` and `config` names and Plan S3-C2 Task 36's harness applied) for everything else: `gofmt` and `go vet` clean for `fsm`, `server`, `integration` and `integration/chpipeline`; the golden, `TestPreActivationHistoryIsByteIdenticalAcrossTracks`/`…SignedClaims` and `TestNoStage3ProtoFieldIsPending` passing; the red lines of Steps 9 and 14 and the skip and opted-in failure lines of Step 16 as shown. `stage3-pipeline.sh` ran against docker with `clickhouse/clickhouse-server:26.3.37.3` and a probe in place of Bazel (Keeper `imok`, replication across the three servers, the 497 fence, the `si_member_ddl` constraint 452, remote writes refused 497, the member storage policy, an owner pull through the named collection), and the real harness on those servers completed the whole stage-2 startup (three managed SNodes, three pool verifiers, the registry, the signed claims, the enrolments, the tracks activation) and `writeEveryOwner` on every owner; it stopped at the activation, which the stubs cannot apply. `$R5/helpers.sh` ran in a scratch `$R5` with `526a721` as old and the stand-in tree as new (six inputs replayed identically, among them the three P0 copies to `snapshot_sha256 7ea1832b…`, Plan S3-A's copy to an 11868827-byte v20 container), and the host and linux `p5rehearsal` builds ran; the dry run printed the three restores (`epoch=5 promotion_seq=59 drain_refusal=""`) and one digest, then the stubs' refusal. Not run while drafting: any Task 64–77 code, the stage-3 harness beyond the stage-2 startup, the activation and v21 parts of `p5rehearsal`, `rehearsal_v21`, Bazel, gazelle and `actionlint` (unavailable); the CI YAML was parsed with Ruby's YAML loader and the shell files checked with `bash -n` and `shellcheck`.
+
+Signing is mandatory for every real commit below, including author reconciliation and the ledger record. On signing cancellation or failure, stop the commit/publish flow and ask the user to unlock the repository's actual signing key in their own terminal; never disable signing or publish an unsigned fallback. The inherited Task64 URWT environment retains its exact returned JSON path.
 
 - [ ] **Step 1: Check the worktree, its head, its commit identity and the inputs**
 
@@ -6151,7 +6973,7 @@ Set this worktree's commit identity (local config only) and check every commit o
 
 ```bash
 . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config --worktree commit.gpgsign true || exit 1
 echo "identity: $(git -C "$W" config user.name) <$(git -C "$W" config user.email)>"
 base="$(git -C "$W" merge-base origin/main HEAD)" || exit 1
 echo "branch base $base; $(git -C "$W" rev-list --count "$base..HEAD") commits"
@@ -6167,10 +6989,16 @@ base="$(git -C "$W" merge-base origin/main HEAD)" || exit 1
 [ ! -e "$W.rewrite-before" ] || { echo "$W.rewrite-before exists: the authors were rewritten once already; stop and ask"; exit 1; }
 git -C "$W" rev-parse HEAD > "$W.rewrite-before"
 git -C "$W" rev-parse -q --verify refs/remotes/origin/urwt/codex/multi-source-s3e > "$W.rewrite-lease" || : > "$W.rewrite-lease"
-git -C "$W" rebase --exec 'git commit --amend --no-edit --reset-author' "$base" || { echo "the rebase stopped: run git -C $W rebase --abort and ask"; exit 1; }
+git -C "$W" rebase --exec 'git commit -S --amend --no-edit --reset-author' "$base" || { echo "the rebase/signing stopped: run git -C $W rebase --abort and ask the user to unlock the actual repository signing key in their own terminal; never disable signing or publish an unsigned fallback"; exit 1; }
 git -C "$W" diff --quiet "$(cat "$W.rewrite-before")" HEAD && echo tree-unchanged
 [ "$(git -C "$W" log --format=%s "$base..HEAD")" = "$(git -C "$W" log --format=%s "$base..$(cat "$W.rewrite-before")")" ] && echo subjects-unchanged
 git -C "$W" log --format='%an <%ae>' "$base..HEAD" | sort | uniq -c
+revisions="$(git -C "$W" rev-list "$base..HEAD")" || exit 1
+[ -n "$revisions" ] || exit 1
+for revision in $revisions; do
+  identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$revision")" || exit 1
+  [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "rewritten commit is not signed poetry G; stop"; exit 1; }
+done
 ```
 
 Expected: `tree-unchanged`, `subjects-unchanged` and one author line `<count> poetry <chen@sentio.xyz>`. `$W.rewrite-lease` holds the remote branch's commit as this clone last saw it (empty if the branch was never pushed), which Step 27's push uses as its lease.
@@ -6599,11 +7427,7 @@ func runPreStage3History(t *testing.T) legacyGolden {
 func TestPreActivationHistoryIsByteIdenticalAcrossStage3(t *testing.T) {
 	got := runPreStage3History(t)
 	if os.Getenv("ARBITER_CAPTURE_PRE_STAGE3_GOLDEN") == "1" {
-		if _, err := os.Stat(preStage3GoldenPath); err == nil {
-			t.Fatalf("%s exists; it is captured once from the release before stage 3 and never rewritten", preStage3GoldenPath)
-		}
-		b, _ := json.MarshalIndent(got, "", "  ")
-		if err := os.WriteFile(preStage3GoldenPath, append(b, '\n'), 0o644); err != nil {
+		if err := writePreStage3GoldenExclusive(preStage3GoldenPath, got); err != nil {
 			t.Fatal(err)
 		}
 		t.Skip("captured; commit the file")
@@ -6624,6 +7448,24 @@ func TestPreActivationHistoryIsByteIdenticalAcrossStage3(t *testing.T) {
 		t.Fatalf("the history must answer 106 commands, seal seven blocks and write v20, got %d answers, %d blocks and v%d",
 			len(got.Results), len(got.ChainHashes), got.SnapshotVersion)
 	}
+}
+
+// writePreStage3GoldenExclusive never follows or replaces an existing leaf.
+// A failed write/close retains the exclusive partial file for reconciliation.
+func writePreStage3GoldenExclusive(path string, got legacyGolden) error {
+	b, err := json.MarshalIndent(got, "", "  ")
+	if err != nil { return err }
+	b = append(b, '\n')
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) { return fmt.Errorf("%s exists; it is captured once from the release before stage 3 and never rewritten", path) }
+		return err
+	}
+	n, writeErr := f.Write(b)
+	closeErr := f.Close()
+	if writeErr != nil { return writeErr }
+	if n != len(b) { return fmt.Errorf("%s: short capture write: %d of %d", path, n, len(b)) }
+	return closeErr
 }
 ```
 
@@ -6647,6 +7489,50 @@ func TestNoStage3ProtoFieldIsPending(t *testing.T) {
 		pending := slices.Sorted(maps.Keys(stage3PendingProtoFields))
 		t.Fatalf("stage3PendingProtoFields still names %v; each owning task serves its fields before the P5 release", pending)
 	}
+}
+```
+
+Create `fsm/pre_stage3_capture_test.go` (the reviewed exclusive-capture lifecycle regression):
+
+```go
+package fsm
+
+import (
+ "bytes"
+ "encoding/json"
+ "os"
+ "path/filepath"
+ "testing"
+)
+
+func TestPreStage3GoldenCaptureIsExclusive(t *testing.T) {
+ got := legacyGolden{}
+ want, err := json.MarshalIndent(got, "", "  ")
+ if err != nil { t.Fatal(err) }; want = append(want, '\n')
+ t.Run("fresh", func(t *testing.T) {
+  p := filepath.Join(t.TempDir(), "capture.json")
+  if err := writePreStage3GoldenExclusive(p, got); err != nil { t.Fatal(err) }
+  b, err := os.ReadFile(p); if err != nil || !bytes.Equal(b,want) { t.Fatalf("fresh capture bytes differ: %v",err) }
+  st,err := os.Lstat(p); if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() & ^os.FileMode(0644) != 0 { t.Fatalf("capture mode: %v %v",st,err) }
+  if err := writePreStage3GoldenExclusive(p,got); err == nil { t.Fatal("capture accepted an existing leaf") }
+  b,err = os.ReadFile(p); if err != nil || !bytes.Equal(b,want) { t.Fatalf("repeat changed capture: %v",err) }
+ })
+ for _, kind := range []string{"regular","directory","live-link","dangling-link"} {
+  t.Run(kind, func(t *testing.T) {
+   d:=t.TempDir(); p:=filepath.Join(d,"capture.json"); target:=filepath.Join(d,"target")
+   switch kind {
+   case "regular": if err:=os.WriteFile(p,[]byte("retained"),0600); err!=nil { t.Fatal(err) }
+   case "directory": if err:=os.Mkdir(p,0700); err!=nil { t.Fatal(err) }
+   case "live-link": if err:=os.WriteFile(target,[]byte("retained"),0600); err!=nil { t.Fatal(err) }; if err:=os.Symlink(target,p); err!=nil { t.Fatal(err) }
+   case "dangling-link": if err:=os.Symlink(target,p); err!=nil { t.Fatal(err) }
+   }
+   before,err:=os.Lstat(p); if err!=nil { t.Fatal(err) }
+   if err:=writePreStage3GoldenExclusive(p,got); err==nil { t.Fatal("capture accepted an existing leaf") }
+   after,err:=os.Lstat(p); if err!=nil || !os.SameFile(before,after) { t.Fatalf("capture leaf replaced: %v",err) }
+   if kind=="regular" || kind=="live-link" { b,err:=os.ReadFile(p); if err!=nil || string(b)!="retained" { t.Fatalf("capture changed retained bytes: %v",err) } }
+   if kind=="dangling-link" { if _,err:=os.Lstat(target); !os.IsNotExist(err) { t.Fatalf("capture followed dangling link: %v",err) } }
+  })
+ }
 }
 ```
 
@@ -6679,16 +7565,21 @@ Expected: `pre_stage3_golden_test.go:353: captured; commit the file`, `--- SKIP:
 - [ ] **Step 6: Replay it on the branch and see the recapture refused**
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcross' -count=1 -v | grep -E '^(--- |ok|FAIL)'; ARBITER_CAPTURE_PRE_STAGE3_GOLDEN=1 go test ./fsm/ -run '^TestPreActivationHistoryIsByteIdenticalAcrossStage3$' -count=1 2>&1 | grep -E 'exists; it is captured once|^(ok|FAIL)'; git -C "$W" status --porcelain`
-Expected: `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossStage3`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossTracks` and `ok` (the branch, with every stage-3 change of Tasks 64–77, replays the history of the release before stage 3 byte for byte); then `pre_stage3_golden_test.go:347: testdata/pre_stage3_golden.json exists; it is captured once from the release before stage 3 and never rewritten` and `FAIL`; then exactly `?? fsm/pre_stage3_golden_test.go`, `?? fsm/testdata/pre_stage3_golden.json` and `?? server/stage3_release_test.go`. A `pre-activation history replays differently from the release before stage 3:` failure is a consensus change before the activation: stop; it is a defect of Tasks 64–77, never a reason to touch the JSON.
+Expected: `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossStage3`, `--- PASS: TestPreActivationHistoryIsByteIdenticalAcrossTracks` and `ok` (the branch, with every stage-3 change of Tasks 64–77, replays the history of the release before stage 3 byte for byte); then `pre_stage3_golden_test.go:347: testdata/pre_stage3_golden.json exists; it is captured once from the release before stage 3 and never rewritten` and `FAIL`; then exactly `?? fsm/pre_stage3_capture_test.go`, `?? fsm/pre_stage3_golden_test.go`, `?? fsm/testdata/pre_stage3_golden.json` and `?? server/stage3_release_test.go`. A `pre-activation history replays differently from the release before stage 3:` failure is a consensus change before the activation: stop; it is a defect of Tasks 64–77, never a reason to touch the JSON.
+
+Run the added exclusive-capture regression before registering the files:
+
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./fsm/ -run '^TestPreStage3GoldenCaptureIsExclusive$' -count=1 -v`
+Expected: the fresh, regular, directory, live-link and dangling-link cases pass; the fresh case includes the repeated-write refusal and unchanged retained bytes. A compile failure or missing case is not a successful lifecycle proof.
 
 - [ ] **Step 7: Register the files and commit**
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- fsm/BUILD.bazel server/BUILD.bazel`
-Expected: the status adds ` M fsm/BUILD.bazel` and ` M server/BUILD.bazel`; gazelle adds `"pre_stage3_golden_test.go",` between `"pre_signed_claims_golden_test.go",` and `"pre_tracks_golden_test.go",` of `go_test(name = "fsm_test")` and `"stage3_release_test.go",` in sorted position to `go_test(name = "server_test")`, and no dependency (the fsm test target already lists `authoritytest`, go-ethereum's `crypto` and housegate's `lthash`; `data = glob(["testdata/**"])` covers the JSON).
+Expected: the status adds ` M fsm/BUILD.bazel` and ` M server/BUILD.bazel`; gazelle adds `"pre_stage3_capture_test.go",` and `"pre_stage3_golden_test.go",` between `"pre_signed_claims_golden_test.go",` and `"pre_tracks_golden_test.go",` of `go_test(name = "fsm_test")` and `"stage3_release_test.go",` in sorted position to `go_test(name = "server_test")`, and no dependency (the fsm test target already lists `authoritytest`, go-ethereum's `crypto` and housegate's `lthash`; `data = glob(["testdata/**"])` covers the JSON).
 
 ```bash
 . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
-git -C "$W" add fsm/pre_stage3_golden_test.go fsm/testdata/pre_stage3_golden.json fsm/BUILD.bazel server/stage3_release_test.go server/BUILD.bazel
+git -C "$W" add fsm/pre_stage3_golden_test.go fsm/pre_stage3_capture_test.go fsm/testdata/pre_stage3_golden.json fsm/BUILD.bazel server/stage3_release_test.go server/BUILD.bazel
 git -C "$W" commit -S -m "test(stage3): freeze the pre-activation history of the release before stage 3 (Task 78)
 
 fsm/testdata/pre_stage3_golden.json is a post-tracks history with a
@@ -6700,12 +7591,14 @@ must replay it byte for byte (housegate spec 2026-10-14 §10.3, §17;
 plan S3-E4 contract §55), and TestNoStage3ProtoFieldIsPending holds
 the release to an empty stage3PendingProtoFields (plan S3-E2 §44).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed or canceled: preserve staged work and ask the user to unlock the actual repository signing key in their own terminal; never disable signing or publish an unsigned fallback"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+printf '%s\n' "$identity"
 git -C "$W" status --porcelain
 ```
 
-Expected: `poetry <chen@sentio.xyz>` and an empty status. Another author: stop (Step 1's identity is not in effect).
+Expected: `poetry <chen@sentio.xyz> G` and an empty status. Another author: stop (Step 1's identity is not in effect).
 
 - [ ] **Step 8: Write the failing fake-cluster tests**
 
@@ -6861,6 +7754,36 @@ func registerVerifierAdvertising(ctx context.Context, v *fakeVerifier, features 
 	})
 }
 
+// TestStage3RegistrationRetryDistinguishesBusinessRefusal keeps a typed
+// election hint retryable, including an empty address, while preserving the
+// exact post-activation refusal as a terminal business error.
+func TestStage3RegistrationRetryDistinguishesBusinessRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		detail  *pb.NotLeader
+		want    bool
+		hint    string
+	}{
+		{name: "business refusal without NotLeader detail", want: false},
+		{name: "typed election hint without address", detail: &pb.NotLeader{}, want: true},
+		{name: "typed hint with address", detail: &pb.NotLeader{LeaderAddr: "arb-2"}, want: true, hint: "arb-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := status.New(codes.FailedPrecondition, "stage3 is active; this binary does not support stage-3 consensus")
+			if tc.detail != nil {
+				var err error
+				st, err = st.WithDetails(tc.detail)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if hint, retry := notLeaderHint(st.Err()); retry != tc.want || hint != tc.hint {
+				t.Fatalf("notLeaderHint = (%q, %t), want (%q, %t)", hint, retry, tc.hint, tc.want)
+			}
+		})
+	}
+}
+
 // activateStage3 commits the v21 activation with every switch off. The
 // leader's stage3 gate reads the features registered with it in its current
 // term, which a leader change empties, so on that refusal every data-plane
@@ -7013,22 +7936,63 @@ func (tc *tracksCluster) restartVoter(t *testing.T, id string, mutate func(*conf
 }
 
 // waitQuiet waits until every live voter applied the leader's last log
-// index and nothing was appended for half a second.
+// index and nothing was appended for half a second. Leader discovery here
+// uses local Raft metadata only: leaderApp's RPC probe appends a rejected
+// attestation, which would prevent this quiet window from ever elapsing.
 func (tc *tracksCluster) waitQuiet(t *testing.T) {
 	t.Helper()
 	var last uint64
+	var lastLeader string
+	var lastTerm uint64
 	var since time.Time
 	poll(t, "every voter at the leader's last index", 60*time.Second, 50*time.Millisecond, func() bool {
 		tc.failOnBackground(t)
-		leader := tc.leaderApp(t).node.Raw().LastIndex()
-		for _, id := range tc.aliveIDs() {
-			if tc.app(t, id).node.Raw().AppliedIndex() != leader {
+		// Pin the live application handles through the sample so a restart
+		// cannot substitute a closed app or change the live voter roster.
+		tc.mu.RLock()
+		defer tc.mu.RUnlock()
+		var leader *testApp
+		for id, app := range tc.nodes {
+			if tc.dead[id] {
+				continue
+			}
+			if app == nil {
+				since = time.Time{}
+				return false
+			}
+			if app.node.Raw().State() != raft.Leader {
+				continue
+			}
+			if leader != nil {
+				since = time.Time{}
+				return false
+			}
+			leader = app
+		}
+		if leader == nil {
+			since = time.Time{}
+			return false
+		}
+		raw := leader.node.Raw()
+		_, leaderID := raw.LeaderWithID()
+		term, index := leader.node.CurrentTerm(), raw.LastIndex()
+		if string(leaderID) != leader.id {
+			since = time.Time{}
+			return false
+		}
+		for id, app := range tc.nodes {
+			if app != nil && !tc.dead[id] && app.node.Raw().AppliedIndex() != index {
 				since = time.Time{}
 				return false
 			}
 		}
-		if leader != last || since.IsZero() {
-			last, since = leader, time.Now()
+		_, sampledLeaderID := raw.LeaderWithID()
+		if raw.State() != raft.Leader || leader.node.CurrentTerm() != term || sampledLeaderID != leaderID || raw.LastIndex() != index {
+			since = time.Time{}
+			return false
+		}
+		if leader.id != lastLeader || term != lastTerm || index != last || since.IsZero() {
+			lastLeader, lastTerm, last, since = leader.id, term, index, time.Now()
 			return false
 		}
 		return time.Since(since) >= 500*time.Millisecond
@@ -7706,10 +8670,51 @@ with:
 
 `wire.Stage3ParamsFromPB` returns nil for a nil message (Plan S3-E1 contract §41), so before the activation the updates stay what they were, and `config` and `fsm` are imported by both files already.
 
+Before the final helper replacement below, with the other Step 10 extensions in place, run the new focused regression against the still-unchanged helper:
+
+Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/ -run '^TestStage3RegistrationRetryDistinguishesBusinessRefusal$' -count=1 -v`
+Expected: only `business_refusal_without_NotLeader_detail` fails with `notLeaderHint = ("", true), want ("", false)`; both typed election-hint cases pass. A compilation error or a different failure is not the intended RED and stops this step.
+
+In `integration/cluster_control_test.go`, replace the complete `notLeaderHint` function below. A business `FailedPrecondition` has no typed leadership detail and must return to the caller. Preserve typed `pb.NotLeader` details with an empty address: elections may legitimately require trying the other live candidates.
+
+```go
+func notLeaderHint(err error) (string, bool) {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		return "", false
+	}
+	for _, d := range st.Details() {
+		if nl, ok := d.(*pb.NotLeader); ok {
+			return nl.GetLeaderAddr(), true
+		}
+	}
+	return "", true
+}
+```
+
+with:
+
+```go
+func notLeaderHint(err error) (string, bool) {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.FailedPrecondition {
+		return "", false
+	}
+	for _, d := range st.Details() {
+		if nl, ok := d.(*pb.NotLeader); ok {
+			return nl.GetLeaderAddr(), true
+		}
+	}
+	return "", false
+}
+```
+
+The focused `TestStage3RegistrationRetryDistinguishesBusinessRefusal` regression has three exact cases. With the old helper its no-detail business case must fail; after this replacement it and both typed-detail cases must pass. These source obligations do not authorize an execution or timeout increase.
+
 - [ ] **Step 11: Run them and see them pass**
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && test -z "$(gofmt -l integration)" && go vet ./integration/ && go test ./integration/ -run '^(TestStage3|TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup)' -count=1 -race -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected: `--- PASS:` for `TestStage3ActivationWithEverySwitchOffChangesNothingButTheEncoding`, `TestStage3ActivationExemptsAQuarantinedTracksSNode`, `TestStage3ActivationRefusesAnUnupgradedDataPlaneNode`, `TestStage3VotersRestartFromV21Snapshots`, `TestStage3ForcedPlainBodyAfterActivation` and `TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup`, then `ok`. A failure names the voter, the container byte or the refusal it saw; the tests read only contract names, so a failure is a defect of the task that owns the behaviour (64–77), fixed there in a new commit of this branch, never by weakening the test.
+Expected: `--- PASS:` for `TestStage3ActivationWithEverySwitchOffChangesNothingButTheEncoding`, `TestStage3ActivationExemptsAQuarantinedTracksSNode`, `TestStage3ActivationRefusesAnUnupgradedDataPlaneNode`, `TestStage3VotersRestartFromV21Snapshots`, `TestStage3ForcedPlainBodyAfterActivation` and `TestNarrowedDrainUpdateCommitsWhileTheFloorHoldsACleanup`, plus `TestStage3RegistrationRetryDistinguishesBusinessRefusal` and its three exact helper cases, then `ok`. A failure names the voter, the container byte or the refusal it saw; the tests read only contract names, so a failure is a defect of the task that owns the behaviour (64–77), fixed there in a new commit of this branch, never by weakening the test.
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && go test ./integration/ -count=1 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
 Expected: `ok` (the whole package: the stage-2 harness tests pass with the carried `stage3` and the new metadata key).
@@ -7728,11 +8733,11 @@ Expected: `wrote arb-<n>'s v21 container (<bytes> bytes) to <f>`, `--- PASS: Tes
 - [ ] **Step 12: Register the file and commit**
 
 Run: `. "$HOME/.cache/s3e2-task64/env.sh" || exit 1; cd "$W" && bazel run //:gazelle && git -C "$W" status --porcelain && git -C "$W" diff -- integration/BUILD.bazel`
-Expected: ` M integration/BUILD.bazel`, ` M integration/cluster_node_test.go`, ` M integration/cluster_test.go`, ` M integration/tracks_harness_test.go` and `?? integration/stage3_p5_test.go`; gazelle adds `"stage3_p5_test.go",` after the stage-3 P0 and P4 test files of `go_test(name = "integration_test")` and no dependency (`authoritytest`, housegate's `replay`, `wire`, `config` and `fsm` are listed already).
+Expected: ` M integration/BUILD.bazel`, ` M integration/cluster_control_test.go`, ` M integration/cluster_node_test.go`, ` M integration/cluster_test.go`, ` M integration/tracks_harness_test.go` and `?? integration/stage3_p5_test.go`; gazelle adds `"stage3_p5_test.go",` after the stage-3 P0 and P4 test files of `go_test(name = "integration_test")` and no dependency (`authoritytest`, housegate's `replay`, `wire`, `config` and `fsm` are listed already).
 
 ```bash
 . "$HOME/.cache/s3e2-task64/env.sh" || exit 1
-git -C "$W" add integration/stage3_p5_test.go integration/tracks_harness_test.go integration/cluster_test.go integration/cluster_node_test.go integration/BUILD.bazel
+git -C "$W" add integration/cluster_control_test.go integration/stage3_p5_test.go integration/tracks_harness_test.go integration/cluster_test.go integration/cluster_node_test.go integration/BUILD.bazel
 git -C "$W" commit -S -m "test(stage3): activation, v21 restarts and the narrowed drain on the in-process cluster (Task 78)
 
 Six tests over the stage-2 tracks harness: the activation with every
@@ -7749,12 +8754,14 @@ addresses with the activation, keeps each node's configuration for
 restarts and applies raft.snapshot_body. ARBITER_WRITE_V21_FIXTURE
 writes the leader's v21 container for the P5 rehearsal directory.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed or canceled: preserve staged work and ask the user to unlock the actual repository signing key in their own terminal; never disable signing or publish an unsigned fallback"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+printf '%s\n' "$identity"
 git -C "$W" status --porcelain
 ```
 
-Expected: `poetry <chen@sentio.xyz>` and an empty status.
+Expected: `poetry <chen@sentio.xyz> G` and an empty status.
 
 - [ ] **Step 13: Write the failing chpipeline stage-3 tests**
 
@@ -7799,8 +8806,8 @@ func TestPipeline_Stage3SwitchOnInOrder(t *testing.T) {
 	h := startStage3Harness(t)
 	h.writeEveryOwner(t, 0)
 	for round, step := range stage3Steps {
+		h.switchOn(t, step)
 		if !t.Run(step, func(t *testing.T) {
-			h.switchOn(t, step)
 			if step == "purge" {
 				h.addTableOnOwner(t, h.hosts[0], "p", 130)
 			}
@@ -7844,11 +8851,11 @@ func (h *stage3Harness) requireStepEffect(t *testing.T, step string, blocks []ui
 		if live == nil || !live.ScopedKeeperPath {
 			t.Fatalf("db.p added after the purge switch = %+v, want a scoped Keeper path", live)
 		}
-		want := fmt.Sprintf("/sentio/%d/unsafe_inc/%s/%d", stage3Shard, chTableName(live.TableID), live.Seq)
+		want := fmt.Sprintf("/sentio/%d/unsafe_inc/%s/%d", stage3Shard, chTableName(live.Key()), live.Seq)
 		waitFor(t, "db.p's hg_unsafe replica on its incarnation path", stage3Patience, func() bool {
 			var path string
 			err := h.hosts[0].admin.QueryRow(h.ctx, "SELECT zookeeper_path FROM system.replicas WHERE database = 'hg_unsafe' AND table = ?",
-				chTableName(live.TableID)).Scan(&path)
+				chTableName(live.Key())).Scan(&path)
 			return err == nil && path == want
 		})
 	case "owner_aware_selection", "members_listed":
@@ -7944,6 +8951,7 @@ func (h *stage3Harness) stage3Params(t *testing.T) *arbiter.Stage3Params {
 // runStepsThrough runs stage3Steps up to and including last.
 func (h *stage3Harness) runStepsThrough(t *testing.T, last string) {
 	t.Helper()
+	h.writeEveryOwner(t, 0)
 	for _, step := range stage3Steps {
 		h.switchOn(t, step)
 		if step == last {
@@ -10247,12 +11255,14 @@ integration-clickhouse-stage3 runs it through
 scripts/ci/stage3-pipeline.sh and requires its three key PASS lines;
 the 25.8 jobs are unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed or canceled: preserve staged work and ask the user to unlock the actual repository signing key in their own terminal; never disable signing or publish an unsigned fallback"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+printf '%s\n' "$identity"
 git -C "$W" status --porcelain
 ```
 
-Expected: `poetry <chen@sentio.xyz>` and an empty status.
+Expected: `poetry <chen@sentio.xyz> G` and an empty status.
 
 - [ ] **Step 20: Full verification**
 
@@ -11259,21 +12269,23 @@ rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-acti
 [ -s "$L/record-s3e4-$n.md" ] || { echo "write the run record $L/record-s3e4-$n.md first"; exit 1; }
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e4-ledger-$n" "urwt/claude/multi-source-s3e4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3e4-ledger-$n" "urwt/codex/multi-source-s3e4-ledger-$n" "$ref")" || exit 1
+d="$(printf '%s\n' "$out" | jq -er .path)" || exit 1
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz && git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3e4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3e4-$n.md" ARBITER_TAG_P5="$ARBITER_TAG_P5" ARBITER_DIGEST_P5="$ARBITER_DIGEST_P5" || exit 1
-git -C "$d" commit -q -m "docs(plan): record ARBITER_TAG_P5 and ARBITER_DIGEST_P5 of Plan S3-E4 (Task 78)
+git -C "$d" commit -S -q -m "docs(plan): record ARBITER_TAG_P5 and ARBITER_DIGEST_P5 of Plan S3-E4 (Task 78)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "signed ledger commit failed or canceled: preserve staged work and ask the user to unlock the actual repository signing key in their own terminal; never disable signing or publish an unsigned fallback"; exit 1; }
+identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+printf '%s\n' "$identity"
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
-Expected: `s3-ledger: Task 78 recorded ARBITER_TAG_P5=<tag>, ARBITER_DIGEST_P5=sha256:<64 hex> and its run record 'arbiter P5 release' in <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md`, `poetry <chen@sentio.xyz>`, then one commit of the plan file only (its two Appendix C rows and the run-record item). A `stop` writes nothing: report it and ask. If `ref` stops with `no plan 's3e4'`, the plans branch is not on origin yet: ask the user to push it; never record into a local checkout. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` in their own terminal.
+Expected: `s3-ledger: Task 78 recorded ARBITER_TAG_P5=<tag>, ARBITER_DIGEST_P5=sha256:<64 hex> and its run record 'arbiter P5 release' in <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md`, `poetry <chen@sentio.xyz> G`, then one commit of the plan file only (its two Appendix C rows and the run-record item). A `stop` writes nothing: report it and ask. If `ref` stops with `no plan 's3e4'`, the plans branch is not on origin yet: ask the user to push it; never record into a local checkout. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` in their own terminal.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 78's ledger record (Appendix C of Plan S3-E4: ARBITER_TAG_P5, ARBITER_DIGEST_P5 and the run record 'arbiter P5 release'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf when that branch is the ledger copy, else as a docs PR into main". After a yes:
 
@@ -11281,7 +12293,8 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 L="$HOME/.cache/s3-ledger"; n=78
 d="$(sed -n 1p "$L/record-s3e4-$n")"; ref="$(sed -n 2p "$L/record-s3e4-$n")"
 [ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "the record commit has another author: stop"; exit 1; }
+identity="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = "poetry <chen@sentio.xyz> G" ] || { echo "the record commit is not signed poetry G: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E4 only, docs only (Plan S3-C1 contract §19)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3e4-$n-pr.md"
@@ -11357,7 +12370,7 @@ Nothing changes for a host or a member until a value is set: without `storage_in
   - `CORE_TAG_P5`'s `go.mod` requires `HG_TAG_P5` and `PROTO_TAG_P5`.
 - Consumes (`HG_TAG_P5`, Plan S3-E1 contract §40, Task 58): `sicore.AdmissionCodeVerifiersUnavailable`, `sicore.AdmissionCodeCopiesBackpressure` (package `github.com/housegate/housegate/pkg/storageintegrity`, imported as `sicore`), `SubmitOutcomeFromSequencedAck` listing both codes with the coded terminal rejects (a code above 13 stays `OutcomeUnknown`), `chproto.VerifiersUnavailableMessage`, `chproto.IsVerifiersUnavailableMessage`, `chproto.CopiesBackpressureMessage`, `chproto.IsCopiesBackpressureMessage`; the existing `sicore.SubmitOutcome{Category, Reason, AdmissionCode}`, `sicore.OutcomeTerminalReject`, `sicore.OutcomeUnknown`, `OutcomeCategory.RequiresAbort`.
 - Consumes (`PROTO_TAG_P5`, Plan S3-E1 contract §39): `pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE` (12), `pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE` (13), the existing `pb.SequencedAck{Code, Message}`.
-- Consumes (sentio-node at `SN_COMMIT_P4`): Plan S3-C2 contract §24.2 and Task 35's `config.SIMemberConfig`, `StorageIntegrityMemberConfig`, `LoadSIMemberConfig`, the unexported `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `yamlMappingValues` (Plan S3-B Task 12), `siMemberKeeperShardID`, `siMemberNodeIDPattern`, `(SIMemberConfig).Validate`, `MemberConfig`, `StorageIntegrityTable.Schema`, `StorageIntegrityPeer`, `config.StorageIntegrityMemberClickhousePasswordEnv`; `commands.NewSIMemberCommand`, `newSIMemberClearForeignCommand`; `simember.Run`, `run`, `runDeps`, `defaultRunDeps`, `siMemberRole`, `newSIMemberLogger`, `closeLogged`, `siMemberShutdownTimeout`; the test helpers `siMemberMinimalYAML`, `clearSIMemberEnv`, `loadSIMemberText`, `writeSIMemberConfig` (config), `fakeSIMemberRole`, `newFakeSIMemberRole`, `startDisabledTableRegistry`, `loadSIMemberRunTestConfig`, `httpGet` (simember), `writeSIMemberCommandConfig` (commands). Plan S3-C4 Task 46's `config.StorageIntegrityMemberServe` (`ListenAddr`), `refuseSIMemberServeTokenKey`, `isListenAddress`, `config.StorageIntegrityMemberStatusTokenEnv`, `siMemberRole.ServeHandler`/`ServeMetrics`, `fakeSIMemberRole.handler`/`serveMetrics`, `tablestate.ReplicaHosts(r Registry) map[string][]uint64` (K50) and its use in `standalone/storage_integrity_info.go`, `newMemberServingCommand`. Plan S3-D Task 52's `storageIntegrityIndexerBySigner(ctx, *config.NodeConfig) (uint64, string, error)` and `newRebuildSafeCommand`. Existing: `storageIntegrityClaimSigner`, `storageIntegrityReconcilerCollector`, `newStorageIntegrityReconcilerCollector`, `storageIntegrityReconcilerStates`, `switchableReconcilerStats`, `reconcilerMetricsHeader`, `storageIntegrityHostMetricNames`, `tablestate.Registry`, `followerSource.View`, `staticFollower` (tablestate tests), `config.LoadConfig`, `config.NodeTypeIndexer`/`NodeTypeObserver`, `log.FromContext`.
+- Consumes (sentio-node at `SN_COMMIT_P4`): Plan S3-C2 contract §24.2 and Task 35's `config.SIMemberConfig`, `StorageIntegrityMemberConfig`, `LoadSIMemberConfig`, the unexported `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `siMemberYAMLMappingValues` (Task 35's bounded alias/merge walker), `siMemberKeeperShardID`, `siMemberNodeIDPattern`, `(SIMemberConfig).Validate`, `MemberConfig`, `StorageIntegrityTable.Schema`, `StorageIntegrityPeer`, `config.StorageIntegrityMemberClickhousePasswordEnv`; `commands.NewSIMemberCommand`, `newSIMemberClearForeignCommand`; `simember.Run`, `run`, `runDeps`, `defaultRunDeps`, `siMemberRole`, `newSIMemberLogger`, `closeLogged`, `siMemberShutdownTimeout`; the test helpers `siMemberMinimalYAML`, `clearSIMemberEnv`, `loadSIMemberText`, `writeSIMemberConfig` (config), `fakeSIMemberRole`, `newFakeSIMemberRole`, `startDisabledTableRegistry`, `loadSIMemberRunTestConfig`, `httpGet` (simember), `writeSIMemberCommandConfig` (commands). Plan S3-C4 Task 46's `config.StorageIntegrityMemberServe` (`ListenAddr`), `refuseSIMemberServeTokenKey`, `isListenAddress`, `config.StorageIntegrityMemberStatusTokenEnv`, `siMemberRole.ServeHandler`/`ServeMetrics`, `fakeSIMemberRole.handler`/`serveMetrics`, `tablestate.ReplicaHosts(r Registry) map[string][]uint64` (K50) and its use in `standalone/storage_integrity_info.go`, `newMemberServingCommand`. Plan S3-D Task 52's `storageIntegrityIndexerBySigner(ctx, *config.NodeConfig) (uint64, string, error)` and `newRebuildSafeCommand`. Existing: `storageIntegrityClaimSigner`, `storageIntegrityReconcilerCollector`, `newStorageIntegrityReconcilerCollector`, `storageIntegrityReconcilerStates`, `switchableReconcilerStats`, `reconcilerMetricsHeader`, `storageIntegrityHostMetricNames`, `tablestate.Registry`, `followerSource.View`, `staticFollower` (tablestate tests), `config.LoadConfig`, `config.NodeTypeIndexer`/`NodeTypeObserver`, `log.FromContext`.
 - Produces (contract §56, verbatim):
   - `sentio-node storage-integrity member-consent-statement --member-node-id ID --member-ed25519-pubkey HEX --member-replica-signer 0x…` (`func newMemberConsentStatementCommand(configPath *string) *cobra.Command`); `type standalone.MemberConsentRequest struct{ NodeID string; Ed25519Pubkey []byte; ReplicaSigner string }`; `func standalone.PrintStorageIntegrityMemberConsentStatement(ctx context.Context, cfg *config.Config, req MemberConsentRequest, out io.Writer) error`; `func writeStorageIntegrityMemberConsentStatement(out io.Writer, signer *authority.Signer, stmt authority.GroupMemberConsentStatement) error`; the seven refusals of contract §56.
   - `type config.StorageIntegrityMemberConsensus struct{ Register bool; CreateReplicas bool; Ed25519SeedFile, ReplicaSignerKeyFile, ConsentFile string }` (YAML `register`, `create_replicas`, `ed25519_seed_file`, `replica_signer_key_file`, `consent_file`) as `StorageIntegrityMemberConfig.Consensus` (`yaml:"consensus"`); `type config.StorageIntegrityMemberReconciler struct{ ClickhouseUsername string \`yaml:"clickhouse_username"\`; … }` as `StorageIntegrityMemberConfig.Reconciler` (`yaml:"reconciler"`); `const config.StorageIntegrityMemberDDLClickhousePasswordEnv = "STORAGE_INTEGRITY_MEMBER_DDL_CLICKHOUSE_PASSWORD"`; `func loadMemberConsensusConfig(c config.StorageIntegrityMemberConsensus, cfg *config.SIMemberConfig) (*consensus.Config, error)` (package `simember`, file `simember/consensus_keys.go`); the six key refusals and the three reconciler refusals of contract §56.
@@ -11384,7 +12397,7 @@ Notes:
   - **Its own loader.** It shares the si-member's ConfigMap file, but `LoadSIMemberConfig`'s `Validate` requires the member's own environment (both restore variables when `restore` is set, the status token when `serve.enabled` is on), which a process holding `si_member_ddl` must not receive. `LoadSIMemberReconcilerConfig` runs the same refusals and strict decode and then `ValidateReconciler`, which checks only what the reconciler uses.
   - **Its own metrics listener.** Contract §56 says the reconciler serves its two series on `metrics_listen`, but it runs as a second container of the si-member's pod (K30), where the member already binds `metrics_listen` (S3-C3's 9095) and `serve.listen` (9096). It listens on `storage_integrity.member.reconciler.metrics_listen` (default `:9097`, `DefaultSIMemberReconcilerMetricsListen`), refused when its port equals either of the member's. Plan S3-F's chart names the port (cross-plan note).
 - **Metrics (group 5).** `role.ConsensusMetrics()` is nil without `member.Config.Consensus`, so a P5 member exports exactly its S3-C2/S3-C4 series; with the mode, arbiter-core's own collectors are registered on the process's registry beside them. The keeper findings ride `storageIntegrityReconcilerCollector`, which already reads `TableSetStats()` at scrape time: one gauge per reason, counting the last audit's findings, both reasons always exported (zeros included) and a reason a later arbiter-core adds exported rather than dropped, as the collector does for states. Only the owner SNode audits (Task 61), so the series is the host's own; runbook §5 (Task 81) stops on any non-zero value.
-- **`replica_hosts` (group 6, decision D27, fix 249-2).** `ReplicaHostsFromGroups` reads the served `host_indexer_id` of every current member of G(owner, database) and nothing else: no `verifiers` entry, no consensus parameter, no node-id mapping, and never `GroupMember.Ready()`. `MemberReady` attests the member's `hg_member_unsafe` replicas, which only verification uses and which exist only from P6 step 6, while a failed-over read is served from the member's manifest-gated `hg_replica` copy, which the host's own table state serves only while its member serves the database under a lease (spec §11, S3-C4 K50). Filtering by readiness would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. `followerSource.View` maps each group into `Registry.Groups` (owner, database, member hosts), so `tablestate.ReplicaHosts`, which the info method already calls, keeps K50's static list for a database until every owner of its live incarnations has a group, and then lists the union of those groups' member hosts (one owner per database on devnet2). `arbitercore.go` stays the only file that maps registry types into the model; `replica_hosts.go` is the second file that reads `wire` types. A delisted member (served without a host) is skipped and indexer 0 is kept, because `HostIndexerID` is `*uint64` in Task 60's `wire.GroupMember` (contract §56's consumed-names line says `uint64`; the source's spelling wins). On devnet2 every group holds the other two hosts' members, so the lists after placement equal the static ones, and neither the placement switch nor any `MemberReady` changes them.
+- **`replica_hosts` (group 6, decision D27, fix 249-2).** `ReplicaHostsFromGroups` reads the served `host_indexer_id` of every current member of G(owner, database) and nothing else: no `verifiers` entry, no consensus parameter, no node-id mapping, and never `GroupMember.Ready()`. `MemberReady` attests the member's `hg_member_unsafe` replicas, which only verification uses and which exist only from P6 step 6, while a failed-over read is served from the member's manifest-gated `hg_replica` copy, which the host's own table state serves only while its member serves the database under a lease (spec §11, S3-C4 K50). Filtering by readiness would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. `followerSource.View` maps each group into `Registry.Groups` (owner, database, member hosts), so `tablestate.ReplicaHosts`, which the info method already calls, keeps K50's static list for a database until every owner of its live incarnations has a group, and then lists the union of those groups' member hosts (one owner per database on devnet2). `arbitercore.go` stays the only file that maps registry types into the model; `replica_hosts.go` is the second file that reads `wire` types. A delisted member (served without a host) is skipped and indexer 0 is kept, because `HostIndexerID` is `*uint64` in Task 60's `wire.GroupMember` (Appendix A's consumed-names contract preserves the same pointer presence semantics). On devnet2 every group holds the other two hosts' members, so the lists after placement equal the static ones, and neither the placement switch nor any `MemberReady` changes them.
 - **Order and rollback.** `SN_COMMIT_P5` needs `HG_TAG_P5`, `CORE_TAG_P5` and `PROTO_TAG_P5` recorded and sentio-node `main` at or after `SN_COMMIT_P4` (contract §57's release order). Merging runs only CI's `docker-push` (`latest` and `sha-<SN_COMMIT_P5>`); this task never dispatches `Release Devnet` or `Release Testnet` (Step 16). Task 80 allowlists the image as `DEVNET2_STAGE3_P5_SOURCE_IMAGE` and Task 82 rolls it, hosts b, c, a and their si-members in P2/P3 mode, before the activation. Until the v21 activation commits, a host or si-member on `SN_DIGEST_P5` can return to `SN_DIGEST_P4` (the new keys are absent from every P5 config, and `SN_DIGEST_P4`'s strict member decoder would refuse them); after it, no SNode or si-member may run an image older than `SN_COMMIT_P5`, because the arbiter refuses a data-plane registration without `stage3_v1` (Plan S3-E2 contract §45).
 - **Verification while drafting** (Appendix B): every hunk below was applied with a hunk-applying script, from this text, to a scratch sentio-node tree (`git archive origin/main`, `0828f21`) after Plan S3-C1 Task 25's, Plan S3-C2 Task 35's, Plan S3-C4 Task 46's (its review-round-2 text with the admission fence) and Plan S3-D Task 52's hunks, applied the same way from their current texts, with `replace` lines to scratch upstream modules built from the producing tasks' own code: housegate `ed24705` with Plan S3-C1 Task 22 and Plan S3-C4 Tasks 42–44 (`HG_TAG_P3`), then Plan S3-E1 Task 58 (`HG_TAG_P5`); arbiter-proto `7a73f25` with Plan S3-D Task 49 (`PROTO_TAG_P4`), then Task 57 regenerated with `protoc` (`PROTO_TAG_P5`); arbiter-core `cfd4f42` with Plans S3-C1 Tasks 23–24, S3-C2 Tasks 29–34, S3-C4 Task 45 and S3-D Task 50 (`CORE_TAG_P4`), then Plan S3-E1 Tasks 59–63 (`CORE_TAG_P5`). No upstream symbol was hand-stubbed. Run step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): Step 2's failure was observed against the `P4` modules exactly as written; the pin of Step 3 is emulated by switching the three `replace` lines to the `P5` modules, after which the base tree (Tasks 25–52 alone) still builds, vets and passes its 283 tests unchanged (the pin is additive); every later "Expected: FAIL" appeared as written and every package passed after each implementation step; `gofmt -l` and `go vet ./...` were clean, `go test ./...` passed and `go test -race` of `config`, `simember`, `commands`, `standalone` and `storageintegrityadapter/...` passed. Sixteen mutations each failed a test of this task (a `Ready()` filter in `groupMemberHosts`; the static list kept after placement; the consent gate removed from `run`; the mode mask narrowed to others only; the reconciler logging in with the `si_member` password; the keeper-findings zero series or an unknown reason dropped; the consensus series not registered; the consent statement's host id or SNode-id refusal dropped; the inline-seed refusal disabled; `register` without files accepted; the reconciler without `register` accepted; the reconciler's purge reader reporting a purge; a member outside `Members` listed; `--role` defaulting to `reconciler`). Step 15's built-binary block ran as written and printed exactly its expected lines and no `LEAK:` line. Step 1's ledger block and Step 17's R1, R2 (to a scratch bare origin holding stand-in Appendix C sections on `urwt/claude/ms-si-stage3-plans-cf`) and R4 ran with the fixed `s3-ledger.py` of Plan S3-C1 contract §19 (R1 with a stand-in `urwt-create.sh` that runs `git worktree add` and prints the same JSON) and printed what their Expected says, the record commit authored `poetry <chen@sentio.xyz>`. Every bash block passes `bash -n`, `/bin/bash -n` (3.2), `zsh -n` and `shellcheck -S warning` with its `<…>` values filled in. Not run: Bazel and gazelle (they need the registries and the `git_override` fetches of tags that do not exist yet; the `BUILD.bazel` hunks are what gazelle writes for these files and imports), the ClickHouse-gated suites (this task adds none), and everything remote (fetches, `go get`, the PR, CI, the image and the ledger push to the real origin).
 
@@ -11393,25 +12406,55 @@ Notes:
 Remote read (fetch): needs explicit user confirmation in chat before running.
 
 ```bash
-git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch origin
-bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/sentio-node claude multi-source-s3e4
+set -eo pipefail
+T79="$HOME/.cache/s3e4-task79"
+mkdir -m 700 "$T79" || exit 1
+git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch origin || exit 1
+bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/sentio-node codex multi-source-s3e4 > "$T79/worktree.json" || exit 1
+python3 -I - "$T79/worktree.json" "$T79/session.sh" <<'PY'
+import json,os,shlex,sys
+obj=json.load(open(sys.argv[1]))
+if obj.get("action")!="created":sys.exit("worktree not newly created; stop")
+path=obj.get("path")
+if not isinstance(path,str) or not os.path.isabs(path) or "\n" in path:sys.exit("invalid returned worktree path; stop")
+with open(sys.argv[2],"x") as out:
+ out.write("W="+shlex.quote(path)+"\nBRANCH=urwt/codex/multi-source-s3e4\n")
+PY
+source "$T79/session.sh" || exit 1
+e4_git_read_039="$(git -C "$W" symbolic-ref --short HEAD)" || exit 1
+[ -n "$e4_git_read_039" ] || exit 1
+[ "${e4_git_read_039}" = "$BRANCH" ] || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" rev-parse HEAD > "$T79/base-head" || exit 1
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3e4` (expanded) on branch `urwt/claude/multi-source-s3e4` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`. If the action is not `created` (an earlier attempt left the worktree), stop and ask.
+Expected: one JSON object with `"action": "created"` whose absolute `path` is retained verbatim in `$HOME/.cache/s3e4-task79/worktree.json` and `session.sh`, on branch `urwt/codex/multi-source-s3e4` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`. If the action is not `created` (an earlier attempt left the worktree), stop and ask.
 
 Before the first commit, give the worktree the repository's commit identity (local, worktree-scoped; the global identity must never author or co-author a sentio-node commit):
 
 ```bash
-W=<worktree path>
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
-git -C "$W" config --get user.name; git -C "$W" config --get user.email
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+e4_git_read_040="$(git -C "$W" config --get user.name)" || exit 1
+[ "${e4_git_read_040}" = poetry ] || exit 1
+e4_git_read_041="$(git -C "$W" config --get user.email)" || exit 1
+[ "${e4_git_read_041}" = chen@sentio.xyz ] || exit 1
+e4_git_read_042="$(git -C "$W" config --get commit.gpgsign)" || exit 1
+[ "${e4_git_read_042}" = true ] || exit 1
+printf '%s\n' 'poetry <chen@sentio.xyz>; signed commits required'
 ```
 
-Expected: `poetry`, `chen@sentio.xyz`. Every commit block below checks `git -C "$W" log -1 --format='%an <%ae>'` prints `poetry <chen@sentio.xyz>` after it commits; any other author: stop, `git -C "$W" commit --amend --no-edit --reset-author` once the identity is set, and check again.
+Expected: `poetry <chen@sentio.xyz>; signed commits required`. Every real commit requires signing, a changed HEAD, exactly one new commit, `poetry <chen@sentio.xyz> G`, `verify-commit` success and a clean tree. A signing cancellation stops publication; ask the user to unlock the repository signing key in their own terminal. Never disable signing or publish an unsigned fallback.
 
 The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §57, Plan S3-C1 contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" ref "$h" s3e4
@@ -11424,10 +12467,12 @@ Expected: `origin/urwt/claude/ms-si-stage3-plans-cf` (or `origin/main` once the 
 Remote read (tag fetches): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_TAG_P3=<ledger>; CORE_TAG_P4=<ledger>; PROTO_TAG_P4=<ledger>; SN_COMMIT_P4=<ledger>
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_TAG_P3=<ledger>; CORE_TAG_P4=<ledger>; PROTO_TAG_P4=<ledger>; SN_COMMIT_P4=<ledger>
 H=/Users/uranuswch/Dev/projects/sentio-network/housegate; C=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core; P=/Users/uranuswch/Dev/projects/sentio-network/arbiter-proto
 git -C "$W" log --oneline -1
-git -C "$W" merge-base --is-ancestor "$SN_COMMIT_P4" HEAD && echo "SN_COMMIT_P4 is in HEAD"
+git -C "$W" merge-base --is-ancestor "$SN_COMMIT_P4" HEAD || exit 1
+echo "SN_COMMIT_P4 is in HEAD"
 git -C "$W" diff --stat "$SN_COMMIT_P4" HEAD -- go.mod MODULE.bazel config simember commands standalone storageintegrityadapter README.md
 grep -cE "^[[:space:]]+github.com/(housegate/housegate $HG_TAG_P3|sentioxyz/arbiter-core $CORE_TAG_P4|sentioxyz/arbiter-proto $PROTO_TAG_P4)\$" "$W/go.mod"
 grep -n -A1 -E 'name = "(arbiter_core|housegate)",' "$W/MODULE.bazel"; grep -n -A2 -E 'module_name = "(arbiter_core|housegate)",' "$W/MODULE.bazel"
@@ -11543,7 +12588,8 @@ Expected: FAIL, the test file does not compile (the pinned releases are `CORE_TA
 `go get` downloads the three modules through the Go proxy: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>
 cd "$W" && GOWORK=off go get "github.com/housegate/housegate@$HG_TAG_P5" "github.com/sentioxyz/arbiter-core@$CORE_TAG_P5" "github.com/sentioxyz/arbiter-proto@$PROTO_TAG_P5" && GOWORK=off go mod tidy
 grep -nE "housegate/housegate $HG_TAG_P5\$|sentioxyz/arbiter-core $CORE_TAG_P5\$|sentioxyz/arbiter-proto $PROTO_TAG_P5\$" "$W/go.mod"
 git -C "$W" diff --stat -- go.mod go.sum
@@ -11554,7 +12600,8 @@ Expected: three `go.mod` lines, the requires of `github.com/housegate/housegate 
 Set the `housegate` and `arbiter_core` `bazel_dep` versions (the tags without the leading `v`) and their `git_override` commits with the `# Resolved …` comments in `MODULE.bazel` (local edit; it refuses, writing nothing, unless the `HG_TAG_P3` and `CORE_TAG_P4` pins of Step 1 are there exactly once each, and a second run with the same values changes nothing):
 
 ```bash
-W=<worktree path>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; HG_TAG_P3=<ledger>; CORE_TAG_P4=<ledger>
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; HG_TAG_P3=<ledger>; CORE_TAG_P4=<ledger>
 H=/Users/uranuswch/Dev/projects/sentio-network/housegate; C=/Users/uranuswch/Dev/projects/sentio-network/arbiter-core
 HG_SHA="$(git -C "$H" rev-parse "$HG_TAG_P5^{commit}")"; HG_SHA_P3="$(git -C "$H" rev-parse "$HG_TAG_P3^{commit}")"
 CORE_SHA="$(git -C "$C" rev-parse "$CORE_TAG_P5^{commit}")"; CORE_SHA_P4="$(git -C "$C" rev-parse "$CORE_TAG_P4^{commit}")"
@@ -11591,7 +12638,8 @@ Expected: two 40-hex commits, `MODULE.bazel: housegate <HG_TAG_P3> -> <HG_TAG_P5
 Fetching the two new `git_override` sources is a download: remote read, needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
 cd "$W" && bazel run @rules_go//go -- mod tidy && bazel mod tidy && bazel run //:gazelle && bazel build //... && grep -nE "$HG_SHA|$CORE_SHA" MODULE.bazel && grep -cE "^[[:space:]]+github.com/(housegate/housegate $HG_TAG_P5|sentioxyz/arbiter-core $CORE_TAG_P5|sentioxyz/arbiter-proto $PROTO_TAG_P5)\$" go.mod && bazel test //... --test_output=errors
 ```
 
@@ -11602,8 +12650,10 @@ Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./standalone/ -count=1 -v
 Expected: `--- PASS: TestPinnedArbiterCoreAdvertisesStage3V1`, `--- PASS: TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably`, `ok  	compute-network-node/standalone`.
 
 ```bash
-W=<worktree path>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "chore(deps): pin housegate $HG_TAG_P5, arbiter-core $CORE_TAG_P5 and arbiter-proto $PROTO_TAG_P5
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; HG_SHA=<printed above>; CORE_SHA=<printed above>
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "chore(deps): pin housegate $HG_TAG_P5, arbiter-core $CORE_TAG_P5 and arbiter-proto $PROTO_TAG_P5
 
 Stage-3 P5 multi-source SI builds (housegate spec 2026-10-14 §10.3,
 §15, §16 P5): every SNode and si-member now registers with stage3_v1,
@@ -11615,10 +12665,21 @@ go.mod, bazel_dep and git_override ($HG_SHA, $CORE_SHA);
 arbiter-proto only in go.mod. TestPinnedArbiterCoreAdvertisesStage3V1
 and TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably pin both.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_043="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_043}" = 1 ] || exit 1
+e4_git_read_044="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_044}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists exactly the files named above before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists exactly the files named above before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 4: Write the failing consent-statement tests**
 
@@ -12156,8 +13217,10 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l standalone commands)" &&
 Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestMemberConsentStatementPrintsOnlyTheJWS`, `TestMemberConsentStatementBindsTheMembersPublicValues`, `TestMemberConsentStatementRefusesTheHostsSNodeNodeID`, `TestMemberConsentStatementRefusesMalformedPublicValues` and `TestStorageIntegrityCommandOffersTheMemberConsentStatement`, `ok  	compute-network-node/standalone`, `ok  	compute-network-node/commands`, and both whole packages `ok`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): member-consent-statement
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "feat(storage-integrity): member-consent-statement
 
 sentio-node storage-integrity member-consent-statement --member-node-id
 --member-ed25519-pubkey --member-replica-signer signs, with the indexer
@@ -12169,10 +13232,21 @@ read-only from the IndexerRegistry. It refuses the host's own SNode id
 and malformed public values before any read, verifies its JWS and
 prints only the JWS. No member key is read or accepted as a flag.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_045="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_045}" = 1 ] || exit 1
+e4_git_read_046="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_046}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists `M commands/storage_integrity.go`, `M commands/storage_integrity_test.go`, `M standalone/BUILD.bazel`, `A standalone/storage_integrity_member_consent.go` and `A standalone/storage_integrity_member_consent_test.go` before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists `M commands/storage_integrity.go`, `M commands/storage_integrity_test.go`, `M standalone/BUILD.bazel`, `A standalone/storage_integrity_member_consent.go` and `A standalone/storage_integrity_member_consent_test.go` before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 6: Write the failing member-key tests**
 
@@ -12214,6 +13288,36 @@ func TestLoadSIMemberConfigRefusesAnInlineMemberKey(t *testing.T) {
 		_, path, err := loadSIMemberText(t, siMemberMinimalYAML+"    consensus:\n      "+tc.key+": "+secret+"\n")
 		require.EqualError(t, err, "si-member config "+path+": "+tc.refusal, "LoadSIMemberConfig refuses the key before its strict decode")
 		require.NotContains(t, err.Error(), secret, "the refusal never echoes the value")
+	}
+}
+
+// TestMemberConsensusSecretRefusalsVisitSharedYAMLOnce keeps the consensus preflight
+// bounded by YAML graph nodes, rather than the number of alias paths.
+func TestMemberConsensusSecretRefusalsVisitSharedYAMLOnce(t *testing.T) {
+	var doc strings.Builder
+	doc.WriteString("n0: &n0 {}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&doc, "n%d: &n%d {<<: [*n%d, *n%d]}\n", i, i, i-1, i-1)
+	}
+	base := doc.String()
+	for _, tc := range []struct {
+		name       string
+		check      func([]byte) error
+		block, key string
+	}{
+		{"consensus seed", refuseSIMemberConsensusKeys, "consensus", "ed25519_seed"},
+		{"consensus signer", refuseSIMemberConsensusKeys, "consensus", "replica_signer_key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, tc.check([]byte(base+"storage_integrity:\n  member:\n    <<: *n40\n    "+tc.block+": {}\n")))
+			for _, value := range []string{"null", "99999999999999999999999999999999999999999999999999"} {
+				text := base + "secret: &secret {" + tc.key + ": " + value + "}\nstorage_integrity:\n  member:\n    " + tc.block + ": {<<: [*n40, *secret, *secret]}\n"
+				err := tc.check([]byte(text))
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.key+" is not read from the config file")
+				require.NotContains(t, err.Error(), value)
+			}
+		})
 	}
 }
 
@@ -12609,13 +13713,13 @@ func refuseSIMemberConsensusKeys(data []byte) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
-	for _, si := range yamlMappingValues(doc.Content[0], "storage_integrity") {
-		for _, block := range yamlMappingValues(si, "member") {
-			for _, c := range yamlMappingValues(block, "consensus") {
-				if len(yamlMappingValues(c, "ed25519_seed")) > 0 {
+	for _, si := range siMemberYAMLMappingValues(doc.Content[0], "storage_integrity") {
+		for _, block := range siMemberYAMLMappingValues(si, "member") {
+			for _, c := range siMemberYAMLMappingValues(block, "consensus") {
+				if len(siMemberYAMLMappingValues(c, "ed25519_seed")) > 0 {
 					return errors.New("storage_integrity.member.consensus.ed25519_seed is not read from the config file; mount the seed as a file and set storage_integrity.member.consensus.ed25519_seed_file")
 				}
-				if len(yamlMappingValues(c, "replica_signer_key")) > 0 {
+				if len(siMemberYAMLMappingValues(c, "replica_signer_key")) > 0 {
 					return errors.New("storage_integrity.member.consensus.replica_signer_key is not read from the config file; mount the key as a file and set storage_integrity.member.consensus.replica_signer_key_file")
 				}
 			}
@@ -13065,8 +14169,10 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config simember)" && GOW
 Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation` (config), `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys` and `TestRunWiresTheMemberRoleWithItsOwnLogin` (simember), both packages `ok`, then `ok` for `config`, `simember` and `commands` (every S3-C2 and S3-C4 member test is untouched: a config without the block keeps `Consensus` zero and nil).
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(si-member): inert member consensus keys and the consent gate
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "feat(si-member): inert member consensus keys and the consent gate
 
 storage_integrity.member.consensus (Plan S3-E4 contract §56) maps onto
 arbiter-core's member consensus mode, off by default: without register
@@ -13077,12 +14183,60 @@ config is refused whatever its value), and the member role runs only
 after the consent file verifies under the host's si_indexers signer for
 exactly this member's network, genesis, host, node id and keys.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_047="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_047}" = 1 ] || exit 1
+e4_git_read_048="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_048}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists `M config/BUILD.bazel`, `M config/si_member.go`, `A config/si_member_consensus.go`, `M config/si_member_test.go`, `M simember/BUILD.bazel`, `A simember/consensus_keys.go`, `A simember/consensus_keys_test.go` and `M simember/run.go` before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists `M config/BUILD.bazel`, `M config/si_member.go`, `A config/si_member_consensus.go`, `M config/si_member_test.go`, `M simember/BUILD.bazel`, `A simember/consensus_keys.go`, `A simember/consensus_keys_test.go` and `M simember/run.go` before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 8: Write the failing reconciler-role tests**
+
+Append to `config/si_member_test.go`:
+
+```go
+// TestMemberReconcilerSecretRefusalVisitsSharedYAMLOnce keeps the reconciler preflight
+// bounded by YAML graph nodes, rather than the number of alias paths.
+func TestMemberReconcilerSecretRefusalVisitsSharedYAMLOnce(t *testing.T) {
+	var doc strings.Builder
+	doc.WriteString("n0: &n0 {}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&doc, "n%d: &n%d {<<: [*n%d, *n%d]}\n", i, i, i-1, i-1)
+	}
+	base := doc.String()
+	for _, tc := range []struct {
+		name       string
+		check      func([]byte) error
+		block, key string
+	}{
+		{"reconciler password", refuseSIMemberReconcilerPasswordKey, "reconciler", "clickhouse_password"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, tc.check([]byte(base+"storage_integrity:\n  member:\n    <<: *n40\n    "+tc.block+": {}\n")))
+			for _, value := range []string{"null", "99999999999999999999999999999999999999999999999999"} {
+				text := base + "secret: &secret {" + tc.key + ": " + value + "}\nstorage_integrity:\n  member:\n    " + tc.block + ": {<<: [*n40, *secret, *secret]}\n"
+				err := tc.check([]byte(text))
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.key+" is not read from the config file")
+				require.NotContains(t, err.Error(), value)
+			}
+		})
+	}
+}
+```
+
+Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./config/ -run TestMemberReconcilerSecretRefusalVisitsSharedYAMLOnce -count=1 -timeout=10s`
+
+Expected: FAIL (`undefined: refuseSIMemberReconcilerPasswordKey`); after Step 9, PASS without expanding shared aliases.
 
 Create `simember/reconciler_test.go`:
 
@@ -13470,10 +14624,10 @@ func refuseSIMemberReconcilerPasswordKey(data []byte) error {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil
 	}
-	for _, si := range yamlMappingValues(doc.Content[0], "storage_integrity") {
-		for _, block := range yamlMappingValues(si, "member") {
-			for _, reconciler := range yamlMappingValues(block, "reconciler") {
-				if len(yamlMappingValues(reconciler, "clickhouse_password")) > 0 {
+	for _, si := range siMemberYAMLMappingValues(doc.Content[0], "storage_integrity") {
+		for _, block := range siMemberYAMLMappingValues(si, "member") {
+			for _, reconciler := range siMemberYAMLMappingValues(block, "reconciler") {
+				if len(siMemberYAMLMappingValues(reconciler, "clickhouse_password")) > 0 {
 					return fmt.Errorf("storage_integrity.member.reconciler.clickhouse_password is not read from the config file; set %s instead", StorageIntegrityMemberDDLClickhousePasswordEnv)
 				}
 			}
@@ -14030,8 +15184,10 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l config simember commands
 Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestSIMemberReconcilerRoleRunsTheUnsafeReconcilerAsItsOwnUser`, `TestSIMemberReconcilerRoleRefusals` and `TestSIMemberCommandTakesARole`, both packages `ok`, then `ok` for `config`, `simember` and `commands` (every earlier member and command test unchanged: `--role` defaults to `member`, whose loader keeps `Validate`).
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(si-member): --role reconciler
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "feat(si-member): --role reconciler
 
 sentio-node si-member --role reconciler (Plan S3-E4 contract §56) runs
 arbiter-core's hg_member_unsafe reconciler (consensus.NewUnsafeReconciler)
@@ -14046,10 +15202,21 @@ LoadSIMemberReconcilerConfig), and serves its two series on its own
 listener (reconciler.metrics_listen, default :9097), because it runs
 beside the si-member in one pod. --role defaults to member.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_049="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_049}" = 1 ] || exit 1
+e4_git_read_050="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_050}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists `M commands/si_member.go`, `M commands/si_member_test.go`, `M config/BUILD.bazel`, `M config/si_member.go`, `A config/si_member_reconciler.go`, `M simember/BUILD.bazel`, `A simember/reconciler.go` and `A simember/reconciler_test.go` before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists `M commands/si_member.go`, `M commands/si_member_test.go`, `M config/BUILD.bazel`, `M config/si_member.go`, `A config/si_member_reconciler.go`, `M simember/BUILD.bazel`, `A simember/reconciler.go` and `A simember/reconciler_test.go` before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 10: Write the failing metrics tests**
 
@@ -14415,8 +15582,10 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l simember standalone)" &&
 Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestSIMemberRegistersTheConsensusMetrics` (simember), `TestStorageIntegrityReconcilerCollectorReportsEveryStateIncludingZeros`, `TestStorageIntegrityReconcilerCollectorKeepsAStateItDoesNotKnow`, `TestKeeperFindingsAreExportedWithEveryReason`, `TestStorageIntegrityTableStateMetricsRegisterOnTheGivenRegistry` and `TestStorageIntegrityTableStateMetricsFallBackToTheDefaultRegistry` (standalone), both packages `ok`, and both whole packages `ok`.
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): member consensus metrics and the keeper findings
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "feat(storage-integrity): member consensus metrics and the keeper findings
 
 The si-member registers the role's member consensus series (Plan S3-E1
 contract §42.3: registered, ready groups, checkpoint seq, checkpoints,
@@ -14427,10 +15596,21 @@ sentio_node_storage_integrity_keeper_findings{reason} on the embedded
 HouseGate registry through the reconciler collector, both reasons
 always exported (Plan S3-E4 contract §56).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_051="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_051}" = 1 ] || exit 1
+e4_git_read_052="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_052}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists `M simember/run.go`, `M simember/run_test.go`, `M standalone/storage_integrity_reconciler_metrics.go`, `M standalone/storage_integrity_reconciler_metrics_test.go` and `M standalone/storage_integrity_table_state_test.go` before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists `M simember/run.go`, `M simember/run_test.go`, `M standalone/storage_integrity_reconciler_metrics.go`, `M standalone/storage_integrity_reconciler_metrics_test.go` and `M standalone/storage_integrity_table_state_test.go` before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 12: Write the failing `replica_hosts` tests**
 
@@ -14790,8 +15970,10 @@ Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)
 Expected: no unformatted file, `go vet` silent, then `--- PASS:` for `TestReplicaHostsKeepTheStaticListBeforePlacement`, `TestReplicaHostsFollowTheDatabaseGroupOncePlaced`, `TestReplicaHostsListEveryCurrentMemberWhateverItsReadiness`, Plan S3-C4 Task 46's `TestReplicaHostsListEveryEnrolledIndexerButTheOwner` and the `TestFromFollower…` tests (a snapshot without groups maps `Groups` nil), `ok  	compute-network-node/storageintegrityadapter/tablestate`, then every listed package `ok` (Plan S3-C4's info tests read `replica_hosts` through `tablestate.ReplicaHosts` and see no group).
 
 ```bash
-W=<worktree path>
-git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -m "feat(storage-integrity): replica_hosts from the registry's database groups
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -A && git -C "$W" status --short && git -C "$W" commit -S -m "feat(storage-integrity): replica_hosts from the registry's database groups
 
 Once the arbiter's registry places G(owner, database), replica_hosts of
 sentio_getStorageIntegrityInfo lists the served host_indexer_id of every
@@ -14802,10 +15984,21 @@ would remove read failover until P6 step 6. A delisted member is
 skipped, Leaving records are never listed, and a database whose groups
 are not placed keeps Plan S3-C4's static list (K50).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_053="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_053}" = 1 ] || exit 1
+e4_git_read_054="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_054}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: `git status --short` lists `M storageintegrityadapter/tablestate/BUILD.bazel`, `M storageintegrityadapter/tablestate/arbitercore.go`, `M storageintegrityadapter/tablestate/model.go`, `M storageintegrityadapter/tablestate/replica.go`, `A storageintegrityadapter/tablestate/replica_hosts.go` and `A storageintegrityadapter/tablestate/replica_hosts_test.go` before the commit, then `poetry <chen@sentio.xyz>`.
+Expected: `git status --short` lists `M storageintegrityadapter/tablestate/BUILD.bazel`, `M storageintegrityadapter/tablestate/arbitercore.go`, `M storageintegrityadapter/tablestate/model.go`, `M storageintegrityadapter/tablestate/replica.go`, `A storageintegrityadapter/tablestate/replica_hosts.go` and `A storageintegrityadapter/tablestate/replica_hosts_test.go` before the commit, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 14: README**
 
@@ -14858,23 +16051,56 @@ Its password comes only from `STORAGE_INTEGRITY_MEMBER_DDL_CLICKHOUSE_PASSWORD` 
 ````
 
 ```bash
-W=<worktree path>
-git -C "$W" add README.md && git -C "$W" commit -m "docs(storage-integrity): stage-3 P5 member consensus keys, consent and reconciler
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add README.md && git -C "$W" commit -S -m "docs(storage-integrity): stage-3 P5 member consensus keys, consent and reconciler
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_055="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_055}" = 1 ] || exit 1
+e4_git_read_056="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_056}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$W" log -1 --format='%an <%ae> %G?'
+
 ```
 
-Expected: one commit of `README.md` only, then `poetry <chen@sentio.xyz>`.
+Expected: one commit of `README.md` only, then `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 15: Full verification**
 
-Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l $(git ls-files '*.go'))" && GOWORK=off go vet ./... && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'; GOWORK=off go test -race ./config/ ./simember/ ./commands/ ./standalone/ ./storageintegrityadapter/... -count=1 2>&1 | grep -vE '^ok|no test files'`
+Run: `W=<worktree path>; cd "$W" && { ( e4_format_files="$(mktemp "${TMPDIR:-/tmp}/s3e4-gofmt.XXXXXX")" || exit 1; trap 'rm -f -- "$e4_format_files"' EXIT; git ls-files -z '*.go' > "$e4_format_files" || exit 1; e4_format_output="$(xargs -0 gofmt -l -- < "$e4_format_files")" || exit 1; [ -z "$e4_format_output" ] || exit 1 ) || exit 1; } && GOWORK=off go vet ./... && GOWORK=off go test ./... -count=1 2>&1 | grep -vE '^ok|no test files'; GOWORK=off go test -race ./config/ ./simember/ ./commands/ ./standalone/ ./storageintegrityadapter/... -count=1 2>&1 | grep -vE '^ok|no test files'`
 
 Expected: no unformatted file, `go vet` silent, and both runs print nothing (every package `ok`; the ClickHouse-gated tests skip without their environment).
 
 Run: `W=<worktree path>; cd "$W" && bazel run //:gazelle && git status --short && bazel build //... && bazel test //... --test_output=errors`
 
-Expected: gazelle leaves the tree clean (`git status --short` prints nothing: Steps 2–13 wrote what it writes; if it does change a `BUILD.bazel`, review the diff, then `git -C "$W" add -- '*BUILD.bazel' && git -C "$W" commit -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git -C "$W" log -1 --format='%an <%ae>'` (expected `poetry <chen@sentio.xyz>`), and rerun this command); the build succeeds; every test PASSES.
+Expected: gazelle leaves the tree clean (`git status --short` prints nothing: Steps 2–13 wrote what it writes); the build succeeds; every test PASSES. If gazelle does change a `BUILD.bazel`, review the diff, then run only this fallback commit block and rerun the gazelle/build/test command above:
+
+```bash
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" add -- '*BUILD.bazel' || exit 1
+git -C "$W" commit -S -m "chore(build): gazelle" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "commit failed or signing cancelled; stop and unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+gazelle_commit_count="$(git -C "$W" rev-list --count "$before..$after")" || exit 1
+[ "$gazelle_commit_count" = 1 ] || exit 1
+gazelle_commit_identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$gazelle_commit_identity" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$after" || exit 1
+gazelle_worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$gazelle_worktree_status" ] || exit 1
+printf '%s\n' "$gazelle_commit_identity"
+```
+
+Expected (fallback only): one reviewed gazelle `BUILD.bazel` commit, `poetry <chen@sentio.xyz> G`, and a clean tree. A failed read, signing cancellation, unexpected identity/signature or residual change stops before continuing. Keep the original BUILD review condition and rerun the same gazelle/build/test command; no build/test result is inferred from the commit.
 
 Then the built binary (local only; nothing is dialed: every run stops at a refusal, the consent command's last one at the unreachable Ethereum RPC on `127.0.0.1:1`; the indexer key is a throwaway value generated for this check, never printed and never on an argv, and the member key files hold throwaway values; the leak checks read the secrets as patterns from stdin):
 
@@ -15015,8 +16241,9 @@ where `<tmp>` is the block's own temporary directory. No `LEAK:` line may appear
 sentio-node always goes through a PR (`CLAUDE.md` "Pull Request Workflow"). Write the body (local file, outside the worktree):
 
 ```bash
+set -eo pipefail
 HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>
-BODY="$HOME/src/remotesrc/claude/sentio-node/multi-source-s3e4.pr-body.md"
+BODY="$HOME/.cache/s3e4-task79/pr-body.md"
 sed -e "s|@HG_TAG_P5@|$HG_TAG_P5|g" -e "s|@CORE_TAG_P5@|$CORE_TAG_P5|g" -e "s|@PROTO_TAG_P5@|$PROTO_TAG_P5|g" > "$BODY" <<'PRBODY'
 Stage 3 P5 of the multi-source storage-integrity network, host and member side (housegate spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` §6.1, §8.2–§8.3, §10.3, §11, §15, §16 P5; Plan S3-E4 Task 79, contract §56, decisions D27 and D30).
 
@@ -15046,16 +16273,18 @@ Expected: `0` (no unreplaced placeholder; the body has no other `@`), `1`.
 Remote write (push and PR): needs explicit user confirmation in chat before running.
 
 ```bash
-W=<worktree path>
-cd "$W" && git push -u origin urwt/claude/multi-source-s3e4
-gh pr create --repo sentioxyz/sentio-node --base main --head urwt/claude/multi-source-s3e4 \
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+cd "$W" && git push -u origin urwt/codex/multi-source-s3e4
+gh pr create --repo sentioxyz/sentio-node --base main --head urwt/codex/multi-source-s3e4 \
   --title 'feat(storage-integrity): multi-source SI stage 3 P5 host side (stage3_v1, member consent, member keys)' \
-  --body-file "$HOME/src/remotesrc/claude/sentio-node/multi-source-s3e4.pr-body.md"
+  --body-file "$HOME/.cache/s3e4-task79/pr-body.md"
 ```
 
 Remote read (CI status): needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 gh pr checks <n> --repo sentioxyz/sentio-node --watch
 ```
 
@@ -15065,33 +16294,58 @@ Before the merge, every commit of the PR must be authored by `chen@sentio.xyz` (
 
 ```bash
 set -eo pipefail
-gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/<n>/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+pr=<n>
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+case "$expected_head" in *[!0-9a-f]*|'') exit 1;; esac
+[ "${#expected_head}" = 40 ] || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+e4_git_read_057="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_057}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$expected_head" || exit 1
+remote_head="$(gh pr view "$pr" --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || exit 1
+gh api --paginate --slurp "repos/sentioxyz/sentio-node/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+remote_head="$(gh pr view "$pr" --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || exit 1
+(set -o noclobber; printf '%s\n' "$expected_head" > "$HOME/.cache/s3e4-task79/checked-pr-head") || exit 1
 ```
 
-Expected: `PR commit identities verified`. The REST commit record checks each primary author as `poetry <chen@sentio.xyz>` independently of GitHub’s coauthor list; no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). Ordinary task commits still require that trailer. Anything else: stop; rewrite the authors on the branch (`git -C "$W" rebase --exec 'git commit --amend --no-edit --reset-author' <base>` with the worktree identity of Step 1) and ask again before force-pushing the branch.
+Expected: `PR commit identities and pinned head verified`. The REST commit record checks each primary author as `poetry <chen@sentio.xyz>` independently of GitHub’s coauthor list; no coauthor or exactly one canonical `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer is allowed (merge commits can have none). Ordinary task commits still require that trailer. Anything else: stop; rewrite the authors on the branch (`git -C "$W" rebase --exec 'git commit -S --amend --no-edit --reset-author || exit 1; rewritten_identity="$(git log -1 --format="%an <%ae> %G?")" || exit 1; [ "$rewritten_identity" = "poetry <chen@sentio.xyz> G" ] || exit 1; git verify-commit HEAD || exit 1' <base>` with the worktree identity of Step 1) and ask again before force-pushing the branch.
 
 Remote write (merge): needs explicit user confirmation in chat, after review, before running.
 
 ```bash
-gh pr merge <n> --repo sentioxyz/sentio-node --squash
+set -eo pipefail
+source "$HOME/.cache/s3e4-task79/session.sh" || exit 1
+expected_head="$(cat "$HOME/.cache/s3e4-task79/checked-pr-head")" || exit 1
+e4_git_read_058="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_058" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_git_read_058}" = "$expected_head" ] || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+remote_head="$(gh pr view <n> --repo sentioxyz/sentio-node --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || exit 1
+gh pr merge <n> --repo sentioxyz/sentio-node --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 Merging runs only CI's `docker-push` (`latest` and `sha-<SN_COMMIT_P5>`). This task never dispatches `Release Devnet` or `Release Testnet`, and neither may run on a commit containing `SN_COMMIT_P5` during this plan: the floating `:devnet` tag that the devnet2 observer and the testnet-v2 releases follow with `pullPolicy: Always` would move pods no runbook covers.
@@ -15101,7 +16355,10 @@ Merging runs only CI's `docker-push` (`latest` and `sha-<SN_COMMIT_P5>`). This t
 Remote read (PR, workflow runs): needs explicit user confirmation in chat before running.
 
 ```bash
-SN_COMMIT_P5="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid)"; echo "$SN_COMMIT_P5"
+set -eo pipefail
+SN_COMMIT_P5="$(gh pr view <n> --repo sentioxyz/sentio-node --json mergeCommit --jq .mergeCommit.oid)" || exit 1
+[[ "$SN_COMMIT_P5" =~ ^[0-9a-f]{40}$ ]] || exit 1
+echo "$SN_COMMIT_P5"
 gh run list --repo sentioxyz/sentio-node --branch main --workflow 'CI Build' --limit 3 --json databaseId,headSha,status,conclusion
 ```
 
@@ -15110,12 +16367,14 @@ Expected: a 40-hex `SN_COMMIT_P5` (the squash-merge commit) and a run whose `hea
 Remote read (registry and fetch): needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 SN_COMMIT_P5=<sha>; HG_TAG_P5=<ledger>; CORE_TAG_P5=<ledger>; PROTO_TAG_P5=<ledger>; SN_COMMIT_P4=<ledger>
 docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5" | sed -n '1,4p'
 docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5" --format '{{json .Image}}' \
   | jq -r 'if has("config") then .config.Labels["org.opencontainers.image.revision"] else (to_entries[0].value.config.Labels["org.opencontainers.image.revision"]) end'
 git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node fetch -q origin
-git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node merge-base --is-ancestor "$SN_COMMIT_P4" "$SN_COMMIT_P5" && echo "SN_COMMIT_P4 precedes SN_COMMIT_P5"
+git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node merge-base --is-ancestor "$SN_COMMIT_P4" "$SN_COMMIT_P5" || exit 1
+echo "SN_COMMIT_P4 precedes SN_COMMIT_P5"
 git -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node show "$SN_COMMIT_P5":go.mod | grep -E "housegate/housegate $HG_TAG_P5|arbiter-core $CORE_TAG_P5|arbiter-proto $PROTO_TAG_P5"
 ```
 
@@ -15124,6 +16383,7 @@ Expected: `Name:`, `MediaType:` and `Digest: sha256:…` — that index digest i
 Pulling the image to check its binary is a download (the image, linux/amd64): needs explicit user confirmation in chat before running.
 
 ```bash
+set -eo pipefail
 SN_COMMIT_P5=<sha>; SN_DIGEST_P5=<sha256:… printed above>
 docker run --rm --platform linux/amd64 "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5@$SN_DIGEST_P5" storage-integrity --help 2>/dev/null | grep -E '^  member-consent-statement '
 docker run --rm --platform linux/amd64 "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5@$SN_DIGEST_P5" si-member --help 2>/dev/null | grep -cE '^      --role '
@@ -15136,37 +16396,61 @@ Record both, never predicting either, with the record procedure (contract §57, 
 R1 (local; the housegate fetch only reads; contract §57, decision D23). Like every remote read of this task, it needs explicit user confirmation in chat before running:
 
 ```bash
+set -eo pipefail
 SN_COMMIT_P5=<sha>; SN_DIGEST_P5=<sha256:… printed above>
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=79
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e4-ledger-$n" "urwt/claude/multi-source-s3e4-ledger-$n" "$ref")"
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3e4-ledger-$n" "urwt/codex/multi-source-s3e4-ledger-$n" "$ref")"
 d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+e4_git_read_059="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_059" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_060="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$e4_git_read_060" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_061="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${e4_git_read_059}" = "${e4_git_read_060}" ] && [ -z "${e4_git_read_061}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz && git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3e4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3e4-$n.md" SN_COMMIT_P5="$SN_COMMIT_P5" SN_DIGEST_P5="$SN_DIGEST_P5" || exit 1
-git -C "$d" commit -q -m "docs(plan): record SN_COMMIT_P5 and SN_DIGEST_P5 of Plan S3-E4 (Task 79)
+before="$(git -C "$d" rev-parse HEAD)" || exit 1
+git -C "$d" commit -S -q -m "docs(plan): record SN_COMMIT_P5 and SN_DIGEST_P5 of Plan S3-E4 (Task 79)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-git -C "$d" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "signing failed or cancelled; stop; unlock the repository signing key in your own terminal"; exit 1; }
+after="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$before" != "$after" ] || exit 1
+e4_git_read_062="$(git -C "$d" rev-list --count "$before..$after")" || exit 1
+[ "${e4_git_read_062}" = 1 ] || exit 1
+e4_git_read_063="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_063}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit "$after" || exit 1
+worktree_status="$(git -C "$d" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+git -C "$d" log -1 --format='%an <%ae> %G?'
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
-Expected: `s3-ledger: Task 79 recorded SN_COMMIT_P5=…, SN_DIGEST_P5=… and its run record 'sentio-node P5 release' in …`, then `poetry <chen@sentio.xyz>`, then one commit of the plan file only (its two rows and the run-record item `sentio-node P5 release (Task 79)`). A `stop` writes nothing: report it and ask. Any other author: stop.
+Expected: `s3-ledger: Task 79 recorded SN_COMMIT_P5=…, SN_DIGEST_P5=… and its run record 'sentio-node P5 release' in …`, then `poetry <chen@sentio.xyz> G`, then one commit of the plan file only (its two rows and the run-record item `sentio-node P5 release (Task 79)`). A `stop` writes nothing: report it and ask. Any other author: stop.
 
 R2 (remote write): needs explicit user confirmation in chat before running. Gate: "push Task 79's ledger record (Appendix C of Plan S3-E4: SN_COMMIT_P5, SN_DIGEST_P5 and the run record 'sentio-node P5 release (Task 79)'; docs only) to housegate, straight to urwt/claude/ms-si-stage3-plans-cf while that branch is the ledger copy, else as a docs PR into main". After a yes:
 
 ```bash
+set -eo pipefail
 L="$HOME/.cache/s3-ledger"; n=79
 d="$(sed -n 1p "$L/record-s3e4-$n")"; ref="$(sed -n 2p "$L/record-s3e4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%ae')" = chen@sentio.xyz ] || { echo "the ledger worktree $d is not one clean record commit by chen@sentio.xyz ahead of $ref: stop"; exit 1; }
+e4_git_read_064="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+e4_git_read_065="$(git -C "$d" status --porcelain)" || exit 1
+e4_git_read_066="$(git -C "$d" log -1 --format='%ae')" || exit 1
+[ "${e4_git_read_064}" = 1 ] && [ -z "${e4_git_read_065}" ] && [ "${e4_git_read_066}" = chen@sentio.xyz ] || { echo "the ledger worktree $d is not one clean record commit by chen@sentio.xyz ahead of $ref: stop"; exit 1; }
+e4_git_read_067="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_067}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E4 only, docs only (contract §57, decision D23)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3e4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
+  e4_git_read_068="$(git -C "$d" log -1 --format=%s)" || exit 1
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${e4_git_read_068}" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
 else
   git -C "$d" push origin "HEAD:${ref#origin/}"
 fi
@@ -15176,32 +16460,47 @@ Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the d
 
 ```bash
 set -eo pipefail
+L="$HOME/.cache/s3-ledger"; n=79
+W="$(sed -n 1p "$L/record-s3e4-$n")" || exit 1
 pr=<number>
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo housegate/housegate --squash
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+case "$expected_head" in *[!0-9a-f]*|'') exit 1;; esac
+[ "${#expected_head}" = 40 ] || exit 1
+worktree_status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$worktree_status" ] || exit 1
+e4_git_read_069="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_069}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$expected_head" || exit 1
+remote_head="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+remote_head="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || exit 1
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
-Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
+Expected: `PR commit identities and pinned head verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; remote read, so it needs explicit user confirmation in chat before running):
 
 ```bash
+set -eo pipefail
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P5 SN_DIGEST_P5
@@ -15213,11 +16512,368 @@ Expected: `SN_COMMIT_P5=<the value written>`, `SN_DIGEST_P5=<the value written>`
 
 ## Task 80: production — the stage-3 consensus rule group, the snapshot body writer value, the P5 image constants and the rehearsal Pod example (S3-E4)
 
-Contract §56 (the production chart, binding) and §57 (the runbook section titles and the live commits these tests hold to); spec §10.3 (the plain-body fallback, the operational writer setting, the rehearsal), §13.2, §15 (production: alert rules for floor, copies and encoding fallback), §16 row P5; clarifications K78 (the floor signals), K81 (the rehearsal) and K82 (vi) (the voter budget is re-checked by the runbook, so the voter sizing stays pinned); decisions D34 (the ledger copy) and D37 (the one rehearsal directory, which this task does not touch). This task puts every chart, test and example change of P5 on branch `urwt/claude/multi-source-s3e4` (production worktree `multi-source-s3e4`); Task 81 adds the P5 runbook `docs/storage-integrity-devnet2-stage3-p5-v21.md` to the same branch and opens `P5_PR`. (1) **The writer value:** `arbiter.raft.snapshotBody` (unset by default; `auto` or `plain`) renders arbiter's node-local `raft.snapshot_body` as the last key of the voters' `raft:` block, only when set, enters the voters' config checksum only when set, and is refused with any other value and on the legacy profile. (2) **The consensus rules:** `monitoring.stage3Consensus.{enabled, heldCleanupAgeWarnSeconds, runbookURL}` renders the rule group `<fullname>.arbiter-stage3` with the eight alerts of contract §56, each pointing at the P5 runbook's `#11-operating-rules`, off by default and refused without `monitoring.enabled`. (3) **The P5 image constants:** `DEVNET2_STAGE3_P5_ARBITER_DIGEST`, `DEVNET2_STAGE3_P5_SOURCE_IMAGE` (listed in every image set a devnet2 host or member key needs, so Task 82's commits stay green), `STAGE3_P5_HOST_IMAGES`, `DEVNET2_SNAPSHOT_BODY`, `DEVNET2_STAGE3_CONSENSUS_MONITORING`, and the tests that hold Task 82's order (arbiter pin, hosts b, c, a, their si-members, then the rules). (4) **The rehearsal Pod example** `docs/examples/storage-integrity-p5-rehearsal-pod.yaml`, which mounts nothing but an emptyDir and reads only the voters' authority key. (5) The chart workflow's paths gain the P5 runbook and the example. Merging the PR syncs and applies nothing: every release renders byte-identically to `origin/main` (Steps 3, 5, 8 and 11).
+
+**Phase and source custody.** New worktrees follow the executing host: this Codex procedure uses `codex` and persists URWT's JSON `path` exactly, including its absolute symlink spelling. D34's fixed historical Claude ledger-copy ref is unchanged. Stop on a reused worktree, missing approval, missing/mismatched source, failed read/check, signing cancellation, test failure, ambiguous completion or source drift. Never manufacture missing END/release values, stub an unavailable API, enable monitoring to fit a test, change grants or resize voters here. Preserve current C1 backupUser/member separation, C3 reader metadata/SHOW COLUMNS, C4 ownerAudit/replica-read/uint64 guards, actual indexer-c host6/CHI3, keep-free100GiB/memberPVC10GiB and monitoring=false provenance. The P4 hardening and restore grants remain phase-sensitive: optional old whole-corpus reruns are unsupported across phases; mandatory P4 paths do not reach that corpus. Formal execution requires the actual phase-specific full500/CH/deployed-image/source/release/END evidence required by the owning procedures; local fixture proof does not substitute for it.
+
+**Future execution environment.** Save each Bash fence as a script and run `bash <file>` (Bash3.2 or newer); do not paste it into fish/zsh. Repository/runbook Bash heredocs remain Bash. Commands handed to the user are fish. Write the following complete local tools with the Write tool under a fresh mode700 `$HOME/.cache/s3e4-task80` session directory before Step1. If that directory already holds evidence from an attempt, stop and inspect it; never overwrite/resume its receipts silently. No tool is committed.
+
+`$HOME/.cache/s3e4-task80/task80-common.sh`:
+
+```bash
+# Local execution helper; source only from Task80's retained session directory.
+task80_stop() { printf '%s\n' "task80: $*; stop" >&2; return 1; }
+task80_require_worktree() {
+  local root="$1" expected actual branch common original
+  [ "$root" = "$(cat "$T/worktree-path.txt")" ] || { task80_stop 'worktree path changed'; return 1; }
+  case "$root" in /*) ;; *) task80_stop 'worktree path must be absolute'; return 1 ;; esac
+  branch="$(git -C "$root" branch --show-current)" || return 1
+  [ "$branch" = urwt/codex/multi-source-s3e4 ] || { task80_stop 'wrong branch'; return 1; }
+  common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  original="$(git -C /Users/uranuswch/Dev/projects/sentio-network/production rev-parse --path-format=absolute --git-common-dir)" || return 1
+  [ "$common" = "$original" ] || { task80_stop 'wrong repository'; return 1; }
+  expected="$(cat "$T/current-head.txt")" || return 1
+  actual="$(git -C "$root" rev-parse HEAD)" || return 1
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] && [ "$expected" = "$actual" ] || { task80_stop 'retained HEAD mismatch'; return 1; }
+}
+task80_commit() {
+  local root="$1" before after identity message status
+  shift
+  task80_require_worktree "$root" || return 1
+  e4_git_read_070="$(git -C "$root" config --get user.name)" || return 1
+  [ "${e4_git_read_070}" = poetry ] || return 1
+  e4_git_read_071="$(git -C "$root" config --get user.email)" || return 1
+  [ "${e4_git_read_071}" = chen@sentio.xyz ] || return 1
+  e4_git_read_072="$(git -C "$root" config --get commit.gpgsign)" || return 1
+  [ "${e4_git_read_072}" = true ] || return 1
+  before="$(git -C "$root" rev-parse HEAD)" || return 1
+  if ! git -C "$root" commit -S "$@"; then
+    task80_stop 'signing/commit failed: unlock the actual repository signing key in your own terminal; never disable signing or publish an unsigned fallback'
+    return 1
+  fi
+  after="$(git -C "$root" rev-parse HEAD)" || return 1
+  [[ "$after" =~ ^[0-9a-f]{40}$ ]] && [ "$after" != "$before" ] || { task80_stop 'commit did not create a new HEAD'; return 1; }
+  identity="$(git -C "$root" log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { task80_stop 'primary author or signature'; return 1; }
+  git -C "$root" verify-commit "$after" || return 1
+  message="$(git -C "$root" log -1 --format=%B)" || return 1
+  printf '%s\n' "$message" | python3 -I -c 'import re,sys; s=sys.stdin.read(); a=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",s); sys.exit(0 if a == ["Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"] else 1)' || { task80_stop 'unexpected coauthor trailer'; return 1; }
+  status="$(git -C "$root" status --porcelain)" || return 1
+  [ -z "$status" ] || { task80_stop 'commit left a dirty tree'; return 1; }
+  printf '%s\n' "$after" > "$T/current-head.txt.new" || return 1
+  mv "$T/current-head.txt.new" "$T/current-head.txt" || return 1
+  printf '%s\n' "$identity"
+}
+```
+
+`$HOME/.cache/s3e4-task80/task80-receipt.py`:
+
+```python
+"""Task80 retained source/evidence custody. This is local provenance, never live acceptance."""
+import hashlib
+import datetime
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+TOKENS = ("ARBITER_TAG_P5", "ARBITER_DIGEST_P5", "SN_COMMIT_P5", "SN_DIGEST_P5", "HG_TAG_P5", "CORE_TAG_P5")
+PATTERNS = {name: (r"sha256:[0-9a-f]{64}" if "DIGEST" in name else r"[0-9a-f]{40}" if "COMMIT" in name else r"v[0-9]+\.[0-9]+\.[0-9]+") for name in TOKENS}
+FORBIDDEN = {"k8s-sea/clickhouse/clickhouse.yaml", "k8s-sea/clickhouse/clickhouse-extra.yaml"}
+FILES = (
+    "charts/storage-integrity/values.yaml", "charts/storage-integrity/values.schema.json",
+    "charts/storage-integrity/templates/arbiter.yaml", "charts/storage-integrity/templates/_helpers.tpl",
+    "charts/storage-integrity/templates/validate.yaml", "charts/storage-integrity/templates/monitoring.yaml",
+    "charts/storage-integrity/tests/test_render.py", ".github/workflows/storage-integrity-chart.yml",
+    "docs/examples/storage-integrity-p5-rehearsal-pod.yaml",
+)
+
+def require(ok, reason):
+    if not ok:
+        raise ValueError("task80 custody: " + reason + "; stop")
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def regular(path):
+    require(not path.is_symlink() and path.is_file(), "missing or symlinked evidence")
+    return path
+
+def ledger(path):
+    data = {}
+    for line in regular(path).read_text().splitlines():
+        key, sep, value = line.partition("=")
+        require(sep and key in PATTERNS and key not in data, "unexpected ledger row")
+        require(re.fullmatch(PATTERNS[key], value) is not None, "malformed ledger value")
+        data[key] = value
+    require(set(data) == set(TOKENS), "incomplete ledger")
+    return data
+
+def source(root):
+    hashes = {}
+    for name in FILES:
+        require(name not in FORBIDDEN and not Path(name).is_absolute() and ".." not in Path(name).parts, "unsafe source name")
+        path = root / name
+        require(all(not (root / Path(*Path(name).parts[:i])).is_symlink() for i in range(1, len(Path(name).parts) + 1)), "source symlink")
+        hashes[name] = digest(regular(path))
+    return hashes
+
+def git(root, *args):
+    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+
+def begin(root, session):
+    head = regular(session / "current-head.txt").read_text().strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", head) and head == git(root, "rev-parse", "HEAD"), "verification start head")
+    for name in ("rollout-bites.log", "rollout-forward.log", "final-tests.log", "lint-legacy.log", "lint-fresh.log", "lint-noauthority.log", "lint-stage3.log", "final-inertness.log", "task80-receipt.json", "verification-input.json"):
+        require(not (session / name).exists() and not (session / name).is_symlink(), "prior verification evidence exists")
+    data = {"head": head, "source": source(root), "ledger_sha256": digest(regular(session / "ledger.env"))}
+    with (session / "verification-input.json").open("x") as out:
+        out.write(json.dumps(data, indent=2) + "\n")
+
+def receipt(root, session):
+    require(str(root) == regular(session / "worktree-path.txt").read_text().strip(), "actual JSON path mismatch")
+    meta = json.loads(regular(session / "urwt.json").read_text())
+    require(meta.get("action") == "created" and type(meta.get("path")) is str and meta["path"] == str(root), "URWT JSON mismatch")
+    base = regular(session / "base-head.txt").read_text().strip()
+    head = regular(session / "current-head.txt").read_text().strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", base) and re.fullmatch(r"[0-9a-f]{40}", head), "invalid pinned SHA")
+    require(head == git(root, "rev-parse", "HEAD") and head != base, "wrong head")
+    require(git(root, "branch", "--show-current") == "urwt/codex/multi-source-s3e4", "wrong branch")
+    require(not git(root, "status", "--porcelain"), "dirty tree")
+    merge = regular(session / "p4-merge.txt").read_text().strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", merge), "P4 merge SHA")
+    git(root, "merge-base", "--is-ancestor", merge, base)
+    end = regular(session / "p4-end.env").read_text()
+    matched = re.fullmatch(r"P4_END=(\d{4}-\d{2}-\d{2})\n?", end)
+    require(matched is not None, "P4 exit row")
+    datetime.date.fromisoformat(matched[1])
+    inputs = json.loads(regular(session / "verification-input.json").read_text())
+    require(inputs == {"head": head, "source": source(root), "ledger_sha256": digest(regular(session / "ledger.env"))}, "verification input drift")
+    commits = git(root, "log", "--format=%H", base + ".." + head).splitlines()
+    require(len(commits) == 4 and len(set(commits)) == 4, "expected four task commits")
+    for commit in commits:
+        require(git(root, "show", "-s", "--format=%an <%ae> %G?", commit) == "poetry <chen@sentio.xyz> G", "commit identity/signature")
+        git(root, "verify-commit", commit)
+        trailers = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", git(root, "show", "-s", "--format=%B", commit))
+        require(trailers == ["Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"], "commit trailer")
+    require(set(git(root, "diff", "--name-only", base, head).splitlines()) == set(FILES), "unexpected changed paths")
+    values = ledger(session / "ledger.env")
+    logs = {}
+    for name in ("final-tests.log", "lint-legacy.log", "lint-fresh.log", "lint-noauthority.log", "lint-stage3.log", "final-inertness.log", "rollout-bites.log", "rollout-forward.log"):
+        path = regular(session / name)
+        text = path.read_text()
+        if name == "final-tests.log":
+            require(re.search(r"^Ran [1-9][0-9]* tests? in [0-9.]+s$", text, re.M) and re.search(r"^OK$", text, re.M), "full suite result")
+            require(not re.search(r"(?i)skip|FAILED|ERROR:|FAIL:", text), "skipped or failed suite")
+        elif name.startswith("lint-"):
+            require("1 chart(s) linted, 0 chart(s) failed" in text, "lint result")
+        elif name == "final-inertness.log":
+            expected = {"storage-integrity-si-v2", "sentio-node-devnet2-indexer-a", "sentio-node-devnet2-indexer-b", "sentio-node-devnet2-indexer-c", "sentio-node-devnet2-observer", "sentio-node-testnet-v2-indexer-a", "sentio-node-testnet-v2-indexer-b", "sentio-node-observer"}
+            rows = text.splitlines()
+            require(len(rows) == 8 and set(rows) == {x + " identical" for x in expected}, "direct Helm complete release set")
+        elif name == "rollout-forward.log":
+            labels = re.findall(r"^(V|H-b|H-c|H-a|M-b|M-c|M-a|MON|PLAIN|UNPLAIN): OK \([1-9][0-9]* tests\)$", text, re.M)
+            require(labels == ["V", "H-b", "H-c", "H-a", "M-b", "M-c", "M-a", "MON", "PLAIN", "UNPLAIN"] and "FAILED" not in text, "rollout states")
+        else:
+            expected = [
+                ("V", "a host moves to the P5 build only after the arbiter pin (runbook §4)"),
+                ("H-b", "the hosts move to the P5 build in the order b, c, a (runbook §5)"),
+                ("H-c", "an si-member moves to the P5 build only after every host (runbook §5.4)"),
+                ("M-b", "the si-members move to the P5 build in the order b, c, a (runbook §5.4)"),
+                ("M-a", "the stage-3 rules come after every host and si-member (runbook §8)"),
+                ("V", "the stage-3 rules need the stage-3 arbiter pin"),
+                ("V", "arbiter.raft.snapshotBody needs the stage-3 arbiter pin"),
+                ("H-b", "its source-image file and its mirror move together"),
+                ("MON", "'plain' != None"), ("H-b", "True is not False"),
+            ]
+            require(text.splitlines() == [f"refused: before {state}, {message}" for state, message in expected], "negative rollout results")
+        logs[name] = digest(path)
+    hashes = source(root)
+    payload = {"task": 80, "head": head, "base": base, "path": str(root), "ledger_sha256": digest(session / "ledger.env"), "ledger_names": sorted(values), "p4_merge": merge, "p4_end_sha256": digest(session / "p4-end.env"), "verification_input_sha256": digest(session / "verification-input.json"), "source": hashes, "logs": logs, "live_acceptance": False, "canonical_wrapper_executed": False}
+    for name, content in (("task80-head.txt", head + "\n"), ("task80-source.sha256", "".join(f"{value}  {key}\n" for key, value in sorted(hashes.items()))), ("task80-receipt.json", json.dumps(payload, indent=2) + "\n")):
+        with (session / name).open("x") as out:
+            out.write(content)
+    print("task80 source and local evidence retained; no live acceptance")
+
+if __name__ == "__main__":
+    if sys.argv[1] == "ledger":
+        ledger(Path(sys.argv[2]))
+        print("ledger values well-formed")
+    elif sys.argv[1] == "receipt":
+        receipt(Path(sys.argv[2]), Path(sys.argv[3]))
+    elif sys.argv[1] == "begin":
+        begin(Path(sys.argv[2]), Path(sys.argv[3]))
+    else:
+        raise SystemExit("unknown custody action; stop")
+```
+
+`$HOME/.cache/s3e4-task80/local-render.py` (the complete previously audited direct-Helm equivalent; do not execute `render-inertness.sh` or any Helmfile subcommand). The source below is retained byte-for-byte from FINAL53. For formal execution, run it against the actual pinned P5 branch. Exact ordered values, chart/release/namespace/set-file inputs, all eight existing releases, new-release refusal and byte/object identity are preserved. Its archive excludes both protected filenames before any content access. No canonical-wrapper/live-tail proof is claimed.
+
+```python
+#!/usr/bin/env python3
+"""Local direct-Helm rendering only; deployment context/order options are not used."""
+import argparse,hashlib,json,os,re,subprocess,tempfile
+from pathlib import Path
+import yaml
+class UniqueLoader(yaml.SafeLoader):
+    pass
+def unique_mapping(loader,node,deep=False):
+    result={}
+    for key_node,value_node in node.value:
+        key=loader.construct_object(key_node,deep=deep)
+        if key in result:raise ValueError('duplicate YAML key')
+        result[key]=loader.construct_object(value_node,deep=deep)
+    return result
+UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,unique_mapping)
+FORBIDDEN={'k8s-sea/clickhouse/clickhouse.yaml','k8s-sea/clickhouse/clickhouse-extra.yaml'}
+def require(ok):
+    if not ok: raise ValueError('unsupported or unsafe local render input; details withheld')
+def plain(x):
+    if isinstance(x,str):require('{{' not in x and '}}' not in x and '\x00' not in x)
+    elif isinstance(x,dict):
+        for k,v in x.items():plain(k);plain(v)
+    elif isinstance(x,list):
+        for v in x:plain(v)
+    else:require(x is None or isinstance(x,(int,float,bool)))
+def checked(root,parent,value,folder=False):
+    require(isinstance(value,str) and not Path(value).is_absolute());plain(value)
+    p=(parent/value).resolve(); require(p.is_relative_to(root));require(str(p.relative_to(root)) not in FORBIDDEN)
+    require(p.is_dir() if folder else p.is_file());return p
+def load(root,file,name):
+    root=Path(root).resolve();path=checked(root,root,file)
+    raw=path.read_text();plain(raw);doc=yaml.load(raw,Loader=UniqueLoader)
+    require(isinstance(doc,dict) and not set(doc)-{'helmDefaults','releases'})
+    defaults=doc.get('helmDefaults',{});require(isinstance(defaults,dict) and not set(defaults)-{'kubeContext','createNamespace'})
+    require(defaults.get('kubeContext','sentio-sea')=='sentio-sea' and defaults.get('createNamespace',False) is False)
+    require(isinstance(doc.get('releases'),list));rows=[r for r in doc['releases'] if isinstance(r,dict) and r.get('name')==name]
+    if not rows:return None
+    require(len(rows)==1);row=rows[0];require(not set(row)-{'name','namespace','chart','needs','set','values','wait','timeout'})
+    require(re.fullmatch('[a-z0-9][a-z0-9-]*',name) is not None);require(isinstance(row.get('namespace'),str));plain(row)
+    require(isinstance(row.get('needs',[]),list) and all(isinstance(s,str) for s in row.get('needs',[])))
+    require(isinstance(row.get('wait',False),bool));require(type(row.get('timeout',1)) is int)
+    chart=checked(root,path.parent,row['chart'],True)
+    require(str(chart.relative_to(root)) in {'charts/storage-integrity','charts/sentio-node'})
+    require(isinstance(row.get('values',[]),list) and isinstance(row.get('set',[]),list))
+    vals=[]
+    for v in row.get('values',[]):
+        if isinstance(v,str):vals.append(('file',checked(root,path.parent,v)))
+        else:
+            require(isinstance(v,dict) and set(v)=={'nodeSelector'} and isinstance(v['nodeSelector'],dict))
+            require(all(isinstance(k,str) and isinstance(s,str) for k,s in v['nodeSelector'].items())); vals.append(('inline',v))
+    sets=[]
+    for v in row.get('set',[]):
+        require(isinstance(v,dict) and set(v)=={'name','file'} and v['name']=='service.chainsConfig')
+        sets.append((v['name'],checked(root,path.parent,v['file'])))
+    require(len(sets)<=1)
+    return root,path,row,chart,vals,sets
+
+def render(tree,file,release,output):
+    data=load(tree,file,release)
+    if data is None:raise LookupError('selected release absent')
+    root,path,row,chart,vals,sets=data
+    out=Path(output);out.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='direct-helm-inline-') as td:
+        args=['helm','template',release,str(chart),'--namespace',row['namespace']]
+        for i,(kind,value) in enumerate(vals):
+            if kind=='inline':
+                value_path=Path(td)/f'inline-{i}.yaml';value_path.write_text(yaml.safe_dump(value));value_path.chmod(0o600)
+            else:value_path=value
+            args+=['-f',str(value_path)]
+        for name,p in sets:args+=['--set-file',name+'='+str(p)]
+        run=subprocess.run(args,cwd=path.parent,capture_output=True,timeout=120)
+        require(run.returncode==0 and bool(run.stdout.strip()))
+        objects=list(yaml.safe_load_all(run.stdout));require(objects and all(isinstance(x,dict) and x.get('apiVersion') and x.get('kind') and isinstance(x.get('metadata'),dict) and x['metadata'].get('name') for x in objects))
+        keys=[(x['apiVersion'],x['kind'],x['metadata'].get('namespace',''),x['metadata']['name']) for x in objects];require(len(keys)==len(set(keys)))
+        out.write_bytes(run.stdout);out.chmod(0o600)
+        meta={'release':release,'namespace':row['namespace'],'helmfile':file,'chart':str(chart.relative_to(root)),'ordered_values':[str(v.relative_to(root)) if k=='file' else {'inline_keys':sorted(v)} for k,v in vals], 'set_file_names':[k for k,v in sets], 'ignored_operational_fields':sorted(set(row)&{'needs','wait','timeout'}),'ignored_defaults':sorted(load_defaults(path)), 'sha256':hashlib.sha256(run.stdout).hexdigest(),'objects':len(keys),'object_keys_sha256':hashlib.sha256(json.dumps(sorted(keys)).encode()).hexdigest()}
+        out.with_suffix(out.suffix+'.meta.json').write_text(json.dumps(meta,indent=2)+'\n')
+        return meta
+
+def load_defaults(path):return yaml.load(path.read_text(),Loader=UniqueLoader).get('helmDefaults',{})
+
+def compare(base_tree,head_tree,entries,new_releases,output_dir):
+    """Compare exact bytes and resource identities; permit only genuinely new named releases."""
+    names=[n for f,n in entries];require(len(names)==len(set(names)))
+    require(len(new_releases)==len(set(new_releases)) and set(new_releases)<=set(names))
+    results=[]
+    for file,name in entries:
+        require(load(head_tree,file,name)is not None)
+        head=render(head_tree,file,name,Path(output_dir)/('head-'+name+'.yaml'))
+        absent=load(base_tree,file,name)is None
+        if absent:
+            require(name in new_releases);results.append({'release':name,'status':'new','head':head});continue
+        require(name not in new_releases)
+        base=render(base_tree,file,name,Path(output_dir)/('base-'+name+'.yaml'))
+        require(base['sha256']==head['sha256'] and base['object_keys_sha256']==head['object_keys_sha256'])
+        results.append({'release':name,'status':'identical','base':base,'head':head})
+    return results
+
+ENTRIES=[
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","storage-integrity-si-v2"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-a"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-b"),
+ ("k8s-sea/sentio-network-devnet2/helmfile.yaml","sentio-node-devnet2-observer"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-a"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-testnet-v2-indexer-b"),
+ ("k8s-sea/sentio-network-testnet-v2/helmfile.yaml","sentio-node-observer"),
+ ("k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml","sentio-node-devnet2-indexer-c"),
+]
+def export_base(tree,ref,destination):
+    import tarfile
+    tree=Path(tree).resolve()
+    # Ref and filename metadata are validated before archive reads any content.
+    require(isinstance(ref,str) and bool(ref) and not ref.startswith("-") and "\x00" not in ref)
+    sha=subprocess.check_output(["git","-C",str(tree),"rev-parse","--verify",ref+"^{commit}"],text=True).strip()
+    require(re.fullmatch("[0-9a-f]{40}",sha)is not None)
+    names=subprocess.check_output(["git","-C",str(tree),"ls-tree","-rz","--name-only",sha],text=True).split("\x00")
+    # The two credential-bearing files are excluded at the archive argument layer.
+    args=["git","-C",str(tree),"archive",sha,"--",".",*[(":(exclude)"+n) for n in sorted(FORBIDDEN)]]
+    process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    try:
+        with tarfile.open(fileobj=process.stdout,mode="r|") as archive:
+            for member in archive:
+                require(member.name not in FORBIDDEN)
+                p=(Path(destination)/member.name).resolve();require(p.is_relative_to(Path(destination).resolve()))
+                # Deployment inputs must be regular files; never follow source symlinks.
+                if member.isdir() or member.isfile():archive.extract(member,destination)
+                else:require(member.issym())
+        require(process.wait(timeout=30)==0)
+    except Exception:
+        process.kill();process.wait();raise
+    require(all(not(Path(destination)/n).exists() for n in FORBIDDEN))
+    return sha
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument("action",choices=["compare","diff"])
+    parser.add_argument("--tree",required=True);parser.add_argument("--base-ref",required=True);parser.add_argument("--release")
+    args=parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="si-p3-direct-render-") as td:
+        base=Path(td)/"base";base.mkdir();export_base(args.tree,args.base_ref,base)
+        out=Path(td)/"renders"
+        if args.action=="compare":
+            require(args.release is None)
+            results=compare(base,args.tree,ENTRIES,[],out)
+            for result in results:print(result["release"]+" identical")
+        else:
+            entries=[(file,name)for file,name in ENTRIES if name==args.release];require(len(entries)==1)
+            file,name=entries[0];a=out/"base.yaml";b=out/"head.yaml"
+            render(base,file,name,a);render(args.tree,file,name,b)
+            def objects(p):
+                return {(x["kind"],x["metadata"]["name"]):x for x in yaml.safe_load_all(p.read_text())}
+            before,after=objects(a),objects(b)
+            for key in sorted(set(before)|set(after)):
+                if before.get(key)!=after.get(key):print("changed "+"/".join(key))
+if __name__=="__main__":
+    try:main()
+    except Exception:raise SystemExit("direct-render: unsupported grammar, missing input or local render failure; details withheld; stop")
+```
+
+
+Contract §56 (the production chart, binding) and §57 (the runbook section titles and the live commits these tests hold to); spec §10.3 (the plain-body fallback, the operational writer setting, the rehearsal), §13.2, §15 (production: alert rules for floor, copies and encoding fallback), §16 row P5; clarifications K78 (the floor signals), K81 (the rehearsal) and K82 (vi) (the voter budget is re-checked by the runbook, so the voter sizing stays pinned); decisions D34 (the ledger copy) and D37 (the one rehearsal directory, which this task does not touch). At future execution this task puts every chart, test and example change of P5 on branch `urwt/codex/multi-source-s3e4` (production worktree `multi-source-s3e4`); Task 81 adds the P5 runbook `docs/storage-integrity-devnet2-stage3-p5-v21.md` to the same branch and opens `P5_PR`. (1) **The writer value:** `arbiter.raft.snapshotBody` (unset by default; `auto` or `plain`) renders arbiter's node-local `raft.snapshot_body` as the last key of the voters' `raft:` block, only when set, enters the voters' config checksum only when set, and is refused with any other value and on the legacy profile. (2) **The consensus rules:** `monitoring.stage3Consensus.{enabled, heldCleanupAgeWarnSeconds, runbookURL}` renders the rule group `<fullname>.arbiter-stage3` with the eight alerts of contract §56, each pointing at the P5 runbook's `#11-operating-rules`, off by default and refused without `monitoring.enabled`. (3) **The P5 image constants:** `DEVNET2_STAGE3_P5_ARBITER_DIGEST`, `DEVNET2_STAGE3_P5_SOURCE_IMAGE` (listed in every image set a devnet2 host or member key needs, so Task 82's commits stay green), `STAGE3_P5_HOST_IMAGES`, `DEVNET2_SNAPSHOT_BODY`, `DEVNET2_STAGE3_CONSENSUS_MONITORING`, and the tests that hold Task 82's order (arbiter pin, hosts b, c, a, their si-members, then the rules). (4) **The rehearsal Pod example** `docs/examples/storage-integrity-p5-rehearsal-pod.yaml`, which mounts nothing but an emptyDir and reads only the voters' authority key. (5) The chart workflow's paths gain the P5 runbook and the example. Merging the PR syncs and applies nothing: every release renders byte-identically to `origin/main` (Steps 3, 5, 8 and 11).
 
 **Files** (anchors: production `origin/main` once Plan S3-D's `P4_PR` has merged, i.e. `75514e3de` (SI paths byte-identical to Plan S3-B's base `9d3d0326b`) with the hunks of Plans S3-B, S3-C1, S3-C3, S3-C4 and S3-D applied, as rebuilt while drafting; line numbers in parentheses are those of that rebuild and are guidance only; the quoted text is the anchor, and a hunk that meets an earlier plan's edit of the same lines applies its intent on top of it, the hunk rule of the Global Constraints):
 - Create: `docs/examples/storage-integrity-p5-rehearsal-pod.yaml`
-- Modify: `charts/storage-integrity/values.yaml` (`arbiter.raft` after the `tableRegistry` block's `    audit:` / `      enabled: false`, before the arbiter's `  storageClassName: local-path` `:292`; `monitoring.stage3Consensus` before the monitoring block's `  clickhouse:` and its comment `# ClickHouseInstallation names (label clickhouse_altinity_com_chi of the` `:398`)
+- Modify: `charts/storage-integrity/values.yaml` (`arbiter.raft` after the `tableRegistry` block's `    audit:` / `      enabled: false`, before the arbiter's `  storageClassName: local-path` `:292`; `monitoring.stage3Consensus` before the monitoring block's top-level `  runbookURL:` after replicaReads (not the earlier clickhouse block); its clickhouse comment is `# ClickHouseInstallation names (label clickhouse_altinity_com_chi of the` `:398`)
 - Modify: `charts/storage-integrity/values.schema.json` (`arbiter.required` `:19` and `arbiter.properties.raft`; `monitoring.required` `:225` and `monitoring.properties.stage3Consensus` before `        "hosts": {` `:259`)
 - Modify: `charts/storage-integrity/templates/arbiter.yaml` (the `raft:` block of `arbiter.yaml.tmpl`, after `      trailing_logs: 10240` `:35`)
 - Modify: `charts/storage-integrity/templates/_helpers.tpl` (`storage-integrity.arbiterConfigChecksum`, after the `tableRegistry` clause `:64-66`)
@@ -15236,7 +16892,7 @@ Contract §56 (the production chart, binding) and §57 (the runbook section titl
 - Produces (this task's names, recorded in Appendix B): `STAGE3_P5_RUNBOOK`, `STAGE3_P5_RUNBOOK_SECTIONS` (contract §57's twelve titles), `SnapshotBodyTest.RAFT_KEYS`, `Stage3ConsensusMonitoringTest.{RUNBOOK_URL, stage3, expected}`; the checksum key `raftSnapshotBody`; `DEVNET2_STAGE3_P5_SOURCE_IMAGE` in `REPLICA_READ_HOST_IMAGES` and `MEMBER_IMAGES` as well; the local tools `fill.py` and `rollout.py`.
 
 Notes:
-- **Inert on merge.** `arbiter.raft.snapshotBody` defaults to the empty string, which renders nothing and enters no checksum; `monitoring.stage3Consensus.enabled` defaults to false, and the group renders only with `monitoring.enabled` too; the image constants and the Pod example are read by tests only. Steps 3, 5, 8 and 11 prove with `render-inertness.sh` that every release renders byte-identically to `origin/main`, and merging syncs or applies nothing (no GitOps on sea, validation-only workflows). The live changes are Task 82's single-service commits, each confirmed in chat.
+- **Inert on merge.** `arbiter.raft.snapshotBody` defaults to the empty string, which renders nothing and enters no checksum; `monitoring.stage3Consensus.enabled` defaults to false, and the group renders only with `monitoring.enabled` too; the image constants and the Pod example are read by tests only. Steps 3, 5, 8 and 11 must prove with the audited direct-Helm tool that every release renders byte-identically to `origin/main`, and merging syncs or applies nothing (no GitOps on sea, validation-only workflows). The live changes are Task 82's single-service commits, each confirmed in chat.
 - **No remote or live action without confirmation.** Step 1 fetches production and housegate and reads GitHub; Step 6 fetches housegate, arbiter and sentio-node and reads the registry: each of those blocks needs explicit user confirmation in chat before it runs. This task pushes nothing, opens no PR and runs no `helmfile sync`, `kubectl` or registry write; Task 81 pushes the branch and opens `P5_PR`, each confirmed.
 - **Ledger values** enter `test_render.py` and the Pod example only through Step 6's `fill.py`, from the `ledger.env` that `s3-ledger.py get` writes; a value that is not recorded stops Step 6, and every token the tool fills is checked gone afterwards.
 - **Why the rules look like this.** As Plan S3-B's arbiter groups: every expression selects `network="<network>"` (the chart's own scrape adds it; the cluster's pod-annotation scrape of the voters has none), no expression selects `job`, every `by()` keeps `cluster` and `network`, and every alert carries `network` as a rule label for the Grafana delivery rule. The counters are read as `increase(...) > 0` over the windows of contract §56 and the gauges as `max(...)`, each inside `max by (cluster, network, …)` so a series of each voter collapses into one alert. `ArbiterSnapshotEncodingFallback` keeps `pod`: the writer setting and the fallback are node-local, so the alert names the voter that fell back. `ArbiterUnderReplicatedCleanups` keeps `reason` and `ArbiterMemberLagging` keeps `owner`. The leader-local series are 0 on a follower, so `max` reads the leader's value. Every `runbook_url` is `<monitoring.stage3Consensus.runbookURL>#11-operating-rules`; the group stays out of `MONITORING_GROUP_RUNBOOKS`, whose test renders only the members group, and `test_stage3_consensus_rules_read_only_this_networks_series` checks the anchor against `STAGE3_P5_RUNBOOK_SECTIONS` and, once Task 81 has written the runbook, against its `## ` headings.
@@ -15245,38 +16901,58 @@ Notes:
 - **The P5 image in four sets.** Contract §56 names `WRITER_AUTHORIZATION_IMAGES` and `STAGE3_HOST_IMAGES`. Task 82's host and si-member commits also need `REPLICA_READ_HOST_IMAGES` (Plan S3-C4's tests require a host with `replicaReads` and a member with a serving endpoint to run one of them, and `REPLICA_READ_HOST_IMAGES <= STAGE3_HOST_IMAGES & MEMBER_IMAGES & WRITER_AUTHORIZATION_IMAGES`) and `MEMBER_IMAGES` (Plan S3-C3's `siMember.image` check), so the P5 image joins those two as well; `test_stage3_p5_host_images_are_reviewed` requires all four and keeps it out of `STAGE3_BACKUP_IMAGES`. `REBUILD_SAFE_IMAGES` stays the P4 image alone (Plan S3-D pins it, and no host runs `rebuildSafe` in P5).
 - **The rehearsal Pod.** It follows the anchor-bootstrap Job's pattern (`storage-integrity-si-v2-anchor-bootstrap.yaml`): the public `ghcr.io/sentioxyz/arbiter` image by digest without `imagePullSecrets`, `automountServiceAccountToken: false`, `restartPolicy: Never`, the key only through `secretKeyRef`. It runs on the SI node pool (`nodeSelector` equal to devnet2's), requests the voters' whole memory limit so node pressure cannot evict it below the limit it measures under, and keeps the image's tools (`sleep` holds the container while the runbook execs the binary it copies in). The exact spec equality of `test_p5_rehearsal_pod_mounts_only_the_authority_secret` is the "no other volume, port or Secret" rule of contract §56.
 - **The tests hold through the rollout.** Task 82 moves, one single-service commit each: the arbiter pin (`arbiter.image.digest` with `DEVNET2_ARBITER_DIGEST`), each host b, c, a (its source-image file with `INDEXER_B_SOURCE_IMAGE`, `INDEXER_C_SOURCE_IMAGE` or `FRESH_SOURCE_IMAGE`, indexer-a's with `docs/examples/storage-integrity-fresh-source-image.yaml` too), each si-member b, c, a (`siMember.image`), the rules (`monitoring.stage3Consensus.enabled` with `DEVNET2_STAGE3_CONSENSUS_MONITORING`), and runbook §11's lever (`arbiter.raft.snapshotBody: plain` with `DEVNET2_SNAPSHOT_BODY`). Step 10 makes each of those commits on a local clone and runs the suite after each, and makes ten out-of-order or half-made changes that must fail; the reverts of runbook §10.1 walk the same states backwards.
-- **Verified while drafting (2026-10-16).** On a scratch production tree rebuilt from `origin/main` (`206c42357`, SI paths byte-identical to `9d3d0326b`) with stand-ins for Plans S3-B, S3-C1, S3-C3, S3-C4 and S3-D (their drafts applied as their tasks say, and their live commits up to the P4 host images and restore grants), with the key-bearing ClickHouse manifests removed, and with stand-in ledger values (`ARBITER_TAG_P5=v0.13.0`, digests and commits of repeated hex): `test_render.py` ran 224 tests OK at the base, 3 with 13 failures and 1 error after Step 2, 227 OK after Step 3, 6 with 3 failures and 3 errors after Step 4, 231 OK after Step 5, 5 with 1 failure and 1 error after Step 7 and 236 OK after Step 8; the three `helm lint --strict` profiles and a fourth with `monitoring.enabled`, `monitoring.stage3Consensus.enabled` and `arbiter.raft.snapshotBody=plain` passed; `render-inertness.sh` printed the eight `identical` lines after each commit; the 26 rendered rule expressions of the fresh values with both monitoring flags on parsed with the upstream PromQL parser (`github.com/prometheus/prometheus/promql/parser` v0.55.0) without an error; `actionlint` passed on the workflow; Step 10's rehearsal printed `OK` for all ten states (236 tests each) and `refused` for all ten bites; and a replay of Steps 2 to 9 from this task's text on a second clone of the base ended in the same tree. Every bash block of this task passes `bash -n`, `/bin/bash -n` (3.2), `zsh -n` and `shellcheck -S warning`. Not run: anything against GitHub, a registry or the cluster (Steps 1 and 6's remote reads), and `kubectl apply --dry-run=server` of the Pod (Task 82, runbook §3.2).
 - **Contract notes.** §56 lists the five `ActualFreshNetworkTest` tests and the two classes; this task adds no other test. `heldCleanupAgeWarnSeconds` is checked whenever it is given (also with the group off), and `values.schema.json` makes both new blocks required (`arbiter.raft`, `monitoring.stage3Consensus`), so a null override is refused instead of silently dropping the block. `STAGE3_P5_RUNBOOK_SECTIONS` restates contract §57's twelve titles for the anchor check; Task 81's runbook must use them verbatim.
 
 - [ ] **Step 1: Worktree and base checks**
 
-Requires: Plan S3-D's `P4_PR` merged into production `main` (Plan S3-D Task 54's record past its R4 check) and `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19; if it is missing, write it with the Write tool from the end of that section, verbatim). Plan S3-D Task 56 (the P4 live rollout) may still be committing to `main`; this task does not need `P4_END`, and Task 81 rebases the branch onto the then `origin/main` before it opens the PR. The commands are written for the Bash tool's shell (zsh) as well as bash; the Bash tool keeps no variables between calls, so every later block sets `W` (and `T`) itself.
+Requires: Plan S3-D's `P4_PR` merged into production `main` (Plan S3-D Task 54's record past its R4 check) and `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19; if it is missing, write it with the Write tool from the end of that section, verbatim). Plan S3-D Task 56 (the P4 live rollout) may still be committing to `main`; Steps1–9 can prepare inert code before `P4_END`; Step10 requires its actual record and a completed P4-exit source baseline. Task81 rebases the branch onto the then `origin/main` before it opens the PR. Every Bash fence runs from a saved script with explicit errexit/nounset/pipefail; the Bash tool keeps no variables between calls, so every later block sets `W` (and `T`) itself.
 
 This block fetches production (a remote read): it needs explicit user confirmation in chat before it runs.
 
 ```bash
+set -euo pipefail
 P=/Users/uranuswch/Dev/projects/sentio-network/production
-git -C "$P" fetch -q origin
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" claude multi-source-s3e4)"
-printf '%s\n' "$out"
-W="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { echo "the worktree is not new (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$W" status --porcelain | wc -l | tr -d ' '
-git -C "$W" branch --show-current
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] && echo "the branch starts at origin/main"
+T="$HOME/.cache/s3e4-task80"
+test -d "$T" && test ! -e "$T/urwt.json" || { echo "missing fresh session or prior attempt; stop" >&2; exit 1; }
+git -C "$P" fetch -q origin || exit 1
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3e4)" || exit 1
+printf '%s\n' "$out" > "$T/urwt.json"
+W="$(printf '%s\n' "$out" | jq -er 'select(.action == "created") | .path | select(type == "string" and startswith("/"))')" || { echo "URWT not newly created; stop" >&2; exit 1; }
+printf '%s\n' "$W" > "$T/worktree-path.txt"
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$status" ] || { echo "dirty new worktree; stop" >&2; exit 1; }
+base="$(git -C "$P" rev-parse origin/main)" || exit 1
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$base" ] || { echo "wrong base; stop" >&2; exit 1; }
+printf '%s\n' "$base" > "$T/base-head.txt"
+printf '%s\n' "$head" > "$T/current-head.txt"
+. "$T/task80-common.sh"
+task80_require_worktree "$W" || exit 1
+printf '%s\n' "$out" 'the branch starts at origin/main'
 ```
 
-Expected: one JSON object with `"action":"created"` and the path `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4`; `0`; `urwt/claude/multi-source-s3e4`; `the branch starts at origin/main`.
+Expected: a new URWT JSON object, its exact absolute path retained in worktree-path.txt, branch `urwt/codex/multi-source-s3e4`, and `the branch starts at origin/main`. No template path is assumed. Re-read that worktree's AGENTS.md/CLAUDE.md before editing. Hook-approval failure follows the URWT skill: stop for the user's own terminal approval; never bypass hooks, clobber or use an unsigned fallback.
 
 The P4 PR and the empty `P5_PR` row (remote reads: the housegate fetch and GitHub; explicit user confirmation in chat):
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
 git -C "$h" fetch -q origin
 pr="$(python3 -I "$L/s3-ledger.py" get "$h" P4_PR | sed -n 's/^P4_PR=//p')"
 [[ "$pr" =~ ^[0-9]+$ ]] || { echo "P4_PR is not recorded on the ledger copy: stop"; exit 1; }
-merge="$(gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
-[ -n "$merge" ] && git -C "$W" merge-base --is-ancestor "$merge" HEAD && echo "P4_PR #$pr is in the base"
+merge="$(gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')" || exit 1
+[[ "$merge" =~ ^[0-9a-f]{40}$ ]] || { echo "P4_PR not merged; stop" >&2; exit 1; }
+git -C "$W" merge-base --is-ancestor "$merge" HEAD || exit 1
+printf '%s\n' "$merge" > "$T/p4-merge.txt"
+echo "P4_PR #$pr is in the base"
 python3 -I "$L/s3-ledger.py" empty "$h" P5_PR
 ```
 
@@ -15285,8 +16961,13 @@ Expected: `P4_PR #<n> is in the base`, then `s3-ledger: P5_PR not recorded yet i
 The base (local only):
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3 || exit 1
 python3 -I -B - <<'PY'
 import sys
 from pathlib import Path
@@ -15303,8 +16984,14 @@ values = yaml.safe_load(Path("charts/storage-integrity/values.yaml").read_text()
 print("monitoring keys", sorted(values["monitoring"]))
 print("arbiter keys with raft", "raft" in values["arbiter"], "arbiter-stage3 group", "arbiter-stage3" in t.MONITORING_ALERTS)
 PY
-ls docs/examples/storage-integrity-p5-rehearsal-pod.yaml docs/storage-integrity-devnet2-stage3-p5-v21.md 2>&1 | sed 's/^ls: //'
-git grep -c "snapshotBody\|stage3Consensus" -- charts docs k8s-sea | wc -l | tr -d ' '
+for path in docs/examples/storage-integrity-p5-rehearsal-pod.yaml docs/storage-integrity-devnet2-stage3-p5-v21.md; do
+  [ ! -e "$path" ] || { echo "unexpected P5 file; stop" >&2; exit 1; }
+  printf '%s: No such file or directory\n' "$path"
+done
+matches=0
+git grep -q "snapshotBody\|stage3Consensus" -- charts docs 'k8s-*' ':!k8s-sea/clickhouse/clickhouse.yaml' ':!k8s-sea/clickhouse/clickhouse-extra.yaml' || matches=$?
+[ "$matches" -eq 1 ] || { echo "unexpected keys or failed inventory; stop" >&2; exit 1; }
+echo 0
 ```
 
 Expected: `Ran <N0> tests` and `OK` (write down `N0`, the count every later step adds to; 224 in the drafting rebuild); `P4 build in ['WRITER_AUTHORIZATION_IMAGES', 'STAGE3_HOST_IMAGES', 'REPLICA_READ_HOST_IMAGES', 'MEMBER_IMAGES', 'REBUILD_SAFE_IMAGES']`; `SI releases ['sentio-node-devnet2-indexer-a', 'sentio-node-devnet2-indexer-b', 'sentio-node-devnet2-indexer-c']`; `monitoring keys ['backups', 'clickhouse', 'enabled', 'hosts', 'interval', 'labels', 'members', 'network', 'replicaReads', 'runbookURL', 'scrapeTimeout', 'stateLimitBytes']`; `arbiter keys with raft False arbiter-stage3 group False`; `docs/examples/storage-integrity-p5-rehearsal-pod.yaml: No such file or directory` and `docs/storage-integrity-devnet2-stage3-p5-v21.md: No such file or directory`; `0`. Anything else: stop and ask (an earlier plan's state differs from the one this task's anchors assume).
@@ -15396,8 +17083,13 @@ class SnapshotBodyTest(unittest.TestCase):
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py SnapshotBodyTest 2>&1 | grep -E '^(FAIL|ERROR|Ran|FAILED|OK)|Error' | head -40
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -B charts/storage-integrity/tests/test_render.py SnapshotBodyTest 2>&1 | grep -E '^(FAIL|ERROR|Ran|FAILED|OK)|Error' | head -40 || exit 1
 ```
 
 Expected: `Ran 3 tests` and `FAILED (failures=13, errors=1)`, with these lines: `ERROR: test_unset_snapshot_body_renders_unchanged` (`KeyError: 'raft'`); ten `FAIL: test_snapshot_body_guard_fails_closed` lines, nine subtests (`body='Plain'`, `'PLAIN'`, `'interned'`, `'none'`, `' plain'`, `'auto,plain'`, `True`, `1`, `['plain']`) and one without a subtest, each with `AssertionError: 0 == 0 : {'arbiter': {'raft': {'snapshotBody': 'Plain'}}} rendered` and the like (the chart renders all of them today; the failure outside a subtest, `{'arbiter': {'raft': 'plain'}} rendered`, ends that test before its legacy subtests); and three `FAIL: test_snapshot_body_renders_only_when_set`, two subtests (`body='auto'`, `body='plain'`) with `AssertionError: Lists differ: [...'trailing_logs'] != [...'trailing_logs', 'snapshot_body']` and one with `AssertionError: 0 != 2`. Any other failing test: stop (the base is not what Step 1 checked).
@@ -15504,26 +17196,42 @@ runtime has no v21 writer.
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' charts/storage-integrity/values.schema.json && echo "schema parses"
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' charts/storage-integrity/values.schema.json && echo "schema parses" || exit 1
 python3 -B charts/storage-integrity/tests/test_render.py SnapshotBodyTest 2>&1 | tail -3
-T="$(mktemp -d)"
+O="$(mktemp -d "$T/overrides.XXXXXX")"
 for v in "arbiter: {raft: {snapshotBody: true}}" "arbiter: {raft: null}" "arbiter: {raft: {snapshotBody: Plain}}"; do
-  printf '%s\n' "$v" > "$T/o.yaml"
-  helm template s charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml -f "$T/o.yaml" --namespace storage-integrity-render-test 2>&1 | grep -E "^(Error|- at)" | sed 's/validate.yaml:[0-9]*:[0-9]*/validate.yaml/' | head -2
+  printf '%s\n' "$v" > "$O/o.yaml"
+  code=0
+  helm template s charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml -f "$O/o.yaml" --namespace storage-integrity-render-test > "$O/refused.log" 2>&1 || code=$?
+  [ "$code" -ne 0 ] || { echo "invalid Helm values rendered; stop" >&2; exit 1; }
+  grep -E "^(Error|- at)" "$O/refused.log" || exit 1
 done
-printf 'arbiter: {raft: {snapshotBody: plain}}\n' > "$T/o.yaml"
-helm template s charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml -f "$T/o.yaml" --namespace sentio-network-devnet2 2>&1 | grep "^Error" | sed 's/validate.yaml:[0-9]*:[0-9]*/validate.yaml/'
-rm -rf -- "$T"
+printf 'arbiter: {raft: {snapshotBody: plain}}\n' > "$O/o.yaml"
+code=0
+helm template s charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml -f "$O/o.yaml" --namespace sentio-network-devnet2 > "$O/legacy-refused.log" 2>&1 || code=$?
+[ "$code" -ne 0 ] || { echo "legacy writer override rendered; stop" >&2; exit 1; }
+grep -F "arbiter.raft.snapshotBody requires arbiter.protocol=pinned-genesis-v1" "$O/legacy-refused.log" || exit 1
+: "Keep this owned temporary directory for inspection; no automatic removal."
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
-bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
+python3 -I -B "$T/local-render.py" compare --tree "$W" --base-ref "$(cat "$T/base-head.txt")"
 ```
 
 Expected: `schema parses`; `Ran 3 tests` and `OK`; `Error: values don't meet the specifications of the schema(s) in the following chart(s):` with `- at '/arbiter/raft/snapshotBody': got boolean, want string`, the same first line with `- at '/arbiter': missing property 'raft'`, and `Error: execution error at (storage-integrity/templates/validate.yaml): arbiter.raft.snapshotBody must be auto or plain`; then `Error: execution error at (storage-integrity/templates/validate.yaml): arbiter.raft.snapshotBody requires arbiter.protocol=pinned-genesis-v1`; `Ran <N0+3> tests` and `OK`; the eight lines `storage-integrity-si-v2 identical`, `sentio-node-devnet2-indexer-a identical`, `sentio-node-devnet2-indexer-b identical`, `sentio-node-devnet2-observer identical`, `sentio-node-testnet-v2-indexer-a identical`, `sentio-node-testnet-v2-indexer-b identical`, `sentio-node-observer identical`, `sentio-node-devnet2-indexer-c identical`, and `exit 0`. A release that renders differently: the change is not inert; stop and find the hunk.
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/arbiter.yaml charts/storage-integrity/templates/_helpers.tpl charts/storage-integrity/templates/validate.yaml charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(storage-integrity): the voters' snapshot body writer value, unset
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/arbiter.yaml charts/storage-integrity/templates/_helpers.tpl charts/storage-integrity/templates/validate.yaml charts/storage-integrity/tests/test_render.py || exit 1
+task80_commit "$W" -m "feat(storage-integrity): the voters' snapshot body writer value, unset
 
 arbiter.raft.snapshotBody (empty by default) renders arbiter's
 node-local raft.snapshot_body as the last key of the voters' raft
@@ -15534,7 +17242,7 @@ enters the voters' config checksum, so each OnDelete voter takes it when
 it is replaced; the verifiers' checksum never moves. Any other value
 and the legacy profile are refused. Every release renders unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
 ```
 
 Expected: one commit, `6 files changed`.
@@ -15732,15 +17440,20 @@ class Stage3ConsensusMonitoringTest(unittest.TestCase):
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py Stage3ConsensusMonitoringTest MonitoringTest.test_default_renders_no_monitoring MonitoringTest.test_alert_names_are_the_reviewed_set 2>&1 | grep -E '^(FAIL|ERROR|Ran|FAILED|OK)|Error' | head -20
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -B charts/storage-integrity/tests/test_render.py Stage3ConsensusMonitoringTest MonitoringTest.test_default_renders_no_monitoring MonitoringTest.test_alert_names_are_the_reviewed_set 2>&1 | grep -E '^(FAIL|ERROR|Ran|FAILED|OK)|Error' | head -20 || exit 1
 ```
 
 Expected: `Ran 6 tests` and `FAILED (failures=3, errors=3)`, with these lines: `ERROR: test_stage3_consensus_alert_names_are_the_reviewed_set` and `ERROR: test_stage3_consensus_rules_read_only_this_networks_series`, each with `KeyError: 'storage-integrity.arbiter-stage3'`; `ERROR: test_stage3_consensus_rules_render_only_when_enabled` with `KeyError: 'stage3Consensus'`; `FAIL: test_stage3_consensus_guards_fail_closed` with `AssertionError: 0 == 0 : {'monitoring': {'stage3Consensus': {'enabled': True}}} rendered`; `FAIL: test_default_renders_no_monitoring` with `AssertionError: {…} != {…'stage3Consensus': {'enabled': False, …}`; and `FAIL: test_alert_names_are_the_reviewed_set` with `AssertionError: Items in the second set but not the first:` (the new group). Any other failing test: stop.
 
 - [ ] **Step 5: The stage-3 consensus rule group**
 
-`charts/storage-integrity/values.yaml`, before the monitoring block's `  clickhouse:` (`:398`; after Plan S3-C4's `replicaReads` at the drafting base):
+`charts/storage-integrity/values.yaml`, after replicaReads and before monitoring's top-level runbookURL (the actual reviewed predecessor, not the historical clickhouse adjacency):
 
 ```diff
    replicaReads:
@@ -15763,9 +17476,7 @@ Expected: `Ran 6 tests` and `FAILED (failures=3, errors=3)`, with these lines: `
 +    # floor holds) stays above this many seconds for 15 minutes.
 +    heldCleanupAgeWarnSeconds: 3600
 +    runbookURL: https://github.com/sentioxyz/production/blob/main/docs/storage-integrity-devnet2-stage3-p5-v21.md
-   clickhouse:
-     # ClickHouseInstallation names (label clickhouse_altinity_com_chi of the
-     # cluster's pod-annotation scrape) whose restarts and default-disk space
+   runbookURL: https://github.com/sentioxyz/production/blob/main/docs/storage-integrity-devnet2-stage3-p0.md
 ```
 
 `charts/storage-integrity/values.schema.json`, `monitoring.required` (`:225`):
@@ -15774,19 +17485,16 @@ Expected: `Ran 6 tests` and `FAILED (failures=3, errors=3)`, with these lines: `
      },
      "monitoring": {
        "type": "object",
--      "required": ["enabled", "network", "interval", "scrapeTimeout", "labels", "stateLimitBytes", "hosts", "clickhouse", "backups", "runbookURL"],
-+      "required": ["enabled", "network", "interval", "scrapeTimeout", "labels", "stateLimitBytes", "hosts", "clickhouse", "backups", "runbookURL", "stage3Consensus"],
+-      "required": ["enabled", "network", "interval", "scrapeTimeout", "labels", "stateLimitBytes", "hosts", "clickhouse", "backups", "members", "runbookURL"],
++      "required": ["enabled", "network", "interval", "scrapeTimeout", "labels", "stateLimitBytes", "hosts", "clickhouse", "backups", "members", "runbookURL", "stage3Consensus"],
        "properties": {
          "enabled": {"type": "boolean"},
          "network": {"type": "string"},
 ```
 
-and `monitoring.properties`, before `        "hosts": {` (`:259`, after Plan S3-C3's `members` at the drafting base):
+and `monitoring.properties`, immediately before `        "hosts": {` (after `stateLimitBytes` in the approved D predecessor; the old members/runbookURL adjacency is not present):
 
 ```diff
-             "runbookURL": {"type": "string", "pattern": "^https://[^\\s#\"]+$"}
-           }
-         },
 +        "stage3Consensus": {
 +          "type": "object",
 +          "required": ["enabled", "heldCleanupAgeWarnSeconds", "runbookURL"],
@@ -15918,12 +17626,18 @@ whole number of seconds, checked whenever it is given.
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' charts/storage-integrity/values.schema.json && echo "schema parses"
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' charts/storage-integrity/values.schema.json && echo "schema parses" || exit 1
 python3 -B charts/storage-integrity/tests/test_render.py Stage3ConsensusMonitoringTest MonitoringTest.test_default_renders_no_monitoring MonitoringTest.test_alert_names_are_the_reviewed_set 2>&1 | tail -3
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
-bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
-git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/validate.yaml charts/storage-integrity/templates/monitoring.yaml charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(storage-integrity): the stage-3 consensus rule group, off
+python3 -I -B "$T/local-render.py" compare --tree "$W" --base-ref "$(cat "$T/base-head.txt")"
+git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/validate.yaml charts/storage-integrity/templates/monitoring.yaml charts/storage-integrity/tests/test_render.py || exit 1
+task80_commit "$W" -m "feat(storage-integrity): the stage-3 consensus rule group, off
 
 monitoring.stage3Consensus (enabled false, heldCleanupAgeWarnSeconds
 3600, runbookURL) renders the rule group <fullname>.arbiter-stage3
@@ -15937,7 +17651,7 @@ devnet2 until every voter runs the stage-3 arbiter release. The
 read-cap alert keeps reading the plain document: the plain-body
 fallback persists it. Every release renders unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
 ```
 
 Expected: `schema parses`; `Ran 6 tests` and `OK`; `Ran <N0+7> tests` and `OK`; the eight `identical` lines of Step 3 and `exit 0`; one commit, `5 files changed`.
@@ -15947,10 +17661,13 @@ Expected: `schema parses`; `Ran 6 tests` and `OK`; `Ran <N0+7> tests` and `OK`; 
 Requires Tasks 78 and 79's records past their R4 check (`ARBITER_TAG_P5`, `ARBITER_DIGEST_P5`, `SN_COMMIT_P5`, `SN_DIGEST_P5`) and Plan S3-E1's (`HG_TAG_P5`, `CORE_TAG_P5`). The housegate fetch reads a remote: this block needs explicit user confirmation in chat before it runs. The values go into `$HOME/.cache/s3e4-task80/ledger.env` exactly as `s3-ledger.py get` prints them, and every later block reads them from there, so no value is ever typed:
 
 ```bash
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T="$HOME/.cache/s3e4-task80"
 git -C "$h" fetch -q origin
-mkdir -p "$T" && chmod 700 "$T"
-python3 -I "$L/s3-ledger.py" get "$h" ARBITER_TAG_P5 ARBITER_DIGEST_P5 SN_COMMIT_P5 SN_DIGEST_P5 HG_TAG_P5 CORE_TAG_P5 > "$T/ledger.env.new" && mv "$T/ledger.env.new" "$T/ledger.env"
+mkdir -p "$T" && chmod 700 "$T" || exit 1
+python3 -I "$L/s3-ledger.py" get "$h" ARBITER_TAG_P5 ARBITER_DIGEST_P5 SN_COMMIT_P5 SN_DIGEST_P5 HG_TAG_P5 CORE_TAG_P5 > "$T/ledger.env.new" && mv "$T/ledger.env.new" "$T/ledger.env" || exit 1
 cat "$T/ledger.env"
 ```
 
@@ -15959,19 +17676,30 @@ Expected: six lines `ARBITER_TAG_P5=v<x.y.z>`, `ARBITER_DIGEST_P5=sha256:<64 hex
 The registry and source reads (remote reads: the arbiter and sentio-node fetches and the registry; explicit user confirmation in chat first):
 
 ```bash
-T="$HOME/.cache/s3e4-task80"; set -a; . "$T/ledger.env"; set +a
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+T="$HOME/.cache/s3e4-task80"
+python3 -I "$T/task80-receipt.py" ledger "$T/ledger.env" || exit 1
+set -a
+. "$T/ledger.env"
+set +a
 printf '%s %s %s\n' "$ARBITER_TAG_P5" "$HG_TAG_P5" "$CORE_TAG_P5" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+ v[0-9]+\.[0-9]+\.[0-9]+ v[0-9]+\.[0-9]+\.[0-9]+' \
   && printf '%s %s\n' "$ARBITER_DIGEST_P5" "$SN_DIGEST_P5" | grep -Eqx 'sha256:[0-9a-f]{64} sha256:[0-9a-f]{64}' \
-  && printf '%s\n' "$SN_COMMIT_P5" | grep -Eqx '[0-9a-f]{40}' && echo "ledger values well-formed"
+  && printf '%s\n' "$SN_COMMIT_P5" | grep -Eqx '[0-9a-f]{40}' && echo "ledger values well-formed" || exit 1
 a=/Users/uranuswch/Dev/projects/sentio-network/arbiter; s=/Users/uranuswch/Dev/projects/sentio-network/sentio-node
-git -C "$a" fetch -q --tags origin && git -C "$s" fetch -q origin
-[ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/arbiter:$ARBITER_TAG_P5" --format '{{json .Manifest}}' | jq -r .digest)" = "$ARBITER_DIGEST_P5" ] && echo "ARBITER_DIGEST_P5 is $ARBITER_TAG_P5"
+git -C "$a" fetch -q --tags origin && git -C "$s" fetch -q origin || exit 1
+[ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/arbiter:$ARBITER_TAG_P5" --format '{{json .Manifest}}' | jq -r .digest)" = "$ARBITER_DIGEST_P5" ] && echo "ARBITER_DIGEST_P5 is $ARBITER_TAG_P5" || exit 1
 rev="$(docker buildx imagetools inspect "ghcr.io/sentioxyz/arbiter@$ARBITER_DIGEST_P5" --format '{{json .Image}}' | jq -r 'if .config then .config.Labels["org.opencontainers.image.revision"] else .["linux/amd64"].config.Labels["org.opencontainers.image.revision"] end')"
-[ "$rev" = "$(git -C "$a" rev-parse "$ARBITER_TAG_P5^{commit}")" ] && echo "the arbiter image is $ARBITER_TAG_P5's commit"
-[ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5" --format '{{json .Manifest}}' | jq -r .digest)" = "$SN_DIGEST_P5" ] && echo "SN_DIGEST_P5 resolves"
+e4_git_read_073="$(git -C "$a" rev-parse "$ARBITER_TAG_P5^{commit}")" || exit 1
+[[ "$e4_git_read_073" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$rev" = "${e4_git_read_073}" ] && echo "the arbiter image is $ARBITER_TAG_P5's commit" || exit 1
+[ "$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5" --format '{{json .Manifest}}' | jq -r .digest)" = "$SN_DIGEST_P5" ] && echo "SN_DIGEST_P5 resolves" || exit 1
 rev="$(docker buildx imagetools inspect "ghcr.io/sentioxyz/sentio-node@$SN_DIGEST_P5" --format '{{json .Image}}' | jq -r 'if .config then .config.Labels["org.opencontainers.image.revision"] else .["linux/amd64"].config.Labels["org.opencontainers.image.revision"] end')"
-[ "$rev" = "$SN_COMMIT_P5" ] && git -C "$s" merge-base --is-ancestor "$SN_COMMIT_P5" origin/main && echo "the sentio-node image is SN_COMMIT_P5, on main"
-git -C "$s" show "$SN_COMMIT_P5:go.mod" | grep -cE "^(require )?[[:space:]]*github.com/(housegate/housegate $HG_TAG_P5|sentioxyz/arbiter-core $CORE_TAG_P5)( //.*)?$"
+[ "$rev" = "$SN_COMMIT_P5" ] && git -C "$s" merge-base --is-ancestor "$SN_COMMIT_P5" origin/main && echo "the sentio-node image is SN_COMMIT_P5, on main" || exit 1
+pins="$(git -C "$s" show "$SN_COMMIT_P5:go.mod" | grep -cE "^(require )?[[:space:]]*github.com/(housegate/housegate $HG_TAG_P5|sentioxyz/arbiter-core $CORE_TAG_P5)( //.*)?$")" || exit 1
+[ "$pins" = 2 ] || { echo "both P5 dependency pins required; stop" >&2; exit 1; }
+echo "$pins"
 ```
 
 Expected: `ledger values well-formed`, `ARBITER_DIGEST_P5 is v<x.y.z>`, `the arbiter image is v<x.y.z>'s commit`, `SN_DIGEST_P5 resolves`, `the sentio-node image is SN_COMMIT_P5, on main`, `2` (the P5 host build pins both P5 releases, contract §56). Anything else: stop; nothing is listed.
@@ -16001,6 +17729,9 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     env[name] = value
 if set(env) != set(TOKENS):
     sys.exit(f"fill: {sys.argv[1]} lacks {', '.join(sorted(set(TOKENS) - set(env)))}; stop")
+patterns = {name: (r"sha256:[0-9a-f]{64}" if "DIGEST" in name else r"[0-9a-f]{40}" if "COMMIT" in name else r"v[0-9]+\.[0-9]+\.[0-9]+") for name in TOKENS}
+if any(re.fullmatch(patterns[name], value) is None for name, value in env.items()):
+    sys.exit("fill: malformed typed ledger value; stop")
 for name in sys.argv[2:]:
     path = Path(name)
     text = path.read_text()
@@ -16154,7 +17885,10 @@ Append to `ActualFreshNetworkTest`, after its last test (before the blank lines 
         }, set())
         # No other file sets the key: dead configuration a later release could pick up unreviewed.
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "k8s-*"], capture_output=True, text=True, check=True).stdout.split()
+        protected = {"k8s-sea/clickhouse/clickhouse.yaml", "k8s-sea/clickhouse/clickhouse-extra.yaml"}
         for name in tracked:
+            if name in protected:
+                continue
             path = ROOT / name
             if path.suffix in (".yaml", ".yml") and path != DEVNET2 / "storage-integrity-si-v2.yaml" and path.is_file():
                 self.assertNotIn("snapshotBody", path.read_text(errors="ignore"), name)
@@ -16225,7 +17959,10 @@ Append to `ActualFreshNetworkTest`, after its last test (before the blank lines 
                     self.assertFalse(selector and selector.items() <= labels.items(), f"{release}: Service {name} selects the rehearsal Pod")
         # No tracked manifest under k8s-* names it: the runbook applies it by hand.
         tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "k8s-*"], capture_output=True, text=True, check=True).stdout.split()
+        protected = {"k8s-sea/clickhouse/clickhouse.yaml", "k8s-sea/clickhouse/clickhouse-extra.yaml"}
         for name in tracked:
+            if name in protected:
+                continue
             path = ROOT / name
             if path.suffix in (".yaml", ".yml") and path.is_file():
                 self.assertNotIn("storage-integrity-si-v2-p5-rehearsal", path.read_text(errors="ignore"), name)
@@ -16234,10 +17971,21 @@ Append to `ActualFreshNetworkTest`, after its last test (before the blank lines 
 Fill the ledger values and run (local only):
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4; T="$HOME/.cache/s3e4-task80"
-cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" charts/storage-integrity/tests/test_render.py
-git -C "$W" grep -cE '<(ARBITER_TAG_P5|ARBITER_DIGEST_P5|SN_COMMIT_P5|SN_DIGEST_P5|HG_TAG_P5|CORE_TAG_P5)>' -- charts docs | wc -l | tr -d ' '
-python3 -B charts/storage-integrity/tests/test_render.py ActualFreshNetworkTest.test_stage3_p5_host_images_are_reviewed ActualFreshNetworkTest.test_devnet2_stage3_p5_images_follow_the_rollout ActualFreshNetworkTest.test_snapshot_body_needs_a_stage3_arbiter ActualFreshNetworkTest.test_stage3_consensus_monitoring_needs_a_stage3_arbiter ActualFreshNetworkTest.test_p5_rehearsal_pod_mounts_only_the_authority_secret 2>&1 | grep -E '^(FAIL|ERROR|Ran|FAILED|OK)|Error' | cut -c1-160
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"; T="$HOME/.cache/s3e4-task80"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -I "$T/fill.py" "$T/ledger.env" charts/storage-integrity/tests/test_render.py || exit 1
+tokens=0
+git -C "$W" grep -qE '<(ARBITER_TAG_P5|ARBITER_DIGEST_P5|SN_COMMIT_P5|SN_DIGEST_P5|HG_TAG_P5|CORE_TAG_P5)>' -- charts docs || tokens=$?
+[ "$tokens" -eq 1 ] || { echo "unfilled tokens or failed inventory; stop" >&2; exit 1; }
+echo 0
+red=0
+python3 -B charts/storage-integrity/tests/test_render.py ActualFreshNetworkTest.test_stage3_p5_host_images_are_reviewed ActualFreshNetworkTest.test_devnet2_stage3_p5_images_follow_the_rollout ActualFreshNetworkTest.test_snapshot_body_needs_a_stage3_arbiter ActualFreshNetworkTest.test_stage3_consensus_monitoring_needs_a_stage3_arbiter ActualFreshNetworkTest.test_p5_rehearsal_pod_mounts_only_the_authority_secret > "$T/red-images.log" 2>&1 || red=$?
+[ "$red" -ne 0 ] || { echo "expected image RED did not fail; stop" >&2; exit 1; }
+cat "$T/red-images.log"
 ```
 
 Expected: `filled charts/storage-integrity/tests/test_render.py`; `0`; `Ran 5 tests` and `FAILED (failures=1, errors=1)`: `ERROR: test_p5_rehearsal_pod_mounts_only_the_authority_secret` with `FileNotFoundError: [Errno 2] No such file or directory: '…/docs/examples/storage-integrity-p5-rehearsal-pod.yaml'`, and `FAIL: test_stage3_p5_host_images_are_reviewed` with `AssertionError: 'ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P5>@<SN_DIGEST_P5>' not found in (…)` (the build is in no reviewed set yet). The other three pass already: nothing has moved, and no file sets the new keys. Any other failing test: stop.
@@ -16331,13 +18079,22 @@ spec:
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4; T="$HOME/.cache/s3e4-task80"
-cd "$W" && python3 -I "$T/fill.py" "$T/ledger.env" docs/examples/storage-integrity-p5-rehearsal-pod.yaml
-git -C "$W" grep -cE '<(ARBITER_TAG_P5|ARBITER_DIGEST_P5|SN_COMMIT_P5|SN_DIGEST_P5|HG_TAG_P5|CORE_TAG_P5)>' -- charts docs | wc -l | tr -d ' '
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"; T="$HOME/.cache/s3e4-task80"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -I "$T/fill.py" "$T/ledger.env" docs/examples/storage-integrity-p5-rehearsal-pod.yaml || exit 1
+tokens=0
+git -C "$W" grep -qE '<(ARBITER_TAG_P5|ARBITER_DIGEST_P5|SN_COMMIT_P5|SN_DIGEST_P5|HG_TAG_P5|CORE_TAG_P5)>' -- charts docs || tokens=$?
+[ "$tokens" -eq 1 ] || { echo "unfilled tokens or failed inventory; stop" >&2; exit 1; }
+echo 0
 python3 -B charts/storage-integrity/tests/test_render.py ActualFreshNetworkTest.test_stage3_p5_host_images_are_reviewed ActualFreshNetworkTest.test_devnet2_stage3_p5_images_follow_the_rollout ActualFreshNetworkTest.test_snapshot_body_needs_a_stage3_arbiter ActualFreshNetworkTest.test_stage3_consensus_monitoring_needs_a_stage3_arbiter ActualFreshNetworkTest.test_p5_rehearsal_pod_mounts_only_the_authority_secret 2>&1 | tail -3
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
-bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
-git -C "$W" add charts/storage-integrity/tests/test_render.py docs/examples/storage-integrity-p5-rehearsal-pod.yaml && git -C "$W" commit -m "feat(storage-integrity): P5 image constants and the rehearsal Pod example
+python3 -I -B "$T/local-render.py" compare --tree "$W" --base-ref "$(cat "$T/base-head.txt")"
+git -C "$W" add charts/storage-integrity/tests/test_render.py docs/examples/storage-integrity-p5-rehearsal-pod.yaml || exit 1
+task80_commit "$W" -m "feat(storage-integrity): P5 image constants and the rehearsal Pod example
 
 test_render.py names the stage-3 P5 arbiter release (ARBITER_DIGEST_P5)
 and sentio-node build (SN_COMMIT_P5) and lists the build in every image
@@ -16350,7 +18107,7 @@ rehearsal Pod: the P5 arbiter image, the voters' authority key from its
 Secret and nothing else, the voters' memory limit, one emptyDir, no
 port, no token, a label no Service selects (K81).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
 ```
 
 Expected: `filled docs/examples/storage-integrity-p5-rehearsal-pod.yaml`; `0`; `Ran 5 tests` and `OK`; `Ran <N0+12> tests` and `OK`; the eight `identical` lines of Step 3 and `exit 0`; one commit, `2 files changed`.
@@ -16367,23 +18124,29 @@ Expected: `filled docs/examples/storage-integrity-p5-rehearsal-pod.yaml`; `0`; `
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -I -c 'import sys, yaml; on = yaml.safe_load(open(sys.argv[1]))[True]; print([sum(p in on[k]["paths"] for p in ("docs/storage-integrity-devnet2-stage3-p5-v21.md", "docs/examples/storage-integrity-p5-rehearsal-pod.yaml")) for k in ("pull_request", "push")])' .github/workflows/storage-integrity-chart.yml
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -I -c 'import sys, yaml; on = yaml.safe_load(open(sys.argv[1]))[True]; print([sum(p in on[k]["paths"] for p in ("docs/storage-integrity-devnet2-stage3-p5-v21.md", "docs/examples/storage-integrity-p5-rehearsal-pod.yaml")) for k in ("pull_request", "push")])' .github/workflows/storage-integrity-chart.yml || exit 1
 if command -v actionlint >/dev/null; then actionlint .github/workflows/storage-integrity-chart.yml && echo "actionlint clean"; fi
-git -C "$W" add .github/workflows/storage-integrity-chart.yml && git -C "$W" commit -m "ci(storage-integrity): chart validation runs on the P5 files
+git -C "$W" add .github/workflows/storage-integrity-chart.yml || exit 1
+task80_commit "$W" -m "ci(storage-integrity): chart validation runs on the P5 files
 
 The storage-integrity chart workflow now also runs when the stage-3 P5
 runbook or the P5 rehearsal Pod example changes: test_render.py reads
 both (Plan S3-E4 Tasks 80 and 81).
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || exit 1
 ```
 
 Expected: `[2, 2]`; `actionlint clean` (when installed); one commit, `1 file changed, 4 insertions(+)`.
 
 - [ ] **Step 10: Rehearse Task 82's file changes (local only)**
 
-Every live commit of Task 82 moves one file and its mirror. This step makes each of them, in order, on a throwaway clone of the branch, runs the whole suite after each, and makes ten out-of-order or half-made changes that must fail. It writes only the clone under `$HOME/.cache/s3e4-task80`, never the worktree, and pushes, syncs and applies nothing.
+Before this future local replay, require Task56's actual P4_END record and independently retained final source/evidence receipts, with rebuildSafe off and the P4 exit images/monitoring posture. Missing P4_END/final56 or final79 is a stop, never a synthetic substitute. Read P4_END only through the canonical tool after its recording owner completed R4. Every live commit of Task82 moves one file and its mirror. This step makes each of them, in order, on a throwaway clone of the branch, runs the whole suite after each, and makes ten out-of-order or half-made changes that must fail. It writes only the clone under `$HOME/.cache/s3e4-task80`, never the worktree, and pushes, syncs and applies nothing.
 
 Write `$HOME/.cache/s3e4-task80/rollout.py` with the Write tool (local, never committed):
 
@@ -16416,6 +18179,10 @@ import yaml
 
 ENV = dict(line.split("=", 1) for line in Path(sys.argv[1]).read_text().split())
 ROOT = Path(sys.argv[2]).resolve()
+session = (Path.home() / ".cache/s3e4-task80").resolve()
+sentinel = ROOT.parent / "ownership-sentinel"
+if ROOT.name != "repo" or ROOT.parent.parent != session or not ROOT.parent.name.startswith("rehearse.") or sentinel.is_symlink() or not sentinel.is_file() or sentinel.read_text() != "scratch-only-never-publish\n":
+    sys.exit("rollout: not the owned safe rehearsal export; stop")
 MODE = sys.argv[3]
 TESTS = ROOT / "charts/storage-integrity/tests/test_render.py"
 DEVNET2 = ROOT / "k8s-sea/sentio-network-devnet2"
@@ -16499,7 +18266,7 @@ def run_tests(*classes):
 def forward():
     for label, change in FORWARD:
         change()
-        git("commit", "-q", "-am", f"rehearsal {label}")
+        git("-c", "commit.gpgsign=false", "commit", "-q", "-am", f"rehearsal {label}")
         code, output = run_tests()
         ran = re.search(r"^Ran (\d+) tests", output, re.M)
         print(f"{label}: {'OK' if code == 0 else 'FAILED'} ({ran.group(1) if ran else '?'} tests)", flush=True)
@@ -16549,10 +18316,29 @@ START = git("rev-parse", "HEAD").strip()
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4; T="$HOME/.cache/s3e4-task80"
-R="$(mktemp -d "$T/rehearse.XXXXXX")" && printf '%s\n' "$R" > "$T/rehearse-path"
-git clone -q --no-hardlinks --branch urwt/claude/multi-source-s3e4 "$W" "$R/repo"
-python3 -I -B "$T/rollout.py" "$T/ledger.env" "$R/repo" bites
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"; T="$HOME/.cache/s3e4-task80"
+task80_require_worktree "$W" || exit 1
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate
+L="$HOME/.cache/s3-ledger"
+python3 -I "$L/s3-ledger.py" get "$h" P4_END > "$T/p4-end.env.new" || exit 1
+python3 -I -c 'import datetime,re,sys; s=open(sys.argv[1]).read(); m=re.fullmatch(r"P4_END=(\d{4}-\d{2}-\d{2})\n?",s); assert m; datetime.date.fromisoformat(m[1])' "$T/p4-end.env.new" || exit 1
+mv "$T/p4-end.env.new" "$T/p4-end.env"
+python3 -I -B "$T/task80-receipt.py" begin "$W" "$T" || exit 1
+R="$(mktemp -d "$T/rehearse.XXXXXX")" && printf '%s\n' "$R" > "$T/rehearse-path" || exit 1
+python3 -I "$T/task80-receipt.py" ledger "$T/ledger.env" || exit 1
+mkdir "$R/repo"
+git -C "$W" archive HEAD -- . ':(exclude)k8s-sea/clickhouse/clickhouse.yaml' ':(exclude)k8s-sea/clickhouse/clickhouse-extra.yaml' | tar -x -C "$R/repo"
+git -C "$R/repo" init -q
+git -C "$R/repo" config user.name rehearsal
+git -C "$R/repo" config user.email rehearsal@localhost
+git -C "$R/repo" config commit.gpgsign false
+git -C "$R/repo" add .
+git -C "$R/repo" -c commit.gpgsign=false commit -q -m 'synthetic safe Task80 rehearsal baseline'
+printf '%s\n' 'scratch-only-never-publish' > "$R/ownership-sentinel"
+python3 -I -B "$T/rollout.py" "$T/ledger.env" "$R/repo" bites | tee "$T/rollout-bites.log"
 ```
 
 Expected: ten lines, each `refused: …`: `refused: before V, a host moves to the P5 build only after the arbiter pin (runbook §4)`, `refused: before H-b, the hosts move to the P5 build in the order b, c, a (runbook §5)`, `refused: before H-c, an si-member moves to the P5 build only after every host (runbook §5.4)`, `refused: before M-b, the si-members move to the P5 build in the order b, c, a (runbook §5.4)`, `refused: before M-a, the stage-3 rules come after every host and si-member (runbook §8)`, `refused: before V, the stage-3 rules need the stage-3 arbiter pin`, `refused: before V, arbiter.raft.snapshotBody needs the stage-3 arbiter pin`, `refused: before H-b, its source-image file and its mirror move together`, `refused: before MON, 'plain' != None` and `refused: before H-b, True is not False`; exit 0. A `NOT REFUSED` line: the test that should catch that change does not; stop and fix it.
@@ -16560,8 +18346,11 @@ Expected: ten lines, each `refused: …`: `refused: before V, a host moves to th
 The forward run takes about twelve minutes (ten full suites); run it in the background and read its output when it exits:
 
 ```bash
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
 T="$HOME/.cache/s3e4-task80"; R="$(cat "$T/rehearse-path")"
-python3 -I -B "$T/rollout.py" "$T/ledger.env" "$R/repo" forward
+python3 -I -B "$T/rollout.py" "$T/ledger.env" "$R/repo" forward | tee "$T/rollout-forward.log"
 git -C "$R/repo" log --oneline -10 | cat
 ```
 
@@ -16574,28 +18363,42 @@ The clone stays under `$HOME/.cache/s3e4-task80` (local, rehearsal commits only)
 The production checks of Plan S3-B contract §15 on the finished branch (`origin/main` as fetched in Step 1), with a fourth lint profile that turns every new value on:
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4
-cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
-helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict 2>&1 | tail -1
-helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict 2>&1 | tail -1
-helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict 2>&1 | tail -1
-helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set monitoring.enabled=true --set monitoring.stage3Consensus.enabled=true --set arbiter.raft.snapshotBody=plain --strict 2>&1 | tail -1
-bash -n scripts/storage-integrity/render-inertness.sh && bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
+set -euo pipefail
+T="$HOME/.cache/s3e4-task80"
+. "$T/task80-common.sh"
+W="$(cat "$HOME/.cache/s3e4-task80/worktree-path.txt")"
+task80_require_worktree "$W" || exit 1
+cd "$W" || exit 1
+ python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tee "$T/final-tests.log" || exit 1
+helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict 2>&1 | tee "$T/lint-legacy.log"
+helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict 2>&1 | tee "$T/lint-fresh.log"
+helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict 2>&1 | tee "$T/lint-noauthority.log"
+helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set monitoring.enabled=true --set monitoring.stage3Consensus.enabled=true --set arbiter.raft.snapshotBody=plain --strict 2>&1 | tee "$T/lint-stage3.log"
+python3 -I -B "$T/local-render.py" compare --tree "$W" --base-ref "$(cat "$T/base-head.txt")" | tee "$T/final-inertness.log" || exit 1
 git -C "$W" status --short | wc -l | tr -d ' '
-git -C "$W" log --oneline origin/main..HEAD | cat
+git -C "$W" log --oneline "$(cat "$T/base-head.txt")..HEAD" | cat
+python3 -I -B "$T/task80-receipt.py" receipt "$W" "$T" || exit 1
 ```
 
 Expected: `Ran <N0+12> tests` and `OK` (236 in the drafting rebuild); four times `1 chart(s) linted, 0 chart(s) failed`; the eight `identical` lines of Step 3 and `exit 0`; `0`; four commits (`ci(storage-integrity): chart validation runs on the P5 files`, `feat(storage-integrity): P5 image constants and the rehearsal Pod example`, `feat(storage-integrity): the stage-3 consensus rule group, off`, `feat(storage-integrity): the voters' snapshot body writer value, unset`).
 
 Keep for Task 81, which adds the runbook to this branch, reruns these checks for its PR body and writes them into the `P5 PR` run record with `P5_PR`: the branch head commit, `Ran <N0+12> tests` (`N0` at `origin/main`), the four lint results, the eight `identical` lines and Step 10's two results. The branch stays local; Task 80 records no ledger value and pushes nothing.
 
+**Task81 handoff and actual acceptance.** Pass the retained `urwt.json`, exact `worktree-path.txt`, base/current/task80 heads, P4 merge and exit evidence, typed ledger file, nine-file `task80-source.sha256`, complete logs and `task80-receipt.json`. The consumer must independently verify them before adding its runbook; source or head mismatch stops. Task80 does not push, merge, cut a release or write ledger values; its local commits must pass the prescribed signing and identity checks. Task81's eventual PR validator must use the approved FINALv2 REST body (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`), checked head argv, exact success text, before/after head checks and atomic `--match-head-commit` for that same head. No simplified validator or GraphQL coauthor list is a substitute. Ordinary commits require the sole Claude trailer and poetry/G throughout; actual signing cancellation stops for the user's own terminal key unlock.
+
+**Formal source binding and execution checks.** For formal execution, re-anchor implementation fences and measured test counts against the actual frozen post79 and completed P4 source; apply exact edits and independently reconstruct final source. Run the meaningful RED/GREEN suites, all full suites with zero skips, four lints, exact eight-release direct-Helm comparisons at every commit, ten negative and ten in-order rehearsal states plus byte-identical rollback proof, workflow checks, exact source/head and complete Task81 receipt consumer controls. Record each outcome from the actual run; no predicted counts, source stand-in or historical232-Helm receipt can discharge this gate. Task81/82 must preserve complete original D40 user-terminal bodies and exact native acceptance oracles (indexer-a bare1, b/c precise row/table markers), fresh finished-snapshot CRC/promotion budgets, readiness/cleanup stops, source receipts and activation unknown-outcome recovery; no client-supplied label or outer tee substitutes them. Rehearsal Pod pull/scheduling/Ready and all live service/metric/feature checks are actual live gates, never dry-run or static proof. Keep K24/K25/K86 and the7-day budget/voter-resize choices unchanged.
+
+
 ---
 
 ## Task 81: production — the P5 runbook and the P5 PR (S3-E4)
 
-Contract §57 (runbook, names, evidence, the activation command, the rehearsal, `P5_PR`), clarifications K81 and K82 and decision D37: Task 80 put the stage-3 rule group, the `arbiter.raft.snapshotBody` value, the rehearsal Pod example, the P5 image constants and their render tests on the branch `urwt/claude/multi-source-s3e4`; this task adds the runbook Task 82 executes and every `runbook_url` of Task 80's rule group points into, `docs/storage-integrity-devnet2-stage3-p5-v21.md` (sections exactly as contract §57 lists them, helpers and evidence files as it names them), points the stage-2 runbook's image-floor rule at it, and takes the P5 PR (Tasks 80 and 81 together) through push, review, CI and merge, then records `P5_PR`. Merging it applies, syncs and turns on nothing: every live change of P5 is a single-service commit, the hand-applied rehearsal Pod or the activation, which the runbook makes after the merge, each confirmed, and the PR renders every release byte-identically (`render-inertness.sh origin/main`).
 
-**Files** (anchors are production `origin/main` at `75514e3de`, whose SI paths equal today's `origin/main` `206c42357`; the branch is Task 80's `urwt/claude/multi-source-s3e4`, which starts from an `origin/main` that carries the runbooks of Plans S3-B, S3-C1, S3-C3, S3-C4 and S3-D; the hunk rule applies):
+**Execution order and evidence.** Replay and rehearsal precede every image roll; the rehearsal Pod must be deleted before verifiers; host checks and selected acceptance writes proceed b → c → a, members b → c → a, voters one at a time with the current leader last, then re-registration, irreversible activation, acceptance, monitoring and every-voter v21 observation. Expected-output prose is not a receipt. A missing, malformed, duplicate, failed or stale receipt stops its dependent mutation; never recover by rewriting success output. Every mutating runbook block requires its own preceding confirmation, including retries and cleanup. D24 extraction must preserve complete fences/heredocs and exact bytes; execute only selected extracted Bash files, never grep fragments or a reconstructed command. Budget comes from one finished Size/CRC-checked snapshot and its own promotion sequence, then subtracts live advances; no metric/live-sequence pairing and no P6 budget decision is made here.
+
+Contract §57 (runbook, names, evidence, the activation command, the rehearsal, `P5_PR`), clarifications K81 and K82 and decision D37: Task 80 put the stage-3 rule group, the `arbiter.raft.snapshotBody` value, the rehearsal Pod example, the P5 image constants and their render tests on the branch `urwt/codex/multi-source-s3e4`; this task adds the runbook Task 82 executes and every `runbook_url` of Task 80's rule group points into, `docs/storage-integrity-devnet2-stage3-p5-v21.md` (sections exactly as contract §57 lists them, helpers and evidence files as it names them), points the stage-2 runbook's image-floor rule at it, and takes the P5 PR (Tasks 80 and 81 together) through push, review, CI and merge, then records `P5_PR`. Merging it applies, syncs and turns on nothing: every live change of P5 is a single-service commit, the hand-applied rehearsal Pod or the activation, which the runbook makes after the merge, each confirmed, and the PR renders every release byte-identically (`render-inertness.sh origin/main`).
+
+**Files** (historical drafting anchors are production `75514e3de`/`206c42357`; they are not a verified current-main or post-80 source claim; the branch is Task 80's `urwt/codex/multi-source-s3e4`, which starts from an `origin/main` that carries the runbooks of Plans S3-B, S3-C1, S3-C3, S3-C4 and S3-D; the hunk rule applies):
 - Create: `docs/storage-integrity-devnet2-stage3-p5-v21.md`
 - Modify: `docs/storage-integrity-devnet2-multi-source-tracks.md` (§11, the first bullet, which begins `- After §6.2, never run a voter, verifier or SNode below` at base `:1072`; match it by its text: later plans may have moved it; no plan before this one edits it)
 - Modify after the merge (housegate, on this plan's ledger copy, with the record procedure of Plan S3-C1 contract §19): Appendix C of `docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md` (the `P5_PR` row and the run record `P5 PR (Task 81)`), one commit in the URWT worktree `multi-source-s3e4-ledger-81`
@@ -16603,7 +18406,7 @@ Contract §57 (runbook, names, evidence, the activation command, the rehearsal, 
 
 **Interfaces:**
 - Consumes (Task 80, contract §56, verbatim): values `arbiter.raft.snapshotBody` (unset) and `monitoring.stage3Consensus.{enabled, heldCleanupAgeWarnSeconds, runbookURL}` (`runbookURL` = `https://github.com/sentioxyz/production/blob/main/docs/storage-integrity-devnet2-stage3-p5-v21.md`); the rule group `<fullname>.arbiter-stage3` (`storage-integrity-si-v2.arbiter-stage3` on devnet2) with `ArbiterSnapshotEncodingFallback`, `ArbiterBlockSealGroupSwitch`, `ArbiterVerifiersUnavailable`, `ArbiterCopiesBackpressure`, `ArbiterUnderReplicatedCleanups`, `ArbiterGroupsUnderReplicated`, `ArbiterFloorHeldCleanupAgeHigh`, `ArbiterMemberLagging`, each with `runbook_url` `<runbookURL>#11-operating-rules`; `docs/examples/storage-integrity-p5-rehearsal-pod.yaml` (Pod `storage-integrity-si-v2-p5-rehearsal`, label `storage-integrity.sentio.xyz/rehearsal: p5`, container `rehearsal` on `ghcr.io/sentioxyz/arbiter@<ARBITER_DIGEST_P5>` running `["sleep", "86400"]`, env `ARBITER_AUTHORITY_PRIVATE_KEY_HEX` from Secret `storage-integrity-devnet2-si-v2-authority` key `private-key`, emptyDir `rehearsal` `sizeLimit: 8Gi` at `/rehearsal`, limits cpu `"2"` memory `2Gi`, `restartPolicy: Never`, `automountServiceAccountToken: false`); the `test_render.py` constants `DEVNET2_STAGE3_P5_ARBITER_DIGEST`, `DEVNET2_STAGE3_P5_SOURCE_IMAGE` (in `WRITER_AUTHORIZATION_IMAGES` and `STAGE3_HOST_IMAGES`, and in Plan S3-C3's `MEMBER_IMAGES`: see the contract note below), `STAGE3_P5_HOST_IMAGES`, `DEVNET2_SNAPSHOT_BODY = None`, `DEVNET2_STAGE3_CONSENSUS_MONITORING = False`, `P5_REHEARSAL_POD`, and the earlier `DEVNET2_ARBITER_DIGEST`, `INDEXER_B_SOURCE_IMAGE`, `INDEXER_C_SOURCE_IMAGE`, `FRESH_SOURCE_IMAGE`, `DEVNET2_STATE_LIMIT_BYTES`.
-- Consumes (Task 78, contract §55 and §57, decision D37): `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal` (mode 700) with `old_tag.txt`, `new_tag.txt`, `arbiter-release` (line 1 tag, line 2 digest), `bin/old/{statedigest,v20check,snapdump}`, `bin/new/{statedigest,v21check,snapdump,p5rehearsal}`, `p5rehearsal/p5rehearsal_test.go`, `v21-fixture.container` and `p5-files.sha256` (the `shasum -a 256` lines of those eight files, paths relative to `$R5`); `v21check`'s `restore_ok version <n> body <none|plain|interned>` and `restore_refused version <n>: <error>`; `statedigest -data-dir -config` (lines `snapshot_index`, `last_index`, `applied_commands`, `written_version`, `live_check`, `key`, `spent_ids`, `snapshot_sha256`, `apply_error`), `snapdump -data-dir -config -out`, `v20check <container>`; `p5rehearsal -test.run '^TestP5Rehearsal$' -test.v -rehearsal.dir /rehearsal -rehearsal.params /rehearsal/stage3-params.json` with the result lines of contract §57 (`voter <i> restored epoch=<e> promotion_seq=<p> drain_refusal=<…>`, `digest <i> <sha256>`, `activation applied epoch=<e+1>`, `persist <i> version 21 body interned bytes=<n> fallback=0 persist_peak_heap_bytes=<n>`, `restart <i> restore_ok version 21 body interned digest_equal=true`, `mismatch <i> version 21 body plain fallback=1 digest_equal=true`, `rehearsal ok`).
+- Consumes (Task 78, contract §55 and §57, decision D37): `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal` (mode 700) with `old_tag.txt`, `new_tag.txt`, `arbiter-release` (line 1 tag, line 2 digest), `bin/old/{statedigest,v20check,snapdump}`, `bin/new/{statedigest,v21check,snapdump,p5rehearsal}`, `p5rehearsal/p5rehearsal_test.go`, `v21-fixture.container` and `p5-files.sha256` (the `shasum -a 256` lines of those eight files, paths relative to `$R5`); `v21check`'s `restore_ok version <n> body <none|plain|interned>` and `restore_refused version <n> body <kind>: <error>` (Task 78's producer text; old `v20check` still omits body); `statedigest -data-dir -config` (lines `snapshot_index`, `last_index`, `applied_commands`, `written_version`, `live_check`, `key`, `spent_ids`, `snapshot_sha256`, `apply_error`), `snapdump -data-dir -config -out`, `v20check <container>`; `p5rehearsal -test.run '^TestP5Rehearsal$' -test.v -rehearsal.dir /rehearsal -rehearsal.params /rehearsal/stage3-params.json` with the result lines of contract §57 (`voter <i> restored epoch=<e> promotion_seq=<p> drain_refusal=<…>`, `digest <i> <sha256>`, `activation applied epoch=<e+1>`, `persist <i> version 21 body interned bytes=<n> fallback=0 persist_peak_heap_bytes=<n>`, `restart <i> restore_ok version 21 body interned digest_equal=true`, `mismatch <i> version 21 body plain fallback=1 digest_equal=true`, `rehearsal ok`).
 - Consumes (Task 79, contract §56): sentio-node `SN_COMMIT_P5` (every SNode and si-member advertises `stage3_v1`; `sentio_node_storage_integrity_keeper_findings{reason}` on `:9091`, reasons `unknown_replica` and `non_incarnation_root`; `storage_integrity.member.consensus` off and absent by default).
 - Consumes (Plan S3-E2 contract §45–§46): `arbiter-admin consensus update --stage3 --indexer-failure-domain 'id=N,domain=D' --stage3-max-lag-publications --stage3-lag-low --stage3-evidence-timeout-l2-blocks --stage3-max-uncleaned-parts-per-partition --stage3-max-uncleaned-parts-per-table --voter …` (its gate `stage3 gate refused; nothing was submitted:`, the leader's `stage3 gate refused: …`, metadata `arbiter-stage3-voters`, the post-commit reports), `consensus show`'s `current.stage3` (proto names, uint64 as strings) and `stage3_state` (`activation_epoch`, `activation_block_seq`, `activation_promotion_seq`, `switches`), the refusals `consensus update must carry stage3 once set` and `stage3 is active; this binary does not support stage-3 consensus`, the v21 container (version byte 21, body byte 0 plain or 1 interned, 14-byte envelope), `arbiter_snapshot_encoding_fallback_total`, `arbiter_snapshot_body_bytes{kind}`, `raft.snapshot_body`; Plan S3-A's hold lines (`took a consensus hold of mode drain on the leader (hold id <id>, expires <t>)`, `waiting for the leader's drain hold: <progress>`, `the leader drained at promotion_seq <n>; signing the update`, `released consensus hold <id>`).
 - Consumes (the ledger, read with `s3-ledger.py get`, contract §57): `ARBITER_TAG_P5`, `ARBITER_DIGEST_P5` (Task 78); `SN_COMMIT_P5`, `SN_DIGEST_P5` (Task 79); `CORE_TAG_P5`, `HG_TAG_P5`, `PROTO_TAG_P5` (Plan S3-E1); `ARBITER_TAG_P4`, `ARBITER_DIGEST_P4`, `SN_COMMIT_P4`, `SN_DIGEST_P4`, `DEVNET2_FAILURE_DOMAINS` (Plan S3-D); `MEMBER_IDS` (Plan S3-C3); `INDEXER_C_ID`, `ENROLMENT_EPOCH` (Plan S3-B). The runbook itself reads `P4_END` and `P5_PR` at run time (§1.1).
@@ -16628,17 +18431,28 @@ Notes (drafting decisions, Appendix B):
 
 - [ ] **Step 1: Worktree, Task 80's commits and the ledger inputs (read-only)**
 
-Requires Task 80's commits on the branch `urwt/claude/multi-source-s3e4` (which started from `origin/main` after `P4_PR` merged), the records of Task 78 (`ARBITER_TAG_P5`, `ARBITER_DIGEST_P5`, and `$R5` rebuilt from that tag with `p5rehearsal` and `p5-files.sha256`) and Task 79 (`SN_COMMIT_P5`, `SN_DIGEST_P5`) on this plan's ledger copy, and `DEVNET2_FAILURE_DOMAINS` (Plan S3-D Task 55) on Plan S3-D's. Stop if any is missing. The fetches below read remotes (GitHub): they need explicit user confirmation in chat before they run. The worktree is Task 80's (URWT; the script reuses the existing branch):
+Requires Task 80's commits on the branch `urwt/codex/multi-source-s3e4` (which started from `origin/main` after `P4_PR` merged), the records of Task 78 (`ARBITER_TAG_P5`, `ARBITER_DIGEST_P5`, and `$R5` rebuilt from that tag with `p5rehearsal` and `p5-files.sha256`) and Task 79 (`SN_COMMIT_P5`, `SN_DIGEST_P5`) on this plan's ledger copy, and `DEVNET2_FAILURE_DOMAINS` (Plan S3-D Task 55) on Plan S3-D's. Stop if any is missing. The fetches below read remotes (GitHub): they need explicit user confirmation in chat before they run. The worktree is Task 80's (URWT; the script reuses the existing branch):
 
 ```bash
 git -C /Users/uranuswch/Dev/projects/sentio-network/production fetch -q origin
-W="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production claude multi-source-s3e4 | jq -r .path)"; echo "$W"
+T="$HOME/.cache/s3e4-task81"
+mkdir -p "$T"
+chmod 700 "$T"
+[ ! -e "$T/worktree.json" ] || { echo "saved worktree state exists: reconcile the previous attempt before resuming"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production codex multi-source-s3e4)" || exit 1
+(set -C; printf '%s\n' "$out" > "$T/worktree.json") || exit 1
+W="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));p=d.get("path");assert d.get("action") in ("created","existing") and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$T/worktree.json")" || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+printf '%s\n' "$W"
 git -C "$W" status --porcelain | wc -l | tr -d ' '
 git -C "$W" log --oneline origin/main..HEAD
 git -C "$W" diff --name-only origin/main...HEAD
 ```
 
-Expected: `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3e4`, `0` (clean), Task 80's commits and nothing else, and exactly the files of Task 80's **Files** list, neither of this task's two documents. Prefix every later command with `W=<that path>; T="$HOME/.cache/s3e4-task81";`. The ledger values: run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool (the ledger tool at the end of Plan S3-C1 contract §19, verbatim; an earlier copy is the same text and is overwritten), then:
+Expected: the absolute path returned in the saved URWT JSON (keep its exact symlink spelling), `0` (clean), Task 80's commits and nothing else, and exactly the files of Task 80's **Files** list, neither of this task's two documents. Before each later task command, set `T="$HOME/.cache/s3e4-task81"` and load W from that saved JSON with the exact Python reader above; never reconstruct a path. Confirm the worktree belongs to the production clone and its existing branch contains only Task 80's accepted commits before reuse. The ledger values: run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool (the ledger tool at the end of Plan S3-C1 contract §19, verbatim; an earlier copy is the same text and is overwritten), then:
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T="$HOME/.cache/s3e4-task81"
@@ -17010,7 +18824,7 @@ si_p5_image() { # the P5 host and member image: ghcr.io/sentioxyz/sentio-node:sh
 si_p5_value() { # $1 a ledger name §1.1 read: its value from $si_backup/ledger-values.txt
   local v
   v="$(sed -n "s/^$1=//p" "$si_backup/ledger-values.txt" 2>/dev/null)"
-  [ -n "$v" ] || { echo "si_p5_value: $1 is not in $si_backup/ledger-values.txt (§1.1)" >&2; return 1; }
+  [ -n "$v" ] && [ "$(printf '%s\n' "$v" | wc -l | tr -d ' ')" = 1 ] || { echo "si_p5_value: $1 is missing or duplicated in $si_backup/ledger-values.txt (§1.1)" >&2; return 1; }
   printf '%s\n' "$v"
 }
 si_p5_owner() { # $1 a|b|c: that owner's SI indexer id (indexer-c's from the ledger, §1.1)
@@ -17080,12 +18894,12 @@ si_p5_accept() { # $1 key file of devuser1's owner (- for indexer-a), $2 a|b|c, 
     *) echo "usage: si_p5_accept <key-file|-> a|b|c <n> <tag>" >&2; return 2 ;;
   esac
   id="$(si_p5_owner "$2")" || return 1
-  base="$(si_track_published "$id")"
+  base="$(si_track_published "$id")" || return 1
   [ -n "$base" ] || { echo "indexer $id has no track" >&2; return 1; }
   si_agent_start "$1" || return 1
   if ! printf '%s\n' "$row" | si_agent_ch --database "$db" --query "INSERT INTO $t FORMAT CSV"; then si_agent_stop; return 1; fi
   si_wait_track "$id" "$base" || { si_agent_stop; return 1; }
-  n="$(si_agent_ch --database "$db" --query "SELECT count() FROM $t WHERE id = $3 SETTINGS SQL_x_read_mode='safe'")"
+  n="$(si_agent_ch --database "$db" --query "SELECT count() FROM $t WHERE id = $3 SETTINGS SQL_x_read_mode='safe'")" || { si_agent_stop; return 1; }
   si_agent_stop
   echo "indexer-$2 row $3 in $db.$t: safe count $n"
   [ "$n" = 1 ]
@@ -17115,9 +18929,27 @@ def die(msg):
     sys.exit(1)
 
 
+def unique_object(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            die(f"duplicate JSON key {key!r}")
+        out[key] = value
+    return out
+
+
 def load(path):
     with open(path) as f:
-        return json.load(f)
+        return json.load(f, object_pairs_hook=unique_object,
+                         parse_constant=lambda value: die(f"non-finite JSON value {value}"))
+
+
+def uint(value, label):
+    if type(value) is int and 0 <= value <= 18446744073709551615:
+        return value
+    if type(value) is str and re.fullmatch(r"0|[1-9][0-9]*", value) and int(value) <= 18446744073709551615:
+        return int(value)
+    die(f"{label} is not a canonical uint64")
 
 
 def cmd_params(domains, c_id, out):
@@ -17147,20 +18979,29 @@ def cmd_params(domains, c_id, out):
 
 
 def num(value):
-    return int(value) if isinstance(value, str) else value
+    return uint(value, "integer field")
 
 
 def normalized(stage3):
     """consensus show's current.stage3 (protojson: uint64 as strings, absent fields unset) as stage3-params.json writes it."""
+    if type(stage3) is not dict or set(stage3) - set(ORDER):
+        die("stage3 is malformed or has unknown fields")
     out = {}
     for k in ORDER:
         v = stage3.get(k)
         if k == "indexer_failure_domains":
-            out[k] = [{"indexer_id": int(e["indexer_id"]), "failure_domain": e["failure_domain"]} for e in (v or [])]
+            if type(v) is not list or any(type(e) is not dict or set(e) != {"indexer_id", "failure_domain"} for e in v):
+                die("malformed indexer_failure_domains")
+            out[k] = [{"indexer_id": uint(e["indexer_id"], "indexer_id"), "failure_domain": e["failure_domain"]} for e in v]
+            ids = [e["indexer_id"] for e in out[k]]
+            if ids != sorted(set(ids)) or any(type(e["failure_domain"]) is not str or NODE.fullmatch(e["failure_domain"]) is None for e in out[k]):
+                die("duplicate, unsorted or malformed failure domains")
         elif isinstance(FIXED.get(k, False), bool):
-            out[k] = bool(v)
+            if k in stage3 and type(v) is not bool:
+                die(f"{k} is not a JSON boolean")
+            out[k] = False if k not in stage3 else v
         else:
-            out[k] = num(v or 0)
+            out[k] = num(0 if k not in stage3 else v)
     return out
 
 
@@ -17177,24 +19018,35 @@ def cmd_stage3(show_path, params_path, activate_path, tip_path):
         diffs = [k for k in ORDER if got.get(k) != params.get(k)]
         die(f"current.stage3 differs from {params_path} in {diffs}: {json.dumps(got)}")
     st = show.get("stage3_state") or {}
-    epoch = int(show["epoch"])
-    if int(activate["committed_epoch"]) != epoch or int(st.get("activation_epoch", 0)) != epoch:
+    epoch = uint(show["epoch"], "epoch")
+    if uint(activate["committed_epoch"], "committed_epoch") != epoch or uint(st.get("activation_epoch"), "activation_epoch") != epoch:
         die(f"epoch {epoch}, committed_epoch {activate['committed_epoch']}, stage3_state.activation_epoch {st.get('activation_epoch')}: they differ")
     if st.get("switches"):
         die(f"stage3_state records switch cutovers {st['switches']}: the activation turns none on")
     m = re.fullmatch(r"sealed (\d+) promotion_seq (\d+)\n?", open(tip_path).read())
     if not m:
         die(f"{tip_path} is not 'sealed <n> promotion_seq <n>'")
-    block, seq = int(st.get("activation_block_seq", 0)), int(st.get("activation_promotion_seq", 0))
+    block, seq = uint(st.get("activation_block_seq"), "activation_block_seq"), uint(st.get("activation_promotion_seq"), "activation_promotion_seq")
+    if (block, seq) != (int(m.group(1)), int(m.group(2))):
+        die("activation cut does not equal the frozen pre-signing tip; preserve evidence and reconcile before continuing")
     print(f"stage3 committed at epoch {epoch} as {params_path} states it, every switch off; activation block {block}, promotion {seq} (tip before signing: sealed {m.group(1)}, promotion {m.group(2)})")
 
 
 def cmd_features(path, c_id):
     """The leader's feature book: exactly the three voters, and exactly the six data-plane nodes, each advertising stage3_v1."""
-    book = json.loads(open(path).read().strip().splitlines()[-1])
-    if sorted(book.get("voters") or []) != VOTERS:
+    book = load(path)
+    if type(book) is not dict or set(book) != {"voters", "nodes"}:
+        die("malformed feature book")
+    if type(book["voters"]) is not list or any(type(v) is not str for v in book["voters"]):
+        die("malformed voter identities")
+    if sorted(book["voters"]) != VOTERS:
         die(f"the feature book's voters are {book.get('voters')}, not {VOTERS}")
-    nodes = {n["id"]: n["stage3"] for n in book.get("nodes") or []}
+    entries = book["nodes"]
+    if type(entries) is not list or not entries or any(type(n) is not dict or set(n) != {"id", "stage3"} or type(n["id"]) is not str or type(n["stage3"]) is not bool for n in entries):
+        die("malformed node features; stage3 must be a JSON boolean")
+    nodes = {n["id"]: n["stage3"] for n in entries}
+    if len(nodes) != len(entries):
+        die("duplicate data-plane node identity")
     want = {"snode-1", "snode-2", "snode-3", "verifier-1", "verifier-2", "verifier-3"}
     if MEMBERS & set(nodes):
         die(f"member ids {sorted(MEMBERS & set(nodes))} are registered: no member registers before Plan S3-F (K82); stop")
@@ -17206,7 +19058,7 @@ def cmd_features(path, c_id):
     print(f"feature book: voters {', '.join(VOTERS)}; snode-1, snode-2, snode-3 (indexers 0, 1, {c_id}) and verifier-1..3, each advertising stage3_v1; no member id")
 
 
-def cmd_activation(show_path, tracks_path, epoch):
+def cmd_activation(show_path, tracks_path, epoch, c_id="2"):
     """show-before-activation.json and the track state allow exactly the update §7.2 signs."""
     show, tracks = load(show_path), load(tracks_path)
     cur = show.get("current") or {}
@@ -17220,7 +19072,13 @@ def cmd_activation(show_path, tracks_path, epoch):
         die("tracks are not enabled; stop")
     if str(show.get("epoch")) != str(epoch):
         die(f"epoch {show.get('epoch')} is not ENROLMENT_EPOCH {epoch}: a consensus update committed since the enrolment; stop and ask")
-    quarantined = [t["indexer_id"] for t in tracks.get("indexers") or [] if t.get("quarantined")]
+    rows = tracks.get("indexers") if type(tracks) is dict else None
+    if type(rows) is not list or any(type(t) is not dict or type(t.get("quarantined")) is not bool for t in rows):
+        die("missing or malformed track set")
+    ids = [uint(t.get("indexer_id"), "track indexer_id") for t in rows]
+    if len(ids) != 3 or set(ids) != {0, 1, uint(c_id, "INDEXER_C_ID")}:
+        die("track set is missing, duplicated or unexpected")
+    quarantined = [t["indexer_id"] for t in rows if t["quarantined"]]
     if quarantined:
         die(f"tracks {quarantined} are quarantined: this runbook activates with every track unquarantined; stop")
     print(f"epoch {show['epoch']}, promotion_seq {show['promotion_seq']}, authority {AUTHORITY}, max_writers \"3\", stage3 null, tracks enabled, no track quarantined")
@@ -17232,10 +19090,25 @@ def rehearsal_lines(path):
 
 def cmd_rehearsal(path, epoch, limit, part):
     """The rehearsal's result lines (Plan S3-E4 contract §57)."""
-    e, limit = int(epoch), int(limit)
+    e, limit = uint(epoch, "rehearsal epoch"), uint(limit, "Persist limit")
     lines = rehearsal_lines(path)
+    if len(lines) != 20:
+        die("rehearsal receipt requires exactly twenty canonical result lines")
+    if lines[-4] != "rehearsal ok" or lines[-2] != "exit 0" or not lines[-1].startswith("P5_REHEARSAL="):
+        die("rehearsal completion lines are out of order")
     if any("eyJ" in l for l in lines):
         die(f"{path} holds a line that looks like a JWS: nothing but digests, version bytes and counts may leave the Pod; delete the file and stop")
+    if part not in ("activation", "mismatch", "all"):
+        die("unknown rehearsal receipt part")
+    if sum(l == "exit 0" for l in lines) != 1 or any(re.fullmatch(r"exit [0-9]+", l) and l != "exit 0" for l in lines):
+        die("rehearsal receipt requires one successful exit and no failing exit")
+    if sum(re.fullmatch(r"--- PASS: TestP5Rehearsal \([0-9]+(?:\.[0-9]+)?s\)", l) is not None for l in lines) != 1 or any("FAIL" in l for l in lines):
+        die("rehearsal receipt requires one TestP5Rehearsal PASS and no FAIL")
+    allowed = re.compile(r'voter [0-2] restored epoch=[0-9]+ promotion_seq=[0-9]+ drain_refusal=.*|digest [0-2] [0-9a-f]{64}|activation applied epoch=[0-9]+|persist [0-2] version 21 body interned bytes=[0-9]+ fallback=0 persist_peak_heap_bytes=[0-9]+|restart [0-2] restore_ok version 21 body interned digest_equal=true|mismatch [0-2] version 21 body plain fallback=1 digest_equal=true|rehearsal ok|--- PASS: TestP5Rehearsal \([0-9]+(?:\.[0-9]+)?s\)|exit 0|P5_REHEARSAL=20[0-9]{2}-[0-9]{2}-[0-9]{2}')
+    if any(allowed.fullmatch(l) is None for l in lines):
+        die("unknown or malformed rehearsal result line")
+    if sum(l == "rehearsal ok" for l in lines) != 1 or sum(l == f"activation applied epoch={e + 1}" for l in lines) != 1:
+        die("missing or duplicate rehearsal success/activation line")
     if part in ("activation", "all"):
         restored = [re.fullmatch(r'voter ([0-2]) restored epoch=(\d+) promotion_seq=(\d+) drain_refusal=(.*)', l) for l in lines]
         restored = [m for m in restored if m]
@@ -17256,22 +19129,29 @@ def cmd_rehearsal(path, epoch, limit, part):
         persists = [m for m in (re.fullmatch(r"persist ([0-2]) version 21 body interned bytes=(\d+) fallback=0 persist_peak_heap_bytes=(\d+)", l) for l in lines) if m]
         if sorted(m.group(1) for m in persists) != ["0", "1", "2"]:
             die("not every voter persisted an interned v21 container without a fallback")
+        if any(int(m.group(2)) <= 0 or int(m.group(3)) <= 0 for m in persists):
+            die("Persist bytes and peak heap must be positive")
         peak = max(int(m.group(3)) for m in persists)
         if peak > limit:
             die(f"the rehearsal's Persist peak {peak} is above L = {limit}: the voters' sizing does not carry the activation (K82 (vi)); stop")
         restarts = [l for l in lines if re.fullmatch(r"restart [0-2] restore_ok version 21 body interned digest_equal=true", l)]
-        if len(restarts) != 3:
+        if sorted(l.split()[1] for l in restarts) != ["0", "1", "2"]:
             die("not every voter restarted from its interned v21 container with an equal digest")
         print(f"rehearsal activation ok: epoch {e} -> {e + 1}, promotion_seq {restored[0].group(3)}, digest {digests[0].group(2)}, interned v21 persisted and restored by voters 0, 1, 2, Persist peak {peak} bytes (L {limit})")
     if part in ("mismatch", "all"):
         mismatches = [l for l in lines if re.fullmatch(r"mismatch [0-2] version 21 body plain fallback=1 digest_equal=true", l)]
-        if len(mismatches) != 3:
+        if sorted(l.split()[1] for l in mismatches) != ["0", "1", "2"]:
             die("the forced mismatch did not persist the plain body with one fallback on every voter")
         if "rehearsal ok" not in lines:
             die("the rehearsal did not print 'rehearsal ok'")
         dates = [l for l in lines if re.fullmatch(r"P5_REHEARSAL=20\d\d-[01]\d-[0-3]\d", l)]
         if len(dates) != 1:
-            die("rehearsal.txt holds no P5_REHEARSAL date")
+            die("rehearsal.txt holds no unique P5_REHEARSAL date")
+        from datetime import date
+        try:
+            date.fromisoformat(dates[0].partition("=")[2])
+        except ValueError:
+            die("P5_REHEARSAL is not a calendar date")
         print(f"rehearsal forced mismatch ok: voters 0, 1, 2 persisted the plain body with fallback=1 and an equal digest; rehearsal ok; {dates[0]}")
 
 
@@ -17455,6 +19335,7 @@ Expected: three lines with `indexerId` 0, 1 and `<INDEXER_C_ID>` and the signers
 
 ```bash
 db_c="$(cat "$HOME/si-devnet2-stage3-indexer-c/acceptance-db")"
+: > "$si_backup/member-images-before.txt"
 {
   si_show | tee "$si_backup/show-before.json" | jq -c '{epoch, promotion_seq, max_writers: .current.max_writers, tracks_enabled: .current.tracks_enabled, stage3: .current.stage3, stage3_state, si_indexers: [.current.si_indexers[] | {indexer_id, snode_node_id}], verifiers: [.current.verifiers[].node_id]}'
   si_tracks | jq -c '[.indexers[] | {id: .indexer_id, published: .published.safe_block_seq, generation: .quarantine_generation, quarantined, rejected: .rejected_blocks}]'
@@ -18048,7 +19929,7 @@ si_features_stage3 > "$si_backup/features-at-activation.json"
 si_p5_py features "$si_backup/features-at-activation.json" "$(si_p5_owner c)"
 si_show > "$si_backup/show-before-activation.json"
 si_tracks > "$si_backup/tracks-at-activation.json"
-si_p5_py activation "$si_backup/show-before-activation.json" "$si_backup/tracks-at-activation.json" "$(si_p5_value ENROLMENT_EPOCH)"
+si_p5_py activation "$si_backup/show-before-activation.json" "$si_backup/tracks-at-activation.json" "$(si_p5_value ENROLMENT_EPOCH)" "$(si_p5_owner c)"
 domains=()
 while IFS=$'\t' read -r id dom; do domains+=(--indexer-failure-domain "id=$id,domain=$dom"); done < <(jq -r '.indexer_failure_domains[] | [.indexer_id, .failure_domain] | @tsv' "$si_backup/stage3-params.json")
 [ "${#domains[@]}" = 6 ] || { echo "stage3-params.json does not hold three failure domains; stop"; exit 1; }
@@ -18075,6 +19956,8 @@ cat "$si_backup/activate.err"
 After the JSON result the CLI runs its gate once more and may add one of three reports to `activate.err`, each of which means the update has committed: `info: the stage3 post-commit re-check differs from the gate observation, but every gate condition still holds: …` is information only; `WARNING: the stage3 update committed (irreversible), but the post-commit re-check could not run: …` asks for the checks by hand (`si_features_stage3`, `for i in 0 1 2; do si_capability "$i"; done`); `WARNING: the stage3 update committed (irreversible), but the post-commit re-check no longer holds: …` lists the nodes to restart on a P5 release; never downgrade one.
 
 ### 7.3 Verify
+
+**Unknown-outcome fence.** If the CLI reported that the commit outcome may be unknown, preserve `activate.out`/`activate.err` unchanged and stop this run before any further mutation or ledger record. A `si_show` readback with stage3 set prevents resubmission and downgrade; it does not fabricate the missing committed CLI receipt. Retain readbacks separately and have the root reconcile the actual producer's signed-update/epoch evidence and approve a source-backed recovery procedure before resuming. This PREP has no actual post-80 implementation and does not invent a recovery RPC or synthesize `{"status":"committed"}` from expected output. The original receipt path remains required by §7.3/§9 until that bounded follow-up is accepted.
 
 ```bash
 {
@@ -18379,11 +20262,25 @@ def main(runbook, ledger, source, sums):
     values = {}
     for line in open(ledger):
         name, sep, value = line.rstrip("\n").partition("=")
-        if sep:
-            values[name] = value
+        if not sep or not name or name in values:
+            sys.exit(f"malformed or duplicate ledger entry {name!r}")
+        values[name] = value
     missing = [n for n in NAMES if not values.get(n)]
     if missing:
         sys.exit(f"the ledger file lacks {missing}")
+    for name in NAMES:
+        value = values[name]
+        pattern = (r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?" if "TAG" in name else
+                   r"sha256:[0-9a-f]{64}" if "DIGEST" in name else
+                   r"[0-9a-f]{40}" if "COMMIT" in name else
+                   r"0|[1-9][0-9]*" if name in ("INDEXER_C_ID", "ENROLMENT_EPOCH") else
+                   r"(?:0|[1-9][0-9]*)=node:[a-z0-9]([-a-z0-9.]*[a-z0-9])?(?:,(?:0|[1-9][0-9]*)=node:[a-z0-9]([-a-z0-9.]*[a-z0-9])?){2}")
+        if re.fullmatch(pattern, value) is None:
+            sys.exit(f"malformed ledger value for {name}")
+    ids = [int(v.partition("=")[0]) for v in values["DEVNET2_FAILURE_DOMAINS"].split(",")]
+    c = int(values["INDEXER_C_ID"])
+    if c in (0, 1) or ids != sorted(set(ids)) or set(ids) != {0, 1, c}:
+        sys.exit("failure domains do not identify exactly the three enrolled indexers")
     code = open(source, "rb").read()
     if not code.endswith(b"\n") or code.endswith(b"\n\n"):
         sys.exit(f"{source} must end in exactly one newline")
@@ -18816,8 +20713,13 @@ Expected: `constants copied: 14` and `fixtures in <T>/fx`; `self-test passed: 46
 - [ ] **Step 7: Commit**
 
 ```bash
-cd "$W" && git add docs/storage-integrity-devnet2-stage3-p5-v21.md docs/storage-integrity-devnet2-multi-source-tracks.md
-git commit -q -m "docs(storage-integrity): devnet2 stage-3 P5 runbook (rehearsal and the v21 activation)
+cd "$W" || exit 1
+git config extensions.worktreeConfig true || exit 1
+git config --worktree user.name poetry || exit 1
+git config --worktree user.email chen@sentio.xyz || exit 1
+git config --worktree commit.gpgsign true || exit 1
+git add docs/storage-integrity-devnet2-stage3-p5-v21.md docs/storage-integrity-devnet2-multi-source-tracks.md || exit 1
+git commit -S -q -m "docs(storage-integrity): devnet2 stage-3 P5 runbook (rehearsal and the v21 activation)
 
 The runbook Plan S3-E4 Task 82 executes: the offline replay of the
 voters' logs under ARBITER_TAG_P4 and ARBITER_TAG_P5, the rehearsal on
@@ -18828,7 +20730,10 @@ irreversible v21 activation with every stage-3 switch off under a drain
 hold, the stage-3 alert rules, every voter writing v21, rollback and
 operating rules. The stage-2 runbook's image-floor rule points to it.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signing failed: preserve staged work; ask the user to unlock this repository actual signing key; no unsigned fallback"; exit 1; }
+e4_git_read_074="$(git log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_074}" = 'poetry <chen@sentio.xyz> G' ] || { echo "unexpected author or signature; stop before publishing"; exit 1; }
+git verify-commit HEAD || exit 1
 git log --oneline origin/main..HEAD
 git diff --name-only origin/main...HEAD
 git status --porcelain | wc -l | tr -d ' '
@@ -18838,17 +20743,31 @@ Expected: Task 80's commits followed by this one; Task 80's files and the two do
 
 - [ ] **Step 8: Push (requires explicit user confirmation)**
 
-This step needs explicit user confirmation in chat. It publishes the branch; nothing is applied or synced. Gate: "push branch urwt/claude/multi-source-s3e4 (Tasks 80 and 81 of Plan S3-E4: the stage-3 rule group, the snapshot-body value, the rehearsal Pod example, the P5 image constants and render tests, and the P5 runbook) to sentioxyz/production; nothing on sea changes".
+This step needs explicit user confirmation in chat. It publishes the branch; nothing is applied or synced. Gate: "push branch urwt/codex/multi-source-s3e4 (Tasks 80 and 81 of Plan S3-E4: the stage-3 rule group, the snapshot-body value, the rehearsal Pod example, the P5 image constants and render tests, and the P5 runbook) to sentioxyz/production; nothing on sea changes".
 
 ```bash
-cd "$W" && git push -u origin HEAD
+checked_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+e4_git_read_075="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_075}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$W" verify-commit "$checked_head" || exit 1
+commits="$(git -C "$W" rev-list --reverse "origin/main..$checked_head")" || exit 1
+[ -n "$commits" ] || { echo "no checked task commits to publish"; exit 1; }
+for commit in $commits; do
+  identity="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$commit")" || exit 1
+  [ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "unexpected primary author or signature"; exit 1; }
+  git -C "$W" verify-commit "$commit" || exit 1
+  message="$(git -C "$W" log -1 --format=%B "$commit")" || exit 1
+  trailers="$(printf '%s\n' "$message" | git interpret-trailers --parse)" || exit 1
+  [ "$trailers" = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' ] || { echo "ordinary task commit requires only the canonical Claude trailer"; exit 1; }
+done
+git -C "$W" push -u origin "$checked_head:refs/heads/urwt/codex/multi-source-s3e4" || exit 1
 ```
 
-Expected: `branch 'urwt/claude/multi-source-s3e4' set up to track 'origin/urwt/claude/multi-source-s3e4'` (or the update of a branch an earlier attempt pushed).
+Expected: `branch 'urwt/codex/multi-source-s3e4' set up to track 'origin/urwt/codex/multi-source-s3e4'` (or the update of a branch an earlier attempt pushed).
 
 - [ ] **Step 9: PR (requires explicit user confirmation)**
 
-This step needs explicit user confirmation in chat. The PR carries Tasks 80 and 81: shared-chart values, alert rules and a runbook that ends in an irreversible consensus update go through review (the user's production rule). Gate: "open the P5 PR from urwt/claude/multi-source-s3e4 into sentioxyz/production main, titled 'feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)'". The body (written by this block into a temporary file, the test count and the two pins filled in):
+This step needs explicit user confirmation in chat. The PR carries Tasks 80 and 81: shared-chart values, alert rules and a runbook that ends in an irreversible consensus update go through review (the user's production rule). Gate: "open the P5 PR from urwt/codex/multi-source-s3e4 into sentioxyz/production main, titled 'feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)'". The body (written by this block into a temporary file, the test count and the two pins filled in):
 
 ```bash
 cd "$W" && count="$(python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | sed -n 's/^Ran \([0-9]*\) tests.*/\1/p')" && [ -n "$count" ] && body="$(mktemp)" && cat > "$body" <<'BODY'
@@ -18870,8 +20789,8 @@ Inert on merge: nothing on sea applies or syncs on merge, and every release rend
 BODY
 sed -i '' -e "s/TEST_COUNT/$count/" -e "s/ARBITER_TAG_P5/$(sed -n 's/^ARBITER_TAG_P5=//p' "$T/ledger.txt")/g" -e "s/SN_COMMIT_P5/$(sed -n 's/^SN_COMMIT_P5=//p' "$T/ledger.txt")/g" "$body"
 ! grep -n 'TEST_COUNT\|ARBITER_TAG_P5\|SN_COMMIT_P5' "$body"
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3e4 --title "feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)" --body-file "$body"
-gh pr view urwt/claude/multi-source-s3e4 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3e4 --title "feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)" --body-file "$body"
+gh pr view urwt/codex/multi-source-s3e4 --repo sentioxyz/production --json number,url -q '"\(.number) \(.url)"'
 ```
 
 Expected: no line from the placeholder check, the PR URL, then `<number> <url>`. Prefix the commands of Steps 10 and 11 with `pr=<number>;` as well.
@@ -18887,13 +20806,54 @@ cd "$W" && gh pr checks "$pr" --repo sentioxyz/production --watch
 
 Expected: `Storage-integrity chart validation` passes (Task 80's files trigger it; this task's documents trigger nothing new). A failure: read its log with `gh run view --repo sentioxyz/production --log-failed`, fix on the branch (a new commit, pushed only after its own confirmation) and watch again; a failure is judged against a run of the same workflow on `main` before it is called a regression, and never fixed by weakening a test.
 
+Before the merge, under the same separately confirmed remote-read gate, validate every primary author/trailer against the observed checked SHA. This is the exact C1 Task 25 FINALv2 reader (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`); its SHA argv is mandatory. Ordinary commits require the canonical Claude trailer; the REST validator permits historical merge commits with none. Never use GraphQL coauthors to infer the primary author.
+
+```bash
+set -eo pipefail
+[[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to Step 9's observed PR number"; exit 1; }
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+observed_remote_head="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$observed_remote_head" = "$expected_head" ] || { echo "PR head changed; repeat review"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+observed_remote_head="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$observed_remote_head" = "$expected_head" ] || { echo "PR head changed; repeat review"; exit 1; }
+(set -C; printf '%s\n' "$expected_head" > "$T/checked-head.txt") || { echo "checked receipt exists: reconcile before repeating"; exit 1; }
+```
+
+Expected: `PR commit identities and pinned head verified`; missing/truncated/malformed/duplicate listing, bad author/trailer, numeric SHA, or any changed head refuses before merge.
+
 - [ ] **Step 11: Merge and record `P5_PR` (requires explicit user confirmation for the merge, and again for the ledger record's push or docs PR and its merge)**
 
 This step needs explicit user confirmation in chat, after review. It merges into production `main`; nothing on sea changes until Task 82 runs the runbook. Gate: "squash-merge sentioxyz/production#<pr> (Plan S3-E4 Tasks 80 and 81) into main; inert on merge".
 
 ```bash
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 9 first"; exit 1; }
-cd "$W" && gh pr merge "$pr" --repo sentioxyz/production --squash
+expected_head="$(cat "$T/checked-head.txt")" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+observed_local_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$observed_local_head" = "$expected_head" ] || { echo "local head changed since review"; exit 1; }
+observed_remote_head="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[ "$observed_remote_head" = "$expected_head" ] || { echo "remote head changed since review"; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt --jq '.state + " " + .mergeCommit.oid + " " + .mergedAt'
 ```
 
@@ -18901,20 +20861,34 @@ Expected: the merge, then `MERGED <40 hex> <time>`. Then record `P5_PR`, the PR 
 
 ```bash
 [[ "${pr:-}" =~ ^[0-9]+$ ]] || { echo "set pr to the PR number of Step 9 first"; exit 1; }
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" = MERGED ] || { echo "the P5 PR is not merged: stop"; exit 1; }
+e4_gh_read_11="$(gh pr view "$pr" --repo sentioxyz/production --json state --jq .state)" || exit 1
+[ "${e4_gh_read_11}" = MERGED ] || { echo "the P5 PR is not merged: stop"; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; n=81
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e4-ledger-$n" "urwt/claude/multi-source-s3e4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3e4-ledger-$n" "urwt/codex/multi-source-s3e4-ledger-$n" "$ref")" || exit 1
+(set -C; printf '%s\n' "$out" > "$L/record-s3e4-$n.urwt.json") || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.load(open(sys.argv[1]));p=d.get("path");assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$L/record-s3e4-$n.urwt.json")" || exit 1
+e4_git_read_076="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_076" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_077="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$e4_git_read_077" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_078="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${e4_git_read_076}" = "${e4_git_read_077}" ] && [ -z "${e4_git_read_078}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3e4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3e4-$n.md" P5_PR="$pr" || exit 1
-git -C "$d" commit -q -m "docs(plan): record P5_PR of Plan S3-E4 (Task 81)
+git -C "$d" commit -S -q -m "docs(plan): record P5_PR of Plan S3-E4 (Task 81)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "signing failed: preserve staged work; ask the user to unlock this repository actual signing key; no unsigned fallback"; exit 1; }
+e4_git_read_079="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_079}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+git -C "$d" verify-commit HEAD || exit 1
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
@@ -18925,17 +20899,117 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 ```bash
 L="$HOME/.cache/s3-ledger"; n=81
 d="$(sed -n 1p "$L/record-s3e4-$n")"; ref="$(sed -n 2p "$L/record-s3e4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+e4_git_read_080="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+e4_git_read_081="$(git -C "$d" status --porcelain)" || exit 1
+[ "${e4_git_read_080}" = 1 ] && [ -z "${e4_git_read_081}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
+  ledger_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+  e4_git_read_082="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+  [ "${e4_git_read_082}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$d" verify-commit "$ledger_head" || exit 1
+  e4_git_read_083="$(git -C "$d" symbolic-ref HEAD)" || exit 1
+  [ -n "$e4_git_read_083" ] || exit 1
+  git -C "$d" push -u origin "$ledger_head:${e4_git_read_083}" || exit 1
   printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E4 only, docs only (Plan S3-C1 contract §19)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3e4-$n-pr.md"
-  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
+  e4_git_read_084="$(git -C "$d" log -1 --format=%s)" || exit 1
+  (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${e4_git_read_084}" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
 else
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  ledger_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+  e4_git_read_085="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+  [ "${e4_git_read_085}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$d" verify-commit "$ledger_head" || exit 1
+  git -C "$d" push origin "$ledger_head:refs/heads/${ref#origin/}" || exit 1
 fi
 ```
 
-Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push (the plans branch moved since R1) is never forced: stop and ask. R3, on `origin/main` only: the PR's merge needs its own explicit confirmation in chat (Gate: "squash-merge housegate PR <url>: Task 81's ledger record"); after a yes, `gh pr merge <number> --repo housegate/housegate --squash`. Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat):
+Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the docs PR URL. A rejected push is never forced: stop and reconcile.
+
+R3, only when R1 resolved the ledger copy to `origin/main`: read the exact saved R1 state/URWT JSON and the actual R2 docs-PR URL, require the one clean signed poetry record with its canonical Claude trailer, require successful required CI, run the exact FINALv2 primary-author/head reader, persist the observed checked head and CI-log hash, recheck both heads and atomically merge only that head. The following block derives every PR/head/path from actual saved state; it contains no future hand-entered PR or SHA. Its remote reads and squash merge need their own explicit user confirmation in chat after review. Gate: "validate required CI and signed identity, then squash-merge the actual housegate docs PR saved by Task81 R2 at its checked head; Appendix C P5_PR record only". This is ordinary reversible docs publication, not a runtime source/recovery change.
+
+For real publication, leave `S3E4_R3_LEDGER_DIR` unset so the canonical ledger directory is used. The override exists solely for owned inert static-control inputs; synthetic receipts are never valid publication evidence.
+
+Confirm before running.
+
+```bash
+set -eo pipefail
+L="${S3E4_R3_LEDGER_DIR:-"$HOME/.cache/s3-ledger"}"; n=81
+repo=housegate/housegate
+state="$L/record-s3e4-$n"
+urwt="$L/record-s3e4-$n.urwt.json"
+url_file="$L/record-s3e4-$n-pr-url"
+checked_receipt="$L/record-s3e4-$n-r3-checked.json"
+merged_receipt="$L/record-s3e4-$n-r3-merged.json"
+ci_log="$L/record-s3e4-$n-r3-ci.txt"
+readback="$L/record-s3e4-$n-r3-readback.json"
+[ ! -e "$checked_receipt" ] && [ ! -e "$merged_receipt" ] || { echo "R3 receipt exists: reconcile the prior attempt before resuming; stop" >&2; exit 1; }
+d="$(python3 -I -c 'import json,os,sys;lines=open(sys.argv[1]).read().splitlines();u=json.load(open(sys.argv[2]));assert len(lines)==2 and lines[1]=="origin/main";p=u.get("path");assert u.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));assert lines[0]==p;print(p)' "$state" "$urwt")" || exit 1
+ledger_pr="$(python3 -I -c 'import re,sys;lines=open(sys.argv[1]).read().splitlines();assert len(lines)==1;m=re.fullmatch(r"https://github.com/housegate/housegate/pull/([1-9][0-9]*)",lines[0]);assert m is not None;print(m.group(1))' "$url_file")" || exit 1
+origin="$(git -C "$d" remote get-url origin)" || exit 1
+case "$origin" in git@github.com:housegate/housegate.git|https://github.com/housegate/housegate.git|https://github.com/housegate/housegate) ;; *) echo "ledger worktree has an unexpected origin; stop" >&2; exit 1 ;; esac
+dirty="$(git -C "$d" status --porcelain)" || exit 1
+[ -z "$dirty" ] || { echo "ledger worktree is dirty; stop" >&2; exit 1; }
+count="$(git -C "$d" rev-list --count origin/main..HEAD)" || exit 1
+[ "$count" = 1 ] || { echo "ledger worktree is not exactly one record commit ahead of its base; stop" >&2; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid observed ledger head; stop" >&2; exit 1; }
+identity="$(git -C "$d" log -1 --format='%an <%ae> %G?' "$expected_head")" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "ledger record requires signed poetry identity; stop" >&2; exit 1; }
+git -C "$d" verify-commit "$expected_head" || exit 1
+message="$(git -C "$d" log -1 --format=%B "$expected_head")" || exit 1
+printf '%s\n' "$message" | python3 -I -c 'import re,subprocess,sys;m=sys.stdin.read();t="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";co=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",m);p=subprocess.run(["git","interpret-trailers","--parse"],input=m,text=True,capture_output=True,check=True).stdout.splitlines();assert co==[t] and p==[t],"ordinary ledger record requires only the canonical Claude trailer"' || exit 1
+remote_head="$(gh pr view "$ledger_pr" --repo "$repo" --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || { echo "ledger PR head changed before CI; repeat review; stop" >&2; exit 1; }
+if gh pr checks "$ledger_pr" --repo "$repo" --required --watch > "$ci_log" 2>&1; then
+  cat "$ci_log" || exit 1
+else
+  rc=$?
+  cat "$ci_log" >&2 || exit 1
+  echo "required ledger CI failed or is unavailable (exit $rc); stop before merge" >&2
+  exit 1
+fi
+[ -s "$ci_log" ] || { echo "required CI produced no checks; stop" >&2; exit 1; }
+echo "required ledger CI passed"
+remote_head="$(gh pr view "$ledger_pr" --repo "$repo" --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || { echo "ledger PR head changed during CI; repeat review; stop" >&2; exit 1; }
+gh api --paginate --slurp "repos/$repo/pulls/$ledger_pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+remote_head="$(gh pr view "$ledger_pr" --repo "$repo" --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$expected_head" ] || { echo "ledger PR head changed during author validation; repeat review; stop" >&2; exit 1; }
+python3 -I -c 'import hashlib,json,os,re,sys;p,repo,pr,head,w,ci=sys.argv[1:];assert re.fullmatch(r"[0-9a-f]{40}",head);doc={"repository":repo,"pr":pr,"head":head,"worktree":w,"ci_sha256":hashlib.sha256(open(ci,"rb").read()).hexdigest()};fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);f=os.fdopen(fd,"w");json.dump(doc,f,sort_keys=True);f.write("\n");f.flush();os.fsync(f.fileno());f.close()' "$checked_receipt" "$repo" "$ledger_pr" "$expected_head" "$d" "$ci_log" || exit 1
+checked_head="$(python3 -I -c 'import hashlib,json,re,sys;d=json.load(open(sys.argv[1]));repo,pr,w,ci=sys.argv[2:];assert isinstance(d,dict) and set(d)=={"repository","pr","head","worktree","ci_sha256"};assert (d["repository"],d["pr"],d["worktree"])==(repo,pr,w);h=d["head"];assert isinstance(h,str) and re.fullmatch(r"[0-9a-f]{40}",h);assert d["ci_sha256"]==hashlib.sha256(open(ci,"rb").read()).hexdigest();print(h)' "$checked_receipt" "$repo" "$ledger_pr" "$d" "$ci_log")" || exit 1
+local_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$local_head" = "$checked_head" ] || { echo "local ledger head changed since review; stop" >&2; exit 1; }
+remote_head="$(gh pr view "$ledger_pr" --repo "$repo" --json headRefOid --jq .headRefOid)" || exit 1
+[ "$remote_head" = "$checked_head" ] || { echo "remote ledger head changed since review; stop" >&2; exit 1; }
+gh pr merge "$ledger_pr" --repo "$repo" --squash --match-head-commit "$checked_head" || exit 1
+gh pr view "$ledger_pr" --repo "$repo" --json state,mergeCommit,headRefOid,mergedAt > "$readback" || exit 1
+merge_commit="$(python3 -I -c 'import json,re,sys;d=json.load(open(sys.argv[1]));assert isinstance(d,dict) and set(d)=={"state","mergeCommit","headRefOid","mergedAt"};assert d["state"]=="MERGED" and d["headRefOid"]==sys.argv[2];m=d["mergeCommit"];assert isinstance(m,dict) and set(m)=={"oid"};s=m["oid"];assert isinstance(s,str) and re.fullmatch(r"[0-9a-f]{40}",s);assert isinstance(d["mergedAt"],str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",d["mergedAt"]);print(s)' "$readback" "$checked_head")" || exit 1
+comparison="$(gh api "repos/$repo/compare/$merge_commit...main" --jq .status)" || exit 1
+case "$comparison" in identical|ahead) ;; *) echo "merged ledger record is not confirmed on remote main; stop" >&2; exit 1 ;; esac
+python3 -I -c 'import hashlib,json,os,sys;p,checked,readback,merge=sys.argv[1:];doc={"checked_receipt_sha256":hashlib.sha256(open(checked,"rb").read()).hexdigest(),"readback_sha256":hashlib.sha256(open(readback,"rb").read()).hexdigest(),"merge_commit":merge};fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);f=os.fdopen(fd,"w");json.dump(doc,f,sort_keys=True);f.write("\n");f.flush();os.fsync(f.fileno());f.close()' "$merged_receipt" "$checked_receipt" "$readback" "$merge_commit" || exit 1
+printf 'ledger docs PR #%s merged as %s; remote main readback verified\n' "$ledger_pr" "$merge_commit"
+```
+
+Expected: required CI output and `required ledger CI passed` only after the CI command succeeds, `PR commit identities and pinned head verified`, then `ledger docs PR #<observed number> merged as <observed SHA>; remote main readback verified`. The checked receipt is created exclusively after CI/identity/head validation; the merged receipt is created only after a MERGED readback with the checked head and remote-main ancestry. A missing/malformed R1/R2 input, existing receipt, failed status read, wrong author/signature/trailer, failed or missing required CI, head race, truncated REST listing or failed merge/readback stops explicitly in both direct and conditional execution. If a merge succeeds but a later readback fails, preserve all outputs and inspect remote state before resuming; never resubmit or manufacture the merged receipt. On D34's plans branch, R3 is skipped and R4 still verifies the recorded value from the resolved ledger copy.
+
+Then R4 (read-only; a remote read, so it needs explicit user confirmation in chat):
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -18944,6 +21018,7 @@ python3 -I "$L/s3-ledger.py" get "$h" P5_PR
 ```
 
 Expected: `P5_PR=<the value written>`. Anything else (for example the plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints `P5_PR`. Task 82 reads the runbook from a production checkout at a freshly fetched `origin/main` in its live worktree (`multi-source-s3e4-live`, detached), never from this worktree, and reads `P5_PR` from the ledger copy only.
+
 
 ---
 
@@ -18958,7 +21033,7 @@ One step is irreversible: Step 14 (runbook §7.2), the authority-signed update t
 - Modify, commits H-b, H-c and H-a (Steps 7–9, runbook §5.1–§5.3): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2-source-image.yaml`, `sentio-node-indexer-c-storage-integrity-si-v2-source-image.yaml` and `sentio-node-indexer-a-storage-integrity-si-v2-source-image.yaml`, each as Plan S3-D Task 56 left it at the P4 host image: the leading comment becomes `p5-edit.py`'s `HOST_HEADERS["<x>"]` and `node.image.tag` moves from `sha-<SN_COMMIT_P4>@<SN_DIGEST_P4>` to `sha-<SN_COMMIT_P5>@<SN_DIGEST_P5>`; for indexer-a also its mirror `docs/examples/storage-integrity-fresh-source-image.yaml` (header `EXAMPLE_HEADER`); `charts/storage-integrity/tests/test_render.py` — `INDEXER_B_SOURCE_IMAGE`, `INDEXER_C_SOURCE_IMAGE` and `FRESH_SOURCE_IMAGE`, each the P4 image → the two-line literal of the P5 image (`DEVNET2_STAGE3_P5_SOURCE_IMAGE`'s value). Subjects `chore(devnet2): indexer-<x> on the stage-3 P5 host build (stage3_v1)`.
 - Modify, commits M-b, M-c and M-a (Step 10, runbook §5.4): `k8s-sea/sentio-network-devnet2/sentio-node-indexer-<x>-storage-integrity-si-v2.yaml` — in Plan S3-C3's top-level `siMember` block, the comment lines directly above `  image:` (Plan S3-C4 Task 48's four lines) and that line become `p5-edit.py`'s `MEMBER_COMMENT` (naming the image it replaces, `member-images-before.txt`'s, as the rollback target) and `  image: ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P5>@<SN_DIGEST_P5>`; nothing else of `siMember` changes and no test constant moves (Task 80 lists the P5 image in `MEMBER_IMAGES` and `REPLICA_READ_HOST_IMAGES`). Subjects `chore(devnet2): stage-3 P5 member image on sentio-node-devnet2-indexer-<x> (consensus mode off)`.
 - Modify, commit MON (Step 16, runbook §8): `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` — `p5-edit.py`'s `MONITORING_BLOCK` (`stage3Consensus:` / `enabled: true` behind three comment lines) appended as the last key of the top-level `monitoring:` block; `charts/storage-integrity/tests/test_render.py` — `DEVNET2_STAGE3_CONSENSUS_MONITORING` `False` → `True` (Task 80's constant). Subject `chore(devnet2): stage-3 consensus alert rules on (P5)` (runbook §8).
-- Modify, the outcome record PR (Step 19; branch `urwt/claude/multi-source-s3e4-record` in the live worktree, docs only): `docs/storage-integrity-devnet2-stage3-p5-v21.md` — one paragraph `Record of the first run: …` at the end of `## 9. End`, right before `## 10. Rollback`. Title `docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)`.
+- Modify, the outcome record PR (Step 19; branch `urwt/codex/multi-source-s3e4-record` in the live worktree, docs only): `docs/storage-integrity-devnet2-stage3-p5-v21.md` — one paragraph `Record of the first run: …` at the end of `## 9. End`, right before `## 10. Rollback`. Title `docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)`.
 - Modify, housegate (Step 20): `docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md`, Appendix C — the rows `P5_REHEARSAL`, `ACTIVATION_EPOCH` and `P5_END` and the run record `P5 run and the v21 activation (Task 82)`, on the ledger copy `s3-ledger.py ref <housegate> s3e4` prints (decision D34), with the record procedure of Plan S3-C1 contract §19 from the URWT worktree `multi-source-s3e4-ledger-82`.
 - Create (local only, never committed): `$HOME/.cache/s3e4-task82/` (mode 700) with `live-path`, `p5-runbook.py`, `p5-edit.py`, `p5-record.py`, `p5-task.sh`, `helpers.sh`, `ledger.env`, `record.env` (one `KEY=value` per line, the last line of a key wins), `p5-pr-state`, `tests-baseline.txt`, `tests-last.txt`, the commit messages `msg-*.txt`, `record-pr-body.md`, `blocks/` (every block file run, decision D24) and `user/` (the user's two acceptance scripts); the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (Plan S3-C1 contract §19, verbatim) with `record-s3e4-82`, `record-s3e4-82.md` and, for a docs PR, `record-s3e4-82-pr.md` and `record-s3e4-82-pr-url`; the runbook's evidence directory `$HOME/si-devnet2-stage3-p5` (`$si_backup`, created fresh by runbook §1.1, never by this task), which also holds this task's `task82-*` files. `$R5` = `$HOME/si-devnet2-multisource-s3e-rehearsal` is only read (decision D37): nothing of this task writes, rebuilds or deletes anything there.
 - Test: `python3 -B charts/storage-integrity/tests/test_render.py` before every commit (inside `p5_commit`, with the count Step 2 records); `si_render_diff` of every commit before its push (this task's check) and `si_render_diff_is` inside every commit block of the runbook; `kubectl apply --dry-run=server` of the rehearsal Pod (runbook §3.2). No chart, template or test changes, so the `helm lint --strict` profiles and `render-inertness.sh` are not affected.
@@ -18974,6 +21049,10 @@ One step is irreversible: Step 14 (runbook §7.2), the authority-signed update t
 - Produces (production `main`, single-service commits in this order, each recorded by the runbook): `stage3-p5-verifiers-commit` (V), `stage3-p5-indexer-b-commit` (H-b), `stage3-p5-indexer-c-commit` (H-c), `stage3-p5-indexer-a-commit` (H-a), `stage3-p5-member-b-commit` (M-b), `stage3-p5-member-c-commit` (M-c), `stage3-p5-member-a-commit` (M-a), `stage3-p5-monitoring-commit` (MON); then the outcome record PR (`RECORD_PR`).
 - Produces (Appendix C, Step 20): `P5_REHEARSAL` (`YYYY-MM-DD`, the date the rehearsal printed `rehearsal ok`), `ACTIVATION_EPOCH` (the `committed_epoch` of `activate.out`), `P5_END` (`YYYY-MM-DD` of runbook §9), with the run record `P5 run and the v21 activation`.
 - Produces (task tools, local; recorded in Appendix B): `p5-runbook.py` (`chain`, `block`, `user`), `p5-edit.py` (`arbiter-pin`, `host-pin`, `fresh-example`, `member-image`, `monitoring-on`, `image-constant`, `constant`, `preflight`), `p5-record.py` (`end`, `runbook-record`, `ledger-record`) and the shell helpers `p5_fresh_main`, `p5_edit`, `p5_rec`, `p5_record`, `p5_recorded`, `p5_author_ok`, `p5_commit`, `p5_host`, `p5_chi_pods`, `p5_arbiter_pods`, `p5_files`, `p5_window`; `record.env` keys `TESTS`, `START_UTC`, `ARBITER_COMMIT_P5`, `BUDGET`, `REPLAY_DATE`, `P5_REHEARSAL`, `LEADER_71`, `ACTIVATION_UTC`, `ACTIVATION_EPOCH`, `V21_UTC`, `P5_END`, `END_UTC`, `RECORD_PR`; the evidence `task82-baseline.txt`, `task82-chi-before.txt`, `task82-chi-now.txt`, `task82-window-<label>.txt`, `task82-render-<label>.txt`, `task82-ledger-recheck.txt`, `task82-activation-precheck.txt`, `task82-features-precheck.json`, `task82-record-pr.txt`.
+
+**Execution prerequisites.** Obtain the accepted Task81 runbook and its actual merged source before execution. Re-extract every block and helper chain, check producer interfaces and image/source digest bindings, apply the preceding production changes in their prescribed order, and run the required render checks before every commit. Inert fixtures do not substitute for the actual merged source, produced release/ledger evidence or any user, signing, remote, irreversible or live confirmation gate.
+
+**Signed workflow / actual URWT path (procedural reconciliation).** Codex-created live and ledger worktrees use runtime `codex`; persist and consume their returned JSON path without resolving its symlink spelling, and stop on a prior JSON or `existing` action. Every real commit requires worktree `commit.gpgsign true`, a changed HEAD, `poetry <chen@sentio.xyz> G`, and `git verify-commit HEAD`. Signing cancellation or failure stops before publish; preserve staged work and ask the user to unlock the actual repository signing key in their own fish terminal; never disable signing or publish an unsigned fallback. Ordinary commits keep exactly the canonical Claude trailer; the FINALv2 full-PR reader allows historical commits without it. D34's fixed `origin/urwt/claude/ms-si-stage3-plans-cf` and the existing stack branches are unchanged. Both merge sites bind REST results to a checked lowercase 40-hex head, check the remote head before and after validation, and pass that same head to atomic `--match-head-commit`.
 
 Notes:
 - **The runbook decides.** Every check, stop condition and expected output of a runbook block is the runbook's; where this task adds a read-only check it says so and gives its exact output. Before the one-way step (Step 14) this task repeats every precondition the step depends on (Step 13) and stops on any that fails.
@@ -19007,17 +21086,31 @@ After `P5_PR` has merged and Task 81's ledger record passed its R4, and Plan S3-
 ```bash
 prod=/Users/uranuswch/Dev/projects/sentio-network/production
 git -C "$prod" fetch -q origin
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$prod" claude multi-source-s3e4-live)"
+urwt_json="$HOME/.cache/s3-worktrees/s3e4-live-82.json"
+mkdir -p "$(dirname "$urwt_json")" || exit 1
+[ ! -e "$urwt_json" ] || { echo "retained URWT JSON exists: reconcile the prior attempt with the user; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$prod" codex multi-source-s3e4-live urwt/codex/multi-source-s3e4-live origin/main)" || { echo "URWT failed; preserve any prior work and stop"; exit 1; }
+printf '%s\n' "$out" > "$urwt_json" || exit 1
+python3 -I -c 'import json,os,sys; d=json.load(open(sys.argv[1])); p=d.get("path"); assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"))' "$urwt_json" || { echo "invalid or reused URWT result; stop"; exit 1; }
 printf '%s\n' "$out"
-P="$(printf '%s\n' "$out" | jq -r .path)"
+P="$(jq -er .path "$urwt_json")"
 [ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { echo "the live worktree is not new (an earlier attempt?): stop and ask"; exit 1; }
 git -C "$P" switch -q --detach origin/main
-[ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = HEAD ] && [ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live worktree is not a detached origin/main: stop"; exit 1; }
-[ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live worktree is not clean: stop"; exit 1; }
+e4_git_read_086="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || exit 1
+e4_git_read_087="$(git -C "$P" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_087" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_088="$(git -C "$P" rev-parse origin/main)" || exit 1
+[[ "$e4_git_read_088" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_git_read_086}" = HEAD ] && [ "${e4_git_read_087}" = "${e4_git_read_088}" ] || { echo "the live worktree is not a detached origin/main: stop"; exit 1; }
+e4_git_read_089="$(git -C "$P" status --porcelain)" || exit 1
+[ -z "${e4_git_read_089}" ] || { echo "the live worktree is not clean: stop"; exit 1; }
 git -C "$P" config extensions.worktreeConfig true
 git -C "$P" config --worktree user.name poetry
-git -C "$P" config --worktree user.email chen@sentio.xyz
-[ "$(git -C "$P" config user.name) <$(git -C "$P" config user.email)>" = "poetry <chen@sentio.xyz>" ] || { echo "the live worktree's identity is not poetry <chen@sentio.xyz>: stop"; exit 1; }
+git -C "$P" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$P" config --worktree commit.gpgsign true || exit 1
+e4_git_read_090="$(git -C "$P" config user.name)" || exit 1
+e4_git_read_091="$(git -C "$P" config user.email)" || exit 1
+[ "${e4_git_read_090} <${e4_git_read_091}>" = "poetry <chen@sentio.xyz>" ] || { echo "the live worktree's identity is not poetry <chen@sentio.xyz>: stop"; exit 1; }
 test -f "$P/docs/storage-integrity-devnet2-stage3-p5-v21.md" || { echo "origin/main has no P5 runbook (P5_PR has not merged): stop"; exit 1; }
 test -f "$P/docs/examples/storage-integrity-p5-rehearsal-pod.yaml" || { echo "origin/main has no rehearsal Pod example (P5_PR has not merged): stop"; exit 1; }
 [ -d "$HOME/si-devnet2-multisource-s3e-rehearsal" ] || { echo "\$R5 is missing: Plan S3-E4 Task 78 builds it; stop"; exit 1; }
@@ -19032,7 +21125,7 @@ printf '%s\n' "$P" > "$T/live-path"
 echo "live worktree $P at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached, identity poetry <chen@sentio.xyz>); task tools in $T"
 ```
 
-Expected: one JSON object with `"action": "created"` whose `path` is `…/remotesrc/claude/production/multi-source-s3e4-live`, then the `live worktree … (detached, identity poetry <chen@sentio.xyz>)` line. An `existing` worktree is a leftover of an earlier attempt: stop and ask. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/claude/multi-source-s3e4-live` is never used or pushed: the worktree stays detached at `origin/main` (S3-B D4), and every commit is pushed as `HEAD:main` by its runbook block.
+Expected: one JSON object with `"action": "created"` whose `path` is `…/remotesrc/codex/production/multi-source-s3e4-live`, then the `live worktree … (detached, identity poetry <chen@sentio.xyz>)` line. An `existing` worktree is a leftover of an earlier attempt: stop and ask. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/production config approvals add` themselves; never pass `--yes` or `--clobber`. The worktree's branch `urwt/codex/multi-source-s3e4-live` is never used or pushed: the worktree stays detached at `origin/main` (S3-B D4), and every commit is pushed as `HEAD:main` by its runbook block.
 
 Write, with the Write tool, the ledger tool `$HOME/.cache/s3-ledger/s3-ledger.py` (the text at the end of Plan S3-C1 contract §19, verbatim; an earlier copy is the same text and is overwritten) and these four files with exactly this content into `$HOME/.cache/s3e4-task82/`.
 
@@ -20089,10 +22182,16 @@ fn(sys.argv[2:])
 T="$HOME/.cache/s3e4-task82"
 p5_fresh_main() { # before every commit: the live checkout fast-forwarded to a freshly fetched origin/main, detached and clean
   git -C "$P" fetch -q origin main || return 1
-  [ -z "$(git -C "$P" status --porcelain)" ] || { echo "the live checkout has local changes: stop"; return 1; }
+  e4_git_read_092="$(git -C "$P" status --porcelain)" || return 1
+  [ -z "${e4_git_read_092}" ] || { echo "the live checkout has local changes: stop"; return 1; }
   git -C "$P" merge -q --ff-only origin/main || { echo "the live checkout cannot fast-forward to origin/main: stop"; return 1; }
-  [ "$(git -C "$P" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] || { echo "the live checkout is not at origin/main (an unpushed local commit?): stop"; return 1; }
-  [ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = HEAD ] || { echo "the live checkout is on a branch, not a detached HEAD: stop"; return 1; }
+  e4_git_read_093="$(git -C "$P" rev-parse HEAD)" || return 1
+  [[ "$e4_git_read_093" =~ ^[0-9a-f]{40}$ ]] || return 1
+  e4_git_read_094="$(git -C "$P" rev-parse origin/main)" || return 1
+  [[ "$e4_git_read_094" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "${e4_git_read_093}" = "${e4_git_read_094}" ] || { echo "the live checkout is not at origin/main (an unpushed local commit?): stop"; return 1; }
+  e4_git_read_095="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || return 1
+  [ "${e4_git_read_095}" = HEAD ] || { echo "the live checkout is on a branch, not a detached HEAD: stop"; return 1; }
   echo "live checkout at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached)"
 }
 p5_edit() { (cd "$P" && python3 -I -B "$T/p5-edit.py" "$@"); } # structure-checked edits of the live checkout (Step 1's p5-edit.py)
@@ -20108,26 +22207,36 @@ p5_recorded() { # $1 KEY: its last value in record.env; fails when it has none
   printf '%s\n' "$v"
 }
 p5_author_ok() { # HEAD of the live checkout is authored and committed as poetry <chen@sentio.xyz> (the worktree identity of Step 1)
-  local a c
-  a="$(git -C "$P" log -1 --format='%an <%ae>')"; c="$(git -C "$P" log -1 --format='%cn <%ce>')"
+  local a c signed
+  a="$(git -C "$P" log -1 --format='%an <%ae>')" || return 1
+  c="$(git -C "$P" log -1 --format='%cn <%ce>')" || return 1
+  signed="$(git -C "$P" log -1 --format='%an <%ae> %G?')" || return 1
+  [ "$signed" = "poetry <chen@sentio.xyz> G" ] && git -C "$P" verify-commit HEAD || { echo "signature check failed: preserve work, unlock the repository signing key in your own terminal, and stop; never disable signing"; return 1; }
   [ "$a" = "poetry <chen@sentio.xyz>" ] && [ "$c" = "poetry <chen@sentio.xyz>" ] ||
     { echo "HEAD is authored by $a and committed by $c, not poetry <chen@sentio.xyz>: never push it; drop it with git -C \"\$P\" switch -q --detach origin/main"; return 1; }
   echo "author and committer: $a"
 }
 p5_commit() { # $1 message file, then the exact files of this commit: refuses any other change, runs the render tests (the count Step 2 recorded), commits on the detached HEAD (local only)
-  local msg=$1 want
+  local msg=$1 want before
   shift
   want="$(p5_recorded TESTS)" || return 1
-  [ "$(git -C "$P" diff --name-only HEAD | LC_ALL=C sort | tr '\n' ' ')" = "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ] ||
+  e4_git_read_096="$(set -o pipefail; git -C "$P" diff --name-only HEAD | LC_ALL=C sort | tr '\n' ' ')" || return 1
+  [ "${e4_git_read_096}" = "$(printf '%s\n' "$@" | LC_ALL=C sort | tr '\n' ' ')" ] ||
     { echo "the working tree does not change exactly: $*"; git -C "$P" status --short; return 1; }
-  [ -z "$(git -C "$P" ls-files --others --exclude-standard)" ] || { echo "untracked files in the checkout:"; git -C "$P" ls-files --others --exclude-standard; return 1; }
+  e4_git_read_097="$(git -C "$P" ls-files --others --exclude-standard)" || return 1
+  [ -z "${e4_git_read_097}" ] || { echo "untracked files in the checkout:"; git -C "$P" ls-files --others --exclude-standard; return 1; }
   (cd "$P" && python3 -B charts/storage-integrity/tests/test_render.py) > "$T/tests-last.txt" 2>&1 ||
     { tail -n 40 "$T/tests-last.txt"; echo "render tests fail: nothing committed; discard the edits with git -C \"\$P\" checkout -- ."; return 1; }
   grep -Eq "^Ran $want tests in [0-9.]+s$" "$T/tests-last.txt" && [ "$(tail -n 1 "$T/tests-last.txt")" = OK ] ||
     { tail -n 3 "$T/tests-last.txt"; echo "the render tests did not run $want tests to OK: nothing committed"; return 1; }
   tail -n 3 "$T/tests-last.txt"
-  git -C "$P" add -- "$@"
-  git -C "$P" commit -q -F "$msg"
+  before="$(git -C "$P" rev-parse HEAD)" || return 1
+  git -C "$P" config --worktree commit.gpgsign true || return 1
+  git -C "$P" add -- "$@" || return 1
+  git -C "$P" commit -q -F "$msg" || { echo "commit/signing failed: preserve staged work and stop; unlock the actual repository signing key in your own terminal; never disable signing"; return 1; }
+  e4_git_read_098="$(git -C "$P" rev-parse HEAD)" || return 1
+  [[ "$e4_git_read_098" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ "${e4_git_read_098}" != "$before" ] || { echo "commit created no new HEAD; stop"; return 1; }
   p5_author_ok || return 1
   git -C "$P" show --stat --oneline HEAD | cat
 }
@@ -20205,8 +22314,10 @@ Expected: `s3-ledger: P5_REHEARSAL ACTIVATION_EPOCH P5_END not recorded yet in o
 This block reads three remotes (`gh pr view`, the fetch of `p5_fresh_main` and the tag fetch of the local arbiter clone): it needs explicit user confirmation in chat (Gate: "gh pr view of sentioxyz/production #<P5_PR>, git fetch of production's origin and git fetch --tags of the local arbiter clone, reads; then local checks and the render tests"). After a yes, write and run it:
 
 ```bash
-gh pr view "$P5_PR" --repo sentioxyz/production --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid)"' | tee "$T/p5-pr-state"
-read -r state merge < "$T/p5-pr-state"
+e4_gh_pr_state="$(gh pr view "$P5_PR" --repo sentioxyz/production --json state,mergeCommit --jq '"\(.state) \(.mergeCommit.oid)"')" || exit 1
+printf '%s\n' "$e4_gh_pr_state" | tee "$T/p5-pr-state" || exit 1
+read -r state merge < "$T/p5-pr-state" || exit 1
+[[ "$merge" =~ ^[0-9a-f]{40}$ ]] || exit 1
 [ "$state" = MERGED ] || { echo "P5_PR #$P5_PR is not merged: stop"; exit 1; }
 p5_fresh_main
 git merge-base --is-ancestor "$merge" HEAD || { echo "origin/main does not contain P5_PR's merge commit $merge: stop"; exit 1; }
@@ -20237,7 +22348,8 @@ PY
 p5_edit preflight "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P4@$SN_DIGEST_P4" "ghcr.io/sentioxyz/sentio-node:sha-$SN_COMMIT_P5@$SN_DIGEST_P5" "$ARBITER_DIGEST_P4" "$ARBITER_DIGEST_P5"
 arb=/Users/uranuswch/Dev/projects/sentio-network/arbiter
 git -C "$arb" fetch -q --tags origin
-commit="$(git -C "$arb" rev-parse "$ARBITER_TAG_P5^{commit}")"
+commit="$(git -C "$arb" rev-parse "$ARBITER_TAG_P5^{commit}")" || exit 1
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
 python3 -B charts/storage-integrity/tests/test_render.py > "$T/tests-baseline.txt" 2>&1 || { tail -n 40 "$T/tests-baseline.txt"; echo "the render tests fail on origin/main: stop"; exit 1; }
 n="$(sed -n 's/^Ran \([0-9][0-9]*\) tests in .*/\1/p' "$T/tests-baseline.txt")"
 [ -n "$n" ] && [ "$(tail -n 1 "$T/tests-baseline.txt")" = OK ] || { tail -n 5 "$T/tests-baseline.txt"; echo "no test count: stop"; exit 1; }
@@ -20882,11 +22994,11 @@ Expected: `P5_REHEARSAL=<date>`, `ACTIVATION_EPOCH=<ENROLMENT_EPOCH + 1>`, `P5_E
 
 - [ ] **Step 19: The outcome record PR (local commit; the push, the PR and the merge each require explicit user confirmation)**
 
-Local, except its `p5_fresh_main` fetch (a remote read that needs explicit user confirmation in chat; Gate: "git fetch of production's origin, a read; then the record paragraph committed on the local branch urwt/claude/multi-source-s3e4-record, never pushed by this block"). After a yes:
+Local, except its `p5_fresh_main` fetch (a remote read that needs explicit user confirmation in chat; Gate: "git fetch of production's origin, a read; then the record paragraph committed on the local branch urwt/codex/multi-source-s3e4-record, never pushed by this block"). After a yes:
 
 ```bash
 p5_fresh_main
-git -C "$P" switch -q -c urwt/claude/multi-source-s3e4-record
+git -C "$P" switch -q -c urwt/codex/multi-source-s3e4-record
 p5_rec runbook-record "$P/docs/storage-integrity-devnet2-stage3-p5-v21.md" "$si_backup" "$T/ledger.env" "$T/record.env"
 cat > "$T/msg-record.txt" <<'EOF'
 docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)
@@ -20912,13 +23024,14 @@ git -C "$P" show HEAD | sed -n '/^@@/,$p'
 } > "$T/record-pr-body.md"
 ```
 
-Expected: `record written: …/docs/storage-integrity-devnet2-stage3-p5-v21.md`, `Ran <N> tests` / `OK`, `author and committer: poetry <chen@sentio.xyz>`, one commit of the runbook only, and one hunk adding the paragraph `Record of the first run: <START_UTC> to <END_UTC> UTC, …` right before `## 10. Rollback`. A `stop` writes nothing. Then the push and the PR. Requires explicit user confirmation in chat. Gate: "push branch urwt/claude/multi-source-s3e4-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)' against production main (one paragraph at the end of runbook §9; nothing is synced)". After a yes:
+Expected: `record written: …/docs/storage-integrity-devnet2-stage3-p5-v21.md`, `Ran <N> tests` / `OK`, `author and committer: poetry <chen@sentio.xyz>`, one commit of the runbook only, and one hunk adding the paragraph `Record of the first run: <START_UTC> to <END_UTC> UTC, …` right before `## 10. Rollback`. A `stop` writes nothing. Then the push and the PR. Requires explicit user confirmation in chat. Gate: "push branch urwt/codex/multi-source-s3e4-record and open the docs PR 'docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)' against production main (one paragraph at the end of runbook §9; nothing is synced)". After a yes:
 
 ```bash
-[ "$(git -C "$P" rev-parse --abbrev-ref HEAD)" = urwt/claude/multi-source-s3e4-record ] || { echo "the live checkout is not on the record branch: stop"; exit 1; }
-p5_author_ok
-git -C "$P" push -u origin urwt/claude/multi-source-s3e4-record
-gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3e4-record --title "docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)" --body-file "$T/record-pr-body.md" | tee "$si_backup/task82-record-pr.txt"
+e4_git_read_100="$(git -C "$P" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${e4_git_read_100}" = urwt/codex/multi-source-s3e4-record ] || { echo "the live checkout is not on the record branch: stop"; exit 1; }
+p5_author_ok || exit 1
+git -C "$P" push -u origin urwt/codex/multi-source-s3e4-record
+gh pr create --repo sentioxyz/production --base main --head urwt/codex/multi-source-s3e4-record --title "docs(storage-integrity): record the devnet2 stage-3 P5 run (v21 activation)" --body-file "$T/record-pr-body.md" | tee "$si_backup/task82-record-pr.txt"
 p5_record RECORD_PR "$(sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p' "$si_backup/task82-record-pr.txt" | tail -n 1)"
 ```
 
@@ -20927,32 +23040,40 @@ Expected: `author and committer: poetry <chen@sentio.xyz>`, the push, the PR URL
 ```bash
 set -eo pipefail
 pr="$(p5_recorded RECORD_PR)"
-gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo sentioxyz/production --squash
+expected_head="$(git -C "$P" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+e4_gh_read_13="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$e4_gh_read_13" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_gh_read_13}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+e4_gh_read_14="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$e4_gh_read_14" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_gh_read_14}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 git -C "$P" fetch -q origin main
 git -C "$P" switch -q --detach origin/main
 echo "live checkout back at origin/main $(git -C "$P" rev-parse --short=9 HEAD) (detached)"
 ```
 
-Expected: `PR commit identities verified`, the merge, then `live checkout back at origin/main <9 hex> (detached)`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the ordinary record commit above still requires its Claude trailer.
+Expected: `PR commit identities and pinned head verified`, the merge, then `live checkout back at origin/main <9 hex> (detached)`. Each REST commit record independently checks primary author `poetry <chen@sentio.xyz>` and allows no coauthor or exactly one canonical Claude trailer (merge commits can have none). Another primary author, additional coauthor, duplicate trailer or malformed response stops before merging; the ordinary record commit above still requires its Claude trailer.
 
 - [ ] **Step 20: Appendix C record (local commit; the push, or the docs PR and its merge, require explicit user confirmation)**
 
@@ -20969,20 +23090,38 @@ L="$HOME/.cache/s3-ledger"; n=82; h=/Users/uranuswch/Dev/projects/sentio-network
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3e4-p5-floor-release-activation.md
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3e4)" || exit 1
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude "multi-source-s3e4-ledger-$n" "urwt/claude/multi-source-s3e4-ledger-$n" "$ref")"
-d="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] ||
+urwt_json="$HOME/.cache/s3-worktrees/s3e4-ledger-82.json"
+mkdir -p "$(dirname "$urwt_json")" || exit 1
+[ ! -e "$urwt_json" ] || { echo "retained URWT JSON exists: reconcile the prior attempt with the user; stop"; exit 1; }
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex "multi-source-s3e4-ledger-$n" "urwt/codex/multi-source-s3e4-ledger-$n" "$ref")" || { echo "URWT failed; preserve any prior work and stop"; exit 1; }
+printf '%s\n' "$out" > "$urwt_json" || exit 1
+python3 -I -c 'import json,os,sys; d=json.load(open(sys.argv[1])); p=d.get("path"); assert d.get("action")=="created" and isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"))' "$urwt_json" || { echo "invalid or reused URWT result; stop"; exit 1; }
+d="$(jq -er .path "$urwt_json")"
+e4_git_read_101="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_101" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_102="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$e4_git_read_102" =~ ^[0-9a-f]{40}$ ]] || exit 1
+e4_git_read_103="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${e4_git_read_101}" = "${e4_git_read_102}" ] && [ -z "${e4_git_read_103}" ] ||
   { printf '%s\n' "$out"; echo "the ledger worktree is not a new, clean checkout of $ref (an earlier attempt?): stop and ask"; exit 1; }
 git -C "$d" config extensions.worktreeConfig true
 git -C "$d" config --worktree user.name poetry
-git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-s3e4-$n"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" "$n" "$L/record-s3e4-$n.md" \
   P5_REHEARSAL="$(p5_recorded P5_REHEARSAL)" ACTIVATION_EPOCH="$(p5_recorded ACTIVATION_EPOCH)" P5_END="$(p5_recorded P5_END)" || exit 1
+before="$(git -C "$d" rev-parse HEAD)" || exit 1
 git -C "$d" commit -q -m "docs(plan): record P5_REHEARSAL, ACTIVATION_EPOCH and P5_END of Plan S3-E4 (Task 82)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "the record commit is not authored by poetry <chen@sentio.xyz>: never push it; stop"; exit 1; }
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$rel" || { echo "commit/signing failed: preserve staged work, unlock the actual signing key in your own terminal, and stop; never disable signing"; exit 1; }
+e4_git_read_104="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$e4_git_read_104" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_git_read_104}" != "$before" ] || { echo "no new ledger commit; stop"; exit 1; }
+e4_git_read_105="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${e4_git_read_105}" = "poetry <chen@sentio.xyz>" ] || { echo "the record commit is not authored by poetry <chen@sentio.xyz>: never push it; stop"; exit 1; }
+e4_git_read_106="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_106}" = "poetry <chen@sentio.xyz> G" ] && git -C "$d" verify-commit HEAD || { echo "ledger signature verification failed; never push; stop"; exit 1; }
 git -C "$d" show --stat --oneline HEAD | cat
 ```
 
@@ -20993,13 +23132,19 @@ R2 (remote write): needs explicit user confirmation in chat before running. Gate
 ```bash
 L="$HOME/.cache/s3-ledger"; n=82
 d="$(sed -n 1p "$L/record-s3e4-$n")"; ref="$(sed -n 2p "$L/record-s3e4-$n")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = "poetry <chen@sentio.xyz>" ] || { echo "the record commit is not authored by poetry <chen@sentio.xyz>: stop"; exit 1; }
+e4_git_read_107="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+e4_git_read_108="$(git -C "$d" status --porcelain)" || exit 1
+[ "${e4_git_read_107}" = 1 ] && [ -z "${e4_git_read_108}" ] || { echo "the ledger worktree $d is not one clean record commit ahead of $ref: stop"; exit 1; }
+e4_git_read_109="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${e4_git_read_109}" = "poetry <chen@sentio.xyz>" ] || { echo "the record commit is not authored by poetry <chen@sentio.xyz>: stop"; exit 1; }
+e4_git_read_110="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${e4_git_read_110}" = "poetry <chen@sentio.xyz> G" ] && git -C "$d" verify-commit HEAD || { echo "ledger signature verification failed; never push; stop"; exit 1; }
 case "$ref" in
   origin/main)
     git -C "$d" push -u origin HEAD
     printf '%s\n\n%s\n' "$(git -C "$d" log -1 --format=%s): Appendix C of Plan S3-E4 only, docs only (Plan S3-C1 contract §19, decision D34)." '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-s3e4-$n-pr.md"
-    (cd "$d" && gh pr create --repo housegate/housegate --base main --title "$(git log -1 --format=%s)" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
+    e4_git_read_111="$(git -C "$d" log -1 --format=%s)" || exit 1
+    (cd "$d" && gh pr create --repo housegate/housegate --base main --title "${e4_git_read_111}" --body-file "$L/record-s3e4-$n-pr.md") | tee "$L/record-s3e4-$n-pr-url"
     ;;
   origin/urwt/claude/ms-si-stage3-plans-cf)
     git -C "$d" push origin HEAD:urwt/claude/ms-si-stage3-plans-cf
@@ -21012,30 +23157,39 @@ Expected: the push to `urwt/claude/ms-si-stage3-plans-cf`, or the push and the d
 
 ```bash
 set -eo pipefail
+d="$(jq -er .path "$HOME/.cache/s3-worktrees/s3e4-ledger-82.json")" || { echo "missing retained ledger worktree path; stop"; exit 1; }
 pr=<number>
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo housegate/housegate --squash
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid checked PR head; stop"; exit 1; }
+e4_gh_read_15="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$e4_gh_read_15" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_gh_read_15}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+e4_gh_read_16="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$e4_gh_read_16" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${e4_gh_read_16}" = "$expected_head" ] || { echo "PR head changed; repeat review and author validation; stop"; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
-Expected: `PR commit identities verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; its fetch reads a remote and needs explicit user confirmation in chat; Gate: "git fetch of housegate's origin and s3-ledger.py get of P5_REHEARSAL, ACTIVATION_EPOCH and P5_END, reads"). After a yes:
+Expected: `PR commit identities and pinned head verified`, then the squash merge. Any other primary author, additional coauthor, duplicate Claude trailer or malformed response stops before the merge. Then R4 (read-only; its fetch reads a remote and needs explicit user confirmation in chat; Gate: "git fetch of housegate's origin and s3-ledger.py get of P5_REHEARSAL, ACTIVATION_EPOCH and P5_END, reads"). After a yes:
 
 ```bash
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"
@@ -21077,7 +23231,7 @@ Plan S3-A's §0–§6, Plan S3-B's §7–§15 and the contracts of S3-C1 (§16�
   - **Proto:** `Stage3Params` fields 1–18 (`group_size` … `narrowed_drain`), `stage3` = 14 on `ConsensusParamsUpdate` and 9 on `ConsensusMutableParams`, `ConsensusParamsState.stage3_state` = 9, `ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12`, `ADMISSION_CODE_COPIES_BACKPRESSURE = 13`, `TableRegistrySnapshot.groups = 10`, `stage3 = 12`.
   - **Canonical Go types:** `arbiter.Stage3Params{GroupSize, NetworkFillDefault, MinSafeCopies, StrictCopies, IndexerFailureDomains, MaxLagPublications, LagLow, EvidenceTimeoutL2Blocks, MaxUncleanedPartsPerPartition, MaxUncleanedPartsPerTable, ExcludeQuarantinedHosts, Purge, EvictionVoiding, OwnerAwareSelection, Placement, Reselection, Checkpoints, NarrowedDrain}`, `arbiter.IndexerFailureDomain{IndexerID, FailureDomain}`, `arbiter.VerifierEntry{NodeID, Ed25519Pubkey, HostIndexerID *uint64, ReplicaSigner, ConsentJWS, Weight, FailureDomain, Verify, Replicate, Counts, SharedRMT}`, `arbiter.ExcludedTable`, `arbiter.AdmissionCodeVerifiersUnavailable`, `arbiter.AdmissionCodeCopiesBackpressure`, `arbiter.Stage3Feature = "stage3_v1"`.
   - **Consent:** `authority.GroupMemberConsentStatement{NetworkID, GenesisSnapshotID, HostIndexerID, NodeID, Ed25519Pubkey, ReplicaSigner}`, `(*authority.Signer).SignGroupMemberConsent`, `authority.VerifyGroupMemberConsent(stmt, jws, signer)`, purpose `arbiter-group-member-v1`.
-  - **Wire and member mode:** `wire.TableRegistrySnapshot.Groups []wire.DatabaseGroup`, `wire.DatabaseGroup{OwnerIndexerID, DatabaseID, Members []GroupMember, NetworkFill, Generation, PastMembers, Leaving []LeavingMember, GroupKey, PlacementSalt}`, `wire.GroupMember{NodeID, JoinedGeneration, ReadyGeneration, Class, Checkpoint, ObservedEntry, LagAdvances, HostIndexerID}` with `Ready()`. Its `HostIndexerID uint64` is the registry-view field `GroupMember.host_indexer_id`, which S3-E1 adds and fills at serve time from the member's `VerifierEntry.HostIndexerID` (decision D27). That value is fixed for the entry's life (K68), is not FSM state and is not Raft-reachable. `LagAdvances` saturates at `max_lag_publications + 1` (decision D31). Also `wire.LeavingMember{NodeID, RemovedGeneration, ReleaseEntry, FrozenMembers, FrozenDomains, Released}`; `member.Config.Consensus *consensus.Config` with `consensus.Config{NodeID, NetworkID, GenesisSnapshotID, StateDir, StoragePolicy string, Ed25519Seed []byte, ReplicaSignerKeyHex string, KeeperShardID, Tables, Register bool, ReadinessInterval, CheckpointInterval, ResolveInterval}`, `consensus.ReconcilerConfig{NodeID, StateDir, KeeperShardID, NetworkID string, Tables []payloadexec.TableSchema, StoragePolicy string, CreateReplicas bool, Interval}`, `consensus.NewUnsafeReconciler`, `consensus.Metrics`, `tableset.Stats.KeeperFindings` and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`.
+  - **Wire and member mode:** `wire.TableRegistrySnapshot.Groups []wire.DatabaseGroup`, `wire.DatabaseGroup{OwnerIndexerID, DatabaseID, Members []GroupMember, NetworkFill, Generation, PastMembers, Leaving []LeavingMember, GroupKey, PlacementSalt}`, `wire.GroupMember{NodeID, JoinedGeneration, ReadyGeneration, Class, Checkpoint, ObservedEntry, LagAdvances, HostIndexerID}` with `Ready()`. Its `HostIndexerID *uint64` is the optional registry-view field `GroupMember.host_indexer_id`, which S3-E1 adds and fills at serve time from the member's `VerifierEntry.HostIndexerID` (decision D27): nil denotes a delisted/unserved host, while a present pointer to0 is a real host ID and must not be treated as absent. That value is fixed for the entry's life (K68), is not FSM state and is not Raft-reachable. `LagAdvances` saturates at `max_lag_publications + 1` (decision D31). Also `wire.LeavingMember{NodeID, RemovedGeneration, ReleaseEntry, FrozenMembers, FrozenDomains, Released}`; `member.Config.Consensus *consensus.Config` with `consensus.Config{NodeID, NetworkID, GenesisSnapshotID, StateDir, StoragePolicy string, Ed25519Seed []byte, ReplicaSignerKeyHex string, KeeperShardID, Tables, Register bool, ReadinessInterval, CheckpointInterval, ResolveInterval}`, `consensus.ReconcilerConfig{NodeID, StateDir, KeeperShardID, NetworkID string, Tables []payloadexec.TableSchema, StoragePolicy string, CreateReplicas bool, Interval}`, `consensus.NewUnsafeReconciler`, `consensus.Metrics`, `tableset.Stats.KeeperFindings` and the reserved series `sentio_node_storage_integrity_keeper_findings{reason}`.
   - **Releases:** `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5`.
 - S3-E2 §44–§48:
   - **FSM state:** `fsm.Params.Stage3 *arbiter.Stage3Params`, `fsm.State.Stage3 *Stage3State`, `Stage3SwitchCheckpoints`, `Stage3SwitchNarrowedDrain`, `stage3SwitchOnLocked(name)`, `onStage3SwitchOnLocked(name)` (this plan adds `narrowed_drain`), `verifierEntryLocked(nodeID) (arbiter.VerifierEntry, bool)`, `stage3PendingProtoFields` (Task 78 asserts it empty).
@@ -21157,7 +23311,7 @@ func (f *FSM) releaseLeavingMembersLocked() bool // true when it recorded a rele
 "Above" means strictly greater.
 
 **Callers.**
-- `applyScheduleUnsafeCleanup` calls `floorLocked` right after the quarantine check (`apply.go:997-1004`) for promotion cleanups while `floorActiveLocked`. It refuses with `BaseRefusal` or the count refusal and leaves state unchanged. On `Applied` with `UnderReplicated != ""` it emits `Event{Kind: EventUnderReplicated, PromotionSeq: seq}`.
+- `applyScheduleUnsafeCleanup` calls `floorLocked` right after the quarantine check (`apply.go:997-1004`) for promotion cleanups while `floorActiveLocked`. It refuses with `BaseRefusal` or the count refusal and leaves state unchanged. A newly installed promotion cleanup while the switch is on returns nonpersistent `CleanupApplied{UnderReplicated UnderReplicatedReason}` with the committed `floorLocked` reason; legacy/off and idempotent outcomes remain `Applied{}`. When that committed reason is nonempty it emits `Event{Kind: EventUnderReplicated, PromotionSeq: seq}`. This adds no persisted field or wire type.
 - The WorkSet loop lists a `PublishedUncleaned` entry only when `floorLocked(pp).Allowed`, with the same function under the read lock. It sets `CleanupWork.UnderReplicated UnderReplicatedReason` and fills `WorkSet.FloorHeld []uint64`, the ascending seqs with `FloorOnly`. Both fields are new in `fsm/reads_work_types.go` and stay zero while the switch is off.
 - `EventKind` gains `EventUnderReplicated`, appended after `EventIndexerQuarantineChanged`, with `String()` `under_replicated`.
 
@@ -21189,7 +23343,7 @@ func (f *FSM) releaseLeavingMembersLocked() bool // true when it recorded a rele
   - `arbiter_safe_copies_min{indexer_id}`: per owner, the minimum over its groups of 1 + the distinct failure domains other than its own among listed, non-evicted, counting replicate members whose checkpoint equals its latest published entry and excludes nothing.
 - **Leader-local.**
   - `orchestrator.FloorMetrics interface{ UnderReplicatedCleanup(reason string); FloorHeldCleanups(count int, oldest time.Duration) }` and `orchestrator.Deps.Floor FloorMetrics` (nil disables).
-  - `handlePromotionRows` (`orchestrator/promotion.go:39-43`) counts a `PublishedUncleaned` entry with a reason only when its proposal returns no error.
+  - `proposeCleanup` counts once from the committed `CleanupApplied` response after a successful Apply and before streaming the signed cleanup. A stale WorkSet reason, a rejected proposal or a plain `Applied{}` adds nothing; a subsequent stream-send failure does not erase the committed count. `handlePromotionRows` performs no second count.
   - The loop keeps `floorHeldSince map[uint64]time.Time`, reset where `resetSealTimes` runs (`orchestrator/metrics.go:16-20`), and reports `ws.FloorHeld` each pass.
   - `metrics.Metrics` implements `FloorMetrics` as `arbiter_under_replicated_total{reason}` (counter) and `arbiter_floor_held_cleanup_age_seconds` (gauge), and `cmd/arbiter` wires it to `Deps.Floor`.
 
@@ -21285,7 +23439,7 @@ A promoted unsafe part is floor-held, and so not in flight, exactly when it belo
   - **Binaries:** `bin/old/{statedigest,v20check,snapdump}`, built from `ARBITER_TAG_P4`. `bin/new/{statedigest,v21check,snapdump}`, built from the branch head with S3-E2's `rehearsal_build new` and rebuilt from the `ARBITER_TAG_P5` export after the cut.
   - **Rehearsal:** `p5rehearsal/p5rehearsal_test.go` and `bin/new/p5rehearsal` (§57), built from the `ARBITER_TAG_P5` export after the cut.
   - **Checksums:** `p5-files.sha256`, written last by Task 78: the `shasum -a 256` lines of `p5rehearsal/p5rehearsal_test.go` and of every file under `bin/old` and `bin/new`, with paths relative to `$R5`.
-- **`v21check`:** S3-E2 §48's `$R5/v21check/main.go`, the same tool in the same directory, never a second definition. A successful restore prints `restore_ok version <n> body <none|plain|interned>`. A refused restore prints `restore_refused version <n>: <error>` and exits non-zero.
+- **`v21check`:** S3-E2 §48's `$R5/v21check/main.go`, the same tool in the same directory, never a second definition. A successful restore prints `restore_ok version <n> body <none|plain|interned>`. A refused restore prints `restore_refused version <n> body <kind>: <error>` and exits non-zero.
 - **Replay:** fresh read-only copies of the three voters' `raft` directories (`si_kubectl exec … tar`) replay to identical `statedigest` lines (`snapshot_sha256` included) under old and new, with `written_version 20`.
 - **v21 fixture:** `"$R5/bin/old/v20check" "$R5/v21-fixture.container"` prints `restore_refused version 21: unsupported snapshot version 21 …`, and `"$R5/bin/new/v21check"` prints `restore_ok version 21 body interned`.
 - **Release files:** `$R5/merge-commit` and `$R5/arbiter-release` (line 1 tag, line 2 digest), written by `$R5/cut-release.sh`, which follows the S3-A Task 11 Step 12 pattern.
@@ -21346,7 +23500,7 @@ A promoted unsafe part is floor-held, and so not in flight, exactly when it belo
   - **On devnet2:** every group holds the other two hosts' members, so the lists after placement equal S3-C4's static ones until a `RebalanceGroup` changes a group, and neither the placement switch nor any `MemberReady` changes them.
 - **Named tests:** `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation`, `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys`, `TestMemberConsentStatementPrintsOnlyTheJWS`, `TestMemberConsentStatementBindsTheMembersPublicValues`, `TestMemberConsentStatementRefusesTheHostsSNodeNodeID`, `TestMemberConsentStatementRefusesMalformedPublicValues`, `TestPinnedArbiterCoreAdvertisesStage3V1`, `TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably`, `TestReplicaHostsKeepTheStaticListBeforePlacement`, `TestReplicaHostsFollowTheDatabaseGroupOncePlaced`, `TestReplicaHostsListEveryCurrentMemberWhateverItsReadiness` (a member with `ready_generation` 0, one ready only at an earlier generation and a ready one are all listed; a member served without `host_indexer_id` is skipped; a Leaving record is never listed), `TestSIMemberReconcilerRoleRunsTheUnsafeReconcilerAsItsOwnUser`, `TestSIMemberReconcilerRoleRefusals`, `TestSIMemberRegistersTheConsensusMetrics`, `TestKeeperFindingsAreExportedWithEveryReason`.
 - **Release:**
-  - **Branch:** worktree `~/src/remotesrc/claude/sentio-node/multi-source-s3e4`, branch `urwt/claude/multi-source-s3e4`, PR title `feat(storage-integrity): multi-source SI stage 3 P5 host side (stage3_v1, member consent, member keys)`.
+  - **Branch:** use Task79 Step1's retained URWT JSON `path` through `session.sh`, preserving its absolute symlink spelling rather than assuming a template path; branch `urwt/codex/multi-source-s3e4`, PR title `feat(storage-integrity): multi-source SI stage 3 P5 host side (stage3_v1, member consent, member keys)`.
   - **Values:** `SN_COMMIT_P5` is the squash-merge commit on `main`; `SN_DIGEST_P5` is the index digest of `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P5>`, checked against its revision label.
 
 **production chart (Task 80).**
@@ -21482,10 +23636,10 @@ Run-record items: `arbiter P5 release` (Task 78), `sentio-node P5 release` (Task
 
 **Repositories and commands.**
 - **Local repositories:** `/Users/uranuswch/Dev/projects/sentio-network/<repo>`.
-- **Worktrees** (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> claude <name>`, whose JSON `path` is `$W`):
+- **Worktrees** (URWT, `bash ~/.agents/skills/urwt/scripts/urwt-create.sh <repo-path> codex <name>` when Codex executes the task; runtime follows the executing host, and the returned JSON `path` is retained and used as `$W` without resolving its absolute symlink spelling):
   - arbiter `multi-source-s3e` is consumed only: do not call URWT again or infer a Claude path; load Task64's retained env/JSON as above (S3-E2 §48). The creation command in this list applies only to the other repositories;
   - sentio-node `multi-source-s3e4`;
-  - production `multi-source-s3e4`, branch `urwt/claude/multi-source-s3e4` from `origin/main` after `P4_PR` merged, for Tasks 80–81;
+  - production `multi-source-s3e4`, branch `urwt/codex/multi-source-s3e4` from `origin/main` after `P4_PR` merged, for Tasks 80–81;
   - production `multi-source-s3e4-live`, held at a detached, freshly fetched `origin/main` for Task 82 and checked clean before every commit.
 - **Checks:**
   - arbiter: `bazel build //... && bazel test //...` and `bazel test --build_tests_only --@rules_go//go/config:race //...`; after dependency changes, `bazel mod tidy && bazel run //:gazelle`.
@@ -21494,9 +23648,56 @@ Run-record items: `arbiter P5 release` (Task 78), `sentio-node P5 release` (Task
 - **P5 PR** (production): title `feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)`, merged with the repository's convention after explicit confirmation.
 - **Remote and live actions:** pushes, PRs, merges, release workflows, `helmfile sync`, `kubectl apply`/`delete`/`exec` that writes, and the consensus update. Each needs explicit user confirmation in chat for its own step; commands handed to the user are fish.
 
-## Appendix B: drafting decisions and cross-task facts
+## Appendix B: bounded review records and historical drafting facts
 
-Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
+### Current bounded review cut — 2026-10-20
+
+All seven Tasks76–82 have completed the bounded root-reviewed local source-custody or synthetic-fixture scopes identified below. Task79 is accepted by `task79-final-root-accepted-local-source-proof.json` (`3722a4013f062529c71e45a3a2e20ddfed0ad09a2c33d3542b7b09caee8a7e50`), closing the former local-review gap at this 2026-10-20 cut. The final documentary consistency review checks the selected owning tasks, contracts, file inventory, review focus, source/proof identities, runbook consumers and future empty ledger shape. This is not a complete operator-runtime PASS, a real release/live/R4/R5 result or a formal adoption/count decision; root adopts and publishes separately.
+
+Current complete documentary tasks and the source-proof preimages are different identities. The table preserves both; selected procedural/status successors do not retag earlier actual or synthetic proofs. Existing valid detailed 76/77/80–82 facts below remain attributed to their original source cuts. Artifact names and hashes identify evidence; no local artifact path grants authority.
+
+| Task | Current complete documentary task SHA256 | Source-proof preimage SHA256 | Root proof artifact(s) and SHA256 |
+|---|---|---|---|
+| 76 | `08cedd235e299796869bc86bc1bd3f0e5b48c1c9955895b5c632bb67df84a20c` | `c8e1c555fa3e30018aba1f37c25c72b50efd0f78a46850a507ec4515c518ff20` | `task76-format-suffix-root-source-acceptance.json` (`7eb18ae0cd99ce54dc87eb54f274b8c446fd40e2fd0f2becaa9701426f8d38f9`); `task76-final-gazelle-documentary-root-selection.json` (`91461cc697c560f2e5943b9773d9a4541fde3bc89cdbf196f472ec7564e51a5e`) |
+| 77 | `6e32e57e50c82092f26fbffa7072f0e721c97e71fd61d5f12f930cb69f552334` | `a2b93d5a33712f3013bcb129171c32d2af924f5015ba3a5144d21b3e37800381` | `task77-v6-root-source-acceptance.json` (`4f15238fa993aa306a6d2d13a9f4efb6db8b7c4fe77326e9679b3d9b1b3679f1`) |
+| 78 | `eb4120b1826db7ab45e3af484b5e2b4dd725b0482402ad4b25b625bd9f050747` | `b270f4cd8ac62eb22c793702cecff22f53242a6159d87d4514b746a553ea2390` | `task78-final-root-accepted-local-source-proof.json` (`7e9f596d1a631573731d5e79b52d5a6b31e4555fcea09cebe9f1e259b20929e8`) |
+| 79 | `778a4a9d16eff21275f238dde8e9086549e4570700a9dad1fdbb57fd98d5aac0` | `a1a4e715c6c3ab282950d7c5dc677bfdf75ce7f9954560b8c96866e41168d4cb` | `task79-final-root-accepted-local-source-proof.json` (`3722a4013f062529c71e45a3a2e20ddfed0ad09a2c33d3542b7b09caee8a7e50`); format-only successor of historical procedural `59922f781ffed4f2afa587d07b2fee66e637a2300f1bd06366f435504c5d0af5` (one terminal ASCII space removed; source proof not retagged) |
+| 80 | `a22e3e8fa3d9857b0a0c29809578fa542c0aa7326710a7504fa19a3183f24cfd` | `08c0e469bedef0587ed3a36166382b90fd2a015bdd009a8459a9f9ae8a03fecf` | `task80-bounded-source-root-acceptance.json` (`9b033d89142df0e2c978882d073abae1a2c63e0c2c9704bdb4b1b79694d3dfa5`); `task80-81-82-verified-source-root-acceptance.json` (`9eb253e6442dd6c660036e604a87daa2e30c3a2941c527648645511a985c2513`) |
+| 81 | `b622933146cda69ac5e06c829ab4ba049508966f5966c18af7560cdf16b463a0` | `5dc51af3b56be3c871b4d8dbc6f520efeb857d3de68551ad1113ba851af319d8` | `task80-81-82-source-intent-root-acceptance.json` (`32ed63a44e74e1638b03472651c07e06c7cb997d0f905d651e4548e0b40a7c56`); `task80-81-82-verified-source-root-acceptance.json` (`9eb253e6442dd6c660036e604a87daa2e30c3a2941c527648645511a985c2513`) |
+| 82 | `c1acc5b41a5cced6b78a422da9b742826dda74ebc0df9fd0a8e903956bb248e8` | `5455df204622e428cfc1a82795246c16fc755b32814aa6b2d6e972c1c3fc2c97` | `task80-81-82-source-intent-root-acceptance.json` (`32ed63a44e74e1638b03472651c07e06c7cb997d0f905d651e4548e0b40a7c56`); `task80-81-82-verified-source-root-acceptance.json` (`9eb253e6442dd6c660036e604a87daa2e30c3a2941c527648645511a985c2513`) |
+
+**Task76/77 scope.** The Task76 receipt preserves 99 retained plus 16 newly closed original obligations (115 total; one new support obligation remains outside that original union), historical HOLDs, the failed postterminal reader and original oracle identities; local source was allowed as Task77 input without a live or formal signed-HEAD/R4 assertion. Task77 records 63 commands/126 raw streams, 18 new tops, 4420 full identities and 19 inherited skips at its accepted cut. Its seams do not prove actual member composition; real signed HEAD/R4 remain absent. Their existing detailed product/procedural notes below are preserved, not rerun or replaced.
+
+**Tasks80/81/82 scope.** The Task80 fixture proof remains 1772 source files, a 239-test source suite, eight-release direct-Helm comparison, ten forward states and ten causal negatives; twelve new methods are qualified as nine initially nonpassing plus three later causally falsified methods. The later synthetic80→81→82 verification binds 1773 safe files, eight 99-method suites plus final239 zero-SKIP, docs16/states64 explicit rendering, eight release comparisons and 48-rule parser evidence, with its original tool/index/cleanup limits. The 81 body remains unfilled; source-intent-only construction and the later actual synthetic verification are separate receipts. These are not actual post79/released-image source, real merged P5_PR/P5_END/R4/R5, live snapshot/rehearsal/key/metric proof or full operator execution. The original real handoff, private-terminal, per-action confirmation, activation unknown-outcome recovery and live/irreversible stops remain in the tasks.
+
+### Task 78 — final bounded local review
+
+- **Owning text and scope.** Complete Task78 is `eb4120b1826db7ab45e3af484b5e2b4dd725b0482402ad4b25b625bd9f050747`; final original-service test body is `16b0a5b0bca1977ef583142ead4e14f2c418ef186c9a08f9ae968e7b8f8a4696`. Root receipt `7e9f596d1a631573731d5e79b52d5a6b31e4555fcea09cebe9f1e259b20929e8` accepts local source custody for Task79, not release, deployment or final plan consistency. Formal increment remains 0 pending root adoption of the review record.
+- **Review fixes.** Integrated the prior20 reviewed source operations into the owning task: exclusive frozen-history capture and its fresh/repeat/regular/directory/live-link/dangling-link lifecycle, nonmutating local-Raft quiet wait retaining60s/50ms/500ms bounds, and precise no-detail FailedPrecondition termination while preserving typed empty/address NotLeader retries. Three subsequent original-service fixes use full incarnation Key() for both purge physical-name checks, publish real tracked round0 data before member bootstrap, and create switch-owned resources under the parent testing.T before phase subtests. Original seven scenarios, eleven ordered phases, assertions, strict validation and waits remain. The final signing/URWT reconciliation explicitly signs and checks poetry/G for normal, amended and ledger commits, follows the executing host and retains returned path spelling; D34 and all user gates remain.
+- **Qualified evidence.** Historical bf09 offline proof retains4452 full-Go identities (4421PASS,31exactSKIP) and22 uncached whole-target Bazel race targets PASS. The historical offline/NoDocker campaign's31 exact SKIP entries remain SKIP; later success does not rewrite them or claim a repeated full campaign on the final source. The final original local-service run on body16b0 has7/7 top tests and11/11 ordered switch children PASS, zero SKIP, uncached Executed1/1;22 calls/44 complete raw streams were independently audited. Root adopted resource closures and source/module/tool restoration guards; its seven changed Task78 procedural Bash fences also parse with Bash (`-n`) at exit0, with no body execution. Earlier original and first-fixed service RED attempts remain RED.
+- **Limits and handoff.** Synthetic history/v21/helper output is not actual released-P4 compatibility or live voter/R5 proof. Warnings and teardown diagnostics remain in the successful service log; success is not a warning-free claim. No real tag/image/release, signed source HEAD, ledger value, R4/R5 or devnet2 activation is established. Existing real-P4 capture/replay, release, R4/R5 and user confirmation obligations remain execution gates. This entry records the already qualified evidence without rerunning or requalifying it.
+
+### Task 79 — final bounded local source review (2026-10-20)
+
+Accepted the successful local campaign after six literal RED/GREEN pairs, actual test registration, seven named causal mutants, full Go/vet/race checks, original and final Bazel builds/tests, selected-action SDK inspection, CLI help checks and a fresh literal replay. The authoritative outer process exited0; all60 calls/120 complete raw streams and known-process-group cleanup were independently/root reviewed. Earlier harness HOLDs remain historical failures rather than being relabelled successful.
+
+Full Go retained all748 inherited test identities and added25:773 total,757PASS and16 exact inherited skips, across22 packages (17PASS/5 no-test-files SKIP). Registration was462 top-level tests (440 inherited plus22 new). The original focused race covered502 identities (489PASS/13 inherited skips), including the storageintegrityadapter root and its slash-delimited descendants. Fresh new-tests race passed all25 additions with no skips. Seven mutants each failed the intended named assertion after a passing baseline; their restoration hashes match final source. The prior Task69 unattributed race-risk qualification remains.
+
+Independent retained-source verification recovered19 touched predecessor files to their accepted hashes and verified11 creates; replaying all69 literal operations reconstructed all30 touched final files byte-for-byte. Main and fresh SN inventories match at244 files/43 directories. The eight-root capture contains3340 files/440 directory entries. Private directory/file modes follow the reviewed copy projection; they are not represented as universally unchanged original input modes. Local module context is confined to declared go.mod replacements; initial preimage hashes and eight restoration chains match, while original go.mod bytes were not separately retained for an independent original-byte diff.
+
+Both original and final Bazel test runs passed the exact18-target set uncached. The actual plain simember aquery identified644 Go actions using the selected SDK, with10 resolved-leaf metadata rows; this is not an all-target or independent race-SDK measurement. Binary build and both help calls passed, without claiming binary-byte custody or publication. One observed Sonic fallback-warning literal recurred69 times; the campaign is not described as warning-free.
+
+Implementation proof used task preimage a1a4e715c6c3ab282950d7c5dc677bfdf75ce7f9954560b8c96866e41168d4cb. The historical procedural preimage59922f781ffed4f2afa587d07b2fee66e637a2300f1bd06366f435504c5d0af5 preserves all120 non-Bash bodies, including119 source bodies (88Go/30Starlark/1Markdown). The current format-only document778a4a9d16eff21275f238dde8e9086549e4570700a9dad1fdbb57fd98d5aac0 removes one terminal ASCII space from that procedural preimage; the same120 non-Bash bodies remain byte-exact and the old source proof is not retagged. Signed-commit/URWT procedures were reviewed separately and not executed by this campaign. Snapshot2f7952141cea75ab297bb5723d277c2752c552eda468f668ea5aeabb3c8fe0f2 and resource closure2fb48ca7102352c6d84bec98d0786a701979815998054db07fb657215c8f0a29 bind this local evidence.
+
+Real released dependency pins, network-facing consent smoke, production registration, signed HEAD/tag/image publication, R4/R5, ledger values and live operations remain unexecuted confirmation/release gates. Local source acceptance does not supply their values or waive their checks.
+
+### Plan consistency — 2026-10-20
+
+Completed the final E4 documentary consistency review of all seven bounded final review records and their root closures. Preserved all seven complete owning task bodies, all product/runbook/script fences and formal signed-head/URWT/REST/ledger procedures; corrected only front file inventory/provenance/D25 mirrors and the two Appendix A committed-cleanup metrics prose mirrors. Task76 counter attribution is from the nonpersistent committed CleanupApplied outcome before streaming, not stale WorkSet reason; off/legacy/idempotent Applied{} and rejected proposals add no count. Task79 retains119 source bodies (88Go/30Starlark/1Markdown), not119Go. The names index's selected current spelling,53 named Review Focus tests, task order/coverage, served HostIndexerID optional-pointer semantics and the v21check body-kind mirror agree with their owning tasks. Appendix C has exactly8 future empty value rows and4 empty run records, with one recording task each and atomic Task82 recording; no review fixture fills them. D25's approved original13+exact9 append and D26's sole pre-P5 exception remain binding. Historical source/task preimages, HOLDs, old69 risk and synthetic/module/binary/SDK/finite-custody limits are preserved. Root alone adopts formal counts and publication; real release/network/registration/R4/R5/ledger/live, keys/confirmations/K24/K25/K86 and budget stops remain future execution requirements, not unperformed local documentary checks.
+
+### Historical drafting and prior-review records retained — 2026-10-20
+
+The following pre-existing record is retained at its named historical cuts, including valid technical facts, synthetic/stand-in limits, earlier failures and old PREP/HOLD/unexecuted statements. Old preparation or unavailable-tool wording is not current truth for a later closed bounded review; the current seven-task cut above controls that narrow interpretation. The already-qualified current-owner composition notes remain valid at their own cited cuts. Historical text neither overrides the current bounded Task79 acceptance and its no-real-release boundary nor supplies release, real R4/R5, live or global acceptance.
 
 ### Task 76
 
@@ -21537,7 +23738,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Two existing S3-B tests are amended (hunk on top): MonitoringTest.test_default_renders_no_monitoring gains the stage3Consensus block and test_alert_names_are_the_reviewed_set renders the new group; the group is kept out of MONITORING_GROUP_RUNBOOKS because that test renders only the members group.
 - Test counts in the scratch rebuild: N0=224, +3 (SnapshotBodyTest), +4 (Stage3ConsensusMonitoringTest), +5 (ActualFreshNetworkTest) = 236; the task states counts as <N0+k> with N0 recorded in Step 1.
 - Names added while drafting: STAGE3_P5_RUNBOOK; STAGE3_P5_RUNBOOK_SECTIONS; SnapshotBodyTest.RAFT_KEYS; Stage3ConsensusMonitoringTest.RUNBOOK_URL; Stage3ConsensusMonitoringTest.stage3; Stage3ConsensusMonitoringTest.expected; checksum key raftSnapshotBody (storage-integrity.arbiterConfigChecksum); DEVNET2_STAGE3_P5_SOURCE_IMAGE added to REPLICA_READ_HOST_IMAGES and MEMBER_IMAGES (beyond contract §56's two sets); local tools $HOME/.cache/s3e4-task80/{ledger.env, fill.py, rollout.py, rehearse-path, rehearse.<random>/repo}
-- Verified while drafting: Scratch base: git archive of a P4-state scratch production repo (S3-B, C1, C3, C4, D drafts and P4 live stand-ins, from work/d/task-53-r5/fix57 e64f1de) copied into work/e4/task-80/p4; the key-bearing ClickHouse manifests are absent there; baseline test_render.py 224 OK. / TDD replay on work/e4/task-80/dev: Step 2 SnapshotBodyTest Ran 3 FAILED (failures=13, errors=1); Step 3 227 OK; Step 4 named selection Ran 6 FAILED (failures=3, errors=3); Step 5 Ran 6 OK, full 231 OK; Step 7 Ran 5 FAILED (failures=1, errors=1); Step 8 Ran 5 OK, full 236 OK. / A second replay on a fresh clone of the base (work/e4/task-80/replay) using the same snippets ended in a tree identical to dev (diff -r). / render-inertness.sh origin/main printed the 8 identical lines (exit 0) after each commit and at the end. / helm lint --strict passed on legacy, fresh, fresh+consensusUpdates/signing-off, and fresh with monitoring.enabled, stage3Consensus.enabled and snapshotBody=plain. / Helm refusal texts were captured: schema '- at /arbiter/raft/snapshotBody: got boolean, want string', '- at /arbiter: missing property raft', and both validate.yaml guard texts. / The 26 rendered rule expressions (fresh values with both monitoring flags on) parsed with prometheus promql/parser v0.55.0 offline (GOPROXY=off, cached modules): 0 errors. / actionlint passed on the edited workflow; the paths lists carry both new files ([2, 2]). / rollout.py (final text in the task) bites: 10/10 refused; forward: V, H-b, H-c, H-a, M-b, M-c, M-a, MON, PLAIN, UNPLAIN all OK at 236 tests each; also re-run with the clone --branch command of Step 10. / Every bash block of the rendered task passes bash -n, /bin/bash -n (3.2), zsh -n and shellcheck -S warning; no hard-wrapped prose found; every diff block's old side was found in the base and its new side in dev; every included code block appears verbatim in dev (after the stand-in fill) or is a local tool.
+- Verified while drafting: Scratch base: git archive of a P4-state scratch production repo (S3-B, C1, C3, C4, D drafts and P4 live stand-ins, from historical Task53 fix57 fixture e64f1de) copied into historical Task80 P4 fixture; the key-bearing ClickHouse manifests are absent there; baseline test_render.py 224 OK. / TDD replay on historical Task80 development fixture: Step 2 SnapshotBodyTest Ran 3 FAILED (failures=13, errors=1); Step 3 227 OK; Step 4 named selection Ran 6 FAILED (failures=3, errors=3); Step 5 Ran 6 OK, full 231 OK; Step 7 Ran 5 FAILED (failures=1, errors=1); Step 8 Ran 5 OK, full 236 OK. / A second replay on a fresh clone of the base (historical Task80 replay fixture) using the same snippets ended in a tree identical to dev (diff -r). / render-inertness.sh origin/main printed the 8 identical lines (exit 0) after each commit and at the end. / helm lint --strict passed on legacy, fresh, fresh+consensusUpdates/signing-off, and fresh with monitoring.enabled, stage3Consensus.enabled and snapshotBody=plain. / Helm refusal texts were captured: schema '- at /arbiter/raft/snapshotBody: got boolean, want string', '- at /arbiter: missing property raft', and both validate.yaml guard texts. / The 26 rendered rule expressions (fresh values with both monitoring flags on) parsed with prometheus promql/parser v0.55.0 offline (GOPROXY=off, cached modules): 0 errors. / actionlint passed on the edited workflow; the paths lists carry both new files ([2, 2]). / rollout.py (final text in the task) bites: 10/10 refused; forward: V, H-b, H-c, H-a, M-b, M-c, M-a, MON, PLAIN, UNPLAIN all OK at 236 tests each; also re-run with the clone --branch command of Step 10. / Every bash block of the rendered task passes bash -n, /bin/bash -n (3.2), zsh -n and shellcheck -S warning; no hard-wrapped prose found; every diff block's old side was found in the base and its new side in dev; every included code block appears verbatim in dev (after the stand-in fill) or is a local tool.
 
 ### Task 81
 
@@ -21557,7 +23758,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Verifier StatefulSet is RollingUpdate in pinned-genesis mode (OnDelete only for legacy); voters are OnDelete; arbiterConfigChecksum is a dict of selected values, so whether arbiter.raft.snapshotBody changes the voters' StatefulSet depends on Task 80 (§11 wording allows either).
 - Pointer: one sentence appended to the first §11 bullet of docs/storage-integrity-devnet2-multi-source-tracks.md (base :1072); no earlier plan edits that bullet.
 - Names added while drafting: si_p5_value <NAME> (reads $si_backup/ledger-values.txt); si_p5_owner a|b|c (indexer-c's id from the ledger); si_p5_member_keys a|b|c (count of consensus: keys in the si-member's rendered si-member.yaml); si_p5_keeper_findings a|b|c (sentio_node_storage_integrity_keeper_findings lines from :9091; si_host_series only serves a|b); si_p5_put <file> <pod path> (copy into the rehearsal Pod via kubectl exec stdin, SHA-256 checked); si_p5_accept <key-file|-> a|b|c <n> <tag>; si_p5_py subcommands params, stage3, features, activation, rehearsal, header, pod, pod-live; $si_backup/ledger-values.txt (17 NAME=value lines read in §1.1); acceptance values 5401 (devuser1.s3_p1, p=1, §5.1), 5402 (<db>.s3e_e2e, §5.2), 5403 (§5.3) and 5404 (§7.3) in devnet101.swap_new2; 4 promotions, no table-set transition; rehearsal Pod inputs /rehearsal/{p5rehearsal,stage3-params.json,rehearsal-copy-<i>.tgz,arbiter-<i>.yaml}, log /rehearsal/rehearsal.log, expected outputs /rehearsal/rehearsal-v21-<i>.container; line P5_REHEARSAL=<YYYY-MM-DD> appended to rehearsal.txt once rehearsal ok and exit 0 printed; evidence: baseline-p5.txt (contract name for §1.3), stage3-params.txt, identities.txt, show-before.json, images-before.txt, member-images-before.txt, features-before.json, budget-start.txt, replay-baseline.txt, show-replay.json, arbiter-<i>-raft.tgz, arbiter-<i>.yaml, digest-<i>-<v>.{cmp,err}, written-<i>-<v>.container, replay.txt, rehearsal-show-{before,after}.json, rehearsal-arbiter-<i>.yaml, rehearsal-digest-<i>.{txt,err,cmp}, rehearsal-copies.txt, p5rehearsal_test.go, rehearsal-pod-check.txt, rehearsal-pod-applied, rehearsal-pod.json, rehearsal-inputs.txt, rehearsal-activation-check.txt, rehearsal-mismatch-check.txt, verify-verifiers.txt, member-<x>-uid, replica-hosts-<x>-{before,after}.json, verify-indexer-<x>.txt, accept-b-5401.txt, accept-c-5402.txt, accept-a-5403.txt, accept-a-5404.txt, member-window-<x>.txt, member-window-<x>-host-after.txt, verify-member-<x>.txt, replace-voter-<k>.txt, verify-voters.txt, state-<i>.bin, tracks-before-activation.json, verify-before-activation.txt, features-at-activation.json, tracks-at-activation.json, verify-after-activation.txt, monitoring-before.txt, vmalert-stage3.txt, vmrule-live.json, vmrule-stage3-selectors.txt, monitoring-after.txt, voter-order-rollback, rollback-voter-<k>.txt, verify-rollback.txt; commit subjects: chore(devnet2): arbiter <ARBITER_TAG_P5> for stage 3 P5 (verifiers now, voters in §6); chore(devnet2): stage-3 consensus alert rules on (P5); task commit docs(storage-integrity): devnet2 stage-3 P5 runbook (rehearsal and the v21 activation); ledger commit docs(plan): record P5_PR of Plan S3-E4 (Task 81); local test files in $HOME/.cache/s3e4-task81/: check_runbook.py, fill_runbook.py, fixtures.bash, selftest.bash, ledger.txt, blocks/, fx/; ledger record worktree multi-source-s3e4-ledger-81, record files $HOME/.cache/s3-ledger/record-s3e4-81{,.md,-pr.md,-pr-url}; PR-time placeholders <ENROLMENT_EPOCH + 1>, <P5REHEARSAL_SHA256>, <P5REHEARSAL_SOURCE> (plus the 14 ledger names), filled in Step 5
-- Verified while drafting: Scratch tree: git archive of production origin/main 206c42357 (git-initialised) under work/e4/task-81/production, plus the eleven earlier runbooks extracted from the current plan texts (S3-B Tasks 14/17/20, S3-C1 Task 27, S3-C3 Task 39, S3-C4 Task 47, S3-D Task 54); the §0 chain sourced cleanly (bash -n OK). / Step 2 checker: failed first with FileNotFoundError, then (runbook, no pointer) with 'the tracks runbook's §11 does not point to the P5 runbook', then passed: 33 headings, 59 bash blocks (30 confirmed), 4 Python programs compile, chain 290 functions / 14 own / 61 earlier reached / none of 52 pins-readers; mutation tests refused a removed confirmation, a redefined earlier helper (si_tracks), a call of si_owner_id, a changed activation command (--hold issuance) and a helper calling si_pin. / Simulated Task 80 branch (stand-in P5 constants appended to test_render.py, a Pod example written from contract §56) and stand-in $R5 (placeholder rehearsal source, stand-in statedigest/snapdump/v20check/v21check printing the contract lines, a linux/amd64 Go stand-in binary, a synthetic v21 fixture); every step's local commands were run as written from the extracted task text (embedded files round-trip byte-identically). / Step 5 fill: '14 ledger values, the next epoch 7, the rehearsal source (10 lines, sha256 …)'; the three grep checks print 1; --filled check passes. / Step 6 self-test: 46 checks passed under bash 5.3.15 and /bin/bash 3.2.57 (si_p5_py params/activation/features/stage3/rehearsal/header/pod/pod-live with refusals, §1.1 constants check incl. MEMBER_IMAGES refusal, §2.1 block against stand-in $R5 incl. refusal of a changed binary and mode 755, §3.2 read-only block incl. refusal of a changed go source, si_v21check behind a newer .tmp dir and on v20/none, §7.2 flag loop, the in-pod JWS filter, si_p5_put, si_p5_member_keys, si_p5_keeper_findings, si_p5_accept rows). / In-pod sh -c quoting of the rehearsal command verified (argument reaches the Pod shell with '^TestP5Rehearsal$' single-quoted). / shellcheck 0.11.0 clean on all 59 blocks (SC2154 excluded); python3 -B charts/storage-integrity/tests/test_render.py: 86 tests OK with the two documents on the base tree; the three helm lint --strict profiles passed; helmfile template of storage-integrity-si-v2 rendered. / Task markdown checked: no hard-wrapped prose outside fences, every fence closed, no TBD/TODO; 50 confirmation lines/notes, Co-Authored-By on both commits. / Not run: render-inertness.sh (S3-B script, not on origin/main), Task 80's real render tests and Task 78's real tools (not drafted yet), anything against a cluster, registry or GitHub; nothing written to real repositories, worktrees or $HOME (a fake HOME under the scratch dir was used).
+- Verified while drafting: Scratch tree: git archive of production origin/main 206c42357 (git-initialised) under historical Task81 production fixture, plus the eleven earlier runbooks extracted from the current plan texts (S3-B Tasks 14/17/20, S3-C1 Task 27, S3-C3 Task 39, S3-C4 Task 47, S3-D Task 54); the §0 chain sourced cleanly (bash -n OK). / Step 2 checker: failed first with FileNotFoundError, then (runbook, no pointer) with 'the tracks runbook's §11 does not point to the P5 runbook', then passed: 33 headings, 59 bash blocks (30 confirmed), 4 Python programs compile, chain 290 functions / 14 own / 61 earlier reached / none of 52 pins-readers; mutation tests refused a removed confirmation, a redefined earlier helper (si_tracks), a call of si_owner_id, a changed activation command (--hold issuance) and a helper calling si_pin. / Simulated Task 80 branch (stand-in P5 constants appended to test_render.py, a Pod example written from contract §56) and stand-in $R5 (placeholder rehearsal source, stand-in statedigest/snapdump/v20check/v21check printing the contract lines, a linux/amd64 Go stand-in binary, a synthetic v21 fixture); every step's local commands were run as written from the extracted task text (embedded files round-trip byte-identically). / Step 5 fill: '14 ledger values, the next epoch 7, the rehearsal source (10 lines, sha256 …)'; the three grep checks print 1; --filled check passes. / Step 6 self-test: 46 checks passed under bash 5.3.15 and /bin/bash 3.2.57 (si_p5_py params/activation/features/stage3/rehearsal/header/pod/pod-live with refusals, §1.1 constants check incl. MEMBER_IMAGES refusal, §2.1 block against stand-in $R5 incl. refusal of a changed binary and mode 755, §3.2 read-only block incl. refusal of a changed go source, si_v21check behind a newer .tmp dir and on v20/none, §7.2 flag loop, the in-pod JWS filter, si_p5_put, si_p5_member_keys, si_p5_keeper_findings, si_p5_accept rows). / In-pod sh -c quoting of the rehearsal command verified (argument reaches the Pod shell with '^TestP5Rehearsal$' single-quoted). / shellcheck 0.11.0 clean on all 59 blocks (SC2154 excluded); python3 -B charts/storage-integrity/tests/test_render.py: 86 tests OK with the two documents on the base tree; the three helm lint --strict profiles passed; helmfile template of storage-integrity-si-v2 rendered. / Task markdown checked: no hard-wrapped prose outside fences, every fence closed, no TBD/TODO; 50 confirmation lines/notes, Co-Authored-By on both commits. / Not run: render-inertness.sh (S3-B script, not on origin/main), Task 80's real render tests and Task 78's real tools (not drafted yet), anything against a cluster, registry or GitHub; nothing written to real repositories, worktrees or $HOME (a fake HOME under the scratch dir was used).
 
 ### Review fixes (AgentConnect round 1)
 
@@ -21632,6 +23833,72 @@ Task64 remains the exact producer of retained worktree.json/env.sh/ledger.env an
 Reconciled the shared arbiter continuation with Task64's retained actual URWT JSON/environment and Codex branch, Task75's observed signed final head, and the future Task76/77 plain-SHA signed-chain handoffs. The original V1 audit remains blocked by its failed-status-read finding. The selected V2 closes that finding and the same push gate's ledger/lease read failures; a nonempty lease must match the existing producer's SHA shape. A separate metadata companion corrects two pre-freeze input modes without changing content. Independent V2 delta review and root documentary acceptance are complete; the current front distinguishes this procedural successor from the historically approved format-only cut.
 
 Complete forward/inverse document bindings, preserved product fences, changed-block Bash syntax and bounded inert failure fixtures were verified. Earlier product/source/runtime results retain their original identities and limits; no unchanged product campaign was repeated. This repair does not execute formal Git continuation, signing, push, PR/merge/release, ledger or live workflows and adds no source/runtime/grant or formal completion credit. Task76's frozen V4 product/TDD body remains separately selected for its future actual local review; only its one stale Expected branch word needs documentary composition, and canonical older product bodies must not replace it.
+
+
+### Current-owner-preserved local document composition (static candidate)
+
+This candidate retains the current published formal Git/GH/identity/ledger/worktree handoff. Task76 product literals are selected from c8e1c555fa3e30018aba1f37c25c72b50efd0f78a46850a507ec4515c518ff20 (root-accepted bounded local source7eb18); its complete current Worktree/Steps1,20,41 and final handoff remain exact, including the observed Task75 predecessor and signed range checks. Task77's accepted product literals come from a2b93d5a33712f3013bcb129171c32d2af924f5015ba3a5144d21b3e37800381 (bounded local source root4f152); current procedure remains exact, including three signed commits and the observed Task76/77 receipts. Source/profile acceptance retains its original document identities and bounded scopes; these composed document hashes are not new runtime evidence.
+
+Tasks80/81/82 select the reviewed08c0e469/5dc51af3/5455df20 local document lineages. Existing accepted source-fixture and synthetic80→81→82 proof remains reusable only with its original239/direct8/1773-source, tool/index/cleanup and TDD qualifications (9initialRED plus3latercausalRED), not actualpost79/released-image or complete operator execution evidence. Real releases/R4/R5/merged-runbook/activation/live and user confirmations remain future execution stops. AppA now describes served HostIndexerID as optional *uint64 (nil delisted, present0 valid). This composition performs no product/helper/test or formal workflow and creates no source acceptance, release, live, ledger, global consistency or formal increment.
+
+
+### Superseded drafting/controller status excerpts — 2026-10-20
+
+The following original paragraphs are retained verbatim from the V2 composition as historical evidence cuts. Their PREP/WAIT/count-zero/local-review-pending wording is superseded for the closed bounded local reviews; it does not describe the current operator task status. Stand-in/drafting counts, unexecuted claims and old failures remain attributed to their original dates and source scopes. No historical result is retagged, and actual release/R4/R5/signed-HEAD/key/source/live/user execution requirements remain in the task procedures. This documentary relocation adds no formal completion, source approval or execution grant.
+
+#### Task76 — V2 paragraph at physical line62 (superseded 2026-10-20)
+
+- **Checked while drafting** (2026-10-16): every code block of this task was applied, step by step, to a `git archive` export of arbiter `526a721` carrying Plan S3-E2 Tasks 64–70 and Plan S3-E3 Tasks 71–72 as their drafting trees had them that day, a scratch stand-in of Plan S3-E3 Task 75 written from contract §52.3 (the record per listed group, the durable `checkpoint_seq`, the acceptance checks the fixture meets, the classes at acceptance and `MarkMemberLagging`; no lag accrual) and arbiter-core and arbiter-proto replace modules carrying Plan S3-E1's contract, with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test`. Observed: Step 8's build failure; Step 19's 33 passes under `-race` and the whole fsm package passing; Steps 22, 27 and 35's build failures and Steps 25, 33 and 38's passes; `go test ./... -race -count=1` passing, `go vet ./...` clean, `gofmt` silent, no `time.Now` in `fsm/`. Each of 38 single-point mutations (no floor in Apply or in the WorkSet; the floor re-checking a pending cleanup; members counted instead of domains; k − 1 outside strict mode; an escape taken where the count holds; either bound at "at or above"; pressure in strict mode; no purge exemption; each base clause dropped; exclusions ignored; reflection ignoring the block; no `domains_below_k`; no hint; no backpressure, or backpressure without a floor-held promotion; no raise check, the raise judged on the committed listing, ignoring exclusions or counting non-Active incarnations; the release on the current E outside strict mode or on the frozen E in strict mode, while the floor is off, withdrawn, missing after an eviction, an update or in `groupsChangedLocked`, or bumping twice; the owner's domain counted in E; the held gauge at zero; counting a refused cleanup; no age reset at the start or at the end of a term; ages not kept across passes; no wiring) fails at least one named test, and the age test passed 200 runs under `-race`. Bazel was not run (no offline module for the stubbed tags); Step 40 runs it on the branch.
+
+#### Task80 — V2 paragraph at physical line4 (superseded 2026-10-20)
+
+**Phase and source custody.** New worktrees follow the executing host: this Codex procedure uses `codex` and persists URWT's JSON `path` exactly, including its absolute symlink spelling. D34's fixed historical Claude ledger-copy ref is unchanged. Stop on a reused worktree, missing approval, missing/mismatched source, failed read/check, signing cancellation, test failure, ambiguous completion or source drift. Never manufacture missing END/release values, stub an unavailable API, enable monitoring to fit a test, change grants or resize voters here. Preserve current C1 backupUser/member separation, C3 reader metadata/SHOW COLUMNS, C4 ownerAudit/replica-read/uint64 guards, actual indexer-c host6/CHI3, keep-free100GiB/memberPVC10GiB and monitoring=false provenance. The P4 hardening and restore grants remain phase-sensitive: optional old whole-corpus reruns are unsupported across phases; mandatory P4 paths do not reach that corpus. Actual successful full500/CH/deployed-image/source/release/END gates remain pending independently of static proof.
+
+#### Task80 — V2 paragraph at physical line6 (superseded 2026-10-20)
+
+**Future execution environment.** Save each Bash fence as a script and run `bash <file>` (Bash3.2 or newer); do not paste it into fish/zsh. Repository/runbook Bash heredocs remain Bash. Commands handed to the user are fish. Write the following complete local tools with the Write tool under a fresh mode700 `$HOME/.cache/s3e4-task80` session directory before Step1. If that directory already holds evidence from an attempt, stop and inspect it; never overwrite/resume its receipts silently. No tool is committed. No real helper, URWT, Git endpoint, signature, ledger or rendering command was executed by this static preparation.
+
+#### Task80 — V2 paragraph at physical line198 (superseded 2026-10-20)
+
+`$HOME/.cache/s3e4-task80/local-render.py` (the complete previously audited direct-Helm equivalent; do not execute `render-inertness.sh` or any Helmfile subcommand). The source below is retained byte-for-byte from FINAL53. Its prior executions are historical only; future acceptance reruns it on the actual pinned P5 branch. Exact ordered values, chart/release/namespace/set-file inputs, all eight existing releases, new-release refusal and byte/object identity are preserved. Its archive excludes both protected filenames before any content access. No canonical-wrapper/live-tail proof is claimed.
+
+#### Task80 — V2 paragraph at physical line392 (superseded 2026-10-20)
+
+- **Historical drafting evidence (2026-10-16; unverified against the final post79 chain).** On a scratch production tree rebuilt from `origin/main` (`206c42357`, SI paths byte-identical to `9d3d0326b`) with stand-ins for Plans S3-B, S3-C1, S3-C3, S3-C4 and S3-D (their drafts applied as their tasks say, and their live commits up to the P4 host images and restore grants), with the key-bearing ClickHouse manifests absent (the old account does not establish pre-read export exclusion), and with stand-in ledger values (`ARBITER_TAG_P5=v0.13.0`, digests and commits of repeated hex): `test_render.py` ran 224 tests OK at the base, 3 with 13 failures and 1 error after Step 2, 227 OK after Step 3, 6 with 3 failures and 3 errors after Step 4, 231 OK after Step 5, 5 with 1 failure and 1 error after Step 7 and 236 OK after Step 8; the three `helm lint --strict` profiles and a fourth with `monitoring.enabled`, `monitoring.stage3Consensus.enabled` and `arbiter.raft.snapshotBody=plain` passed; `render-inertness.sh` printed the eight `identical` lines after each commit; the 26 rendered rule expressions of the fresh values with both monitoring flags on parsed with the upstream PromQL parser (`github.com/prometheus/prometheus/promql/parser` v0.55.0) without an error; `actionlint` passed on the workflow; Step 10's rehearsal printed `OK` for all ten states (236 tests each) and `refused` for all ten bites; and a replay of Steps 2 to 9 from this task's text on a second clone of the base ended in the same tree. The historical account said every bash block passed `bash -n`, `/bin/bash -n` (3.2), `zsh -n` and `shellcheck -S warning`. Not run: anything against GitHub, a registry or the cluster (Steps 1 and 6's remote reads), and `kubectl apply --dry-run=server` of the Pod (Task 82, runbook §3.2).
+
+#### Task80 — V2 paragraph at physical line1875 (superseded 2026-10-20)
+
+**Task81 handoff and actual acceptance.** Pass the retained `urwt.json`, exact `worktree-path.txt`, base/current/task80 heads, P4 merge and exit evidence, typed ledger file, nine-file `task80-source.sha256`, complete logs and `task80-receipt.json`. The consumer must independently verify them before adding its runbook; source or head mismatch stops. Task80 never pushes, merges, cuts a release, writes a real ledger row or uses GPG in this preparation. Task81's eventual PR validator must use the approved FINALv2 REST body (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`), checked head argv, exact success text, before/after head checks and atomic `--match-head-commit` for that same head. No simplified validator or GraphQL coauthor list is a substitute. Ordinary commits require the sole Claude trailer and poetry/G throughout; actual signing cancellation stops for the user's own terminal key unlock.
+
+#### Task80 — V2 paragraph at physical line1877 (superseded 2026-10-20)
+
+**Actual runtime review still required.** Re-anchor every unchanged implementation fence and test count against the real frozen post79 and completed P4 source; apply exact edits and independently reconstruct final source. Run the meaningful RED/GREEN suites, all full suites with zero skips, four lints, exact eight-release direct-Helm comparisons at every commit, ten negative and ten in-order rehearsal states plus byte-identical rollback proof, workflow checks, exact source/head and complete Task81 receipt consumer controls. Record each outcome from the actual run; no predicted counts, source stand-in or historical232-Helm receipt can discharge this gate. The `INDEXER_C_SOURCE_IMAGE` alias/string-shape and old rollout.py return-code/output/count semantics are known actual-review gates, not repaired speculatively here. Task81/82 must preserve complete original D40 user-terminal bodies and exact native acceptance oracles (indexer-a bare1, b/c precise row/table markers), fresh finished-snapshot CRC/promotion budgets, readiness/cleanup stops, source receipts and activation unknown-outcome recovery; no client-supplied label or outer tee substitutes them. Rehearsal Pod pull/scheduling/Ready and all live service/metric/feature checks are actual live gates, never dry-run or static proof. Keep K24/K25/K86 and the7-day budget/voter-resize choices unchanged.
+
+#### Task81 — V2 paragraph at physical line2449 (superseded 2026-10-20)
+
+Expected: `PR commit identities and pinned head verified`; missing/truncated/malformed/duplicate listing, bad author/trailer, numeric SHA, or any changed head refuses before merge. This PREP executes the reader only on inert JSON fixtures.
+
+#### Task82 — V2 paragraph at physical line29 (superseded 2026-10-20)
+
+**Static preparation / execution boundary.** This copy is STATIC PREP, WAIT81, formal review count 0. No actual post-Task-81 production source exists in this review. Before execution, obtain the accepted Task 81 runbook and its real merged source, re-extract every block and chain, re-check producer interfaces and image/source digest bindings, replay the actual preceding production changes in order, run the real render checks before each commit, and perform a separate formal review; inert fixtures do not establish any of those gates. No API, runtime implementation or ledger value is supplied here.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+Filled in only by the recording tasks through S3-C1 contract §19's `s3-ledger.py` and S3-B D23 R1–R4 on the ledger copy, retaining D34's ledger-copy ref. Value cells and run-record tails remain empty until produced and recorded; local or synthetic review evidence does not populate them. Each task records all its rows and its single run record together in one plan-only commit, then completes R1–R4 before a later task reads the values from the ledger copy. Task 82 records its three observed values together after its complete actual acceptance/end checks, never partially.
+
+| Name | Value | Recorded by |
+|---|---|---|
+| `ARBITER_TAG_P5` | | Task 78 |
+| `ARBITER_DIGEST_P5` | | Task 78 |
+| `SN_COMMIT_P5` | | Task 79 |
+| `SN_DIGEST_P5` | | Task 79 |
+| `P5_PR` | | Task 81 |
+| `P5_REHEARSAL` | | Task 82 |
+| `ACTIVATION_EPOCH` | | Task 82 |
+| `P5_END` | | Task 82 |
+
+### Run records
+
+- arbiter P5 release (Task 78):
+- sentio-node P5 release (Task 79):
+- P5 PR (Task 81):
+- P5 run and the v21 activation (Task 82):

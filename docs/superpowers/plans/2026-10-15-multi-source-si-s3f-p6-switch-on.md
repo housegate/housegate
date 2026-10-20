@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Status (2026-10-17): draft.** Tasks 83–89 are drafted and verified locally against their recorded bases. Task 84 daily-soak/restart corrections and Task 89 immutable-consumer checks passed; independent Tasks 85–88 consumer refresh also passed. The full production chain must be rebased to current main parameters during formal review and consistency. No F task has completed its adversarial review; final plan consistency and cross-plan checks remain required. Appendix B distinguishes drafting proof from future execution. Do not execute this plan before those passes; `2026-10-15-multi-source-si-s3cf-status.md` lists the process.
+**Review scope.** Appendix B binds the seven root-accepted bounded local source reviews to their original full-task preimages and the document-only successors selected here; all code/runbook/helper fences and execution steps are unchanged. The final documentary consistency candidate integrates the reviewed source/helper/custody fixes and preserves the published owner as provenance; it does not create execution authority or complete unmodified operator-runtime proof. D25 is already user-approved and E1/E2/E3 documentary adoption is recorded separately. Formal F adoption remains root-ordered after E4 and independent review. All real predecessor release, R1–R4, private-terminal, K86, budget, seven-day/live and user confirmation stops below remain future execution requirements, not prerequisites to claiming an unperformed live result.
 
 **Goal:** Turn stage 3 on, on devnet2, in the order of spec §10.4, starting from the state Plan S3-E4's v21 activation left (`stage3` committed at `ACTIVATION_EPOCH` with every switch off): switch 1 `purge`, switch 2 `eviction_voiding` and switch 3 `owner_aware_selection` (every SI host checked on `SN_COMMIT_P5` first); step 4, the three member identities of `MEMBER_IDS` listed in `verifiers` with their keys, consents and the failure domains of `DEVNET2_FAILURE_DOMAINS`, then switched to consensus mode, registered and marked active one host at a time, entering no ring; switch 5 `placement` after a placement preview, every group verified and the cutover block recorded; the Keeper headroom gate on the shared `clickhouse-keeper-extra`; step 6, the second member user `si_member_ddl` one installation at a time and each member's `hg_member_unsafe` reconciler one host at a time, until every member is ready in every group it belongs to; switches 7 `reselection`, 8 `checkpoints` and 9 `narrowed_drain`; and step 10, `min_safe_copies` 2 after its precondition, the P4 anti-affinity proof and a Keeper re-check, held for 7 days with a bounded held-cleanup age and `safe_copies` ≥ 2 on distinct nodes. Each step is one authority-signed update, or one non-consensus rollout, confirmed in chat. No code is written or released: every behaviour this plan turns on shipped, inert, in Plans S3-E1 to S3-E4 (K66), the member side included (Plan S3-E4 Task 79 carries the consent command, the member consensus mode, the reconciler role, the member consensus metrics and the keeper-findings export, decision D30); production adds values, the second member user, two user scripts, one alert and the P6 runbook.
 
@@ -12,7 +12,7 @@
 
 **Spec:** housegate `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md` (merged into housegate `main` as housegate#236, `fb83a97`; Plans S3-A and S3-B followed as housegate#237, `838de2d`; this plan's branch `urwt/claude/ms-si-stage3-plans-cf` is aligned with `main` (decision D34) and amends spec §8.2 with the explicit `hg_rstage` grants of `si_member`, decision D36, which leaves `si_member_ddl` unchanged) — binding: §10.4 (steps 1–10, their order and the confirmation of each), §16 row P6 and its operator playbook, and, for what each step turns on, §6.1 (member entries, consent, weight, failure domains), §6.2–§6.4 (group records, placement and backfill, `RebalanceGroup`, `MemberReady`, Leaving), §7.1–§7.4 (seal key and header `group_key`, grouping window, eligible rings and `VERIFIERS_UNAVAILABLE`, re-selection), §8.2 (`si_member_ddl`, the `<replicated_merge_tree>` merge default, `unsafe_inc`), §8.3, §8.8, §9.1–§9.3 (checkpoints, classes, the floor, raising k, failure independence), §10.1 (narrowed drain gate and issuance hold), §11 (`replica_hosts` from placement on), §12 (no third-party member), §18 (risks); as clarified by Plans S3-A and S3-B (K1–K22), Plans S3-C1 to S3-E4 (K23–K82) and K83–K87 below. **Prerequisites:** Plans S3-A, S3-B, S3-C1, S3-C2, S3-C3, S3-C4, S3-D, S3-E1, S3-E2, S3-E3 and S3-E4, executed through `P5_END`: their Global Constraints, clarifications and Appendix A (contract §0–§57) apply here unchanged. This plan's Appendix A continues the numbering (§58–§61); §58 names every earlier name this plan consumes with the contract that owns it, and Tasks 85–89 consume the ledger values of Plans S3-B, S3-C3, S3-D, S3-E1 and S3-E4 verbatim from the ledger copy.
 
-**Base revisions.** Task 84 was reconciled against production `ddeac38d28094db2407b5df4af5f922bff7b6e3f` (`origin/main` observed 2026-10-17; the scratch export began at `36a680517c1c6e43930b44bfa178344203b03e0e` and incorporated its enacted posture-C change), arbiter `526a721657983920f19539801b91fcbd222e6f06` (v0.13.0), arbiter-core `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455` (v0.15.0), arbiter-proto `7a73f256865c333332f0ac28b17806b1e2bfcbd1` (v0.12.0), housegate `aa6912c286d40f949ef1ac1dd067fedad818425e`, and sentio-node `0828f212c9ff6fee311701f9b14d8df8c7817a64`. Older line anchors are guidance, not claims that pending code exists at these revisions. S3-A has executed and S3-B has partly executed; later production intent must be applied over the current state, preserving enacted Track A changes: remaining S3-B Tasks 19–21/L, C1 Task 26, C3 Tasks 37–38, C4 Task 47, D Task 53, E4 Task 80 and F Task 83. Scratch verification additionally supplies the earlier live END postures, including P2 member configuration, the C1-END monitoring prerequisite and P5 pins; it is not evidence of live execution. Every code behaviour consumed is the released behaviour of its owning contract (§58), verified against the pending implementation chain; live execution requires its recorded release and END values. devnet2 when Task 85 starts, as the earlier plans' exit records leave it (every value read from the ledger copy at execution, never predicted):
+**Base revisions.** Task 84 was reconciled against production `ddeac38d28094db2407b5df4af5f922bff7b6e3f` (`origin/main` observed 2026-10-17; the scratch export began at `36a680517c1c6e43930b44bfa178344203b03e0e` and incorporated its enacted posture-C change), arbiter `526a721657983920f19539801b91fcbd222e6f06` (v0.13.0), arbiter-core `cfd4f42aa2a1e5e9857a8b9c6271b03876b0a455` (v0.15.0), arbiter-proto `7a73f256865c333332f0ac28b17806b1e2bfcbd1` (v0.12.0), housegate `aa6912c286d40f949ef1ac1dd067fedad818425e`, and sentio-node `0828f212c9ff6fee311701f9b14d8df8c7817a64`. Older line anchors are guidance, not claims that pending code exists at these revisions. These are historical drafting bases. Root documentary receipt `production-fresh-origin-scoped-equality.json` binds production `938f4c26a0b728739c4c86446cc9ba50263f1f58` to cached `a9f9b26686029cfae0fc8621ba41ac30e002624d` only for `charts/storage-integrity`, `scripts/storage-integrity` and `docs/storage-integrity-devnet2-dynamic-table-set.md`; this is named-tree equality, not a new complete-source replay or a live result. Other repository hashes above remain their stated historical proof cuts, not freshly fetched current-main claims. The controller BRIEF records S3-A/S3-B through Task 21 as complete; the old S3-B Tasks 19–21/L scratch overlay is not current remaining work. Later production intent must be applied over the actual reviewed predecessor state, preserving enacted Track A changes: C1 Task 26, C3 Tasks 37–38, C4 Task 47, D Task 53, the current E4 Task 80 override selected by the controller index, and F Task 83. Scratch verification additionally supplies the earlier live END postures, including P2 member configuration, the C1-END monitoring prerequisite and P5 pins; it is not evidence of live execution. Every code behaviour consumed is the released behaviour of its owning contract (§58), verified against the pending implementation chain; live execution requires its recorded release and END values. devnet2 when Task 85 starts, as the earlier plans' exit records leave it (every value read from the ledger copy at execution, never predicted):
 - **Consensus.** `stage3` committed at `ACTIVATION_EPOCH` with all seven switches off and the parameter values of Plan S3-E4's activation record (`group_size` 3, `network_fill_default` true, `min_safe_copies` 1, `strict_copies` false, `indexer_failure_domains` equal to `DEVNET2_FAILURE_DOMAINS`, `exclude_quarantined_hosts` false, and its `max_lag_publications`, `lag_low`, `evidence_timeout_l2_blocks` and `max_uncleaned_parts_*` values); every voter writes v21; tracks enabled; `si_indexers` {0: `snode-1`, 1: `snode-2`, `INDEXER_C_ID`: `snode-3`}, `max_writers` 3; `verifiers` = `verifier-1`, `verifier-2`, `verifier-3` (the network pool, no host-bound entry); authority `0x9Ef3A259D1D87C864431CAb5Ed5F6578Ad5Ad705`; no track quarantined; the registry cursor advances every `cursorAdvanceInterval` 1m (production `charts/storage-integrity/values.yaml:156`, not overridden by the devnet2 overlay; arbiter `config/raw.go:180`).
 - **Images.** The three voters and the three verifiers on `ARBITER_DIGEST_P5`; hosts indexer-a, indexer-b and indexer-c on `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P5>@<SN_DIGEST_P5>` (HouseGate `HG_TAG_P5`, arbiter-core `CORE_TAG_P5` with `stage3_v1`); each si-member on the image Plan S3-E4's P5 record names.
 - **ClickHouse.** Every SI installation locked (S3-B posture C) and restarted once in P2 with `table_engines_require_grant`, the `<replicated_merge_tree>` default `max_bytes_to_merge_at_max_space_in_pool` 0, `keep_free_space_bytes`, the member disk and policy and the `NOT OVERRIDABLE` collections (S3-C3 K39); engine grants by name; `si_member` on every SI installation; no `si_member_ddl` anywhere; `/sentio/0/unsafe_inc` under the Keeper root `/storage-integrity/devnet2/devnet2-si-v2` exists with no child (`UNSAFE_INC_ROOT`).
@@ -82,7 +82,7 @@ Every produced value is written into Appendix C by the task that makes it, with 
 2. **A member secret, or any member value, in the wrong place.** Expected: the ed25519 seed and `replica_signer` key reach only the `si-member` container, the `si_member_ddl` password only `si-member-reconciler`; neither Secret is the `si_member` password Secret or the member status token Secret `<release>-si-member-status-token` (D29), which this plan leaves as S3-C3 and S3-C4 mount it; the `replica_signer` address in the public file is derived by the script with OpenSSL, whichever tool made the key (D40); no member value changes a host pod's `checksum/config`, so syncing a host release for a member change replaces only the member pod; `si_member_ddl` holds exactly its three grants, its profile refuses a merges-allowed replica with 452 and accepts `ddl.UnsafeSettings`' explicit 0; the CHIs carry only a hash; no block reads Secret data except into `kubectl exec -i` stdin. Tests: Task 83 `test_member_consensus_mounts_its_keys_only_into_the_member_container`, `test_member_reconciler_takes_its_password_only_from_its_secret`, `test_member_changes_never_touch_the_host_checksum`, `test_member_reconciler_needs_consensus_mode`, `test_member_consensus_guards_fail_closed`, `test_si_member_ddl_holds_exactly_its_grants`, `test_si_member_ddl_profile_makes_merges_const`, `test_si_member_ddl_carries_only_a_literal_hash`, `test_grant_probe_covers_si_member_ddl`, `test_devnet2_member_secrets_are_per_host`; Task 84 checker `no-secret-data-in-blocks`; `make-member-keys.sh`'s address self-check (§59.5); runbook §8.2 (`member-ddl-probe-<installation>.tsv`), §5.4 and §8.3 (host pod start time unchanged).
 3. **The shared Keeper under the members' replicas.** Expected: the K86 gate passes on ≥ 24 h of samples, with the thresholds agreed by the user, before any `si_member_ddl` exists; reconcilers start one host at a time with a sample after each and every 10 minutes for an hour; after each host the owner-side replica set of every SI table is exactly its owner, the three pool verifiers and the members of its group whose reconciler already runs (after indexer-b 5 replicas for the tables of owners a and c and 4 for indexer-b's own, after indexer-c 6 for owner a's tables and 5 for those of b and c, after indexer-a 6 for every table), so the check never expects a member that is still off; an abort criterion stops the rollout at that host with nothing removed automatically, and the forward fix removes that host's member from its groups with `group rebalance` (Leaving; at k = 1 its release needs no other member's checkpoint, since min(k − 1, |E|) = 0 in spec §6.4, so it is recorded at the first evaluation and the member then drops its replicas); the same thresholds gate step 10 and hold through the soak. Checks: Task 84 checker `keeper-gate-first`; runbook §7.1–§7.3 (`keeper-baseline.tsv`, `keeper-projection.txt`, `keeper-thresholds-agreed.txt`, `keeper-verdict.txt`), §8.3 (`owner-replicas-after-<x>.tsv` from `si_unsafe_replicas` with the hosts done so far) and §8.5 (`keeper-after-<x>.tsv`, `si_keeper_abort`, and `keeper-findings-<x>.txt`: every host's `sentio_node_storage_integrity_keeper_findings{reason}` stays 0 for both reasons, S3-E4 Task 79's export, D30), §12.3, §13.1, §15.4.
 4. **Groups and sealing at steps 5 and 6.** Expected: the placement preview equals the switch-on result: every (owner, database) with a physical incarnation, genesis-origin included, gets the other two hosts' members with `network_fill` forced on, and no Legacy or Refused database gets a group; headers carry `group_key` exactly after `PLACEMENT_CUTOVER_BLOCK`; before step 6 no member is ready, so every group's key is the same and each owner's blocks seal as before, and rings stay the pool; `replica_hosts` stay the other two hosts at step 5 and through step 6 (from placement on read from the groups: every current member's host from its served `host_indexer_id`, D27, whether or not it has sent `MemberReady`, which attests only the `hg_member_unsafe` replicas that reads never use, S3-E4 §56; a host serves a failed-over read only under its own manifest-gated conditions, spec §11); during step 6 `arbiter_block_seal_reason{reason="group_switch"}` rises only while an owner's groups differ in readiness and stops once all are ready, and each later block's eligible ring holds its group's ready members and the pool (ready verify members derived from `ready_generation` and the `verifiers` entries, since `ReadyVerifyMembers` is not served, D33). Checks: runbook §6.1, §6.3 (`placement-preview.json` against `groups-after-step5.json`, `cutover.txt`, `block-<seq>.json` on both sides of the cutover, `replica-hosts-step5.jsonl`), §8.4 (`ready-<x>.jsonl`, `rings-after-<x>.jsonl`, `seal-reasons.txt`, `replica-hosts-after-<x>.jsonl` equal to `replica-hosts-step5.jsonl`); Plan S3-E3 Tasks 71–73's placement, key and readiness tests; Plan S3-E4 Task 79's `TestReplicaHostsListEveryCurrentMemberWhateverItsReadiness`.
-5. **The copy floor at k = 2 with a member down.** Expected: with two members per group and k − 1 = 1, one member down holds no cleanup; both members of a group down hold its cleanups until each is Lagging (once its `lag_advances` reaches `max_lag_publications + 1`, where it saturates, D31, or by `member lagging` per the playbook), `under_replicated` is raised and the pressure bypass keeps the owner writing (strict mode stays off); hosts and members restart strictly one at a time; the held-cleanup age stays ≤ 1800 s and `safe_copies` ≥ 2 on distinct nodes at every daily check, or the 7 days restart; the precondition preview passes before the step-10 update and Apply's own check stays authoritative. Tests and checks: Task 83 `test_p6_exit_alert_reads_the_held_cleanup_gauge`, `test_devnet2_p6_exit_alert_follows_the_rollout`; runbook §12.1 (`k2-precondition.jsonl`), §12.2 (`antiaffinity-step10.txt`, D39's rule: sources on pairwise distinct nodes, no verifier on a source's node), §13.1 (`soak-day<d>.txt`, `safe-copies-day<d>.jsonl`), §16.1, §16.2; Plan S3-E4 Task 76's floor, escape and k-raise tests.
+5. **The copy floor at k = 2 with a member down.** Expected: with two members per group and k − 1 = 1, one member down holds no cleanup; both members of a group down hold its cleanups until each is Lagging (once its `lag_advances` reaches `max_lag_publications + 1`, where it saturates, D31, or by `member lagging` per the playbook), `under_replicated` is raised and the pressure bypass keeps the owner writing (strict mode stays off); hosts and members restart strictly one at a time; the held-cleanup age stays ≤ 1800 s and `safe_copies` ≥ 2 on distinct nodes at every daily check, or the 7 days restart; the precondition preview passes before the step-10 update and Apply's own check stays authoritative. Tests and checks: Task 83 `test_p6_exit_alert_reads_the_held_cleanup_gauge`, `test_devnet2_p6_exit_alert_follows_the_rollout`; runbook §12.1 (`k2-precondition.jsonl`), §12.2 (`antiaffinity-step10.txt`, D39's rule: sources on pairwise distinct nodes, no verifier on a source's node), §13.1 (`soak-current`, `soak-runs/<run_id>/run.json`, `targets.json`, daily `day-N/observation.json` and its attempt/audit/review/receipt chain; AppA §60), §16.1, §16.2; Plan S3-E4 Task 76's floor, escape and k-raise tests.
 
 ## Task order and dependencies
 
@@ -105,8 +105,8 @@ Plans S3-A to S3-E4 executed through P5 (`P5_END`, `P4_END` and the other consum
 Line anchors in the tasks refer to the base revisions above.
 
 **production, P6 code** (Tasks 83–84)
-- `charts/sentio-node/values.yaml` (`siMember.consensus`, `siMember.reconciler.passwordSecret`, commented), the `siMember` template Plan S3-C3 adds (expected `templates/si-member.yaml`), `templates/si-member.yaml` (values, define `sentio-node.siMember.consensus` and guards; `templates/_helpers.tpl` is not touched); `templates/node.yaml` is not touched.
-- `charts/storage-integrity/values.yaml`, `values.schema.json`, `templates/clickhouse.yaml` (`si_member_ddl` user and profile), `templates/validate.yaml` (refusals), `templates/monitoring.yaml` (`<fullname>.stage3-p6`).
+- `charts/sentio-node/values.yaml` (`siMember.consensus`, `siMember.reconciler.passwordSecret`, commented), `templates/si-member.yaml` (values, define `sentio-node.siMember.consensus` and guards; `templates/_helpers.tpl` is not touched); `templates/node.yaml` is not touched.
+- `charts/storage-integrity/values.yaml`, `values.schema.json`, `templates/_helpers.tpl` (users and grants definitions), `templates/clickhouse.yaml` (`si_member_ddl` user and profile), `templates/validate.yaml` (refusals), `templates/monitoring.yaml` (`<fullname>.stage3-p6`).
 - `charts/storage-integrity/tests/test_render.py` (constants, `MemberConsensusTest`, the `ActualFreshNetworkTest` additions), `charts/storage-integrity/tests/clickhouse_grant_probe.tsv` (`si_member_ddl` rows, `constrained`).
 - `scripts/storage-integrity/make-member-keys.sh` (new), `scripts/storage-integrity/make-clickhouse-logins.sh` (`si_member_ddl`).
 - `docs/storage-integrity-devnet2-stage3-p6-switches.md` (new), `docs/storage-integrity-devnet2-multi-source-tracks.md` (stage row 13).
@@ -132,7 +132,7 @@ Line anchors in the tasks refer to the base revisions above.
 | §10.4 step 6: `si_member_ddl` only from here (§8.2), reconcilers (§8.3), `MemberReady` (§6.4) | 83 (`si_member_ddl`, reconciler Secret, probe rows), 84 (§8), 87 |
 | §10.4 step 7 `reselection` (§7.4) | 84 (§9), 88 |
 | §10.4 step 8 `checkpoints` (§9.1–§9.3, classes) | 84 (§10), 88 |
-| §10.4 step 9 `narrowed_drain` (§10.1, issuance hold) | 84 (§11, §16.3, K83), 88 |
+| §10.4 step 9 `narrowed_drain` (§10.1; step9 update under drain, issuance from step10 after narrowed_drain is committed) | 84 (§11, §16.3, K83), 88 |
 | §10.4 step 10, §9.3 raising k (precondition, P4 anti-affinity, Keeper check) | 84 (§12), 89 |
 | §16 P6 exit (k = 2 for 7 days, bounded held-cleanup age, anti-affinity re-checked, `safe_copies` ≥ 2 on distinct nodes), §9.3 failure independence | 83 (exit alert), 84 (§13, K87), 89 |
 | §16 operator playbook (down member, lagging member, Diverged, Foreign; restarts one at a time; confirmation of every live step) | 84 (§15, §16), 85–89 |
@@ -157,7 +157,11 @@ Line anchors in the tasks refer to the base revisions above.
 
 ## Task 83: production — member consensus mode and the reconciler's Secret, `si_member_ddl` with its const-merge profile and probe rows, the member-keys and logins scripts, the P6 exit alert, render tests (S3-F)
 
-Contract §59.1–§59.6 (the production part of P6, binding) and the §58.3 rows it implements (member consensus-mode config, reconciler process, `siMember` values, single-user logins, test constants); spec §6.1 (member entries, keys, consent), §8.2 (`si_member_ddl`: `CREATE DATABASE` without `ENGINE`, `CREATE TABLE` and `DROP TABLE` on `hg_member_unsafe.*`, `TABLE ENGINE ON ReplicatedMergeTree`, nothing else; its profile's `merge_tree_` constraint; the residual), §8.3 (the reconciler creates replicas only while registered), §10.4 steps 4 and 6, §16 row P6 (the exit), §18; clarifications K85 (keys in the user's terminal, consent in the host pod) and K87 (a) (the bound 1800 s); S3-C2 K30 and D29 (one container per secret, the status token's own Secret), S3-C3 K39 (the `<replicated_merge_tree>` default 0 of P2's restart) and K43 (installation-wide users); decisions D30 (S3-E4 Task 79 ships the member side) and D40 (keys and logins are the user's). This task puts every chart, test, corpus and script change of P6 on branch `urwt/claude/multi-source-s3f` (production worktree `multi-source-s3f`); Task 84 adds the P6 runbook `docs/storage-integrity-devnet2-stage3-p6-switches.md` to the same branch and opens `P6_PR`. (1) **`charts/sentio-node`:** `siMember.consensus.{enabled, keysSecret{name, seedKey, replicaSignerKey}, consentJWS}` renders the member's `storage_integrity.member.consensus` keys, its `consent.jws` and the `si-member-keys` volume, mounted read-only (mode `0400`) into the `si-member` container only; `siMember.reconciler.{enabled, passwordSecret{name, key}, metricsPort, resources}` renders the `si-member-reconciler` container (`--role reconciler`), which alone takes `STORAGE_INTEGRITY_MEMBER_DDL_CLICKHOUSE_PASSWORD`; the guards of §59.1 replace Plan S3-C3's refusal of the reconciler. (2) **`charts/storage-integrity`:** `clickhouse.access.memberDDL` renders the user `si_member_ddl` with exactly its three grants and the profile `si_member_ddl` whose merge constraint is const; `monitoring.stage3.{exitAlert, heldCleanupAgeBoundSeconds, p6RunbookURL}` renders the group `<fullname>.stage3-p6` with `ArbiterFloorHeldCleanupAgeAboveExitBound`. (3) **The grant probe:** thirteen `si_member_ddl` rows with the new outcome `constrained`, ordered so every denial meets an existing table (the Bugbot PR 249 fix of contract §59.3). (4) **Scripts:** `make-member-keys.sh` (new) and `make-clickhouse-logins.sh --add-user si_member_ddl`. (5) **Tests** that keep each secret in its one container and every member value out of the host pod, and that hold through Tasks 86, 87 and 89's live commits.
+**Execution prerequisites.** Before Step 1, verify actual P5_END R4 and P5_PR/base custody against the accepted predecessor chain, preserving enacted source/image pins, 100GiB keep-free, 10GiB member PVC and monitoring provenance. Canonical `render-inertness.sh` invokes Helmfile and must not run in this controller; any local substitute needs its separately audited exact direct-Helm equivalence and explicit verification authorization. No stub or synthetic fixture supplies deployment, release, END or ledger evidence. Preserve K86 owner agreement and the complete seven-day promotion-budget user stop.
+
+Contract §59.1–§59.6 (the production part of P6, binding) and the §58.3 rows it implements (member consensus-mode config, reconciler process, `siMember` values, single-user logins, test constants); spec §6.1 (member entries, keys, consent), §8.2 (`si_member_ddl`: `CREATE DATABASE` without `ENGINE`, `CREATE TABLE` and `DROP TABLE` on `hg_member_unsafe.*`, `TABLE ENGINE ON ReplicatedMergeTree`, nothing else; its profile's `merge_tree_` constraint; the residual), §8.3 (the reconciler creates replicas only while registered), §10.4 steps 4 and 6, §16 row P6 (the exit), §18; clarifications K85 (keys in the user's terminal, consent in the host pod) and K87 (a) (the bound 1800 s); S3-C2 K30 and D29 (one container per secret, the status token's own Secret), S3-C3 K39 (the `<replicated_merge_tree>` default 0 of P2's restart) and K43 (installation-wide users); decisions D30 (S3-E4 Task 79 ships the member side) and D40 (keys and logins are the user's). This task puts every chart, test, corpus and script change of P6 on the actual branch and JSON worktree path returned by URWT (`codex` runtime when executed by Codex); Task 84 adds the P6 runbook `docs/storage-integrity-devnet2-stage3-p6-switches.md` to the same branch and opens `P6_PR`. (1) **`charts/sentio-node`:** `siMember.consensus.{enabled, keysSecret{name, seedKey, replicaSignerKey}, consentJWS}` renders the member's `storage_integrity.member.consensus` keys, its `consent.jws` and the `si-member-keys` volume, mounted read-only (mode `0400`) into the `si-member` container only; `siMember.reconciler.{enabled, passwordSecret{name, key}, metricsPort, resources}` renders the `si-member-reconciler` container (`--role reconciler`), which alone takes `STORAGE_INTEGRITY_MEMBER_DDL_CLICKHOUSE_PASSWORD`; the guards of §59.1 replace Plan S3-C3's refusal of the reconciler. (2) **`charts/storage-integrity`:** `clickhouse.access.memberDDL` renders the user `si_member_ddl` with exactly its three grants and the profile `si_member_ddl` whose merge constraint is const; `monitoring.stage3.{exitAlert, heldCleanupAgeBoundSeconds, p6RunbookURL}` renders the group `<fullname>.stage3-p6` with `ArbiterFloorHeldCleanupAgeAboveExitBound`. (3) **The grant probe:** thirteen `si_member_ddl` rows with the new outcome `constrained`, ordered so every denial meets an existing table (the Bugbot PR 249 fix of contract §59.3). (4) **Scripts:** `make-member-keys.sh` (new) and `make-clickhouse-logins.sh --add-user si_member_ddl`. (5) **Tests** that keep each secret in its one container and every member value out of the host pod, and that hold through Tasks 86, 87 and 89's live commits.
+
+
 
 **Files** (anchors: production `origin/main` once Plan S3-E4's `P5_PR` has merged, i.e. `75514e3de` (SI paths byte-identical to Plan S3-B's base `9d3d0326b`) with the hunks of Plans S3-B, S3-C1, S3-C3, S3-C4, S3-D and S3-E4 applied, as rebuilt while drafting; line numbers in the diff headers are that rebuild's and are guidance only; the context lines are the anchor, and a hunk that meets a live commit of an earlier plan on the same lines applies its intent on top of it, the hunk rule of the Global Constraints):
 - Create: `scripts/storage-integrity/make-member-keys.sh` (mode 755)
@@ -195,7 +199,7 @@ Notes:
 - **The member keys (D40, contract §59.5).** `make-member-keys.sh` takes the `replica_signer` key from `cast wallet new --json` or from the user's own key file, never makes it from anything else, and derives both public values with OpenSSL after checking each pipeline against a known vector (RFC 8032 test 1; the secp256k1 key 1, whose address is `0x7e5f4552091a69125d5dfcb7b8c2659029395bdf`) and, with `cast`, against the address `cast` printed. The keys reach OpenSSL and `kubectl` only through pipes and files; the one `printf` of a fixed prefix is a shell builtin, and the range check reads the key into a shell variable that no process sees. Contract §59.5 asks for an `openssl version` starting `OpenSSL 3`, but on the user's Mac `openssl` is Homebrew's OpenSSL 4.0.3 (3.6.4 is `openssl@3`), which has the same `KECCAK-256` digest and gives the same vectors: the script accepts OpenSSL 3 or later and refuses LibreSSL (Appendix B; the contract text is amended).
 - **The exit alert (K87 (a)).** It reads the leader's gauge as `max by (cluster, network) (…) > 1800` for 5 minutes, the form of every chart rule (S3-B's conventions keep `cluster` and `network` in each aggregation for the Grafana delivery rule; contract §59.4's bare `max(…)` would drop them), and points at `#131-daily-checks`, which `markdown_anchor("13.1 Daily checks")` gives and which Task 84's runbook carries (checked once the file exists).
 - **The tests hold through the rollout.** The devnet2 constants are all off in this PR, but the earlier plans' tests read the devnet2 files as Tasks 86, 87 and 89 leave them, and Step 6's rehearsal found every one that would turn red; each is amended in place, keeping its assertions: Plan S3-C3's `member_values` builds a P2 member with consensus mode and the reconciler off (as it drops P3's `serve`), `SIMemberTest`'s member-off renders turn them off too and its reconciler test follows `DEVNET2_MEMBER_RECONCILER`; Plan S3-C4's two token tests take the member's container by name; Plan S3-B's password-source test admits the reconciler's `si_member_ddl` password, Plan S3-C3's config-key test the P5 image's `consensus` and `reconciler` keys, and its census test leaves `si_member_ddl`'s own engine grant out. For the CHI manifests and the network overlay, `without_p2_users` and `without_p2_chi` leave `si_member_ddl` out as they leave `si_member` out, `p2_chi` keeps it as it keeps the P3 and P4 grants, `p2_overrides` states `memberDDL` explicitly (off by default, or each manifest's own state with its own hash), and `p2_manifest_text` (which keeps `si_member_ddl`'s block line for line, its engine grant included) and `p2_overlay_text` write `si_member`'s lines before `si_member_ddl`'s, which `p6_manifest_text` and `p6_overlay_text` put right after them. Step 6 makes Tasks 86, 87 and 89's ten commits on a throwaway clone and runs the suite after each, and ten out-of-order or half-made changes that must fail.
-- **Verified while drafting (2026-10-17).** On a scratch production tree rebuilt from `origin/main` (`febc6c4ac`) with Plan S3-B's Tasks 16, 19 and 20 applied from their text and stand-ins for its live commits (repair mode, the lockdown's posture C and logins, indexer-c's monitoring and ledger row), then Plans S3-C1 Task 26, S3-C3 Tasks 37–38, S3-C4 Task 47, S3-D Task 53 and S3-E4 Task 80 applied from their text with stand-in ledger values (local corrections recorded in Appendix B), without the two key-bearing `k8s-sea/clickhouse` manifests: `test_render.py` ran 237 tests OK at the base; after Step 2 `Ran 231 tests` / `FAILED (failures=21, errors=14)`; after Step 3 the sentio-node half of `MemberConsensusTest` passed; after Step 4 the suite failed only on the logins script; after Step 5 `Ran 257 tests` / `OK`; the three `helm lint --strict` profiles passed; `render-inertness.sh` printed the eight `identical` lines; Step 6's rehearsal (on top of stand-ins for the P2 end state and Plan S3-E4 Task 80's own P5 rehearsal, whose `MON` state was made by hand because the stand-in has no P3 live `replicaReads`) printed `OK (257 tests)` for all ten states and `refused` for all ten bites; its first run went red at `C-b` and found the nine earlier tests the Notes list, which this text amends; and a replay of Steps 2–5 from this task's text on a second clone of the base ended in the same tree. `make-member-keys.sh` ran against stand-in `kubectl` and `cast` under OpenSSL 3.6.4 and 4.0.3 (derived addresses of the keys 2 and 3 as published, the key never in a call, every refusal of §59.5) and LibreSSL 3.3.6 was refused. Every bash block of this task passes `bash -n`, `/bin/bash -n` (3.2) and `shellcheck -S warning`; both scripts pass `shellcheck` at every severity.
+
 
 - [ ] **Step 1: Worktree, identity and base checks**
 
@@ -204,30 +208,54 @@ Requires: Plan S3-E4's `P5_PR` merged into production `main` and `P5_END` record
 This block fetches production (a remote read): it needs explicit user confirmation in chat before it runs.
 
 ```bash
+set -euo pipefail
 P=/Users/uranuswch/Dev/projects/sentio-network/production
-git -C "$P" fetch -q origin
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" claude multi-source-s3f)"
+T="$HOME/.cache/s3f-task83"
+umask 077
+mkdir -p "$T"
+[ ! -e "$T/worktree.json" ] || { echo "retained worktree JSON already exists: stop and inspect the previous attempt"; exit 1; }
+git -C "$P" fetch -q origin || exit 1
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$P" codex multi-source-s3f)" || exit 1
 printf '%s\n' "$out"
-W="$(printf '%s\n' "$out" | jq -r .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] || { echo "the worktree is not new (an earlier attempt?): stop and ask"; exit 1; }
-git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz
-git -C "$W" status --porcelain | wc -l | tr -d ' '
-git -C "$W" branch --show-current
-git -C "$W" config --worktree --get user.email
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$P" rev-parse origin/main)" ] && echo "the branch starts at origin/main"
+printf '%s\n' "$out" | jq -e 'type == "object" and .action == "created" and (.path | type == "string" and startswith("/") and (contains("\n") | not)) and (.branch | type == "string" and length > 0)' >/dev/null || { echo "new URWT JSON/path/branch is invalid: stop"; exit 1; }
+W="$(printf '%s\n' "$out" | jq -er .path)" || exit 1
+branch="$(printf '%s\n' "$out" | jq -er .branch)" || exit 1
+actual_branch="$(git -C "$W" branch --show-current)" || exit 1
+[ "$actual_branch" = "$branch" ] || { echo "URWT branch differs from retained JSON: stop"; exit 1; }
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$status" ] || { echo "new worktree is dirty: stop"; exit 1; }
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+main="$(git -C "$P" rev-parse origin/main)" || exit 1
+[ "$head" = "$main" ] || { echo "the branch does not start at checked origin/main: stop"; exit 1; }
+si_read_83_75_1="$(git -C "$W" config --worktree --get user.name)" || exit 1
+[ "${si_read_83_75_1}" = poetry ] || exit 1
+si_read_83_76_1="$(git -C "$W" config --worktree --get user.email)" || exit 1
+[ "${si_read_83_76_1}" = chen@sentio.xyz ] || exit 1
+si_read_83_77_1="$(git -C "$W" config --worktree --get commit.gpgsign)" || exit 1
+[ "${si_read_83_77_1}" = true ] || exit 1
+(set -C; printf '%s\n' "$out" > "$T/worktree.json") || exit 1
+printf '%s\n' "$head" > "$T/task83-base-head"
+printf '0\n%s\nchen@sentio.xyz\nthe branch starts at origin/main\n' "$branch"
 ```
 
-Expected: one JSON object with `"action":"created"` and the path `/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f`; `0`; `urwt/claude/multi-source-s3f`; `chen@sentio.xyz`; `the branch starts at origin/main`. Every commit of this branch (Tasks 83 and 84) is authored `poetry <chen@sentio.xyz>`.
+Expected: the actual URWT JSON with `action: created`, an absolute `path` and its actual `branch`; `0`; that same branch; `chen@sentio.xyz`; `the branch starts at origin/main`. Retain `$HOME/.cache/s3f-task83/worktree.json` unchanged, preserving its absolute symlink spelling; Task 84 consumes this exact path and branch. Every real commit must be a new signed HEAD, authored `poetry <chen@sentio.xyz> G`. Signing cancellation stops this flow: ask the user to unlock the repository's actual signing key in their own terminal; never disable signing or use an unsigned fallback.
 
 The P5 PR, `P5_END` and the empty `P6_PR` row (remote reads: the housegate fetch and GitHub; explicit user confirmation in chat):
 
 ```bash
-h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+set -euo pipefail
+h=/Users/uranuswch/Dev/projects/sentio-network/housegate; L="$HOME/.cache/s3-ledger"; T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 git -C "$h" fetch -q origin
 pr="$(python3 -I "$L/s3-ledger.py" get "$h" P5_PR | sed -n 's/^P5_PR=//p')"
 [[ "$pr" =~ ^[0-9]+$ ]] || { echo "P5_PR is not recorded on the ledger copy: stop"; exit 1; }
-merge="$(gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
-[ -n "$merge" ] && git -C "$W" merge-base --is-ancestor "$merge" HEAD && echo "P5_PR #$pr is in the base"
+merge="$(gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit --jq 'select(.state == "MERGED") | .mergeCommit.oid')" || exit 1
+[[ "$merge" =~ ^[0-9a-f]{40}$ ]] || { echo "P5_PR has no exact merge SHA: stop"; exit 1; }
+git -C "$W" merge-base --is-ancestor "$merge" HEAD || { echo "P5_PR is absent from this base: stop"; exit 1; }
+echo "P5_PR #$pr is in the base"
 python3 -I "$L/s3-ledger.py" get "$h" P5_END | grep -E '^P5_END=20[0-9]{2}-[01][0-9]-[0-3][0-9]$' || { echo "P5_END is not recorded: stop"; exit 1; }
 python3 -I "$L/s3-ledger.py" empty "$h" P6_PR
 ```
@@ -237,7 +265,7 @@ Expected: `P5_PR #<n> is in the base`; `P5_END=<date>`; then `s3-ledger: P6_PR n
 The base (local only):
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 python3 -I -B - <<'PY'
 import sys
@@ -430,7 +458,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 +            out.extend(lines[index:end])
 +            index = end
 +            continue
-         if in_users and re.fullmatch(r'\s+- "?(GRANT TABLE ENGINE ON [A-Za-z0-9]+|GRANT SELECT ON hg_replica\.\*|GRANT READ ON S3)"?', line):
+         if in_users and re.fullmatch(r'\s+- "?(?:GRANT TABLE ENGINE ON [A-Za-z0-9]+|GRANT SHOW COLUMNS ON system\.parts|GRANT SELECT ON hg_replica\.\*|GRANT READ ON S3)"?', line):
              index += 1
              continue
 @@ -2105,6 +2193,15 @@ def _yaml_scalar(value):
@@ -1194,12 +1222,13 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
          self.assertEqual(self.env(member, "STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN")["valueFrom"], token)
          # The key defaults to status-token.
          keyless = {"storageIntegrity": {"replicaReads": {"memberStatusURL": self.URL, "memberStatusTokenSecret": {"name": self.TOKEN_SECRET}}}}
-@@ -5849,7 +6526,7 @@ class ReplicaReadsTest(unittest.TestCase):
+@@ -5849,8 +6526,8 @@ class ReplicaReadsTest(unittest.TestCase):
              "storageIntegrity": {"enabled": False, "clickhouseUsername": None, "clickhousePasswordSecret": None},
              "housegate": {"storageIntegrity": {"enabled": False}},
              "housegateSidecar": {"storageIntegrity": {"enabled": False}},
 -            "siMember": {"enabled": False},
 +            "siMember": {"enabled": False, "consensus": {"enabled": False}, "reconciler": {"enabled": False}},
+             "siBackup": {"enabled": False},
          }
          self.assert_host_rejected("storageIntegrity.replicaReads requires storageIntegrity.enabled", off, self.HOST)
          url = "storageIntegrity.replicaReads.memberStatusURL must be http://<host>:<port>"
@@ -1281,7 +1310,7 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
                  (member_token,) = [item for item in member["env"] if item["name"] == "STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN"]
                  self.assertEqual(member_token["valueFrom"]["secretKeyRef"]["name"], token_secret)
                  service = docs[("Service", f"{name}-si-member")]
-@@ -10369,6 +11057,174 @@ class ActualFreshNetworkTest(unittest.TestCase):
+@@ -10369,5 +11057,173 @@ class ActualFreshNetworkTest(unittest.TestCase):
              if path.suffix in (".yaml", ".yml") and path.is_file():
                  self.assertNotIn("storage-integrity-si-v2-p5-rehearsal", path.read_text(errors="ignore"), name)
  
@@ -1453,13 +1482,12 @@ diff --git a/charts/storage-integrity/tests/test_render.py b/charts/storage-inte
 +            self.assertTrue(alert_rule(self.control, "ArbiterFloorHeldCleanupAgeAboveExitBound", FRESH_RELEASE)["expr"].endswith(
 +                f") > {P6_HELD_CLEANUP_AGE_BOUND_SECONDS}"))
 +
- 
  if __name__ == "__main__":
      unittest.main()
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | sed 's/ (__main__\.[^)]*)//' | sed -E 's/ \((release|installation|stage|user|grant|error|value)=.*//' | sort | uniq -c
 ```
 
@@ -1582,7 +1610,7 @@ diff --git a/charts/sentio-node/templates/si-member.yaml b/charts/sentio-node/te
  {{- end }}
  {{- /* storage_integrity.member.serve (housegate spec 2026-10-14 §11, stage 3
  P3; Plan S3-C4 contract §31.3), rendered only with siMember.serve.endpoint:
-@@ -73,9 +79,78 @@ serve:
+@@ -73,9 +79,85 @@ serve:
    {{- end }}
  {{- end }}
  {{- end }}
@@ -1620,8 +1648,19 @@ diff --git a/charts/sentio-node/templates/si-member.yaml b/charts/sentio-node/te
 +waits for the member to start; every Secret of them is its own. */ -}}
 +{{- $consensus := $member.consensus | default dict -}}
 +{{- $reconciler := $member.reconciler | default dict -}}
-+{{- if not (and (kindIs "bool" ($consensus.enabled | default false)) (kindIs "bool" ($reconciler.enabled | default false))) -}}
++{{- if not (and (hasKey $consensus "enabled") (hasKey $reconciler "enabled") (kindIs "bool" $consensus.enabled) (kindIs "bool" $reconciler.enabled)) -}}
 +{{- fail "siMember.consensus.enabled and siMember.reconciler.enabled must be true or false" -}}
++{{- end -}}
++{{- /* Check raw port type and presence before coercion, including disabled mode. */ -}}
++{{- $port := $reconciler.metricsPort -}}
++{{- if not (hasKey $reconciler "metricsPort") -}}
++{{- fail "siMember.reconciler.metricsPort must be a port other than siMember.metricsPort and siMember.statusPort: the reconciler listens beside the si-member in one pod" -}}
++{{- end -}}
++{{- if not (or (kindIs "float64" $port) (kindIs "int" $port) (kindIs "int64" $port)) -}}
++{{- fail "siMember.reconciler.metricsPort must be a port other than siMember.metricsPort and siMember.statusPort: the reconciler listens beside the si-member in one pod" -}}
++{{- end -}}
++{{- if or (ne (float64 $port) (float64 (int $port))) (has (int $port) (list (int $member.metricsPort) (int $member.statusPort))) (lt (int $port) 1) (gt (int $port) 65535) -}}
++{{- fail "siMember.reconciler.metricsPort must be a port other than siMember.metricsPort and siMember.statusPort: the reconciler listens beside the si-member in one pod" -}}
 +{{- end -}}
 +{{- $keysSecret := toString (dig "keysSecret" "name" "" $consensus) -}}
 +{{- $passwordSecret := toString (dig "passwordSecret" "name" "" $reconciler) -}}
@@ -1643,10 +1682,6 @@ diff --git a/charts/sentio-node/templates/si-member.yaml b/charts/sentio-node/te
 +{{- end -}}
 +{{- if eq $passwordSecret "" -}}
 +{{- fail "siMember.reconciler.passwordSecret.name is required when siMember.reconciler.enabled" -}}
-+{{- end -}}
-+{{- $port := $reconciler.metricsPort -}}
-+{{- if or (has (int $port) (list (int $member.metricsPort) (int $member.statusPort))) (lt (int $port) 1) (gt (int $port) 65535) -}}
-+{{- fail "siMember.reconciler.metricsPort must be a port other than siMember.metricsPort and siMember.statusPort: the reconciler listens beside the si-member in one pod" -}}
 +{{- end -}}
 +{{- end -}}
 +{{- if and (ne $passwordSecret "") (eq $passwordSecret (toString $member.secret.name)) -}}
@@ -1784,7 +1819,7 @@ diff --git a/charts/sentio-node/templates/si-member.yaml b/charts/sentio-node/te
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && helm lint charts/sentio-node --strict | tail -1
 python3 -B charts/storage-integrity/tests/test_render.py MemberConsensusTest SIMemberTest 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | sed 's/ (__main__\.[^)]*)//' | sed -E 's/ \((release|grant|error)=.*//' | sort | uniq -c
 bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
@@ -1808,8 +1843,11 @@ Expected: `1 chart(s) linted, 0 chart(s) failed`; then
 then the eight lines `<release> identical` and `exit 0`. Every sentio-node test of the class passes; what still fails needs Step 4's chart.
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
-git -C "$W" add charts/sentio-node/values.yaml charts/sentio-node/templates/si-member.yaml && git -C "$W" commit -m "feat(sentio-node): si-member consensus mode and its reconciler, off
+set -euo pipefail
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
+git -C "$W" add charts/sentio-node/values.yaml charts/sentio-node/templates/si-member.yaml || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(sentio-node): si-member consensus mode and its reconciler, off
 
 siMember.consensus renders the member's storage_integrity.member.consensus
 keys (register and the key and consent files), its consent.jws and the
@@ -1823,11 +1861,22 @@ or <release>-si-member-status-token, the guards replace Plan S3-C3's
 refusal of the reconciler, and no member value enters the host pod.
 Every release renders unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed: stop; ask the user to unlock the repository's actual signing key in their own terminal; never disable signing"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$after" != "$before" ] || { echo "commit did not produce a new HEAD: stop"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new commit author or signature is invalid: stop"; exit 1; }
+git -C "$W" verify-commit "$after" || exit 1
+message="$(git -C "$W" log -1 --format=%B)" || exit 1
+[ "$(printf '%s\n' "$message" | grep -ic '^Co-authored-by:')" = 1 ] || exit 1
+[ "$(printf '%s\n' "$message" | grep -i '^Co-authored-by:')" = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' ] || exit 1
+status="$(git -C "$W" status --porcelain)" || exit 1
+[ "$status" = ' M charts/storage-integrity/tests/test_render.py' ] || { echo "Step 3 must leave exactly the pending Step 2 test file: stop"; exit 1; }
+printf '%s\n' "$after" > "$T/task83-checked-head"
+printf '%s\n' "$identity"
 ```
 
-Expected: one commit, `2 files changed`; `poetry <chen@sentio.xyz>`.
+Expected: one commit, `2 files changed`; `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 4: `si_member_ddl`, its probe rows and the exit alert in `charts/storage-integrity`**
 
@@ -2148,7 +2197,7 @@ diff --git a/charts/storage-integrity/tests/clickhouse_grant_probe.tsv b/charts/
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && python3 -I -c 'import json, sys; json.load(open(sys.argv[1]))' charts/storage-integrity/values.schema.json && echo "schema parses"
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | grep -E '^(FAIL|ERROR):|^Ran |^OK|^FAILED' | sed 's/ (__main__\.[^)]*)//' | sed -E 's/ \((release|installation|user)=.*//' | sort | uniq -c
 T="$(mktemp -d)"
@@ -2172,8 +2221,11 @@ Expected: `schema parses`; then
 (the logins script learns `si_member_ddl` in Step 5); `Error: execution error at (storage-integrity/templates/validate.yaml): clickhouse.access.memberDDL requires clickhouse.access.lockDefault: si_member_ddl exists only on a locked installation`; `Error: execution error at (storage-integrity/templates/validate.yaml): monitoring.stage3.heldCleanupAgeBoundSeconds must be a positive integer`; the eight lines `<release> identical` and `exit 0`.
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
-git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/_helpers.tpl charts/storage-integrity/templates/clickhouse.yaml charts/storage-integrity/templates/validate.yaml charts/storage-integrity/templates/monitoring.yaml charts/storage-integrity/tests/clickhouse_grant_probe.tsv charts/storage-integrity/tests/test_render.py && git -C "$W" commit -m "feat(storage-integrity): si_member_ddl with its const-merge profile and the P6 exit alert, off
+set -euo pipefail
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
+git -C "$W" add charts/storage-integrity/values.yaml charts/storage-integrity/values.schema.json charts/storage-integrity/templates/_helpers.tpl charts/storage-integrity/templates/clickhouse.yaml charts/storage-integrity/templates/validate.yaml charts/storage-integrity/templates/monitoring.yaml charts/storage-integrity/tests/clickhouse_grant_probe.tsv charts/storage-integrity/tests/test_render.py || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): si_member_ddl with its const-merge profile and the P6 exit alert, off
 
 clickhouse.access.memberDDL renders si_member_ddl with exactly CREATE
 DATABASE, CREATE TABLE and DROP TABLE on hg_member_unsafe.* and TABLE
@@ -2188,11 +2240,22 @@ monitoring.stage3.exitAlert renders ArbiterFloorHeldCleanupAgeAboveExitBound
 reconciler, the user and the exit alert and hold through the P6 commits.
 Every release renders unchanged.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed: stop; ask the user to unlock the repository's actual signing key in their own terminal; never disable signing"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$after" != "$before" ] || { echo "commit did not produce a new HEAD: stop"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new commit author or signature is invalid: stop"; exit 1; }
+git -C "$W" verify-commit "$after" || exit 1
+message="$(git -C "$W" log -1 --format=%B)" || exit 1
+[ "$(printf '%s\n' "$message" | grep -ic '^Co-authored-by:')" = 1 ] || exit 1
+[ "$(printf '%s\n' "$message" | grep -i '^Co-authored-by:')" = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' ] || exit 1
+status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$status" ] || { echo "commit leaves dirty state: stop"; exit 1; }
+printf '%s\n' "$after" > "$T/task83-checked-head"
+printf '%s\n' "$identity"
 ```
 
-Expected: one commit, `8 files changed`; `poetry <chen@sentio.xyz>`.
+Expected: one commit, `8 files changed`; `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 5: The member-keys script and `si_member_ddl`'s logins**
 
@@ -2410,7 +2473,7 @@ diff --git a/scripts/storage-integrity/make-clickhouse-logins.sh b/scripts/stora
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && chmod 755 scripts/storage-integrity/make-member-keys.sh
 for f in scripts/storage-integrity/make-member-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; do bash -n "$f" && /bin/bash -n "$f" && shellcheck "$f" && echo "$f clean"; done
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
@@ -2421,7 +2484,7 @@ Expected: `scripts/storage-integrity/make-member-keys.sh clean`, `scripts/storag
 The member-keys script against local stand-ins of `kubectl` and `cast` (local only: no cluster, no Secret; the stand-in `cast` prints the secp256k1 key 2, whose address is `0x2b5ad5c4795c026514f8317c7a215e218dccd6cf`, and the key file holds the key 3, whose address is `0x6813eb9362372eef6200f3b1dbc3f819671cba69`). It needs an OpenSSL 3 or later with `KECCAK-256` first on `PATH` (Homebrew's `openssl` or `openssl@3`):
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f; T="$HOME/.cache/s3f-task83"
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1; T="$HOME/.cache/s3f-task83"
 mkdir -p "$T/bin" && chmod 700 "$T"
 cat > "$T/bin/kubectl" <<'PY'
 #!/usr/bin/env python3
@@ -2472,8 +2535,11 @@ rm -rf -- "$T/state" "$T/out" "$T/key3"
 Expected: `make-member-keys: created sentio-node-devnet2-indexer-b-si-member-keys for member-b; public values in T/out/member-public-b.json`; `{"replica_signer":"0x2b5ad5c4795c026514f8317c7a215e218dccd6cf","secret_uid":"uid-of-sentio-node-devnet2-indexer-b-si-member-keys"}`; `ed25519-seed replica-signer-key`; `0` (the key in no call); the created line for member-c and `0x6813eb9362372eef6200f3b1dbc3f819671cba69`, with `T/key3` still there; `make-member-keys: T/key3 must have no group or other permission bits (chmod 600)`; `make-member-keys: Secret sentio-node-devnet2-indexer-a-si-member-keys exists in sentio-network-devnet2; refusing to overwrite it (nothing was created)`; and, with macOS's own `/usr/bin/openssl` first, `make-member-keys: OpenSSL 3 or later is required (found: LibreSSL 3.3.6)`.
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
-git -C "$W" add scripts/storage-integrity/make-member-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh && git -C "$W" commit -m "feat(storage-integrity): member-keys script and si_member_ddl logins
+set -euo pipefail
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
+git -C "$W" add scripts/storage-integrity/make-member-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh || exit 1
+before="$(git -C "$W" rev-parse HEAD)" || exit 1
+git -C "$W" commit -S -m "feat(storage-integrity): member-keys script and si_member_ddl logins
 
 make-member-keys.sh makes a member's ed25519 seed and takes its
 replica_signer key from cast wallet new or from the user's own key file,
@@ -2485,11 +2551,22 @@ values to a file and never prints a key or puts one on a command line
 --add-user si_member_ddl puts the password into the reconciler's Secret
 sentio-node-devnet2-indexer-<x>-si-member-ddl. Run only by the user.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-git -C "$W" log -1 --format='%an <%ae>'
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" || { echo "signed commit failed: stop; ask the user to unlock the repository's actual signing key in their own terminal; never disable signing"; exit 1; }
+after="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$after" != "$before" ] || { echo "commit did not produce a new HEAD: stop"; exit 1; }
+identity="$(git -C "$W" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "$identity" = 'poetry <chen@sentio.xyz> G' ] || { echo "new commit author or signature is invalid: stop"; exit 1; }
+git -C "$W" verify-commit "$after" || exit 1
+message="$(git -C "$W" log -1 --format=%B)" || exit 1
+[ "$(printf '%s\n' "$message" | grep -ic '^Co-authored-by:')" = 1 ] || exit 1
+[ "$(printf '%s\n' "$message" | grep -i '^Co-authored-by:')" = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' ] || exit 1
+status="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$status" ] || { echo "commit leaves dirty state: stop"; exit 1; }
+printf '%s\n' "$after" > "$T/task83-checked-head"
+printf '%s\n' "$identity"
 ```
 
-Expected: one commit, `2 files changed`, `create mode 100755 scripts/storage-integrity/make-member-keys.sh`; `poetry <chen@sentio.xyz>`.
+Expected: one commit, `2 files changed`, `create mode 100755 scripts/storage-integrity/make-member-keys.sh`; `poetry <chen@sentio.xyz> G`.
 
 - [ ] **Step 6: Rehearse Tasks 86, 87 and 89's file changes (local only)**
 
@@ -2688,9 +2765,9 @@ def bites():
 ```
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f; T="$HOME/.cache/s3f-task83"
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1; T="$HOME/.cache/s3f-task83"
 R="$(mktemp -d "$T/rehearse.XXXXXX")" && printf '%s\n' "$R" > "$T/rehearse-path"
-git clone -q --no-hardlinks --branch urwt/claude/multi-source-s3f "$W" "$R/repo"
+git clone -q --no-hardlinks --branch "$(git -C "$W" branch --show-current)" "$W" "$R/repo" || exit 1
 python3 -I -B "$T/rollout.py" "$R/repo" bites
 ```
 
@@ -2711,38 +2788,63 @@ The clone stays under `$HOME/.cache/s3f-task83` (local, rehearsal commits only);
 - [ ] **Step 7: Full production checks**
 
 ```bash
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+set -euo pipefail
+T="$HOME/.cache/s3f-task83"; W="$(jq -er '.path | select(type == "string" and startswith("/") and (contains("\n") | not))' "$T/worktree.json")" || exit 1
 cd "$W" && python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false --strict | tail -1
 helm lint charts/storage-integrity -f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --set monitoring.enabled=true --set monitoring.network=probe --set monitoring.stage3.exitAlert=true --strict | tail -1
 helm lint charts/sentio-node --strict | tail -1
-bash scripts/storage-integrity/render-inertness.sh origin/main; echo "exit $?"
+bash scripts/storage-integrity/render-inertness.sh origin/main || exit 1
+echo "exit 0"
 for f in scripts/storage-integrity/make-member-keys.sh scripts/storage-integrity/make-clickhouse-logins.sh; do bash -n "$f" && shellcheck -S warning "$f" && echo "$f clean"; done
 git -C "$W" status --porcelain | wc -l | tr -d ' '
-git -C "$W" log --format='%an <%ae> %s' origin/main..HEAD | cat
+head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[ "$head" = "$(cat "$T/task83-checked-head")" ] || { echo "HEAD changed since last verified commit: stop"; exit 1; }
+base="$(cat "$T/task83-base-head")" || exit 1
+commits="$(git -C "$W" rev-list --reverse "$base..$head")" || exit 1
+[ -n "$commits" ] || { echo "empty Task83 commit range: stop"; exit 1; }
+for commit in $commits; do
+  si_read_83_2640_1="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$commit")" || exit 1
+  [ "${si_read_83_2640_1}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$W" verify-commit "$commit" || exit 1
+done
+git -C "$W" log --format='%an <%ae> %G? %s' "$base..$head" | cat
+printf '%s\n' "$head" > "$T/task83-handoff-head"
 ```
 
-Expected: `Ran <N0+20> tests` and `OK`; five times `1 chart(s) linted, 0 chart(s) failed`; the eight lines `<release> identical` and `exit 0`; both scripts `clean`; `0`; three lines, each `poetry <chen@sentio.xyz> feat(…)`, the commits of Steps 3, 4 and 5. Nothing is pushed: Task 84 adds the runbook to this branch, runs these checks again with the runbook checker, pushes and opens `P6_PR`, each remote step confirmed in chat.
+Expected: `Ran <N0+20> tests` and `OK`; five times `1 chart(s) linted, 0 chart(s) failed`; the eight lines `<release> identical` and `exit 0`; both scripts `clean`; `0`; three lines, each `poetry <chen@sentio.xyz> G feat(…)`, the commits of Steps 3, 4 and 5. Nothing is pushed: Task 84 adds the runbook to this branch, runs these checks again with the runbook checker, pushes and opens `P6_PR`, each remote step confirmed in chat.
 
 ---
 
 ## Task 84: production — the P6 switch-on runbook and the P6 PR (S3-F)
 
+**Execution prerequisites.** Consume Task83’s retained creator JSON and the exact accepted implementation/source chain; never fabricate the handoff. Before operator execution, establish fresh immutable custody for the complete thirteen-document/helper chain and its114-marker runbook; do not edit or reseal earlier execution custody to accept changed bytes. Local fixture/chart/wire evidence supplies no actual operator approval, startup health or live result.
+
+
+
+
+
 Write the full P6 runbook of contract §59.7, its local checker (§59.8), the stage-table pointer and the workflow path. Open and, only after the user's separate approval and passing review/CI, merge the inert P6 PR carrying Tasks 83 and 84 (§59.9). Record only its observed PR number as P6_PR through §61's R1–R4. This task performs no live switch, rollout, user/Secret creation or Keeper mutation; Tasks 85–89 execute the separately confirmed blocks. The member-aware integration harness is S3-E4 Task 78's, including the required reconciler NetworkID/Tables/StoragePolicy: a failing harness is fixed there, never worked around in this runbook.
 
-**Files** (production origin/main `36a680517c1c6e43930b44bfa178344203b03e0e`, plus pending S3-B Tasks 19–21 and remaining lockdown state, then the production chain C1 Task 26 → C3 Tasks 37–38 → C4 Task 47 → D Task 53 → E4 Tasks 80–81 → F Task 83; applied in plan order; an already merged hunk is not applied again):
+**Files** (historical drafting base production `36a680517c1c6e43930b44bfa178344203b03e0e`; at execution use the actual accepted predecessor state, preserving completed S3-B Tasks19–21 and enacted lockdown intent, then the production chain C1 Task 26 → C3 Tasks 37–38 → C4 Task 47 → D Task 53 → E4 Tasks 80–81 → F Task 83; applied in plan order; an already merged hunk is not applied again):
 - Create `docs/storage-integrity-devnet2-stage3-p6-switches.md` (§0–§16, complete text below).
 - Modify `docs/storage-integrity-devnet2-multi-source-tracks.md` (the Stage/Change/Way back table, immediately after its last stage-3 row; P1 is row 10, P2 row 11 and P3 row 12; P4/P5 add no row, so P6 is row 13).
 - Modify `.github/workflows/storage-integrity-chart.yml` (`pull_request.paths` and `push.paths`, beside the P5 runbook path; add the P6 path exactly once to each list).
-- Local only, never committed: `<production worktree>.runbook-check.py` and `<production worktree>.runbook-selftest.py`; the throwaway `stage3reads` source is embedded in the runbook and built only in a release-tag export.
+- Local only, never committed: `<production worktree>.runbook-check.py` and `<production worktree>.runbook-selftest.py` and `<production worktree>.runbook-restart-selftest.py`; the throwaway `stage3reads` source is embedded in the runbook and built only in a release-tag export.
 - Record only `P6_PR` and `P6 PR (Task 84)` in Plan S3-F Appendix C through the ledger tool. No ledger value is predicted.
 
 **Interfaces**
 - Consumes §58.2–§58.4's recorded pins, `si_stage3` and the full P5 helper chain; `CORE_TAG_P5` wire converters, `dataplane.Client.LeaderConn`, `SafeState` and `TableRegistry`; Task 83's serializers/constants, scripts, member/reconciler values and exit alert; current S3-C1 §19 `s3-ledger.py`; D24 block-file execution, D27 served host indexer ids, D29 separate status-token Secret, D30 member runtime/metrics, D33 served fields and D39 node independence.
-- Produces the section titles and helper interfaces of §59.7, plus the additive, safety-required interfaces `si_stage3reads_put` (confirmed binary copy; reads refuse a stale/missing copy), `si_budget_v21` (the same CRC-checked S3-B estimator, v21-aware), `si_p6_value`, `si_p6_py`, `si_p6_capture`, `si_p6_agent`, `si_p6_create <host>`, `si_p6_rollout <C|D|R-host|X>`, `si_p6_commit`, `si_p6_verify`, `si_p6_rings`, `si_p6_daily`; the additive daily interfaces are `si_p6_soak_start`, `si_p6_soak_finalize`, `si_p6_soak_review` (user terminal only), `si_p6_soak_close`, `si_p6_soak_restart` (approved user terminal only), `si_p6_soak_sample`, `si_p6_soak_budget`, `si_p6_vm_at`, `si_p6_vm_raw`, `si_p6_soak_path`, `si_p6_soak_tail_review` and `si_p6_drop_guard`; `si_acceptance <step> <host>` writes exactly one owner row per confirmed call. The registry tool additionally prints existing served `purged_by` for purge evidence, and the groups sequence-book row includes `purge_node_set` from GetPurgeNodeSet so an evicted member never counts toward a copy preview. `P6_PR` is recorded only here.
+- Consumes Task 85’s exact `$HOME/.cache/s3f-task85/prepare.py` schema-2 immutable-source/ordered signed-head lifecycle (`plan-head <C|D|R-host|X>`, `advance-head <C|D|R-host|X>`, `run-file <prepared-file>`); the missing, changed or unfinished producer stops execution. No synthetic custody receipt is an execution input.
+- Produces `si_p6_action <C|D|R-host|X> <push|sync|dry-run|apply> <command argv>` with exclusive `action-<operation>-<action>.started.json`, `.out` and `.done.json` evidence (schema 1, exact operation/action, checked head, runbook hash, timestamps and started/output hashes; real push receipts additionally bind the observed remote parent/head). Twenty-two dynamic actions cover ten separately confirmed pushes, ten separately confirmed infrastructure mutations, and two separately confirmed b/c dry-runs. No started/unknown action is automatically replayed.
+- Produces the section titles and helper interfaces of §59.7, plus the additive, safety-required interfaces `si_stage3reads_put` (confirmed binary copy; reads refuse a stale/missing copy), `si_budget_v21` (the same CRC-checked S3-B estimator, v21-aware), `si_p6_value`, `si_p6_py`, `si_p6_capture`, `si_p6_agent`, `si_p6_create <host>`, `si_p6_rollout <C|D|R-host|X>`, `si_p6_commit`, `si_p6_verify`, `si_p6_rings`, `si_p6_daily`; the additive daily interfaces are `si_p6_monitoring_preflight`, `si_p6_restart_before`, `si_p6_restart_after`, `si_p6_soak_start`, `si_p6_soak_finalize`, `si_p6_soak_review` (user terminal only), `si_p6_soak_close`, `si_p6_soak_restart` (approved user terminal only), `si_p6_soak_sample`, `si_p6_soak_budget`, `si_p6_vm_at`, `si_p6_vm_raw`, `si_p6_soak_path`, `si_p6_soak_tail_review` and `si_p6_drop_guard`; `si_acceptance <step> <host>` writes exactly one owner row per confirmed call. The registry tool additionally prints existing served `purged_by` for purge evidence, and the groups sequence-book row includes `purge_node_set` from GetPurgeNodeSet so an evicted member never counts toward a copy preview. `P6_PR` is recorded only here.
 - Every bash block has one unique `# block <id>` marker, so the live tasks extract exact code rather than copying commands. Helpers live entirely in the first §0 block. Each acceptance INSERT and acceptance-table DDL receives its own confirmation. Every irreversible authority update has an explicit stop, one field diff, original output and leader-read recovery.
+
+
+
+
 
 **Verification while drafting.** See the Notes at this task's end and Appendix B. The runbook is not permission to perform a live action. K86's agreement with the clickhouse-extra owner and the P6 soak promotion-budget/voter-resize decision remain execution-time stops; none is taken by this task.
 
@@ -2752,25 +2854,47 @@ The existing Task 83 worktree is used, not a new checkout. Remote reads below re
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_32_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_32_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger/s3-ledger.py"
-[ "$(git -C "$W" branch --show-current)" = urwt/claude/multi-source-s3f ]
-[ -z "$(git -C "$W" status --porcelain)" ]
-[ "$(git -C "$W" config --worktree user.name) <$(git -C "$W" config --worktree user.email)>" = 'poetry <chen@sentio.xyz>' ]
+si_read_84_35_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_35_1}" = "$branch" ] || exit 1
+state="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "$state" ]
+si_read_84_38_1="$(git -C "$W" config --worktree user.name)" || exit 1
+si_read_84_38_2="$(git -C "$W" config --worktree user.email)" || exit 1
+[ "${si_read_84_38_1} <${si_read_84_38_2}>" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_84_39_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_84_39_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_39_1}" = "$(cat "$HOME/.cache/s3f-task83/task83-handoff-head")" ] || { echo 'Task83 final signed checked-head handoff differs; stop'; exit 1; }
+si_read_84_40_1="$(git -C "$W" config --worktree commit.gpgsign)" || exit 1
+[ "${si_read_84_40_1}" = true ] || exit 1
 git -C "$W" fetch -q origin
 git -C "$h" fetch -q origin
 python3 -I "$L" get "$h" P5_PR P5_END CORE_TAG_P5 ARBITER_TAG_P5 SN_COMMIT_P5
 python3 -I "$L" empty "$h" P6_PR
 p5="$(python3 -I "$L" get "$h" P5_PR | sed -n 's/^P5_PR=//p')"
-[ "$(gh pr view "$p5" --repo sentioxyz/production --json state --jq .state)" = MERGED ]
-[ "$(git -C "$W" rev-list --count HEAD..origin/main)" = 0 ] || { echo 'production main moved: replay Tasks 83/84 on current main and reverify; stop'; exit 1; }
+si_read_84_46_1="$(gh pr view "$p5" --repo sentioxyz/production --json state --jq .state)" || exit 1
+[ "${si_read_84_46_1}" = MERGED ] || exit 1
+si_read_84_47_1="$(git -C "$W" rev-list --count HEAD..origin/main)" || exit 1
+[ "${si_read_84_47_1}" = 0 ] || { echo 'production main moved: replay Tasks 83/84 on current main and reverify; stop'; exit 1; }
 [ ! -e "$W/docs/storage-integrity-devnet2-stage3-p6-switches.md" ]
 git -C "$W" log --format='%an <%ae>' origin/main..HEAD | sort -u
+commits="$(git -C "$W" rev-list origin/main..HEAD)" || exit 1
+[ -n "$commits" ] || { echo 'empty Task83 commit range; stop'; exit 1; }
+while IFS= read -r commit; do
+  si_read_84_51_1="$(git -C "$W" log -1 --format='%an <%ae> %G?' "$commit")" || exit 1
+  [ "${si_read_84_51_1}" = 'poetry <chen@sentio.xyz> G' ] || exit 1
+  git -C "$W" verify-commit "$commit" || exit 1
+done <<< "$commits"
 python3 -B "$W/charts/storage-integrity/tests/test_render.py" MemberConsensusTest
 ```
 
-Expected: recorded values, empty P6_PR, P5_PR MERGED, clean branch, no missing current-main commit and exactly poetry <chen@sentio.xyz> for Task 83’s commits. MemberConsensusTest passes; its runbook-anchor check becomes active once the file exists. Any unsigned commit or pinentry cancellation stops: the user unlocks the configured key in their own terminal; never turn signing off.
+Expected: recorded values, empty P6_PR, P5_PR MERGED, clean branch, no missing current-main commit and exactly poetry <chen@sentio.xyz> for Task 83’s commits, each with a verified signature. MemberConsensusTest passes; its runbook-anchor check becomes active once the file exists. Any unsigned commit or pinentry cancellation stops: the user unlocks the configured key in their own terminal; never turn signing off.
 
 - [ ] **Step 2: Write the local checker and run it red**
 
@@ -2803,7 +2927,7 @@ for b in bash:
 assert len(set(names))==len(names),'duplicate block marker'
 assert 'si_keeper_verdict' in bash[0][2] and 'si_budget_v21' in bash[0][2]
 assert 'si_stage3reads_put()' in bash[0][2] and 'si_stage3reads()' in bash[0][2]
-mutating=re.compile(r'(?m)^\s*(?:si_stage3_update|si_acceptance|si_p6_create|si_stage3reads_put|si_p6_rollout|si_p6_commit|si_member_ddl_probe|si_p6_agent|git push|helmfile.* sync|si_kubectl apply|bash scripts/storage-integrity/make-|si_arbiter.*(?:group rebalance|member lagging)|si_kubectl exec.*(?:member-consent-statement|cat >))\b')
+mutating=re.compile(r'(?m)^\s*(?:si_stage3_update|si_acceptance|si_p6_create|si_stage3reads_put|si_p6_rollout|si_p6_commit|si_p6_action|si_member_ddl_probe|si_p6_agent|git push|helmfile.* sync|si_kubectl apply|bash scripts/storage-integrity/make-|si_arbiter.*(?:group rebalance|member lagging)|si_kubectl exec.*(?:member-consent-statement|cat >))\b')
 previous=0
 for b in blocks:
     if b==bash[0] or b[1]=='go':
@@ -2846,7 +2970,11 @@ print(f'runbook checks PASS: {len(headings)} sections, {len(bash)} Bash blocks, 
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_136_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_136_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 if python3 -I "$W.runbook-check.py" "$W/docs/storage-integrity-devnet2-stage3-p6-switches.md"; then
   echo 'unexpected green before the runbook exists'; exit 1
 fi
@@ -2867,7 +2995,7 @@ Blocks are Bash 3.2+ and run from the detached production `multi-source-s3f-live
 
 ## 0. Session helpers
 
-Source the first Bash block of §0 of the P5 runbook and its complete chain, in that chain's documented order, then this first Bash block. Earlier helpers retain their definitions. P6 uses name=value pins and never invokes earlier helpers that interpret pins by line number; `si_stage3`, `si_show`, `si_budget_capture`, `si_member_pod`, `si_member_serving`, `si_agent_start`, `si_agent_ch`, the ClickHouse/admin helpers and `si_replica_hosts` are safe with this shape. The earlier lockdown evidence stays under si_lockdown_dir. Tool copying has its own confirmed block: a read refuses a missing/stale copy.
+Source the first Bash block of §0 of the P5 runbook and its complete chain, in that chain's documented order, then this first Bash block. Earlier helpers retain their definitions. P6 uses name=value pins and never invokes earlier helpers that interpret pins by line number; `si_stage3`, `si_show`, `si_budget_capture`, `si_member_pod`, `si_member_serving`, `si_agent_start`, `si_agent_ch`, the ClickHouse/admin helpers and `si_replica_hosts` are safe with this shape. The earlier lockdown evidence stays under si_lockdown_dir. The Task 85 immutable extractor/lifecycle tool at `$HOME/.cache/s3f-task85/prepare.py` must have completed setup before any block runs. Its schema-2 source custody binds the retained lexical worktree path, branch, source head, thirteen documents, helpers and extractor. Each planned one-service commit stages its exact operation diff with `plan-head` after rollout, then records the signed direct-child head with `advance-head` after commit. Execute all prepared files through its `run-file` check. The order is C-b, C-c, C-a, D-b, D-c, D-a, R-b, R-c, R-a, X; no other head advance is authorized. Tool copying has its own confirmed block: a read refuses a missing/stale copy. Every C/D/R/X push and sync/apply has a distinct action identity and exclusive started/done receipts. A missing DONE, changed head/source/output or existing STARTED stops without automatic replay. A successful push is not sync/apply permission; confirm the next exact block separately.
 
 ```bash
 # block 0-helpers
@@ -2885,9 +3013,93 @@ P6_SOAK_DAYS=7
 SI_AUTHORITY=0x9Ef3A259D1D87C864431CAb5Ed5F6578Ad5Ad705
 SI_MAX_WRITERS=3
 # A sourced earlier runbook must never be silently replaced.
-for si_p6_name in si_p6_value si_host_id si_member_id si_failure_domain si_switch_is si_stage3_update si_step_diff si_member si_stage3reads_build si_stage3reads_put si_stage3reads si_groups si_block si_p6_capture si_scoped_paths si_unsafe_replicas si_keeper_pods si_keeper_on si_keeper_exists si_keeper_sample si_keeper_verdict si_keeper_abort si_node_of si_k_precondition si_safe_copies si_antiaffinity si_member_ddl_probe si_keeper_findings si_p6_agent si_p6_create si_acceptance si_p6_rollout si_p6_commit si_p6_verify si_p6_rings si_budget_v21 si_p6_soak_path si_p6_soak_sample si_p6_soak_budget si_p6_vm_at si_p6_vm_raw si_p6_soak_start si_p6_daily si_p6_soak_finalize si_p6_soak_review si_p6_soak_close si_p6_soak_tail_review si_p6_soak_restart si_p6_drop_guard si_p6_py; do
+for si_p6_name in si_p6_action si_p6_value si_host_id si_member_id si_failure_domain si_switch_is si_stage3_update si_step_diff si_member si_stage3reads_build si_stage3reads_put si_stage3reads si_groups si_block si_p6_capture si_scoped_paths si_unsafe_replicas si_keeper_pods si_keeper_on si_keeper_exists si_keeper_sample si_keeper_verdict si_keeper_abort si_node_of si_k_precondition si_safe_copies si_antiaffinity si_member_ddl_probe si_keeper_findings si_p6_agent si_p6_create si_acceptance si_p6_rollout si_p6_commit si_p6_verify si_p6_rings si_budget_v21 si_p6_soak_path si_p6_soak_sample si_p6_soak_budget si_p6_vm_at si_p6_vm_raw si_p6_soak_start si_p6_daily si_p6_soak_finalize si_p6_soak_review si_p6_soak_close si_p6_soak_tail_review si_p6_soak_restart si_p6_drop_guard si_p6_py; do
   if declare -F "$si_p6_name" >/dev/null; then echo "$si_p6_name is defined earlier in the chain; stop" >&2; exit 1; fi
 done
+si_p6_action() { # One confirmed public action; an unknown result is never automatically repeated.
+  local op="$1" phase="$2" head source prefix state remote_before remote_after real_push=0
+  local -a statuses
+  shift 2
+  case "$op:$phase" in C-[abc]:push|C-[abc]:sync|D-[abc]:push|D-a:sync|D-[bc]:dry-run|D-[bc]:apply|R-[abc]:push|R-[abc]:sync|X:push|X:sync) ;; *) echo 'invalid P6 action identity' >&2; return 2 ;; esac
+  [ "$#" -gt 0 ] || return 2
+  prefix="$si_backup/action-$op-$phase"
+  head="$(git rev-parse HEAD)" || return 1
+  source="$(shasum -a 256 docs/storage-integrity-devnet2-stage3-p6-switches.md | cut -d' ' -f1)" || return 1
+  if [ "$phase" = push ] && [ "$1" = git ]; then
+    [ "$#" = 4 ] && [ "$2" = push ] && [ "$3" = origin ] && [ "$4" = HEAD:main ] || { echo 'unexpected push argv'; return 1; }
+    state="$(git status --porcelain)" || return 1
+    [ -z "$state" ] || { echo 'push requires a clean checked source'; return 1; }
+    local si_read_84_191_1
+    si_read_84_191_1="$(git log -1 --format='%an <%ae> %G?' "$head")" || return 1
+    [ "${si_read_84_191_1}" = 'poetry <chen@sentio.xyz> G' ] || return 1
+    git verify-commit "$head" || return 1
+    git log -1 --format=%B "$head" | python3 -I -c 'import re,subprocess,sys; m=sys.stdin.read(); t="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; p=subprocess.run(["git","interpret-trailers","--parse"],input=m,text=True,check=True,capture_output=True).stdout.splitlines(); assert re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",m)==[t] and p.count(t)==1' || return 1
+    remote_before="$(git ls-remote --exit-code origin refs/heads/main)" || return 1
+    local si_read_84_195_1
+    si_read_84_195_1="$(git rev-parse "$head^")" || return 1
+    [[ "$si_read_84_195_1" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [ "$remote_before" = "${si_read_84_195_1}$(printf '\t')refs/heads/main" ] || { echo 'main is not the exact checked commit parent; stop'; return 1; }
+    # The submitted ref is pinned even if local HEAD moves concurrently.
+    set -- git push origin "$head:refs/heads/main"
+    real_push=1
+  fi
+  python3 -I - "$prefix" "$op" "$phase" "$head" "$source" "$si_backup" "${remote_before:-}" "$real_push" <<'P6ACTIONBEGIN'
+import hashlib,json,re,sys,time
+from pathlib import Path
+prefix,op,phase,head,source,root,remote,real=sys.argv[1:]; root=Path(root); p=Path(prefix)
+def unique(pairs):
+    out={}
+    for k,v in pairs:
+        assert k not in out, 'duplicate action receipt key'; out[k]=v
+    return out
+def load(path): return json.loads(path.read_text(),object_pairs_hook=unique)
+assert re.fullmatch('[0-9a-f]{40}',head) and re.fullmatch('[0-9a-f]{64}',source)
+parent=None
+if real=='1':
+    parent,ref=remote.split('\t'); assert ref=='refs/heads/main' and re.fullmatch('[0-9a-f]{40}',parent)
+for suffix in ('.started.json','.done.json','.out'):
+    q=Path(prefix+suffix); assert not q.exists() and not q.is_symlink(), 'action exists/unknown: inspect retained evidence; never replay'
+for prior in ([] if phase=='push' else ['push']+(['dry-run'] if phase=='apply' else [])):
+    b=root/f'action-{op}-{prior}'; start=Path(str(b)+'.started.json'); done=Path(str(b)+'.done.json'); log=Path(str(b)+'.out')
+    assert not any(x.is_symlink() for x in (start,done,log))
+    a=load(start); d=load(done)
+    assert set(a)=={'schema','operation','action','head','runbook_sha256','started_at','remote_parent'}
+    assert set(d)==set(a)|{'completed_at','started_sha256','output_sha256','observed_remote_head'}
+    assert type(a['schema']) is type(d['schema']) is int and a['schema']==d['schema']==1 and a['operation']==d['operation']==op and a['action']==d['action']==prior
+    assert type(a['started_at']) is type(d['started_at']) is type(d['completed_at']) is int and 0<=a['started_at']==d['started_at']<=d['completed_at']
+    assert a['head']==d['head']==head and a['runbook_sha256']==d['runbook_sha256']==source
+    assert d['remote_parent']==a['remote_parent']
+    assert (a['remote_parent'] is None and d['observed_remote_head'] is None) or (isinstance(a['remote_parent'],str) and re.fullmatch('[0-9a-f]{40}',a['remote_parent']) and d['observed_remote_head']==head)
+    assert d['started_sha256']==hashlib.sha256(start.read_bytes()).hexdigest() and d['output_sha256']==hashlib.sha256(log.read_bytes()).hexdigest()
+with Path(prefix+'.started.json').open('x') as f:
+    json.dump({'schema':1,'operation':op,'action':phase,'head':head,'runbook_sha256':source,'started_at':int(time.time()),'remote_parent':parent},f,sort_keys=True); f.write('\n')
+P6ACTIONBEGIN
+  [ "$?" = 0 ] || return 1
+  # Either the command or the logger failing leaves STARTED without DONE.
+  if "$@" 2>&1 | tee "$prefix.out"; then statuses=("${PIPESTATUS[@]}"); else statuses=("${PIPESTATUS[@]}"); fi
+  [ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ] || { echo 'P6 action or logger failed/unknown; retain evidence and stop without replay' >&2; return 1; }
+  if [ "$real_push" = 1 ]; then
+    remote_after="$(git ls-remote --exit-code origin refs/heads/main)" || return 1
+    local si_read_84_237_1
+    si_read_84_237_1="$(git rev-parse HEAD)" || return 1
+    [[ "$si_read_84_237_1" =~ ^[0-9a-f]{40}$ ]] || return 1
+    [ "$remote_after" = "$head$(printf '\t')refs/heads/main" ] && [ "${si_read_84_237_1}" = "$head" ] || { echo 'push readback/local head differs; STARTED remains unknown, stop'; return 1; }
+  fi
+  python3 -I - "$prefix" "${remote_after:-}" "$real_push" <<'P6ACTIONDONE'
+import hashlib,json,sys,time
+from pathlib import Path
+prefix,remote,real=sys.argv[1:]; start=Path(prefix+'.started.json'); log=Path(prefix+'.out'); done=Path(prefix+'.done.json')
+assert not any(p.is_symlink() for p in (start,log,done))
+a=json.loads(start.read_text())
+assert a['schema']==1 and log.is_file()
+observed=None
+if real=='1':
+    observed,ref=remote.split('\t'); assert ref=='refs/heads/main' and observed==a['head'] and a['remote_parent']
+with done.open('x') as f:
+    json.dump({**a,'completed_at':int(time.time()),'started_sha256':hashlib.sha256(start.read_bytes()).hexdigest(),'output_sha256':hashlib.sha256(log.read_bytes()).hexdigest(),'observed_remote_head':observed},f,sort_keys=True); f.write('\n')
+P6ACTIONDONE
+}
+
 si_p6_value() { # Name=value pins, never source values as shell code.
   local v
   v="$(sed -n "s/^$1=//p" "$si_backup/pins")"
@@ -2920,8 +3132,12 @@ si_stage3_update() { # A write; only in a separately confirmed block.
   jq -e --arg a "$(printf '%s' "$SI_AUTHORITY" | tr '[:upper:]' '[:lower:]')" '.current | ([.authority_addresses[] | ascii_downcase] == [$a]) and ((.max_writers|tostring)=="3")' "$si_backup/show-before-step$step.json" >/dev/null || return 1
   leader="$(si_leader)" || return 1
   local rc
+  local -a statuses
   if si_arbiter "$leader" /usr/local/bin/arbiter-admin consensus update --address "$(si_voter "$leader")" --expected-epoch "$(jq -r .epoch "$si_backup/show-before-step$step.json")" --authority "$SI_AUTHORITY" --max-writers "$SI_MAX_WRITERS" --hold "$hold" --hold-timeout 10m "$@" --timeout 15m 2>&1 | tee "$si_backup/update-step$step.out"
-  then rc=0; else rc="${PIPESTATUS[0]}"; fi
+  then statuses=("${PIPESTATUS[@]}"); else statuses=("${PIPESTATUS[@]}"); fi
+  rc=0
+  [ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ] || rc=1
+  printf '%s\t%s\n' "${statuses[0]}" "${statuses[1]}" > "$si_backup/update-step$step.pipeline-status" || return 1
   si_show > "$si_backup/show-after-step$step.json" || return 1
   [ "$rc" = 0 ] || { echo 'refused or outcome unknown; stop and read §16.3'; return 1; }
 }
@@ -3117,7 +3333,15 @@ si_acceptance() { # Exactly one selected owner INSERT per confirmed call.
 }
 si_p6_rollout() { # One service per confirmed block; refresh the remote read before editing.
   git fetch -q origin main || return 1
-  [ -z "$(git status --porcelain)" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo 'live checkout is not clean at freshly fetched main; stop'; return 1; }
+  local si_read_84_487_1
+  si_read_84_487_1="$(git status --porcelain)" || return 1
+  local si_read_84_487_2
+  si_read_84_487_2="$(git rev-parse HEAD)" || return 1
+  [[ "$si_read_84_487_2" =~ ^[0-9a-f]{40}$ ]] || return 1
+  local si_read_84_487_3
+  si_read_84_487_3="$(git rev-parse origin/main)" || return 1
+  [[ "$si_read_84_487_3" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ -z "${si_read_84_487_1}" ] && [ "${si_read_84_487_2}" = "${si_read_84_487_3}" ] || { echo 'live checkout is not clean at freshly fetched main; stop'; return 1; }
   si_p6_py rollout "$PWD" "$si_backup" "$1"
 }
 si_p6_commit() { # Local signed commit only; push/sync lives in a separate confirmed block.
@@ -3128,14 +3352,22 @@ si_p6_commit() { # Local signed commit only; push/sync lives in a separate confi
     D-a|X) expected=k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml ;;
     *) echo 'unknown single-service operation'; return 2 ;;
   esac
-  [ "$(git diff --name-only HEAD | sort)" = "$(printf '%s\n%s\n' charts/storage-integrity/tests/test_render.py "$expected" | sort)" ] || { echo 'expected only one service file and its mirror'; return 1; }
-  [ -n "$(git status --porcelain)" ] || return 1
+  local si_read_84_498_1
+  si_read_84_498_1="$(git diff --name-only HEAD | sort)" || return 1
+  [ "${si_read_84_498_1}" = "$(printf '%s\n%s\n' charts/storage-integrity/tests/test_render.py "$expected" | sort)" ] || { echo 'expected only one service file and its mirror'; return 1; }
+  local si_read_84_499_1
+  si_read_84_499_1="$(git status --porcelain)" || return 1
+  [ -n "${si_read_84_499_1}" ] || return 1
   python3 -B charts/storage-integrity/tests/test_render.py || return 1
   git diff --check && git diff --stat || return 1
   git add charts/storage-integrity/tests/test_render.py k8s-sea/sentio-network-devnet2 || return 1
   git -c commit.gpgsign=true commit -m "chore(devnet2): P6 $label" -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' || return 1
-  [ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || return 1
-  [ "$(git log -1 --format=%G?)" = G ] || return 1
+  local si_read_84_504_1
+  si_read_84_504_1="$(git log -1 --format='%an <%ae>')" || return 1
+  [ "${si_read_84_504_1}" = 'poetry <chen@sentio.xyz>' ] || return 1
+  local si_read_84_505_1
+  si_read_84_505_1="$(git log -1 --format=%G?)" || return 1
+  [ "${si_read_84_505_1}" = G ] || return 1
   git rev-parse HEAD > "$si_backup/$out"
 }
 si_p6_verify() { si_p6_capture && si_p6_py verify "$si_backup" "$1"; }
@@ -3185,9 +3417,62 @@ si_p6_vm_raw() { # VM raw export returns actual sample timestamps, not query_ran
   q="$(jq -nr --arg v '{network="devnet2-si-v2",__name__=~"arbiter_floor_held_cleanup_age_seconds|arbiter_under_replicated_total|sentio_node_si_member_checkpoints_total|sentio_node_si_member_checkpoint_seq"}' '$v|@uri')"
   si_arbiter 0 wget -qO- "http://vmsingle-vm.monitoring.svc:8429/api/v1/export?match%5B%5D=$q&start=$1&end=$2"
 }
+si_p6_monitoring_preflight() { # Read-only owner gate; retain every attempt before k2/day1.
+  local attempt end start
+  attempt="$(mktemp -d "$si_backup/monitoring-preflight-XXXXXXXX")" || return 1
+  si_p6_soak_sample "$attempt/current" || { echo 'monitoring preflight capture failed: owner-stop before k2/day1' >&2; return 1; }
+  end="$(date -u +%s)" || return 1
+  start=$((end-60)) # Existing two thirty-second scrape intervals, not a new exit threshold.
+  si_p6_vm_raw "$start" "$end" > "$attempt/raw.jsonl" || { echo 'monitoring raw export failed: monitoring owner-stop before k2/day1' >&2; return 1; }
+  si_p6_py monitoring-preflight "$si_backup" "$attempt" "$start" "$end" || { echo 'monitoring labels/Endpoint/raw coverage refused: monitoring owner-stop before k2/day1' >&2; return 1; }
+}
+si_p6_restart_before() { # No restart action: record actual prior approval/evidence only.
+  local run attempt x component pod approval epoch
+  run="$(si_p6_soak_path)" || return 1
+  [ ! -e "$run/restart-pending" ] || { echo 'unfinished restart: owner-stop'; return 1; }
+  printf 'Approved host (a/b/c): ' >&2; IFS= read -r x
+  case "$x" in a|b|c) ;; *) return 2 ;; esac
+  printf 'Approved component (member/source-clickhouse/indexer): ' >&2; IFS= read -r component
+  case "$component" in member) pod="$(si_member_pod "$x")" ;; source-clickhouse) pod="$(si_ch_pod "$x")" ;; indexer) pod="sentio-node-devnet2-indexer-$x-0" ;; *) return 2 ;; esac
+  printf 'Actual public user approval and restart purpose (no secrets): ' >&2; IFS= read -r approval
+  mkdir -p "$run/restarts" || return 1
+  attempt="$(mktemp -d "$run/restarts/attempt-XXXXXXXX")" || return 1
+  python3 -I -c 'import json,sys;print(json.dumps(dict(run_id=sys.argv[1],component=sys.argv[2],pod=sys.argv[3],public_approval=sys.argv[4])))' "${run##*/}" "$component" "$pod" "$approval" > "$attempt/approval.json" || return 1
+  si_p6_soak_sample "$attempt/before" || return 1
+  si_kubectl get pod "$pod" -o json > "$attempt/before/selected-process.json" || return 1
+  si_kubectl get pod "$pod" -o json > "$attempt/selected-before.json" || return 1
+  epoch="$(date -u +%s)" || return 1; printf '%s\n' "$epoch" > "$attempt/start-epoch"
+  si_p6_vm_raw "$((epoch-60))" "$epoch" > "$attempt/before-raw.jsonl" || return 1
+  si_p6_py restart-begin "$si_backup" "$attempt" || return 1
+}
+si_p6_restart_after() { # Complete exactly the pending observed restart, never retry the action.
+  local run name attempt pod b1 e1 b2 e2 start finish evidence
+  run="$(si_p6_soak_path)" || return 1
+  name="$(cat "$run/restart-pending")" || return 1
+  [[ "$name" =~ ^attempt-[A-Za-z0-9_-]+$ ]] || return 1
+  attempt="$run/restarts/$name"
+  pod="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["pod"])' "$attempt/started.json")" || return 1
+  printf 'Actual public startup audit, registration, readiness and checkpoint evidence references: ' >&2; IFS= read -r evidence
+  ( set -o noclobber; printf '%s\n' "$evidence" > "$attempt/return-to-service.txt" ) || return 1
+  mkdir "$attempt/after" || return 1
+  b1="$(date -u +%s)" || return 1; si_p6_soak_sample "$attempt/after/read1" || return 1
+  si_kubectl get pod "$pod" -o json > "$attempt/after/read1/selected-process.json" || return 1
+  e1="$(date -u +%s)" || return 1
+  sleep 60
+  b2="$(date -u +%s)" || return 1; si_p6_soak_sample "$attempt/after/read2" || return 1
+  si_kubectl get pod "$pod" -o json > "$attempt/after/read2/selected-process.json" || return 1
+  e2="$(date -u +%s)" || return 1
+  printf '{"read1_begin":%s,"read1_end":%s,"read2_begin":%s,"read2_end":%s}\n' "$b1" "$e1" "$b2" "$e2" > "$attempt/after/times.json" || return 1
+  si_kubectl get pod "$pod" -o json > "$attempt/selected-after.json" || return 1
+  start="$(cat "$attempt/start-epoch")" || return 1; finish="$(date -u +%s)" || return 1
+  printf '%s\n' "$finish" > "$attempt/finish-epoch"
+  si_p6_vm_raw "$((start-60))" "$finish" > "$attempt/raw.jsonl" || return 1
+  si_p6_py restart-finish "$si_backup" "$attempt" || { echo 'restart evidence refused: owner-stop, retain pending and all files; no automatic retry/restart'; return 1; }
+}
 si_p6_soak_start() {
   local run id
   [ ! -e "$si_backup/soak-current" ] || { echo 'existing run: use explicit restart after repair'; return 1; }
+  si_p6_monitoring_preflight || return 1
   mkdir -p "$si_backup/soak-runs" || return 1
   run="$(mktemp -d "$si_backup/soak-runs/run-XXXXXXXX")" || return 1; id="${run##*/}"
   si_p6_soak_sample "$run/baseline" && si_p6_soak_budget "$run" || return 1
@@ -3733,6 +4018,7 @@ def vector(path):
 import hashlib
 import os
 import time
+import tempfile
 
 
 def digest(path):
@@ -3933,6 +4219,231 @@ def targets(sample,root):
     return {'pods':pods,'instances':instances,'indexer_c_id':pins(root)['INDEXER_C_ID']}
 
 
+def monitoring_preflight(root, attempt, start, end):
+    require(type(start) is int and type(end) is int and end-start==60,'preflight must cover the existing two thirty-second intervals')
+    require(attempt.is_dir() and not (attempt/'receipt.json').exists(),'monitoring preflight attempt missing/reused')
+    state=targets(attempt/'current',root)
+    under=raw_series(attempt/'raw.jsonl',start,end,state,False)
+    exclusive(attempt/'receipt.json',{'schema':1,'kind':'monitoring-preflight','interval_start':start,'interval_end':end,'targets':state,'under_replicated_events':under,'files_sha256':manifest(attempt)})
+
+
+# Approved restart evidence never performs a restart. Revalidate every retained semantic binding.
+def stable_placement(state):
+    return {name:{k:p[k] for k in ('namespace','node')} for name,p in state['pods'].items()},state['indexer_c_id']
+
+
+def latest_targets(root,run,events):
+    return events[-1]['after_targets'] if events else load(run/'targets.json')
+
+
+def _restart_raw(path,start,end,root,run,events,daily=True,record_resets=False):
+    baseline=load(run/'targets.json'); expected=latest_targets(root,run,events)
+    require(stable_placement(baseline)==stable_placement(expected),'stable node/owner identity changed')
+    logical={}; resets=[]; normalized=[]
+    for row in lines(path):
+        labels=row['metric']; pod=labels.get('pod'); p=baseline['pods'].get(pod)
+        require(p and labels.get('namespace')==p['namespace'] and labels.get('network')=='devnet2-si-v2','restart raw labels missing/mismatched: monitoring owner-stop')
+        key=(pod,labels.get('__name__'),labels.get('owner',''),labels.get('result',''),labels.get('reason',''))
+        require(len(row['values'])==len(row['timestamps']) and row['values'],'restart raw empty/misaligned')
+        points=logical.setdefault(key,{})
+        for t,value in zip(row['timestamps'],row['values']):
+            require(type(t)is int and start*1000<=t<=end*1000,'restart raw timestamp outside exact interval')
+            state=baseline; allowed=set(state['instances'].get(pod,[]))
+            for e in events:
+                if t<e['start_epoch']*1000:break
+                if t<=e['finish_epoch']*1000:
+                    allowed=set(e['before_targets']['instances'].get(pod,[]))|set(e['after_targets']['instances'].get(pod,[]));break
+                state=e['after_targets'];allowed=set(state['instances'].get(pod,[]))
+            require(labels.get('instance') in allowed,'unapproved UID/instance transition')
+            v=float(value);require(math.isfinite(v) and v>=0,'restart raw nonfinite/negative')
+            prior=points.get(t); token=(v,tuple(sorted(labels.items())))
+            require(prior is None or prior==token,'overlapping/conflicting raw target sample')
+            points[t]=token
+    for key,points in logical.items():
+        pod,name,owner,result,reason=key; stamps=sorted(points);offset=0;values=[];previous=None
+        for t in stamps:
+            value=points[t][0]
+            if previous is not None and points[previous[0]][1]!=points[t][1]:
+                old_instance=dict(points[previous[0]][1])['instance'];new_instance=dict(points[t][1])['instance']
+                require(any(e['pod']==pod and (e['start_epoch']-60)*1000<=previous[0]<=t<=e['finish_epoch']*1000 and t>=e['start_epoch']*1000 and old_instance in e['before_targets']['instances'].get(pod,[]) and new_instance in e['after_targets']['instances'].get(pod,[]) for e in events),'raw label identity reversed/changed outside approved restart boundary')
+            boundaries=[] if previous is None else [e for e in events if e['pod']==pod and type(e.get('process_start_ms'))is int and previous[0]<e['process_start_ms']<=t]
+            if name=='sentio_node_si_member_checkpoints_total' and boundaries:
+                require(len(boundaries)==1,'multiple unseen process boundaries: owner-stop')
+                e=boundaries[0];old=e['before_targets']['pods'][pod];new=e['after_targets']['pods'][pod]
+                require((old['uid']!=new['uid'] or old['containers']!=new['containers']) and (e['start_epoch']-60)*1000<=previous[0] and t<=e['finish_epoch']*1000,'counter boundary lacks actual changed process/covered interval')
+                # E1 Task63 declareOwners initializes each process counter at zero; the first
+                # observed accepted/switch_off sample may already be positive. Never fill a gap.
+                proof={'pod':pod,'metric':name,'owner':owner,'result':result,'process_start_ms':e['process_start_ms'],'before_timestamp':previous[0],'before_value':previous[1],'after_timestamp':t,'after_value':value}
+                require(record_resets and e is events[-1] or proof in e['counter_resets'],'counter boundary not bound to completed restart receipt')
+                if not record_resets or e is events[-1]:resets.append(proof)
+                offset+=previous[1]
+            elif previous is not None and value<previous[1] and name!='arbiter_floor_held_cleanup_age_seconds':
+                require(False,'unapproved counter reset or durable sequence reset')
+            values.append(value+offset);previous=(t,value)
+        # Validate all original timing/coverage/age/refused/monotonic rules over real timestamps.
+        labels=dict(points[stamps[0]][1]);labels['instance']=baseline['instances'][pod][0]
+        normalized.append({'metric':labels,'timestamps':stamps,'values':values})
+    with tempfile.TemporaryDirectory(prefix='p6-restart-raw-') as temp:
+        path=Path(temp)/'normalized.jsonl';path.write_text(''.join(json.dumps(r)+'\n' for r in normalized))
+        under=raw_series(path,start,end,baseline,daily)
+    return under,resets
+
+
+def _restart_checkpoint_pair(before,after,root,events,begin,end):
+    offsets={}
+    for e in events:
+        if begin<=e['start_epoch'] and e['finish_epoch']<=end:
+            for r in e['counter_resets']:
+                k=(r['pod'],r['owner'],r['result']);offsets[k]=offsets.get(k,0)+r['before_value']
+        else:
+            require(e['finish_epoch']<=begin or e['start_epoch']>=end,'observation interval crosses incomplete restart boundary')
+    # Temporary AFTER metric view changes counters only; served sequences/frontiers stay byte exact.
+    with tempfile.TemporaryDirectory(prefix='p6-restart-checkpoint-') as temp:
+        dst=Path(temp)
+        for file in ('watermark.json','groups.jsonl'):(dst/file).write_bytes((after/file).read_bytes())
+        p=pins(root)
+        for x in 'abc':
+            pod=f'sentio-node-devnet2-indexer-{x}-si-member-0';rows=[]
+            for line in (after/f'member-{x}.txt').read_text().splitlines():
+                m=re.fullmatch(r'(sentio_node_si_member_checkpoints_total)\{([^}]*)\} ([^ ]+)',line)
+                if m:
+                    labels=dict(re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)="([^"\\]*)"',m[2]));amount=offsets.get((pod,labels.get('owner'),labels.get('result')),0)
+                    if amount:line=m[1]+'{'+m[2]+'} '+str(float(m[3])+amount)
+                rows.append(line)
+            (dst/f'member-{x}.txt').write_text('\n'.join(rows)+'\n')
+        checkpoint_pair(before,dst,root)
+
+
+def restart_record_equal(left,right):
+    # Preserve JSON value types as well as contents; bool/float coercion is not evidence.
+    return json.dumps(left,sort_keys=True,separators=(',',':'),allow_nan=False)==json.dumps(right,sort_keys=True,separators=(',',':'),allow_nan=False)
+
+
+def restart_process_identity(doc,pod):
+    m=doc['metadata'];s=doc['status'];cs=s.get('containerStatuses',[])
+    require(m['name']==pod and s['phase']=='Running' and cs and all(c.get('ready') is True for c in cs),'selected process missing/not ready')
+    require(all(isinstance(v,str) and v for v in (m['namespace'],m['uid'],s['podIP'],doc['spec']['nodeName'])),'selected process identity missing')
+    require(len({c['name'] for c in cs})==len(cs) and all(isinstance(c['name'],str) and c['name'] and type(c['restartCount'])is int and c['restartCount']>=0 and isinstance(c['state'].get('running',{}).get('startedAt'),str) and c['state']['running']['startedAt'] for c in cs),'selected container identity malformed')
+    return {'uid':m['uid'],'ip':s['podIP'],'namespace':m['namespace'],'node':doc['spec']['nodeName'],'containers':sorted([c['name'],c['restartCount'],c['state']['running']['startedAt']] for c in cs)}
+
+
+def restart_selected_sample(sample,root,pod,selected):
+    observed=restart_process_identity(load(sample/'selected-process.json'),pod)
+    require(observed==restart_process_identity(selected,pod),'selected process differs from independently sampled container tuple')
+    full=targets(sample,root)
+    if pod in full['pods']:
+        require(observed==full['pods'][pod],'selected process differs from full sampled Pod UID/IP/container tuple')
+    return observed
+
+
+def restart_start_record(root,run,attempt,events):
+    require(attempt.parent==run/'restarts' and attempt.is_dir() and not attempt.is_symlink(),'restart evidence outside current run')
+    require(re.fullmatch(r'attempt-[A-Za-z0-9_-]+',attempt.name) is not None,'restart attempt identity invalid')
+    approval=load(attempt/'approval.json')
+    require(set(approval)=={'run_id','component','pod','public_approval'} and approval['run_id']==run.name and approval['component'] in ('member','source-clickhouse','indexer') and isinstance(approval['public_approval'],str) and len(approval['public_approval'].strip())>=40,'actual one-at-a-time user approval required')
+    before=targets(attempt/'before',root);pod=approval['pod'];selected=load(attempt/'selected-before.json')
+    restart_selected_sample(attempt/'before',root,pod,selected)
+    if approval['component']=='member':require(pod in before['instances'] and '-si-member-' in pod,'selected member missing')
+    elif approval['component']=='source-clickhouse':require(pod in before['pods'] and pod not in before['instances'],'selected source ClickHouse missing')
+    else:require(pod in {f'sentio-node-devnet2-indexer-{x}-0' for x in 'abc'},'selected indexer missing')
+    require(before==latest_targets(root,run,events),'target changed before approved restart: owner-stop')
+    start=int((attempt/'start-epoch').read_text())
+    require(not events or start>=events[-1]['finish_epoch'],'overlapping approved restarts')
+    raw_series(attempt/'before-raw.jsonl',start-60,start,before,False)
+    hashes={'before/'+k:v for k,v in manifest(attempt/'before').items()}
+    for name in ('approval.json','selected-before.json','start-epoch','before-raw.jsonl'):hashes[name]=digest(attempt/name)
+    return {'schema':1,'kind':'approved-restart-started','run_id':run.name,'ordinal':len(events)+1,'previous_receipt_sha256':digest(Path(events[-1]['_path'])) if events else None,'start_epoch':start,'pod':pod,'component':approval['component'],'before_targets':before,'approval_sha256':digest(attempt/'approval.json'),'files_sha256':hashes}
+
+
+def restart_complete_record(root,run,attempt,events):
+    started=load(attempt/'started.json')
+    require(all(type(started.get(k))is int for k in ('schema','ordinal','start_epoch')),'restart started integers must be exact')
+    bound_files(attempt,started['files_sha256'])
+    expected=restart_start_record(root,run,attempt,events)
+    require(restart_record_equal(started,expected),'restart started fields differ from approval/captured evidence/predecessor')
+    finish=int((attempt/'finish-epoch').read_text());served_pair(attempt/'after',root,started['start_epoch'],finish)
+    one=targets(attempt/'after'/'read1',root);after=targets(attempt/'after'/'read2',root)
+    require(one==after,'restart AFTER targets differ across served pair')
+    before=started['before_targets'];pod=started['pod']
+    original=load(attempt/'selected-before.json');selected=load(attempt/'selected-after.json')
+    old=restart_selected_sample(attempt/'before',root,pod,original)
+    current=restart_selected_sample(attempt/'after'/'read1',root,pod,selected)
+    require(current==restart_selected_sample(attempt/'after'/'read2',root,pod,selected),'selected process changed across AFTER captures')
+    require(stable_placement(before)==stable_placement(after),'restart changed stable node/owner identity')
+    require(all(before['pods'][p]==after['pods'][p] and before['instances'].get(p)==after['instances'].get(p) for p in before['pods'] if p!=pod),'another pod/target changed during one-at-a-time restart')
+    require((old['namespace'],old['node'])==(current['namespace'],current['node']),'selected restart node/namespace changed')
+    require(old['uid']!=current['uid'] or old['containers']!=current['containers'],'no observed restart identity change')
+    evidence=(attempt/'return-to-service.txt').read_text()
+    require(len(evidence.strip())>=40,'actual owner startup audit/registration/readiness/checkpoint evidence required; owner-stop')
+    event={k:v for k,v in started.items() if k not in ('files_sha256','kind')}
+    event.update({'kind':'approved-restart','finish_epoch':finish,'after_targets':after,'counter_resets':[],'process_start_ms':None,'started_sha256':digest(attempt/'started.json'),'raw_sha256':digest(attempt/'raw.jsonl'),'return_to_service_sha256':digest(attempt/'return-to-service.txt')})
+    if started['component']=='member':
+        rows=[c for c in current['containers'] if c[0]=='si-member'];require(len(rows)==1,'actual si-member process startedAt missing: owner-stop')
+        from datetime import datetime
+        stamp=datetime.fromisoformat(rows[0][2].replace('Z','+00:00'));require(stamp.tzinfo is not None,'process start timezone missing')
+        event['process_start_ms']=int(stamp.timestamp()*1000)
+        require(started['start_epoch']*1000<=event['process_start_ms']<=finish*1000,'actual member process start outside approved interval')
+    _,resets=_restart_raw(attempt/'raw.jsonl',started['start_epoch']-60,finish,root,run,events+[event],False,True)
+    event['counter_resets']=resets
+    _restart_checkpoint_pair(attempt/'before',attempt/'after'/'read2',root,[event],started['start_epoch'],finish)
+    event['files_sha256']=manifest(attempt)
+    return event
+
+
+def restart_events(root,run,allow_pending=False):
+    current,_=run_at(root);require(run==current,'restart chain differs from current run')
+    require(allow_pending or not (run/'restart-pending').exists(),'approved restart unfinished: owner-stop before observation/next restart')
+    incomplete=[p.parent.name for p in (run/'restarts').glob('*/started.json') if not (p.parent/'receipt.json').is_file()] if (run/'restarts').exists() else []
+    pending=(run/'restart-pending').read_text().strip() if (run/'restart-pending').is_file() else None
+    require(not incomplete or allow_pending and incomplete==[pending],'unfinished/ambiguous started restart: owner-stop, no replay')
+    records=[]
+    for path in (run/'restarts').glob('*/receipt.json') if (run/'restarts').exists() else []:
+        record=load(path)
+        require(all(type(record.get(k))is int for k in ('schema','ordinal','start_epoch','finish_epoch')),'restart receipt integers must be exact')
+        records.append((record['ordinal'],path,record))
+    records.sort(key=lambda row:row[0]);events=[]
+    for ordinal,path,record in records:
+        require(ordinal==len(events)+1,'restart chain missing/duplicate/out of order')
+        bound_files(path.parent,record['files_sha256'])
+        expected=restart_complete_record(root,run,path.parent,events)
+        require(restart_record_equal(record,expected),'completed restart receipt fields differ from retained started/approval/target/raw/health evidence')
+        require(not events or record['start_epoch']>=events[-1]['finish_epoch'],'overlapping approved restarts')
+        expected['_path']=str(path);events.append(expected)
+    return events
+
+
+def restart_raw(path,start,end,root,run,events,daily=True,record_resets=False):
+    require(record_resets is False,'counter proof production is internal to complete restart validation')
+    checked=restart_events(root,run)
+    require(restart_record_equal(events,checked),'raw consumer events differ from strictly validated restart receipts')
+    return _restart_raw(path,start,end,root,run,checked,daily,False)
+
+
+def restart_checkpoint_pair(before,after,root,events,begin,end):
+    run,_=run_at(root);checked=restart_events(root,run)
+    require(restart_record_equal(events,checked),'checkpoint consumer events differ from strictly validated restart receipts')
+    return _restart_checkpoint_pair(before,after,root,checked,begin,end)
+
+
+def restart_command(command,root,attempt,*args):
+    run,_=run_at(root)
+    if command=='begin':
+        events=restart_events(root,run)
+        require(not (attempt/'started.json').exists() and not (attempt/'receipt.json').exists(),'restart attempt reused: owner-stop')
+        require(all(not (attempt/name).exists() for name in ('after','selected-after.json','finish-epoch','return-to-service.txt','raw.jsonl')),'future restart observations already exist before begin: owner-stop')
+        started=restart_start_record(root,run,attempt,events)
+        exclusive(attempt/'started.json',started)
+        with (run/'restart-pending').open('x') as f:f.write(attempt.name+'\n')
+        print(attempt);return
+    require(command=='finish','unknown restart command')
+    name=(run/'restart-pending').read_text().strip()
+    require(re.fullmatch(r'attempt-[A-Za-z0-9_-]+',name) and attempt==run/'restarts'/name,'restart pending identity mismatch')
+    events=restart_events(root,run,True)
+    event=restart_complete_record(root,run,attempt,events)
+    exclusive(attempt/'receipt.json',event)
+    (run/'restart-pending').unlink() # Only this completed attempt, never after an ambiguous result.
+    print(attempt/'receipt.json')
+
 def daily_budget(root,run_doc,attempt,closing=False):
     b=load(attempt/'budget.json'); original=run_doc['initial_budget']; live=int(b['live_promotion_seq'])
     spent=live-int(run_doc['start_promotion_seq']); bound=int(run_doc['forecast_upper_bound'])
@@ -4002,6 +4513,7 @@ def daily_command(command,root,*args):
         print(run/'retired-current-pointer')
         return
     run,doc=run_at(root)
+    if command in ('observe','audit','closing-audit'): events=restart_events(root,run)
     if command=='breach':
         fail_run(run,args[0])
     if command=='missed':
@@ -4020,9 +4532,10 @@ def daily_command(command,root,*args):
             prior=run/'baseline' if day==1 else run/f'day-{day-1}'/'observation.json'
             if day>1:
                 p=load(prior); bound_files(prior.parent/p['attempt'],p['hashes']); prior=prior.parent/p['attempt']/'read2'
-            require(pod_state(prior/'pods.jsonl')==pod_state(attempt/'read2'/'pods.jsonl'),'pod restarted/replaced since prior observation')
-            checkpoint_pair(prior,attempt/'read2',root)
-            require(targets(attempt/'read2',root)==load(run/'targets.json'),'monitoring target identity changed')
+            require(targets(attempt/'read2',root)==latest_targets(root,run,events),'current targets differ from completed approved restart chain')
+            require(stable_placement(targets(prior,root))==stable_placement(targets(attempt/'read2',root)),'stable node/owner identity changed')
+            previous_epoch=doc['start_epoch'] if day==1 else p['read2_end']
+            restart_checkpoint_pair(prior,attempt/'read2',root,events,previous_epoch,load(attempt/'times.json')['read2_end'])
             exclusive(attempt.parent.parent/'observation.json',{'schema':1,'run_id':doc['run_id'],'day':day,'interval_start':start,'interval_end':end,'attempt':'attempts/'+attempt.name,**load(attempt/'times.json'),'copies':rows,'hashes':manifest(attempt)})
         except (SystemExit,KeyError,ValueError,OSError) as e: fail_run(run,str(e))
         return
@@ -4031,8 +4544,8 @@ def daily_command(command,root,*args):
         require(int(time.time())>=end,'daily history window has not completed')
         bound_files(dayroot/obs['attempt'],obs['hashes'])
         try:
-            require(pod_state(dayroot/obs['attempt']/'read2'/'pods.jsonl')==pod_state(attempt/'current'/'pods.jsonl'),'pod restarted/replaced before audit')
-            under=raw_series(attempt/'raw.jsonl',start,end,load(run/'targets.json'))
+            require(targets(attempt/'current',root)==latest_targets(root,run,events),'audit targets differ from completed approved restart chain')
+            under,_=restart_raw(attempt/'raw.jsonl',start,end,root,run,events)
             held=load(attempt/'held.json'); underq=load(attempt/'under.json')
             require(held['status']=='success' and held['data']['result'] and all(float(r['value'][0])==end and 0<=float(r['value'][1])<=1800 for r in held['data']['result']),'fixed-end held-age query invalid/breached')
             require(underq['status']=='success' and underq['data']['result'] and all(float(r['value'][0])==end and math.isfinite(float(r['value'][1])) and float(r['value'][1])>=0 for r in underq['data']['result']),'fixed-end under-replicated query invalid')
@@ -4064,10 +4577,12 @@ def daily_command(command,root,*args):
         attempt=Path(args[0]); receipts=load(attempt/'daily-receipts.json'); end=int(time.time())
         try:
             served_pair(attempt,root,doc['end_epoch'],end,True)
-            require(pod_state(run/'baseline'/'pods.jsonl')==pod_state(attempt/'read2'/'pods.jsonl')==pod_state(attempt/'closing-pods.jsonl'),'pod changed before closing')
+            require(stable_placement(load(run/'targets.json'))==stable_placement(targets(attempt/'read2',root)),'stable node/owner identity changed before closing')
+            require(pod_state(attempt/'read2'/'pods.jsonl')==pod_state(attempt/'closing-pods.jsonl'),'pod changed during closing')
+            require(targets(attempt/'read2',root)==latest_targets(root,run,events),'closing target differs from approved chain')
             last=load(run/'day-7'/'observation.json')
-            checkpoint_pair(run/'day-7'/last['attempt']/'read2',attempt/'read2',root)
-            tail=raw_series(attempt/'raw.jsonl',doc['end_epoch'],int((attempt/'tail-end').read_text()),load(run/'targets.json'),False)
+            restart_checkpoint_pair(run/'day-7'/last['attempt']/'read2',attempt/'read2',root,events,last['read2_end'],load(attempt/'times.json')['read2_end'])
+            tail,_=restart_raw(attempt/'raw.jsonl',doc['end_epoch'],int((attempt/'tail-end').read_text()),root,run,events,False)
 
             query=load(attempt/'under-tail.json')
             require(query['status']=='success' and query['data']['result'] and all(float(r['value'][0])==int((attempt/'tail-end').read_text()) and math.isfinite(float(r['value'][1])) and float(r['value'][1])>=0 for r in query['data']['result']),'closing tail under-replicated query invalid')
@@ -4116,6 +4631,8 @@ elif command=='ddl-grants': ddl_grants(args[0])
 elif command=='preview': preview(Path(args[0]))
 elif command=='placement': preview(Path(args[0]),True)
 elif command=='purge': purge(Path(args[0]),args[1])
+elif command.startswith('restart-'): restart_command(command[8:],Path(args[0]),Path(args[1]),*args[2:])
+elif command=='monitoring-preflight': monitoring_preflight(Path(args[0]),Path(args[1]),int(args[2]),int(args[3]))
 elif command.startswith('daily-'): daily_command(command[6:],Path(args[0]),*args[1:])
 elif command=='rings': rings(Path(args[0]),args[1],args[2])
 else: fail('unknown local check '+command)
@@ -4290,9 +4807,16 @@ L="$HOME/.cache/s3-ledger/s3-ledger.py"
 python3 -I "$L" get "$h" INDEXER_C_ID MEMBER_IDS UNSAFE_INC_ROOT P2_END DEVNET2_FAILURE_DOMAINS P4_END HG_TAG_P5 CORE_TAG_P5 ARBITER_TAG_P5 ARBITER_DIGEST_P5 SN_COMMIT_P5 SN_DIGEST_P5 ACTIVATION_EPOCH P5_END P6_PR > "$si_backup/pins"
 cp "$si_backup/pins" "$si_backup/ledger-values.txt"
 [ "$(wc -l < "$si_backup/pins" | tr -d ' ')" = 15 ]
-[ "$(git status --porcelain | wc -l | tr -d ' ')" = 0 ]
-[ "$(git config --worktree user.name) <$(git config --worktree user.email)>" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]
+si_read_84_1660_1="$(git status --porcelain | wc -l | tr -d ' ')" || exit 1
+[ "${si_read_84_1660_1}" = 0 ] || exit 1
+si_read_84_1661_1="$(git config --worktree user.name)" || exit 1
+si_read_84_1661_2="$(git config --worktree user.email)" || exit 1
+[ "${si_read_84_1661_1} <${si_read_84_1661_2}>" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_84_1662_1="$(git rev-parse HEAD)" || exit 1
+[[ "$si_read_84_1662_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_1662_2="$(git rev-parse origin/main)" || exit 1
+[[ "$si_read_84_1662_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_1662_1}" = "${si_read_84_1662_2}" ] || exit 1
 cat "$si_backup/ledger-values.txt"
 ```
 
@@ -4684,8 +5208,13 @@ For x=b then c then a, run each of the following blocks separately with its own 
 printf 'Next host (b, c, then a): ' >&2
 IFS= read -r x
 case "$x" in b|c|a) ;; *) exit 1 ;; esac
-[ -z "$(git status --porcelain)" ]
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]
+si_read_84_2054_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_84_2054_1}" ] || exit 1
+si_read_84_2055_1="$(git rev-parse HEAD)" || exit 1
+[[ "$si_read_84_2055_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_2055_2="$(git rev-parse origin/main)" || exit 1
+[[ "$si_read_84_2055_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_2055_1}" = "${si_read_84_2055_2}" ] || exit 1
 si_pod_state "sentio-node-devnet2-indexer-$x-0" > "$si_backup/host-before-C-$x.txt"
 si_kubectl get pod "$(si_member_pod "$x")" -o jsonpath='{.metadata.uid}' > "$si_backup/member-before-C-$x.uid"
 ```
@@ -4694,17 +5223,25 @@ Confirm before running.
 
 ```bash
 # block 5.4-commit
-si_p6_rollout "C-$x"
-git diff --check && git diff
-si_p6_commit "member-$x consensus mode" "step4-$x-commit" "C-$x"
+si_p6_rollout "C-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" plan-head "C-$x" || exit 1
+git diff --check && git diff || exit 1
+si_p6_commit "member-$x consensus mode" "step4-$x-commit" "C-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" advance-head "C-$x" || exit 1
+```
+
+Confirm before running.
+
+```bash
+# block 5.4-push
+si_p6_action "C-$x" push git push origin HEAD:main
 ```
 
 Confirm before running.
 
 ```bash
 # block 5.4-sync
-git push origin HEAD:main
-helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector "name=sentio-node-devnet2-indexer-$x"
+si_p6_action "C-$x" sync helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector "name=sentio-node-devnet2-indexer-$x"
 si_kubectl rollout status "statefulset/sentio-node-devnet2-indexer-$x-si-member" --timeout=15m
 ```
 
@@ -4870,7 +5407,7 @@ bash scripts/storage-integrity/make-clickhouse-logins.sh --add-user si_member_dd
 
 ### 8.2 si_member_ddl users, one installation at a time
 
-For x=b then c then a (network), run each block separately. This changes one source CHI manifest or the network overlay plus its test mirror, never k8s-sea/clickhouse. No ClickHouse restart is allowed: users.xml reloads; if a pod restarts, stop and re-audit before continuing. p6_manifest_text/p6_overlay_text are Task 83’s exact serializers, retaining every prior grant, profile and password hash.
+For x=b then c then a (network), run each block separately. Confirm each push independently from each sync/apply; for b/c run and confirm the separate dry-run block before the separate apply block. The network host a skips the b/c-only dry-run block. This changes one source CHI manifest or the network overlay plus its test mirror, never k8s-sea/clickhouse. No ClickHouse restart is allowed: users.xml reloads; if a pod restarts, stop and re-audit before continuing. p6_manifest_text/p6_overlay_text are Task 83’s exact serializers, retaining every prior grant, profile and password hash.
 
 ```bash
 # block 8.2-select
@@ -4878,7 +5415,8 @@ printf 'Next DDL host (b, c, then a for network): ' >&2
 IFS= read -r x
 case "$x" in b|c|a) ;; *) exit 1 ;; esac
 [ "$(cat "$si_backup/keeper-verdict.txt")" = PASS ] && [ -s "$si_backup/keeper-thresholds-agreed.txt" ]
-[ -z "$(git status --porcelain)" ]
+si_read_84_2256_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_84_2256_1}" ] || exit 1
 si_kubectl get pod "$(si_ch_pod "$x")" -o json | jq -c '{uid:.metadata.uid,start:.status.startTime,restarts:[.status.containerStatuses[].restartCount]}' > "$si_backup/chi-before-D-$x.json"
 [ "$(si_source_ch "$x" "SELECT value FROM system.replicated_merge_tree_settings WHERE name='max_bytes_to_merge_at_max_space_in_pool'")" = 0 ]
 ```
@@ -4888,23 +5426,39 @@ Confirm before running.
 ```bash
 # block 8.2-commit
 [ "$(cat "$si_backup/keeper-verdict.txt")" = PASS ] && [ -s "$si_backup/keeper-thresholds-agreed.txt" ]
-si_p6_rollout "D-$x"
-git diff --check && git diff
+si_p6_rollout "D-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" plan-head "D-$x" || exit 1
+git diff --check && git diff || exit 1
 inst=network; [ "$x" = a ] || inst="indexer-$x"
-si_p6_commit "si_member_ddl on $inst" "step6-ddl-$inst-commit" "D-$x"
+si_p6_commit "si_member_ddl on $inst" "step6-ddl-$inst-commit" "D-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" advance-head "D-$x" || exit 1
+```
+
+Confirm before running.
+
+```bash
+# block 8.2-push
+si_p6_action "D-$x" push git push origin HEAD:main
+```
+
+Confirm before running.
+
+```bash
+# block 8.2-dry-run
+case "$x" in b|c) ;; *) echo 'only source CHI b/c has a manifest dry-run'; exit 1 ;; esac
+manifest="k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-$x-source.yaml"
+si_p6_action "D-$x" dry-run si_kubectl apply --dry-run=server -f "$manifest"
 ```
 
 Confirm before running.
 
 ```bash
 # block 8.2-apply
-git push origin HEAD:main
 if [ "$x" = a ]; then
-  helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
+  si_p6_action D-a sync helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
 else
   manifest="k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-$x-source.yaml"
-  si_kubectl apply --dry-run=server -f "$manifest"
-  si_kubectl apply -f "$manifest"
+  si_p6_action "D-$x" apply si_kubectl apply -f "$manifest"
 fi
 ```
 
@@ -4945,17 +5499,25 @@ Confirm before running.
 
 ```bash
 # block 8.3-commit
-si_p6_rollout "R-$x"
-git diff --check && git diff
-si_p6_commit "member-$x reconciler" "step6-reconciler-$x-commit" "R-$x"
+si_p6_rollout "R-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" plan-head "R-$x" || exit 1
+git diff --check && git diff || exit 1
+si_p6_commit "member-$x reconciler" "step6-reconciler-$x-commit" "R-$x" || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" advance-head "R-$x" || exit 1
+```
+
+Confirm before running.
+
+```bash
+# block 8.3-push
+si_p6_action "R-$x" push git push origin HEAD:main
 ```
 
 Confirm before running.
 
 ```bash
 # block 8.3-sync
-git push origin HEAD:main
-helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector "name=sentio-node-devnet2-indexer-$x"
+si_p6_action "R-$x" sync helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector "name=sentio-node-devnet2-indexer-$x"
 si_kubectl rollout status "statefulset/sentio-node-devnet2-indexer-$x-si-member" --timeout=15m
 ```
 
@@ -5193,6 +5755,8 @@ si_keeper_abort "$si_backup/keeper-step10.tsv" "$si_backup/keeper-baseline.tsv"
 
 ### 12.4 Update
 
+The read-only monitoring preflight in the update block must pass before the irreversible k2 call. It retains observed pod/Endpoint identities and actual raw exports, checks all existing namespace/pod/network/instance bindings and logical voter/member/owner/result series with the existing two-interval gap and K87 bounds, and stops for the monitoring owner on any missing label or coverage. It is repeated by soak-start before day 1. A local fixture is not deployment-label proof; inspect the actual accepted Task83 render and the C3/D/E4 discovery producers before the live grant.
+
 At most three individually confirmed attempts, one configured checkpoint interval apart. Never put retries in a loop. On a precondition refusal wait for the next checkpoint and rerun §12.1; archive the refused evidence through §16.3 before another attempt. On any other refusal or unknown outcome stop immediately and inspect si_show. If the third precondition attempt fails, ask the user; do not lower the precondition or k.
 
 Stop here and obtain explicit confirmation. This change is irreversible; its failure path is §15, never rollback.
@@ -5201,6 +5765,7 @@ Confirm before running.
 
 ```bash
 # block 12.4-update
+si_p6_monitoring_preflight || exit 1
 si_stage3_update 10 issuance --stage3-min-safe-copies 2
 ```
 
@@ -5241,16 +5806,24 @@ Confirm before running.
 
 ```bash
 # block 12.5-alert-commit
-si_p6_rollout X
-si_p6_commit 'exit held-cleanup alert' exit-alert-commit X
+si_p6_rollout X || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" plan-head "X" || exit 1
+si_p6_commit 'exit held-cleanup alert' exit-alert-commit X || exit 1
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" advance-head "X" || exit 1
+```
+
+Confirm before running.
+
+```bash
+# block 12.5-alert-push
+si_p6_action "X" push git push origin HEAD:main
 ```
 
 Confirm before running.
 
 ```bash
 # block 12.5-alert-sync
-git push origin HEAD:main
-helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
+si_p6_action "X" sync helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
 ```
 
 ```bash
@@ -5460,6 +6033,27 @@ si_p6_soak_restart
 
 From step 6, every indexer restart removes a verifier from two other owners’ rings. Never restart two indexers, two member pods or a host and its peer member simultaneously. Before an approved restart capture current groups, unfinished blocks and safe copies; verify the two other tracks remain publishable, keep the network pool healthy and wait for the restarted host’s owner audit, registration, readiness and checkpoints before another restart. Use the P4 source-ClickHouse restart/rebuild procedure for a ClickHouse-only restart; the owner startup audit and the member startup/self-audit must complete. No P6 block authorises a restart of shared production ClickHouse/Keeper.
 
+
+During an active seven-day run, an individually approved §16.1 restart uses the following two read-only evidence blocks around the separately approved existing restart procedure. They never restart a process. Preserve the pending attempt on any error; do not overwrite it or start another restart. The before block records the actual public approval, exact current run/head of the immutable restart receipt chain, selected pod and complete target/placement evidence. After the existing owner startup audit, registration, readiness and checkpoint conditions have actually passed, the after block records their real public evidence references, two served reads sixty seconds apart, unchanged node/owner placement, only the selected process identity change, actual old/new Endpoint instances and raw timestamped samples. Each selected JSON must equal the independently captured namespace/node/UID/IP and normalized container name/restartCount/startedAt tuple in before/selected-process.json and both AFTER selected-process.json files, plus the corresponding full nine-pod samples wherever that process belongs. This also covers an indexer outside the nine-pod metrics roster without inventing a target. A same-UID/IP process replacement is valid only when these complete tuples agree. Shared production ClickHouse/Keeper and simultaneous restarts remain forbidden.
+
+Confirm before running.
+
+```bash
+# block 16.1-restart-before
+si_p6_restart_before || exit 1
+```
+
+Perform only the separately approved §16.1/P4 restart procedure in the operator's terminal. This text grants no restart. Before another restart or any day/closing observation, complete the following evidence block; its receipt is exclusive and hash-bound to all retained evidence and the preceding receipt. The shared completion validator rederives every semantic receipt field from the original started/approval and independently captured data, including raw/counter proofs and the actual startup-evidence reference hash; editing receipt metadata or a subset of its hash map cannot change its authority. All observe/audit/closing and public raw/checkpoint consumers require that same strict validation. An unknown result remains pending and stops consumers, rather than being replayed.
+
+Confirm before running.
+
+```bash
+# block 16.1-restart-after
+si_p6_restart_after || exit 1
+```
+
+Raw series retain all real timestamps across approved UID/instance boundaries. The actual si-member container startedAt/UID binds each new process boundary. E1 Task63 initializes every checkpoint counter per process at zero, but accepted/switch_off may already be positive at the first observed sample; record that complete observed value rather than requiring a scraped zero. Add the prior process last observed count only in the validation view. A positive first refused count therefore remains an observed increase and is rejected by the unchanged no-refused-growth rule. The receipt binds exact old/new raw samples and process identity; offsets never rewrite raw evidence or create a missing sample. The durable checkpoint sequence cannot reset. The original daily sample count, two-interval gap, age, refused-growth, served-copy, checkpoint-progress and seven-adjacent-day checks remain mandatory across the entire window. An unapproved identity change, overlapping target samples, missing boundary/reset evidence, incomplete restart, node/owner move or original timing/coverage breach stops; there is no monitoring-window waiver. An actual K87 breach retains the original full-seven-day repair/reapproval rule.
+
 ### 16.2 Operator playbook
 
 Down: wait for the lag timeout or explicitly issue MarkMemberLagging with the member’s currently served observed_entry, then explicitly EvictNode or generation-checked RebalanceGroup if needed. Lagging: restore from the verified object-store backup through the install gate; never attach unverified rows directly. Diverged: let the automatic fresh-scratch DROP PARTITION + ATTACH PARTITION rebuild run and page if it repeats; never REPLACE PARTITION on a copy. Foreign: stop serving that database, keep the scratch for forensics, rebuild through owner pull or verified restore and investigate the transport. Keys remain in Secrets and only their owning container receives them. The command below is a separately approved MarkMemberLagging for a real currently Behind member. It records the exact observed entry, not the latest owner frontier guessed at execution.
@@ -5500,7 +6094,9 @@ For a definite refusal only, set step to its actual number in the private Bash s
 [[ "${step:-}" =~ ^(1|2|3|4|5|7|8|9|10)$ ]]
 old="$(jq -r .epoch "$si_backup/show-before-step$step.json")"
 [ "$(jq -r .epoch "$si_backup/show-recovery.json")" = "$old" ]
-cmp <(jq -S .current "$si_backup/show-before-step$step.json") <(jq -S .current "$si_backup/show-recovery.json")
+si_archive_before_current="$(jq -S .current "$si_backup/show-before-step$step.json")" || exit 1
+si_archive_recovery_current="$(jq -S .current "$si_backup/show-recovery.json")" || exit 1
+cmp <(printf '%s\n' "$si_archive_before_current") <(printf '%s\n' "$si_archive_recovery_current") || exit 1
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir "$si_backup/refused-step$step-$stamp"
 for part in before after; do [ ! -e "$si_backup/show-$part-step$step.json" ] || mv "$si_backup/show-$part-step$step.json" "$si_backup/refused-step$step-$stamp/"; done
@@ -5763,7 +6359,11 @@ print(f'{count} local runbook checks PASS')
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3176_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3176_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 cd "$W"
 python3 -I "$W.runbook-check.py" docs/storage-integrity-devnet2-stage3-p6-switches.md
 python3 -I "$W.runbook-selftest.py" docs/storage-integrity-devnet2-stage3-p6-switches.md
@@ -5779,18 +6379,210 @@ git diff --check
 
 Expected: runbook checker PASS (17 sections; Bash/fish block counts are printed, nine ordered held updates); 52 local fixture checks PASS; full render suite OK (record the actual count); every lint 0 charts failed; render-inertness prints `<release> identical` for every pre-existing release. The runbook adds no rendered object; anchor 131-daily-checks is now checked by the exit-alert test. A failing prior-task hunk or current-main drift is fixed in its owning task and replayed here; no weakened assertion is accepted.
 
+Write `$W.runbook-restart-selftest.py` with this complete additional local-only synthetic boundary test. It does not execute a marker or prove actual deployment labels, approval or restart health.
+
+```python
+"""Ten NEW F1/F2/F3 pure witnesses only; no old matrix, dispatcher, tool or product."""
+from pathlib import Path
+import argparse,ast,contextlib,copy,hashlib,io,json,re,tempfile
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+member=lambda x:f'sentio-node-devnet2-indexer-{x}-si-member-0'
+voter=lambda i:f'storage-integrity-si-v2-arbiter-{i}'
+selected=member('a')
+space={}
+def dump(p,v):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(v)+'\n')
+
+def jsonlines(p,values):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(''.join(json.dumps(v)+'\n' for v in values))
+
+def fixture(root,same=False):
+    root.mkdir();run=root/'soak-runs/run-INDEPENDENT';run.mkdir(parents=True)
+    (root/'pins').write_text('INDEXER_C_ID=2\nMEMBER_IDS=member-a:0,member-b:1,member-c:2\nDEVNET2_FAILURE_DOMAINS=0=node:n0,1=node:n1,2=node:n2\n')
+    (root/'soak-current').write_text(run.name+'\n')
+    dump(run/'run.json',{'schema':1,'run_id':run.name,'start_epoch':0,'end_epoch':7*86400,'pins_sha256':sha(root/'pins')})
+    pods=[]
+    for i,x in enumerate('abc'):
+        for kind,name in [('voter',voter(i)),('si-member',member(x)),('source',f'fixture-source-{x}')]:
+            pods.append({'metadata':{'name':name,'namespace':'inert-ns','uid':'old-'+name},'spec':{'nodeName':'n'+str(i)},'status':{'phase':'Running','podIP':f'10.0.{i}.{1 if kind=="voter" else 2 if kind=="si-member" else 3}','containerStatuses':[{'name':kind,'ready':True,'restartCount':0,'state':{'running':{'startedAt':'1970-01-01T00:00:00Z'}}}]}})
+    after=copy.deepcopy(pods)
+    chosen=next(p for p in after if p['metadata']['name']==selected)
+    if not same:chosen['metadata']['uid']='new-'+selected;chosen['status']['podIP']='10.1.0.2'
+    chosen['status']['containerStatuses'][0]['restartCount']=1
+    chosen['status']['containerStatuses'][0]['state']['running']['startedAt']='1970-01-01T00:01:15Z'
+    current={'stage3':{'min_safe_copies':2,'narrowed_drain':True,'checkpoints':True},'verifiers':[{'node_id':'member-'+x,'host_indexer_id':str(i),'counts':True,'replicate':True,'failure_domain':'node:n'+str(i)} for i,x in enumerate('abc')]}
+    groups=[]
+    for i in range(3):
+        groups.append({'owner':str(i),'database':'d'+str(i),'generation':'1','members':[{'node_id':'member-'+x,'host_indexer_id':str(j),'class':'caught_up','ready_generation':'1','checkpoint_entry':{'safe_block_seq':'100','applied_promotion_seq':'10'},'excluded':[]} for j,x in enumerate('abc') if j!=i]})
+    groups += [{'purge_node_set':['member-'+x for x in 'abc']},{'member_checkpoint_seqs':[{'node_id':'member-'+x,'owner':str(i),'checkpoint_seq':'10'} for j,x in enumerate('abc') for i in range(3) if i!=j]}]
+    registry=[{'status':'active','owner':str(i),'database_id':'d'+str(i),'table':'t','incarnation':str(i+1)} for i in range(3)]
+    def sample(path,ps,new=False):
+        path.mkdir(parents=True)
+        jsonlines(path/'pods.jsonl',ps)
+        dump(path/'selected-process.json',next(p for p in ps if p['metadata']['name']==selected))
+        eps=[]
+        for p in ps:
+            name=p['metadata']['name']
+            if '-arbiter-' in name or '-si-member-' in name:
+                eps.append({'subsets':[{'ports':[{'name':'metrics','port':9095}],'addresses':[{'ip':p['status']['podIP'],'targetRef':{'name':name,'uid':p['metadata']['uid']}}]}]})
+        jsonlines(path/'endpoints.jsonl',eps);dump(path/'show.json',{'current':current})
+        dump(path/'watermark.json',{'track_frontiers':[{'indexer_id':str(i),'safe_block_seq':'100','applied_promotion_seq':'10'} for i in range(3)]})
+        jsonlines(path/'groups.jsonl',groups);jsonlines(path/'registry.jsonl',registry)
+        (path/'source-nodes.tsv').write_text('0\tn0\n1\tn1\n2\tn2\n')
+        for j,x in enumerate('abc'):
+            metrics=[]
+            for i in range(3):
+                if i==j:continue
+                metrics.append(f'sentio_node_si_member_checkpoint_seq{{owner="{i}"}} 10')
+                for result in ('accepted','switch_off','refused'):
+                    value=0 if result=='refused' else 7 if new and x=='a' else 5
+                    metrics.append(f'sentio_node_si_member_checkpoints_total{{owner="{i}",result="{result}"}} {value}')
+            (path/f'member-{x}.txt').write_text('\n'.join(metrics)+'\n')
+    sample(run/'baseline',pods)
+    dump(run/'targets.json',space['targets'](run/'baseline',root))
+    attempt=run/'restarts/attempt-INDEPENDENT';attempt.mkdir(parents=True)
+    sample(attempt/'before',pods)
+    sample(attempt/'after/read1',after,True);sample(attempt/'after/read2',after,True)
+    dump(attempt/'after/times.json',{'read1_begin':80,'read1_end':81,'read2_begin':141,'read2_end':142})
+    dump(attempt/'approval.json',{'run_id':run.name,'component':'member','pod':selected,'public_approval':'INERT synthetic public approval reference; not any actual user approval.'})
+    dump(attempt/'selected-before.json',next(p for p in pods if p['metadata']['name']==selected))
+    dump(attempt/'selected-after.json',chosen)
+    (attempt/'start-epoch').write_text('60\n');(attempt/'finish-epoch').write_text('180\n')
+    (attempt/'return-to-service.txt').write_text('INERT synthetic startup two-audit/registration/readiness/checkpoint references; no actual health claim.\n')
+    def raw(ps,stamps,new=False):
+        out=[]
+        for p in ps:
+            name=p['metadata']['name']
+            if '-arbiter-' in name:
+                specs=[('arbiter_floor_held_cleanup_age_seconds',{},0)]+[('arbiter_under_replicated_total',{'reason':r},0) for r in ('inactive_incarnation','pressure_partition','pressure_table','domains_below_k')]
+            elif '-si-member-' in name:
+                x=next(x for x in 'abc' if 'indexer-'+x+'-si-member' in name);host='abc'.index(x)
+                specs=[]
+                for i in range(3):
+                    if i==host:continue
+                    specs.append(('sentio_node_si_member_checkpoint_seq',{'owner':str(i)},10))
+                    specs.extend(('sentio_node_si_member_checkpoints_total',{'owner':str(i),'result':r},0 if r=='refused' else 7 if new and x=='a' else 5) for r in ('accepted','switch_off','refused'))
+            else:continue
+            for metric,extra,value in specs:
+                out.append({'metric':{'__name__':metric,'pod':name,'namespace':'inert-ns','network':'devnet2-si-v2','instance':p['status']['podIP']+':9095',**extra},'timestamps':stamps,'values':[value]*len(stamps)})
+        return out
+    before=raw(pods,[0,30000,60000]);allraw=before+raw(after,[90000,120000,150000,180000],True)
+    jsonlines(attempt/'before-raw.jsonl',before);jsonlines(attempt/'raw.jsonl',allraw)
+    return run,attempt,allraw
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('runbook',type=Path);parser.add_argument('--record',type=Path);args=parser.parse_args()
+    runbook=args.runbook.read_text();source=re.search(r"<<'P6PY'\n(.*?)\nP6PY",runbook,re.S)[1]+'\n'
+    nodes=[n for n in ast.parse(source).body if isinstance(n,(ast.Import,ast.ImportFrom,ast.FunctionDef))]
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'exact-v2-pure-file-evidence-definitions','exec'),space)
+    rows=[]
+    with tempfile.TemporaryDirectory(prefix='task84-v2-new-witnesses-',dir=args.record.parent if args.record else None) as directory:
+        work=Path(directory)
+        for label,kind in [('normal-UID-change-nonzero-accepted','normal'),('same-UID-IP-container-nonzero-accepted','same'),('selected-after-container-not-the-sampled-container','unbound'),('first-refused-positive','refused'),('durable-seq-reset','seq'),('original-gap90','gap'),('age1801','age')]:
+            root=work/label;run,a,raw=fixture(root,kind in ('same','unbound'))
+            # Future capture files do not exist at begin: no prefilled AFTER evidence.
+            future={str(p.relative_to(a)):p.read_bytes() for p in a.rglob('*') if p.is_file() and (str(p.relative_to(a)).startswith('after/') or p.name in ('selected-after.json','finish-epoch','return-to-service.txt','raw.jsonl'))}
+            for rel in future:(a/rel).unlink()
+            for path in sorted((a/'after').rglob('*'),key=lambda p:len(p.parts),reverse=True):
+                if path.is_dir():path.rmdir()
+            (a/'after').rmdir()
+            with contextlib.redirect_stdout(io.StringIO()):space['restart_command']('begin',root,a)
+            for rel,data in future.items():
+                (a/rel).parent.mkdir(parents=True,exist_ok=True);(a/rel).write_bytes(data)
+            if kind=='unbound':
+                doc=json.loads((a/'selected-after.json').read_text());doc['status']['containerStatuses'][0]['restartCount']=2;doc['status']['containerStatuses'][0]['state']['running']['startedAt']='1970-01-01T00:01:40Z';dump(a/'selected-after.json',doc)
+            elif kind=='refused':
+                for row in raw:
+                    if row['metric']['pod']==selected and row['timestamps'][0]==90000 and row['metric'].get('result')=='refused':row['values']=[1]*4
+                jsonlines(a/'raw.jsonl',raw)
+            elif kind=='seq':
+                for row in raw:
+                    if row['metric']['pod']==selected and row['timestamps'][0]==90000 and row['metric']['__name__'].endswith('_seq'):row['values']=[0]*4
+                jsonlines(a/'raw.jsonl',raw)
+            elif kind=='gap':
+                for row in raw:
+                    if row['metric']['pod']==selected and row['timestamps'][0]==90000:row['timestamps']=[150000,180000];row['values']=row['values'][-2:]
+                jsonlines(a/'raw.jsonl',raw)
+            elif kind=='age':
+                next(row for row in raw if row['timestamps'][0]==90000 and row['metric']['__name__']=='arbiter_floor_held_cleanup_age_seconds')['values'][0]=1801
+                jsonlines(a/'raw.jsonl',raw)
+            error=None
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):space['restart_command']('finish',root,a)
+            except (SystemExit,ValueError,KeyError,OSError,AssertionError) as exc:error=str(exc)
+            accepted=error is None;expected=kind in ('normal','same')
+            assert accepted==expected,(label,error)
+            assert (a/'receipt.json').exists()==expected and (run/'restart-pending').exists()!=expected
+            row={'case':label,'expected_accept':expected,'accepted':accepted,'error':error,'pending_preserved':(run/'restart-pending').exists(),'receipt_exists':(a/'receipt.json').exists(),'scope':'NEW complete pure begin/finish on synthetic public data; no actual approval/restart'}
+            if expected:
+                events=space['restart_events'](root,run)
+                space['restart_raw'](a/'raw.jsonl',0,180,root,run,events,False)
+                space['restart_checkpoint_pair'](a/'before',a/'after/read2',root,events,60,180)
+                row['strict_completed_chain_raw_checkpoint_consumers']=True
+            rows.append(row)
+            if kind=='same':
+                original=(a/'receipt.json').read_bytes();receipt=json.loads(original)
+                receipt['pod']='fixture-source-b';receipt['component']='source-clickhouse';dump(a/'receipt.json',receipt)
+                checks=[]
+                for name,fn in [('restart_events',lambda:space['restart_events'](root,run)),('raw',lambda:space['restart_raw'](a/'raw.jsonl',0,180,root,run,events,False)),('checkpoint',lambda:space['restart_checkpoint_pair'](a/'before',a/'after/read2',root,events,60,180)),('observe',lambda:space['daily_command']('observe',root)),('audit',lambda:space['daily_command']('audit',root)),('closing-audit',lambda:space['daily_command']('closing-audit',root))]:
+                    try:fn();raise AssertionError('mutated authority accepted '+name)
+                    except SystemExit as exc:
+                        assert 'completed restart receipt fields differ' in str(exc),(name,str(exc));checks.append({'consumer':name,'accepted':False,'error':str(exc)})
+                (a/'receipt.json').write_bytes(original)
+                # Every other receipt authority/reference field is also rederived, not merely rehashed.
+                rebindings=[]
+                for field in ('approval_sha256','previous_receipt_sha256','started_sha256','raw_sha256','return_to_service_sha256','process_start_ms','process_start_ms_float','before_targets','after_targets','counter_resets','files_sha256'):
+                    changed=json.loads(original)
+                    if field=='process_start_ms_float':changed['process_start_ms']=float(changed['process_start_ms'])
+                    elif field=='process_start_ms':changed[field]+=1
+                    elif field in ('before_targets','after_targets'):changed[field]['pods'][selected]['containers'][0][1]+=1
+                    elif field=='counter_resets':changed[field]=[]
+                    elif field=='files_sha256':changed[field].pop('return-to-service.txt')
+                    else:changed[field]='f'*64
+                    dump(a/'receipt.json',changed)
+                    try:space['restart_events'](root,run);raise AssertionError('receipt field accepted '+field)
+                    except SystemExit as exc:rebindings.append({'field':field,'accepted':False,'error':str(exc)})
+                    (a/'receipt.json').write_bytes(original)
+                rows.append({'case':'completed-receipt-semantic-rebinding','accepted':False,'six_consumer_refusals':checks,'additional_reference_rebindings':rebindings,'original_captured_evidence_unchanged':True,'scope':'NEW F3 witness; only receipt metadata edits, no forged actual authority'})
+        archive=runbook.split('# block 16.3-archive\n',1)[1].split('\n```',1)[0]
+        assert 'cmp <(jq -S .current ' not in archive
+        assert 'si_archive_before_current="$(jq -S .current "$si_backup/show-before-step$step.json")" || exit 1' in archive
+        assert 'si_archive_recovery_current="$(jq -S .current "$si_backup/show-recovery.json")" || exit 1' in archive
+        assert archive.index('si_archive_before_current=')<archive.index('si_archive_recovery_current=')<archive.index('cmp ')<archive.index('mkdir ')
+        def checked_read_flow(left_rc,right_rc,left,right):
+            if left_rc!=0:return False
+            if right_rc!=0:return False
+            return left==right
+        for rc in (1,73):
+            assert not checked_read_flow(rc,rc,'','')
+            assert not checked_read_flow(rc,0,'matching','matching') and not checked_read_flow(0,rc,'matching','matching')
+            assert checked_read_flow(0,0,'matching','matching') and not checked_read_flow(0,0,'different','matching')
+            rows.append({'case':'archive-jq-status-'+str(rc),'jq_statuses':[rc,rc],'old_equal_empty_cmp_accepts':True,'new_refuses_before_compare_and_moves':True,'equal_valid_positive_preserved':True,'valid_mismatch_refuses':True,'scope':'NEW pure explicit status/control-flow model bound to exact checked assignments; no Bash/jq/archive execution'})
+    assert len(rows)==10
+    result={'scope':'NEW F1-F3 TEN-WITNESS BATCH ONLY; not old20/20/52/283/16','runbook_sha256':sha(args.runbook),'p6_sha256':hashlib.sha256(source.encode()).hexdigest(),'results':rows,'witnesses':len(rows),'actual':'UNKNOWN','formal_increment':0,'actual_approval_restart_source_or_deployment_proven':False}
+    if args.record:args.record.write_text(json.dumps(result,indent=2)+'\n')
+    print(json.dumps(result,indent=2))
+if __name__=='__main__':main()
+```
+
+Run it locally as `python3 -I "$W.runbook-restart-selftest.py" docs/storage-integrity-devnet2-stage3-p6-switches.md` after the existing local selftest. Expected: 10 new F1–F3 pure witness groups, including complete synthetic begin/finish and strict consumer bindings; actual outcomes must be observed during formal local review. The old20+20 control receipts remain historical and are not rerun by this successor. This additional helper stays outside the repository and is never committed.
+
 - [ ] **Step 5: Signed docs commit**
 
 Commit only the three Task 84 repository files; checker/selftest stay outside the worktree. Every commit on this branch must retain the required identity and only the canonical Claude trailer.
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3201_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3201_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 cd "$W"
 git add docs/storage-integrity-devnet2-stage3-p6-switches.md docs/storage-integrity-devnet2-multi-source-tracks.md .github/workflows/storage-integrity-chart.yml
 git -c commit.gpgsign=true commit -m 'docs(storage-integrity): P6 switch-on runbook and stage pointer' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
-[ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git log -1 --format=%G?)" = G ]
+si_read_84_3205_1="$(git log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_84_3205_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_84_3206_1="$(git log -1 --format=%G?)" || exit 1
+[ "${si_read_84_3206_1}" = G ] || exit 1
 git status --porcelain
 git diff --stat origin/main...HEAD
 ```
@@ -5799,14 +6591,20 @@ Expected clean status, a verified GPG signature, poetry <chen@sentio.xyz>, Task 
 
 - [ ] **Step 6: Push, PR and CI**
 
-Each remote write below needs its own explicit user confirmation in chat. First gate: push branch urwt/claude/multi-source-s3f, carrying inert Tasks 83 and 84, to sentioxyz/production. No live value is applied.
+Each remote write below needs its own explicit user confirmation in chat. First gate: push the branch retained by Task 83, carrying inert Tasks 83 and 84, to sentioxyz/production. No live value is applied.
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3222_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3222_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 cd "$W"
-[ -z "$(git status --porcelain)" ]
-[ "$(git rev-list --count HEAD..origin/main)" = 0 ] || { echo 'main moved; stop and replay'; exit 1; }
+si_read_84_3224_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_84_3224_1}" ] || exit 1
+si_read_84_3225_1="$(git rev-list --count HEAD..origin/main)" || exit 1
+[ "${si_read_84_3225_1}" = 0 ] || { echo 'main moved; stop and replay'; exit 1; }
 git push -u origin HEAD
 ```
 
@@ -5814,10 +6612,14 @@ After a separate confirmation to open the P6 PR, write a concrete body and creat
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3236_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3236_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 body="$W.pr-body.md"
 printf '%s\n'   'P6 adds inert member consensus/reconciler values, per-container keys and DDL-password mounts, the si_member_ddl user with its const merge profile and exact grant probe, user-side key/login scripts and the bounded held-cleanup exit alert.'   ''   'The complete P6 runbook stages one-way switches, member registration, placement, the shared-Keeper user gate, one-host replica rollout, checkpoints, narrowed drain and k=2 followed by seven days. Every live action is separately confirmed; forward fixes preserve irreversible state. No live deployment or switch changes on merge.'   ''   'Validation: full storage-integrity render suite; three strict Helm profiles; all release renders identical to origin/main; runbook shell/fish/order/confirmation checker; 52 local CRC-budget, Keeper, field-diff, grants, copy-floor, fixed raw-window coverage and soak-budget fixtures.'   ''   'Execution gates: P5_END and P4_END recorded; clickhouse-extra owner agrees K86 thresholds; the remaining promotion budget must fit the seven-day soak or the user decides voter sizing first.'   ''   '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$body"
-(cd "$W" && gh pr create --repo sentioxyz/production --base main --head urwt/claude/multi-source-s3f --title 'storage-integrity: multi-source SI stage 3 P6 (member consensus values, si_member_ddl, exit alert, switch-on runbook)' --body-file "$body") | tee "$W.pr-url"
+(cd "$W" && gh pr create --repo sentioxyz/production --base main --head "$branch" --title 'storage-integrity: multi-source SI stage 3 P6 (member consensus values, si_member_ddl, exit alert, switch-on runbook)' --body-file "$body") | tee "$W.pr-url"
 gh pr view "$(cat "$W.pr-url")" --repo sentioxyz/production --json number --jq .number > "$W.pr-number"
 ```
 
@@ -5825,9 +6627,17 @@ CI reads need explicit confirmation as remote reads under this plan’s conventi
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3250_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3250_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 pr="$(cat "$W.pr-number")"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo 'PR head differs from checked HEAD; stop'; exit 1; }
+si_read_84_3252_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3252_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3252_2="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_84_3252_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3252_1}" = "${si_read_84_3252_2}" ] || { echo 'PR head differs from checked HEAD; stop'; exit 1; }
 gh pr checks "$pr" --repo sentioxyz/production --watch --fail-fast
 gh api "repos/sentioxyz/production/pulls/$pr/reviews" > "$W.pr-reviews.json"
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/comments" > "$W.pr-comments.json"
@@ -5839,29 +6649,46 @@ Gate: squash-merge the reviewed current-head P6 PR into production main, with al
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3267_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3267_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 pr="$(cat "$W.pr-number")"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$W" rev-parse HEAD)" ] || { echo 'PR head differs from checked HEAD; stop'; exit 1; }
+si_read_84_3269_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3269_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3269_2="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_84_3269_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3269_1}" = "${si_read_84_3269_2}" ] || { echo 'PR head differs from checked HEAD; stop'; exit 1; }
 gh pr checks "$pr" --repo sentioxyz/production
-gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr merge "$pr" --repo sentioxyz/production --squash
+expected_head="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3273_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3273_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3273_1}" = "$expected_head" ] || exit 1
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_84_3292_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3292_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3292_1}" = "$expected_head" ] || { echo 'PR head changed after validation; stop'; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
 gh pr view "$pr" --repo sentioxyz/production --json number,url,state,mergeCommit,mergedAt > "$W.pr-merged.json"
 [ "$(jq -r .state "$W.pr-merged.json")" = MERGED ]
 ```
@@ -5874,7 +6701,11 @@ R1 includes remote fetch/read, requiring explicit confirmation. The PR number an
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3309_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3309_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger"
 rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md
@@ -5886,15 +6717,22 @@ open(sys.argv[2],'w').write(f"{x['url']} merged as {x['mergeCommit']['oid']} at 
 EOF
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" claude multi-source-s3f-ledger-84 urwt/claude/multi-source-s3f-ledger-84 "$ref")"
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-84 urwt/codex/multi-source-s3f-ledger-84 "$ref")"
 d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger worktree is not new and clean at the ledger ref; stop'; exit 1; }
-git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz
+si_read_84_3323_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_84_3323_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3323_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_84_3323_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "$(printf '%s\n' "$out" | jq -r .action)" = created ] && [ "${si_read_84_3323_1}" = "${si_read_84_3323_2}" ] && state="$(git -C "$d" status --porcelain)" || exit 1
+[ -z "$state" ] || { echo 'ledger worktree is not new and clean at the ledger ref; stop'; exit 1; }
+git -C "$d" config extensions.worktreeConfig true && git -C "$d" config --worktree user.name poetry && git -C "$d" config --worktree user.email chen@sentio.xyz && git -C "$d" config --worktree commit.gpgsign true || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-84"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" 84 "$L/record-84.md" P6_PR="$pr"
 git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record P6_PR of Plan S3-F (Task 84)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+si_read_84_3329_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_84_3329_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_84_3330_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_84_3330_1}" = G ] || exit 1
 ```
 
 R2 is a separate explicitly confirmed remote write: push the single docs record to the ledger branch, or open a docs PR if ref is origin/main. A rejected push is never forced: stop, refresh and ask.
@@ -5903,7 +6741,10 @@ R2 is a separate explicitly confirmed remote write: push the single docs record 
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-84")"; ref="$(sed -n 2p "$L/record-84")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || { echo 'ledger record identity/range/cleanliness mismatch'; exit 1; }
+si_read_84_3339_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+[ "${si_read_84_3339_1}" = 1 ] && state="$(git -C "$d" status --porcelain)" || exit 1
+si_read_84_3340_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ -z "$state" ] && [ "${si_read_84_3340_1}" = 'poetry <chen@sentio.xyz>' ] || { echo 'ledger record identity/range/cleanliness mismatch'; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
   printf '%s\n\n%s\n' 'Record the observed P6_PR and its P6 PR run record in Plan S3-F Appendix C only.' '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-84-pr.md"
@@ -5920,35 +6761,52 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-84")"; ref="$(sed -n 2p "$L/record-84")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3 merge'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-84-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+pr="$(gh pr view "$(cat "$L/record-84-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_84_3358_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3358_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3358_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_84_3358_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3358_1}" = "${si_read_84_3358_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_84_3361_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3361_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3361_1}" = "$expected_head" ] || exit 1
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
 gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash
+si_read_84_3381_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_84_3381_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_84_3381_1}" = "$expected_head" ] || { echo 'PR head changed after validation; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 R4 is a separately confirmed remote fetch/read. The task ends only after it reads exactly the observed number back:
 
 ```bash
 set -eo pipefail
-W=/Users/uranuswch/src/remotesrc/claude/production/multi-source-s3f
+J="$HOME/.cache/s3f-task83/worktree.json"
+W="$(jq -er 'select(.action=="created") | .path | select(type=="string" and startswith("/"))' "$J")" || exit 1
+branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))' "$J")" || exit 1
+si_read_84_3392_1="$(git -C "$W" branch --show-current)" || exit 1
+[ "${si_read_84_3392_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger/s3-ledger.py"
 git -C "$h" fetch -q origin
@@ -5963,18 +6821,32 @@ printf 'P6_PR=%s verified from remote ledger copy\n' "$actual"
 
 ## Task 85: devnet2 — P6 live, steps 1–3: `purge`, `eviction_voiding`, `owner_aware_selection` (S3-F)
 
+**Execution prerequisites.** Verify Tasks83/84 implementation and merged P6_PR through actual R4, and verify consumed P5 release/END/source/image records from authoritative ledger copies before Step 1. Establish fresh immutable full-chain custody with setup; missing or changed source, helpers, release pins or custody stops, never an edited existing manifest. Local synthetic fixtures cannot supply these execution inputs or user/private-terminal approval.
+
+
+
+
+
+
+
+
+
 Execute Task 84's merged runbook §§0–4. Spec §10.4 fixes the order; §8.8 fixes the new Keeper paths, §14 eviction voiding, and §7.3 owner exclusion and the pool-only ring before placement. Contract §§58–61, K83–K84, D24, D34 and D40 bind. These are three irreversible authority-signed consensus updates, each in its own confirmed window under `--hold drain`. No image, Helm value, chart, source file, node registration, eviction or voter resource changes in this task. Each acceptance CREATE and INSERT belongs to the user's private keyed terminal. Agents only prepare block files and read public evidence.
 
 **Files** (at execution: production `origin/main` after `P6_PR` merged, Tasks 83–84 plus the recorded P5_END posture):
 - Read: `docs/storage-integrity-devnet2-stage3-p6-switches.md`, its §0 chain, `charts/storage-integrity/tests/test_render.py`, the devnet2 overlays and P5 public run evidence.
-- Create locally, never commit: `$HOME/.cache/s3f-task85/{live-path,prepare.py,record.py,setup.sh}`; `$HOME/si-devnet2-stage3-p6/{helpers.sh,blocks/,user-block.sh,task85-*.json}` and the runbook's evidence files. Consensus/SQL output is retained even when a command fails. Snapshots and owner keys never enter git or a PR.
+- Create locally, never commit: `$HOME/.cache/s3f-task85/{live-path,prepare.py,record.py,setup.sh}`; `$HOME/si-devnet2-stage3-p6/{helpers.sh,blocks/,user-block.sh,task85-*.json,head-plan-*.json,head-advance-*.json}` and the runbook's evidence files. Consensus/SQL output is retained even when a command fails. Snapshots and owner keys never enter git or a PR.
 - Modify only by the ledger procedure: housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md`, Appendix C, `PURGE_EPOCH`, `VOIDING_EPOCH`, `SELECTION_EPOCH` and `Steps 1–3 run (Task 85)`.
 - Tests: syntax and marker extraction locally; merged production render suite before live operations; exact field/epoch, images, paths, replicas, safe-row and stored-ring checks after the corresponding step. This live task introduces no code, so no artificial red/green source test is added.
+
+**Custody lifecycle (procedure-only schema 2).** The complete extractor below binds all thirteen document bytes, assembled helpers, its own bytes, immutable source HEAD, recorded URWT lexical path and branch. Every input is checked as an owned regular non-link file before reading; source-child directories are also checked. Each selected file has exclusive attempt/prepared receipts; run-file revalidates all custody and the explicit phase predecessor before creating exclusive started/done/failed receipts. A partial or failed attempt never authorizes replay. `verify` is a read-only check before any inline helper sourcing. The original source freeze never changes: later Tasks 86/87/89 may advance only through the existing contract order C-b, C-c, C-a, D-b, D-c, D-a, R-b, R-c, R-a, X, with the exact service and test mirror of each operation. Their exact Task 84 commit body calls `plan-head <operation>` after rollout to stage only that reviewed scope and bind its canonical raw diff bytes, then `advance-head <operation>` after the signed commit. The latter requires a new direct child, poetry/G/canonical-Claude identity, unchanged branch/run ID/source custody and committed bytes matching the staged diff hash. Exclusive numbered head-plan/head-advance receipts form the only accepted predecessor chain; an arbitrary clean or signed descendant is never accepted. No new business order or production action is introduced by this custody procedure.
 
 **Interfaces:**
 - Consumes fifteen names from the remote ledger copy using C1 §19's `s3-ledger.py`: `INDEXER_C_ID`, `MEMBER_IDS`, `UNSAFE_INC_ROOT`, `P2_END`, `DEVNET2_FAILURE_DOMAINS`, `P4_END`, `HG_TAG_P5`, `CORE_TAG_P5`, `ARBITER_TAG_P5`, `ARBITER_DIGEST_P5`, `SN_COMMIT_P5`, `SN_DIGEST_P5`, `ACTIVATION_EPOCH`, `P5_END`, `P6_PR`. Requires this task's three rows empty.
 - Consumes Task 84's exact markers `1.1-pins` through `4.3-rings`, not substring matches; `si_stage3_update`, `si_step_diff`, `si_p6_verify`, `si_budget_capture` plus `si_budget_v21`, `si_p6_create <host>` and `si_acceptance <step> <host>`, the actual-wire `stage3reads`, the separate confirmed `si_stage3reads_put`, the complete unchanged P5 helper chain, and runbook §16.3 outcome recovery.
 - Produces observed epoch receipts after each successful window and, only when all three succeed, the three ledger rows through R1–R4. C1's tool atomically records all rows owned by one task: do not predict the later epochs or attempt a partial `set`. The per-step receipt is a local prerequisite between steps; complete the single Task 85 R4 before Task 86. No other consumer may treat a local receipt as a ledger value.
+
+**Producer and source execution gates.** P6_PR must identify the accepted Tasks 83/84 implementation merged into the freshly fetched production main; freeze that exact full production HEAD and all thirteen helper-document hashes before selecting any live body. A changed helper document, released tool source, P5 image/source pin or accepted runbook requires a new owning review and fresh preparation, never an edited frozen hash. Actual Task 84 producer proof must cover current-main ordered chart replay and its permitted direct-Helm inertness replacement, exact runbook marker uniqueness, strict field/epoch and helper-output shapes, the actual released wire chain and every consumer source identity. No API stand-in or earlier draft run establishes these facts. The reviewed source/helper intent remains unchanged; changed execution inputs require their owning review and fresh custody.
 
 **Execution conventions and stops.** The live worktree is newly created with URWT runtime `codex`, named `multi-source-s3f-live`, clean and detached at a freshly fetched `origin/main`. It is reused by Tasks 86–89, never a phase branch or the user's checkout. Every later production commit starts clean at freshly fetched main, is signed and author-checked and changes one service plus its test mirror; this task makes none. Existing worktrees/evidence mean stop and resume deliberately, never clobber or reset them. Git signing failure stops; ask the user to unlock the configured key, never disable signing. Every remote mutation and every keyed SQL statement requires its own explicit chat confirmation; no planning-stack PR merge is authorised. Remote reads do not authorise writes. Never run helmfile against `k8s-sea/clickhouse`, resize voters, remove a znode, restart ClickHouse, evict a verifier or list a member as a diagnostic. Between voiding and reselection, an eviction can strand unlatched evidence; diagnose and repair forward without injecting that fault.
 
@@ -5991,23 +6863,35 @@ T="$HOME/.cache/s3f-task85"
 p=/Users/uranuswch/Dev/projects/sentio-network/production
 [ ! -e "$T/live-path" ] || { echo 'Task 85 already started; resume deliberately'; exit 1; }
 [ ! -e "$HOME/si-devnet2-stage3-p6" ] || { echo 'P6 evidence already exists; stop'; exit 1; }
-git -C "$p" fetch -q origin
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" codex multi-source-s3f-live urwt/codex/multi-source-s3f-live origin/main)"
+git -C "$p" fetch -q origin || exit 1
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" codex multi-source-s3f-live urwt/codex/multi-source-s3f-live origin/main)" || exit 1
 [ "$(printf '%s\n' "$out" | jq -er .action)" = created ] || { echo 'live worktree was not newly created'; exit 1; }
-W="$(printf '%s\n' "$out" | jq -er .path)"
-[ -z "$(git -C "$W" status --porcelain)" ]
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$p" rev-parse origin/main)" ]
-git -C "$W" config extensions.worktreeConfig true
-git -C "$W" config --worktree user.name poetry
-git -C "$W" config --worktree user.email chen@sentio.xyz
-git -C "$W" switch -q --detach origin/main
-[ "$(git -C "$W" rev-parse --abbrev-ref HEAD)" = HEAD ]
-[ "$(git -C "$W" config --worktree user.name) <$(git -C "$W" config --worktree user.email)>" = 'poetry <chen@sentio.xyz>' ]
+W="$(python3 -I -c 'import json,os,sys;d=json.loads(sys.argv[1]);assert isinstance(d,dict) and d.get("action")=="created";p=d.get("path");assert isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$out")" || exit 1
+si_read_85_41_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_85_41_1}" ] || exit 1
+si_read_85_42_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_85_42_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_85_42_2="$(git -C "$p" rev-parse origin/main)" || exit 1
+[[ "$si_read_85_42_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_42_1}" = "${si_read_85_42_2}" ] || exit 1
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+si_read_85_47_1="$(git -C "$W" config --worktree commit.gpgsign)" || exit 1
+[ "${si_read_85_47_1}" = true ] || { echo 'worktree signing is not enabled; stop'; exit 1; }
+git -C "$W" switch -q --detach origin/main || exit 1
+si_read_85_49_1="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${si_read_85_49_1}" = HEAD ] || exit 1
+si_read_85_50_1="$(git -C "$W" config --worktree user.name)" || exit 1
+si_read_85_50_2="$(git -C "$W" config --worktree user.email)" || exit 1
+[ "${si_read_85_50_1} <${si_read_85_50_2}>" = 'poetry <chen@sentio.xyz>' ] || exit 1
+printf '%s\n' "$out" > "$T/live-worktree.json"
 printf '%s\n' "$W" > "$T/live-path"
 git -C "$W" rev-parse HEAD > "$T/start-head"
 ```
 
-Expected new clean detached checkout and exact poetry identity. Do not commit or push its unused URWT branch. Write `prepare.py` below into the task directory. Its setup mode assembles the explicit unchanged helper chain (P6 §0's prose pointer is not a Markdown link); its block mode selects a unique exact marker, retaining the body byte-for-byte. It does not execute a block. The evidence directory remains absent until runbook `1.1-pins` creates it.
+Expected new clean detached checkout and exact poetry identity. Do not commit or push its unused URWT branch. Write `prepare.py` below into the task directory. Its setup mode assembles the explicit unchanged helper chain (P6 §0's prose pointer is not a Markdown link); its block mode selects a unique exact marker, retaining the body byte-for-byte. Its block mode does not execute a block; run-file revalidates custody and executes only the exact prepared file once, retaining exclusive started/done/failed receipts. The evidence directory remains absent until runbook `1.1-pins` creates it.
 
 ```python
 #!/usr/bin/env python3
@@ -6017,11 +6901,11 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 
 T = Path.home()/'.cache/s3f-task85'
-P = Path((T/'live-path').read_text().strip())
 R = Path.home()/'si-devnet2-stage3-p6'
 NAME = 'storage-integrity-devnet2-stage3-p6-switches.md'
 CHAIN = ['dynamic-table-set', 'multi-source', 'multi-source-tracks',
@@ -6029,17 +6913,76 @@ CHAIN = ['dynamic-table-set', 'multi-source', 'multi-source-tracks',
          'stage3-p1-backups', 'stage3-p2-members', 'stage3-p3-replica-reads',
          'stage3-p4-hardening', 'stage3-p4-owner-rebuild', 'stage3-p5-v21',
          'stage3-p6-switches']
+OPERATIONS = ['C-b','C-c','C-a','D-b','D-c','D-a','R-b','R-c','R-a','X']
+
+def scope(operation):
+    if operation == 'X' or operation == 'D-a':
+        service = 'k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml'
+    elif operation in ('D-b','D-c'):
+        service = 'k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-'+operation[-1]+'-source.yaml'
+    else:
+        assert operation in OPERATIONS
+        service = 'k8s-sea/sentio-network-devnet2/sentio-node-indexer-'+operation[-1]+'-storage-integrity-si-v2.yaml'
+    return sorted(['charts/storage-integrity/tests/test_render.py',service])
+
+def git(p, *args):
+    return subprocess.check_output(['git','-C',str(p),*args])
+
+def git_text(p, *args):
+    return git(p,*args).decode().strip()
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+def loads(data):
+    def unique(pairs):
+        out = {}
+        for key, value in pairs:
+            assert key not in out, 'duplicate JSON key'
+            out[key] = value
+        return out
+    return json.loads(data, object_pairs_hook=unique)
+
+def directory(path):
+    value = path.lstat()
+    assert stat.S_ISDIR(value.st_mode) and not stat.S_ISLNK(value.st_mode), 'not a real directory: '+str(path)
+    assert value.st_uid == os.getuid() and not stat.S_IMODE(value.st_mode) & 0o022, 'unsafe directory owner/mode: '+str(path)
+
+def read(path, base=None):
+    if base is not None:
+        relative = path.relative_to(base)
+        assert relative.parts and '..' not in relative.parts
+        parent = base
+        for part in relative.parts[:-1]:
+            parent = parent/part
+            directory(parent)
+    value = path.lstat()
+    assert stat.S_ISREG(value.st_mode) and not stat.S_ISLNK(value.st_mode), 'not a regular non-link file: '+str(path)
+    assert value.st_uid == os.getuid() and not stat.S_IMODE(value.st_mode) & 0o022, 'unsafe file owner/mode: '+str(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        assert (opened.st_dev, opened.st_ino) == (value.st_dev, value.st_ino), 'file changed while opening'
+        return stream.read()
+
+def exclusive(path, data):
+    directory(path.parent)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(data.encode() if isinstance(data, str) else data)
+
+def emit(path, value):
+    exclusive(path, json.dumps(value, sort_keys=True, indent=2)+'\n')
 
 def blocks(text):
     result = []
-    lines = text.splitlines(keepends=True)
     opening = None
     body = []
     section = ''
-    for line in lines:
+    for line in text.splitlines(keepends=True):
         if opening is None:
             if line.startswith('## '):
-                section = line.rstrip('\n')
+                section = line.rstrip('\r\n')
             match = re.fullmatch(r'(`{3,})([^`\s]*)\s*\n?', line)
             if match:
                 opening = (match[1], match[2], section)
@@ -6052,47 +6995,201 @@ def blocks(text):
     assert opening is None, 'unterminated Markdown fence'
     return result
 
-def exclusive(path, data):
-    with path.open('x') as stream:
-        stream.write(data)
-    path.chmod(0o600)
+def context(initial=False):
+    directory(T)
+    directory(R)
+    raw_path = read(T/'live-path', T).decode()
+    assert raw_path.endswith('\n') and raw_path.count('\n') == 1
+    lexical = raw_path[:-1]
+    assert os.path.isabs(lexical) and lexical != '/' and not any(c in lexical for c in ('\r','\x00'))
+    worktree = loads(read(T/'live-worktree.json', T))
+    assert isinstance(worktree, dict) and worktree.get('action') == 'created' and worktree.get('path') == lexical, 'URWT lexical path mismatch'
+    p = Path(lexical)
+    # The URWT root may retain its trusted symlink spelling; no child source path may be a symlink.
+    assert p.is_dir() and p.stat().st_uid == os.getuid()
+    head = read(T/'start-head', T).decode().strip()
+    assert re.fullmatch(r'[0-9a-f]{40}', head), 'bad original source HEAD'
+    actual = git_text(p,'rev-parse','HEAD')
+    assert re.fullmatch(r'[0-9a-f]{40}',actual), 'invalid actual HEAD'
+    branch = git_text(p,'rev-parse','--abbrev-ref','HEAD')
+    assert branch and not any(c in branch for c in ('\n','\r','\x00'))
+    if initial:
+        assert actual == head == git_text(p,'rev-parse','origin/main'), 'initial source HEAD mismatch'
+        assert not git_text(p,'status','--porcelain'), 'initial worktree dirty'
+    return p, lexical, head, actual, branch
+
+def phase_state(manifest):
+    run_id = digest(read(R/'task85-custody.json',R))
+    expected, branch = manifest['head'], manifest['branch']
+    previous_hash = run_id
+    files = list(R.glob('head-advance-*.json'))
+    assert len(files) <= len(OPERATIONS)
+    assert {p.name for p in files} == {'head-advance-%02d.json'%n for n in range(1,len(files)+1)}, 'noncontiguous phase head receipts'
+    for n in range(1,len(files)+1):
+        path = R/('head-advance-%02d.json'%n)
+        data = read(path,R)
+        value = loads(data)
+        assert set(value) == {'schema','operation','previous_head','head','branch','run_id','previous_receipt_sha256','plan_sha256','diff_sha256','paths'}
+        assert value['schema'] == 2 and value['operation'] == OPERATIONS[n-1]
+        assert value['previous_head'] == expected and value['branch'] == branch and value['run_id'] == run_id
+        assert value['previous_receipt_sha256'] == previous_hash and value['paths'] == scope(value['operation'])
+        plan_data = read(R/('head-plan-%02d.json'%n),R)
+        plan = loads(plan_data)
+        assert value['plan_sha256'] == digest(plan_data) and value['diff_sha256'] == plan['diff_sha256']
+        assert plan == {'schema':2,'operation':value['operation'],'previous_head':expected,'branch':branch,'run_id':run_id,'paths':value['paths'],'diff_sha256':value['diff_sha256']}
+        assert re.fullmatch(r'[0-9a-f]{40}',value['head']) and value['head'] != expected
+        p = Path(manifest['lexical_path'])
+        assert git_text(p,'rev-parse',value['head']+'^') == expected, 'stored phase parent mismatch'
+        assert git_text(p,'log','-1','--format=%an <%ae> %G?',value['head']) == 'poetry <chen@sentio.xyz> G', 'stored phase signature mismatch'
+        assert sorted(git_text(p,'diff','--name-only',expected,value['head']).splitlines()) == value['paths']
+        actual_diff = git(p,'diff','--binary','--no-ext-diff','--no-textconv','--no-color','--full-index','--no-renames',expected,value['head'],'--',*value['paths'])
+        assert digest(actual_diff) == value['diff_sha256'], 'stored phase diff mismatch'
+        expected = value['head']; previous_hash = digest(data)
+    return expected, branch, run_id, previous_hash, len(files)
+
+def sources(p):
+    paths = [p/'docs'/('storage-integrity-devnet2-'+stem+'.md') for stem in CHAIN]
+    docs = {path.name: read(path, p) for path in paths}
+    bodies = []
+    for path in paths:
+        own = [body for lang, section, body in blocks(docs[path.name].decode())
+               if lang == 'bash' and section == '## 0. Session helpers']
+        assert len(own) == 1, 'missing/duplicate helper block: '+path.name
+        bodies.append('# Source: docs/'+path.name+'\n'+own[0])
+    markers = {}
+    for lang, _, body in blocks(docs[NAME].decode()):
+        if lang != 'bash':
+            continue
+        assert body and body.splitlines()[0].startswith('# block '), 'missing exact block marker'
+        marker = body.splitlines()[0][8:]
+        assert re.fullmatch(r'[A-Za-z0-9.-]+', marker) and marker not in markers, 'duplicate/invalid exact marker'
+        markers[marker] = body
+    assert markers
+    return docs, bodies, markers
+
+def verify(allow_dirty=False, advancing=False):
+    p, lexical, source_head, actual, actual_branch = context()
+    directory(R/'blocks')
+    docs, bodies, markers = sources(p)
+    manifest = loads(read(R/'task85-custody.json', R))
+    assert set(manifest) == {'schema','lexical_path','head','branch','worktree_sha256','start_head_sha256','extractor_sha256','runbook_hashes_sha256','helpers_sha256','documents','markers'}
+    assert manifest['schema'] == 2 and manifest['lexical_path'] == lexical and manifest['head'] == source_head
+    assert manifest['worktree_sha256'] == digest(read(T/'live-worktree.json', T))
+    assert manifest['start_head_sha256'] == digest(read(T/'start-head', T))
+    assert manifest['extractor_sha256'] == digest(read(T/'prepare.py', T)), 'extractor drift; stop'
+    assert manifest['documents'] == {name:digest(data) for name,data in docs.items()}, 'helper/runbook source drift; stop'
+    hashes = read(R/'task85-runbook-hashes.json', R)
+    assert digest(hashes) == manifest['runbook_hashes_sha256'] and loads(hashes) == manifest['documents'], 'hash inventory changed'
+    helper = ('\n'.join(bodies)+'\nP='+shlex.quote(lexical)+'\n').encode()
+    assert digest(read(R/'helpers.sh', R)) == digest(helper) == manifest['helpers_sha256'], 'assembled helper drift; stop'
+    assert manifest['markers'] == {name:digest(body.encode()) for name,body in markers.items()}, 'marker inventory changed'
+    expected, branch, _, _, _ = phase_state(manifest)
+    assert actual_branch == branch, 'branch changed outside authorized phase'
+    assert advancing or actual == expected, 'HEAD differs from explicit phase predecessor receipt'
+    assert allow_dirty or not git_text(p,'status','--porcelain'), 'worktree dirty'
+    return p, lexical, actual, markers
 
 def main(args):
     mode, *args = args
-    book = (P/'docs'/NAME).read_text()
-    if mode == 'setup':
-        assert not args and R.is_dir() and not (R/'helpers.sh').exists()
-        bodies = []
-        hashes = {}
-        for stem in CHAIN:
-            path = P/'docs'/('storage-integrity-devnet2-'+stem+'.md')
-            text = path.read_text()
-            own = [body for lang, sec, body in blocks(text)
-                   if lang == 'bash' and sec == '## 0. Session helpers']
-            assert own, 'missing helper block: '+str(path)
-            bodies.append('# Source: docs/'+path.name+'\n'+own[0])
-            hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
-        exclusive(R/'helpers.sh', '\n'.join(bodies)+'\nP='+shlex.quote(str(P))+'\n')
-        exclusive(R/'task85-runbook-hashes.json', json.dumps(hashes, indent=2)+'\n')
+    if mode == 'verify':
+        assert not args
+        _, _, head, _ = verify()
+        print('custody schema 2 verified at explicit phase HEAD '+head)
+    elif mode == 'setup':
+        assert not args
+        p, lexical, head, _, branch = context(True)
+        for name in ('helpers.sh','task85-runbook-hashes.json','task85-custody.json','blocks'):
+            assert not os.path.lexists(R/name), 'preexisting custody artifact; resume deliberately'
+        docs, bodies, markers = sources(p)
+        helper = '\n'.join(bodies)+'\nP='+shlex.quote(lexical)+'\n'
+        hashes = {name:digest(data) for name,data in docs.items()}
+        hashes_data = json.dumps(hashes, sort_keys=True, indent=2)+'\n'
+        exclusive(R/'helpers.sh', helper)
+        for shell in ('/bin/bash','/opt/homebrew/bin/bash'):
+            subprocess.run([shell, '-n', str(R/'helpers.sh')], check=True)
+        exclusive(R/'task85-runbook-hashes.json', hashes_data)
         (R/'blocks').mkdir(mode=0o700)
-        subprocess.run(['/bin/bash', '-n', str(R/'helpers.sh')], check=True)
-        subprocess.run(['/opt/homebrew/bin/bash', '-n', str(R/'helpers.sh')], check=True)
-        print('thirteen runbook helper blocks assembled')
+        emit(R/'task85-custody.json', {'schema':2,'lexical_path':lexical,'head':head,'branch':branch,
+             'worktree_sha256':digest(read(T/'live-worktree.json',T)),
+             'start_head_sha256':digest(read(T/'start-head',T)),
+             'extractor_sha256':digest(read(T/'prepare.py',T)),
+             'runbook_hashes_sha256':digest(hashes_data.encode()),'helpers_sha256':digest(helper.encode()),
+             'documents':hashes,'markers':{name:digest(body.encode()) for name,body in markers.items()}})
+        verify()
+        print('thirteen runbooks, helpers, extractor and clean source HEAD frozen (custody schema 2)')
     elif mode == 'block':
         marker, label = args
-        assert re.fullmatch(r'[A-Za-z0-9.-]+', label)
-        found = [body for lang, sec, body in blocks(book)
-                 if lang == 'bash' and body.splitlines()[0] == '# block '+marker]
-        assert len(found) == 1, 'missing or duplicate exact marker: '+marker
-        hashes = json.loads((R/'task85-runbook-hashes.json').read_text())
-        assert hashlib.sha256((P/'docs'/NAME).read_bytes()).hexdigest() == hashes[NAME], 'runbook changed; stop and revalidate'
+        assert re.fullmatch(r'[A-Za-z0-9.-]+', label) and label not in ('.','..')
+        _, lexical, head, markers = verify()
+        assert marker in markers, 'missing exact marker: '+marker
         path = R/'blocks'/(label+'.sh')
-        exclusive(path, 'source '+shlex.quote(str(R/'helpers.sh'))+'\ncd "$P"\n'+found[0])
-        for shell in ['/bin/bash', '/opt/homebrew/bin/bash']:
+        custody_hash = digest(read(R/'task85-custody.json',R))
+        emit(path.with_suffix('.attempt.json'), {'schema':2,'marker':marker,'label':label,'custody_sha256':custody_hash,'head':head})
+        body = 'source '+shlex.quote(str(R/'helpers.sh'))+'\ncd "$P"\n'+markers[marker]
+        exclusive(path, body)
+        for shell in ('/bin/bash','/opt/homebrew/bin/bash'):
             subprocess.run([shell, '-n', str(path)], check=True)
+        emit(path.with_suffix('.prepared.json'), {'schema':2,'marker':marker,'label':label,'custody_sha256':custody_hash,'body_sha256':digest(body.encode())})
         print(path)
+    elif mode == 'run-file':
+        [raw] = args
+        path = Path(raw)
+        assert path.parent == R/'blocks' and path.suffix == '.sh', 'not a prepared block path'
+        _, _, head, markers = verify()
+        receipt = loads(read(path.with_suffix('.prepared.json'),R))
+        attempt = loads(read(path.with_suffix('.attempt.json'),R))
+        assert set(receipt) == {'schema','marker','label','custody_sha256','body_sha256'}
+        marker, label = receipt['marker'], receipt['label']
+        assert receipt['schema'] == 2 and label+'.sh' == path.name and marker in markers
+        assert receipt['custody_sha256'] == attempt['custody_sha256'] == digest(read(R/'task85-custody.json',R))
+        assert attempt == {'schema':2,'marker':marker,'label':label,'custody_sha256':receipt['custody_sha256'],'head':head}
+        data = read(path,R)
+        expected = ('source '+shlex.quote(str(R/'helpers.sh'))+'\ncd "$P"\n'+markers[marker]).encode()
+        assert digest(data) == digest(expected) == receipt['body_sha256'], 'prepared block drift; stop'
+        assert not any(os.path.lexists(path.with_suffix('.'+suffix+'.json')) for suffix in ('started','done','failed')), 'execution attempt exists; never replay'
+        emit(path.with_suffix('.started.json'), receipt)
+        result = subprocess.run(['/bin/bash','-eo','pipefail',str(path)])
+        if result.returncode:
+            emit(path.with_suffix('.failed.json'), {'schema':2,'returncode':result.returncode,'prepared_sha256':digest(read(path.with_suffix('.prepared.json'),R))})
+            raise SystemExit(result.returncode)
+        emit(path.with_suffix('.done.json'), {'schema':2,'prepared_sha256':digest(read(path.with_suffix('.prepared.json'),R))})
+    elif mode in ('plan-head','advance-head'):
+        [operation] = args
+        assert operation in OPERATIONS
+        p, _, actual, _ = verify(allow_dirty=mode=='plan-head', advancing=mode=='advance-head')
+        manifest = loads(read(R/'task85-custody.json',R))
+        previous, branch, run_id, prior_hash, count = phase_state(manifest)
+        assert count < len(OPERATIONS) and operation == OPERATIONS[count], 'wrong next production operation'
+        paths = scope(operation)
+        number = count+1
+        plan_path = R/('head-plan-%02d.json'%number)
+        if mode == 'plan-head':
+            assert not git_text(p,'ls-files','--others','--exclude-standard'), 'untracked production files'
+            # Stage only the contract's exact service and its test mirror; bind raw staged bytes.
+            assert sorted(git_text(p,'diff','--name-only',previous).splitlines()) == paths, 'wrong prospective phase scope'
+            subprocess.run(['git','-C',str(p),'add','--',*paths],check=True)
+            assert not git_text(p,'diff','--name-only'), 'unstaged changes remain'
+            assert sorted(git_text(p,'diff','--cached','--name-only').splitlines()) == paths
+            data = git(p,'diff','--cached','--binary','--no-ext-diff','--no-textconv','--no-color','--full-index','--no-renames','--',*paths)
+            assert data
+            emit(plan_path, {'schema':2,'operation':operation,'previous_head':previous,'branch':branch,'run_id':run_id,'paths':paths,'diff_sha256':digest(data)})
+            print(plan_path)
+        else:
+            plan_data = read(plan_path,R); plan = loads(plan_data)
+            assert actual != previous and git_text(p,'rev-parse','HEAD^') == previous, 'phase commit is not one new direct child'
+            assert git_text(p,'log','-1',"--format=%an <%ae> %G?") == 'poetry <chen@sentio.xyz> G', 'phase commit is not signed poetry G'
+            assert sorted(git_text(p,'diff','--name-only',previous,actual).splitlines()) == paths
+            data = git(p,'diff','--binary','--no-ext-diff','--no-textconv','--no-color','--full-index','--no-renames',previous,actual,'--',*paths)
+            assert plan == {'schema':2,'operation':operation,'previous_head':previous,'branch':branch,'run_id':run_id,'paths':paths,'diff_sha256':digest(data)}, 'committed diff differs from approved staged bytes'
+            message = git_text(p,'log','-1','--format=%B')
+            trailer = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
+            assert re.findall(r'(?im)^[ \t]*co-authored-by[ \t]*:.*$',message) == [trailer], 'unexpected phase coauthor'
+            parsed = subprocess.run(['git','interpret-trailers','--parse'],input=message,text=True,capture_output=True,check=True).stdout.splitlines()
+            assert parsed.count(trailer) == 1, 'canonical coauthor is not a real commit trailer'
+            emit(R/('head-advance-%02d.json'%number), {'schema':2,'operation':operation,'previous_head':previous,'head':actual,'branch':branch,'run_id':run_id,'previous_receipt_sha256':prior_hash,'plan_sha256':digest(plan_data),'diff_sha256':digest(data),'paths':paths})
+            print('authorized phase head advanced for '+operation)
     else:
-        raise SystemExit('mode must be setup or block')
+        raise SystemExit('mode must be setup, verify, block, run-file, plan-head or advance-head')
 
 if __name__ == '__main__':
     main(sys.argv[1:])
@@ -6159,7 +7256,7 @@ python3 -I "$T/prepare.py" setup
 
 Expected `empty` names unrecorded; fifteen recorded nonempty pin lines; helpers assembled. No future epoch is filled. The ledger tool is the exact current C1 §19 implementation, not a downloaded variant or handwritten parser. Do not source pins as shell code.
 
-From here `python3 -I "$HOME/.cache/s3f-task85/prepare.py" block <exact-marker> <new-label>` prepares a block only; run the printed path with `bash -eo pipefail <path> < /dev/null` only under its step's authorisation. The explicit commands below bind every required invocation; labels are not reused.
+From here `python3 -I "$HOME/.cache/s3f-task85/prepare.py" block <exact-marker> <new-label>` prepares a block only; run the printed path with `python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file <path> < /dev/null` only under its step's authorisation. The explicit commands below bind every required invocation; labels are not reused.
 
 - [ ] **Step 2: Merged PR, pins, images, databases and initial baseline**
 
@@ -6167,14 +7264,17 @@ Run these read-only task checks from a block file:
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 pr="$(si_p6_value P6_PR)"
 gh pr view "$pr" --repo sentioxyz/production --json state,mergeCommit,mergedAt,url > "$si_backup/task85-p6-pr.json"
 [ "$(jq -r .state "$si_backup/task85-p6-pr.json")" = MERGED ]
 git merge-base --is-ancestor "$(jq -er .mergeCommit.oid "$si_backup/task85-p6-pr.json")" HEAD
-[ "$(git rev-parse --abbrev-ref HEAD)" = HEAD ]
-[ -z "$(git status --porcelain)" ]
+si_read_85_436_1="$(git rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${si_read_85_436_1}" = HEAD ] || exit 1
+si_read_85_437_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_85_437_1}" ] || exit 1
 python3 -B charts/storage-integrity/tests/test_render.py | tee "$si_backup/task85-render.txt"
 ```
 
@@ -6184,7 +7284,7 @@ Expected merged P6_PR commit ancestor and full render suite green, printed count
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 1.2-identities 020-identities)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected three distinct databases of the same existing devuser1 owner account, rows in a,b,c order. The user verifies the public account ownership from its existing account context; no key is read by an agent. If the lockdown owner-a database belongs to another account, stop and ask the user for an existing owned owner-a database, amend the explicitly permitted operator input in a fresh block, revalidate registry ownership, and retain both original and approved selection. No new database is created here.
@@ -6197,7 +7297,7 @@ Confirm before running. Gate: build the throwaway local read tool from recorded 
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 1.3-build 030-build)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Confirm before running. Gate: copy only the SHA-256-checked read tool into `/tmp/stage3reads` on all three voters. This is a remote filesystem mutation and needs its own explicit chat yes; it is not a consensus or pod change:
@@ -6206,7 +7306,7 @@ Confirm before running. Gate: copy only the SHA-256-checked read tool into `/tmp
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 1.3-put 031-put)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Then execute the read-only baseline and explicit image comparison:
@@ -6215,11 +7315,12 @@ Then execute the read-only baseline and explicit image comparison:
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 1.3-baseline 032-baseline)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 si_images | tee "$si_backup/task85-arbiter-images.txt"
@@ -6254,7 +7355,7 @@ python3 -I "$T/prepare.py" block 1.4-budget 040-budget
 Hand the user this fish command (the path is the file just produced):
 
 ```fish
-bash -eo pipefail "$HOME/si-devnet2-stage3-p6/blocks/040-budget.sh"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$HOME/si-devnet2-stage3-p6/blocks/040-budget.sh"
 ```
 
 Expected CRC/Size-checked newest finished snapshot, v21 plain/interned or v20 accepted, same snapshot's `promotion_seq`, subsequent live sequence and budget to L/4; `P6 reserve 24+traffic <= half-budget ...`. The six lifecycle allowance plus eighteen INSERTs and observed seven-day traffic must fit half remaining budget. Retain the user estimate and observed P5/current-sequence source as `traffic-observed.txt`. A short budget stops before any switch, and the user decides voter sizing. Unknown kind/version, bad CRC, temporary-only snapshot or live sequence older than snapshot also stops; never choose an older convenient snapshot. The inherited v20-only `si_budget` is never called.
@@ -6280,7 +7381,7 @@ PY
 export key_file
 (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.started")
 file="$(python3 -I "$T/prepare.py" block "$marker" "user-$marker")"
-if bash -eo pipefail "$file"; then
+if python3 -I "$T/prepare.py" run-file "$file"; then
   printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.done"
 else
   echo 'keyed block failed or outcome unknown: preserve evidence and inspect; never repeat blindly' >&2
@@ -6298,7 +7399,7 @@ Read-only prerequisites:
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 2.1-check 050-purge-check)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Stop here and obtain explicit confirmation. Gate: turn on `stage3.purge` only, on devnet2, through one authority-signed expected-epoch update with `--hold drain --hold-timeout 10m --timeout 15m`. This is irreversible. On failure use Step 10 and runbook §15.1/§16.3; never switch it off or recreate an incarnation on the legacy root.
@@ -6309,7 +7410,7 @@ Confirm before running.
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 2.2-update 051-purge-update)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Inspect the completed command, then read:
@@ -6318,7 +7419,7 @@ Inspect the completed command, then read:
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 2.3-verify 052-purge-verify)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected `diff-step1.txt` exactly `stage3.purge`, one epoch increment, every other current parameter unchanged, all later switches false, k1 and no host-bound verifier. Preserve `show-before-step1.json`, the original unmodified CLI `update-step1.out`, `show-after-step1.json` and `verify-step1.txt`. No CREATE is authorised by the update confirmation.
@@ -6369,15 +7470,16 @@ Read-only evidence (no key):
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 2.3-paths 060-purge-paths)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 f="$(python3 -I "$T/prepare.py" block 2.3-replicas 061-purge-replicas)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected all three safe rows exactly once, the three new Active incarnations scoped, old records' scoping flags unchanged, every owner path equal to the chroot-relative `/sentio/0/unsafe_inc/<database>__s3_p6/<incarnation>`, owner plus exactly the three pool replicas, no member replica. Check direct verifier paths too, rather than inferring them solely from owner replica names:
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 for v in 1 2 3; do
@@ -6416,10 +7518,14 @@ set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 [ -s "$HOME/si-devnet2-stage3-p6/task85-receipt-step1.json" ]
 f="$(python3 -I "$T/prepare.py" block 3.1-check 070-voiding-check)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 si_show > "$si_backup/task85-preread-step2.json"
-cmp <(jq -S '{epoch,current}' "$si_backup/task85-receipt-step1.json") <(jq -S '{epoch,current}' "$si_backup/task85-preread-step2.json")
+prior="$(jq -ceS 'select(type=="object" and (.current|type)=="object" and (.epoch|type=="string" or type=="number")) | {epoch,current}' "$si_backup/task85-receipt-step1.json")" || exit 1
+fresh="$(jq -ceS 'select(type=="object" and (.current|type)=="object" and (.epoch|type=="string" or type=="number")) | {epoch,current}' "$si_backup/task85-preread-step2.json")" || exit 1
+[ -n "$prior" ] && [ -n "$fresh" ] || exit 1
+[ "$prior" = "$fresh" ] || { echo 'observed epoch/current changed between windows; stop'; exit 1; }
 ```
 
 Stop here and obtain explicit confirmation. Gate: turn on only `stage3.eviction_voiding` through the runbook's next expected-epoch update with `--hold drain`. It is irreversible. No node is evicted in this task; the P5 integration proof covers stored evidence and latched verdicts.
@@ -6430,14 +7536,14 @@ Confirm before running.
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 3.2-update 071-voiding-update)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 3.3-verify 072-voiding-verify)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 cp "$HOME/si-devnet2-stage3-p6/show-after-step2.json" "$HOME/si-devnet2-stage3-p6/task85-receipt-step2.json"
 ```
 
@@ -6452,10 +7558,14 @@ set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 [ -s "$HOME/si-devnet2-stage3-p6/task85-receipt-step2.json" ]
 f="$(python3 -I "$T/prepare.py" block 4.1-hosts 080-selection-hosts)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 si_show > "$si_backup/task85-preread-step3.json"
-cmp <(jq -S '{epoch,current}' "$si_backup/task85-receipt-step2.json") <(jq -S '{epoch,current}' "$si_backup/task85-preread-step3.json")
+prior="$(jq -ceS 'select(type=="object" and (.current|type)=="object" and (.epoch|type=="string" or type=="number")) | {epoch,current}' "$si_backup/task85-receipt-step2.json")" || exit 1
+fresh="$(jq -ceS 'select(type=="object" and (.current|type)=="object" and (.epoch|type=="string" or type=="number")) | {epoch,current}' "$si_backup/task85-preread-step3.json")" || exit 1
+[ -n "$prior" ] && [ -n "$fresh" ] || exit 1
+[ "$prior" = "$fresh" ] || { echo 'observed epoch/current changed between windows; stop'; exit 1; }
 ```
 
 Expected all three host images exactly the recorded P5 source pin, three Active pool verifiers and voiding on. An older embedded HouseGate maps admission code 12 to OutcomeUnknown; this host gate is mandatory even when `stage3_v1` registration passed. Missing metrics or a different image stops; do not fix a pin inside this task.
@@ -6468,14 +7578,14 @@ Confirm before running.
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 4.2-update 081-selection-update)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 4.3-verify 082-selection-verify)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected diff exactly `stage3.owner_aware_selection`, next epoch and no other field change.
@@ -6506,13 +7616,14 @@ After each separately approved private-terminal run succeeds, read only its evid
 set -eo pipefail
 T="$HOME/.cache/s3f-task85"
 f="$(python3 -I "$T/prepare.py" block 4.3-rings 090-selection-rings)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 The runbook intentionally skips transition blocks with no verifier set. Strengthen the task's acceptance proof so an entirely unmarked list cannot pass vacuously; inspect only this step's captured blocks, never an older ringless block:
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 python3 -I - "$si_backup" <<'PY'
@@ -6538,7 +7649,8 @@ jq -e 'all(.indexers[];(.quarantined|not))' "$si_backup/task85-final-tracks.json
 si_p6_verify 3
 for x in a b c; do si_keeper_findings "$x"; done
 cp "$si_backup/show-after-step3.json" "$si_backup/task85-receipt-step3.json"
-[ -z "$(git status --porcelain)" ]
+si_read_85_806_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_85_806_1}" ] || exit 1
 ```
 
 Expected six acceptance INSERTs total, each safe exactly once; three marked owners with exact sorted pool rings and three distinct verifier-set entries, no member, no quarantined track, k1 and all later switches off. A no-set block alone proves nothing; wait/read existing statement status until marked or stop, never issue an extra diagnostic INSERT. All full-session outputs, budget, paths and the original CLI output stay in the evidence directory.
@@ -6549,6 +7661,7 @@ Stop the normal sequence first; no later window or ledger operation follows a fa
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 si_show | tee "$si_backup/show-recovery.json"
@@ -6560,6 +7673,8 @@ For a proven committed outcome only, this complete recovery block derives the on
 
 ```bash
 set -eo pipefail
+T="$HOME/.cache/s3f-task85"
+python3 -I "$T/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 step="$(python3 -I - "$si_backup" <<'PY'
@@ -6588,7 +7703,7 @@ assert b['current']['stage3'].get(field,False) is False and clean(a['current'])=
 print('committed current-state recovery proven')
 PY
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 16.3-committed "recovered-step$step")"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$T/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected `committed current-state recovery proven`, the intended exact diff and a separate `recovery-step<N>.txt`. Continue with the original step's read-only verify block extracted to a new filename. A preexisting recovery file/label means stop and inspect the prior recovery rather than rerun it. A refusal archive is not automated by this task: the user first validates definite refusal and settlement of the original attempt, then separately confirms any retry under runbook §16.3. Keeping an unresolved attempt stopped is the correct result.
@@ -6604,25 +7719,94 @@ This step runs only after Steps 5–9 passed or an unknown outcome was positivel
 import json
 from pathlib import Path
 import sys
+import math
+import re
+
+FIELDS = ('purge', 'eviction_voiding', 'owner_aware_selection')
+SWITCHES = FIELDS + ('placement', 'reselection', 'checkpoints', 'narrowed_drain')
+
+def unique_fields(pairs):
+    result = {}
+    for name, value in pairs:
+        assert name not in result, 'duplicate observed JSON field'
+        result[name] = value
+    return result
+
+def load_observed(text):
+    return json.loads(text, object_pairs_hook=unique_fields)
+
+def uint64(value):
+    if type(value) is int:
+        result = value
+    elif isinstance(value, str) and re.fullmatch(r'0|[1-9][0-9]*', value):
+        result = int(value)
+    else:
+        raise AssertionError('epoch must be a canonical uint64 integer or decimal string')
+    assert 0 <= result <= 2**64-1, 'uint64 out of range'
+    return result
+
+def typed(value, omit_metadata=False):
+    # Match the owning runbook's epoch/digest metadata exclusions, while keeping
+    # JSON bool/int/string distinctions that Python equality alone collapses.
+    if isinstance(value, dict):
+        assert all(isinstance(k, str) for k in value)
+        return ('object', tuple((k, typed(v, omit_metadata)) for k, v in sorted(value.items())
+                                if not (omit_metadata and k in ('epoch', 'digest'))))
+    if isinstance(value, list):
+        return ('array', tuple(typed(v, omit_metadata) for v in value))
+    assert value is None or type(value) in (bool, int, str) or type(value) is float and math.isfinite(value), 'unexpected parameter JSON type'
+    return (type(value).__name__, value)
+
+def one_window(before, after, receipt, step):
+    assert type(step) is int and 1 <= step <= 3
+    assert isinstance(before, dict) and isinstance(after, dict) and isinstance(receipt, dict)
+    assert typed(receipt) == typed(after), 'receipt differs from observed after state'
+    first, second = uint64(before['epoch']), uint64(after['epoch'])
+    assert first < 2**64-1 and second == first+1, 'not exactly one observed epoch'
+    left, right = before['current'], after['current']
+    assert isinstance(left, dict) and isinstance(right, dict)
+    a, b = left['stage3'], right['stage3']
+    assert isinstance(a, dict) and isinstance(b, dict)
+    for i, name in enumerate(SWITCHES):
+        # Actual consensus-show uses EmitUnpopulated, not snapshot omitempty.
+        assert name in a and name in b, 'raw CLI switch field missing'
+        old, new = a[name], b[name]
+        assert type(old) is bool and type(new) is bool, 'switch is not boolean'
+        assert old is (i < step-1) and new is (i < step), 'wrong ordered switch posture'
+    assert uint64(a['min_safe_copies']) == uint64(b['min_safe_copies']) == 1, 'unexpected k'
+    expected = json.loads(json.dumps(left))
+    expected['stage3'][FIELDS[step-1]] = True
+    assert typed(expected, True) == typed(right, True), 'not an exact false-to-true single-field update'
+    return str(second)
+
+def observed_windows(windows, final):
+    assert isinstance(windows, list) and len(windows) == 3
+    epochs, previous = [], None
+    for step, row in enumerate(windows, 1):
+        assert isinstance(row, (list, tuple)) and len(row) == 3
+        before, after, receipt = row
+        epochs.append(one_window(before, after, receipt, step))
+        if previous is not None:
+            assert uint64(previous['epoch']) == uint64(before['epoch'])
+            assert typed(previous['current']) == typed(before['current']), 'unrelated update between windows'
+        previous = after
+    assert isinstance(final, dict)
+    assert uint64(final['epoch']) == uint64(previous['epoch'])
+    assert typed(final['current']) == typed(previous['current']), 'final state differs from observed window'
+    return epochs
 
 r=Path.home()/'si-devnet2-stage3-p6'
 names=['purge','eviction_voiding','owner_aware_selection']
 ledger=['PURGE_EPOCH','VOIDING_EPOCH','SELECTION_EPOCH']
-epochs=[]
-previous=None
-for n,field in enumerate(names,1):
-    before=json.loads((r/f'show-before-step{n}.json').read_text())
-    after=json.loads((r/f'show-after-step{n}.json').read_text())
-    receipt=json.loads((r/f'task85-receipt-step{n}.json').read_text())
-    assert receipt==after and int(after['epoch'])==int(before['epoch'])+1
-    assert after['current']['stage3'][field] is True
-    if previous is not None:
-        assert previous['epoch']==before['epoch'] and previous['current']==before['current'], 'unrelated update between windows'
-    previous=after
-    epochs.append(str(after['epoch']))
+windows=[]
+for n in range(1,4):
+    before=load_observed((r/f'show-before-step{n}.json').read_text())
+    after=load_observed((r/f'show-after-step{n}.json').read_text())
+    receipt=load_observed((r/f'task85-receipt-step{n}.json').read_text())
+    windows.append((before,after,receipt))
     assert (r/f'verify-step{n}.txt').read_text().strip()
-final=json.loads((r/'task85-final-show.json').read_text())
-assert final['epoch']==previous['epoch'] and final['current']==previous['current']
+final=load_observed((r/'task85-final-show.json').read_text())
+epochs=observed_windows(windows,final)
 for marker in ['2.3-create-'+x for x in 'abc']+['2.3-accept-'+x for x in 'abc']+['4.3-accept-'+x for x in 'abc']:
     assert (r/f'user-{marker}.done').is_file()
 L=Path.home()/'.cache/s3-ledger'
@@ -6648,21 +7832,31 @@ rel=docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" empty "$h" PURGE_EPOCH VOIDING_EPOCH SELECTION_EPOCH
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
-out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-85 urwt/codex/multi-source-s3f-ledger-85 "$ref")"
-d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
-git -C "$d" config extensions.worktreeConfig true
-git -C "$d" config --worktree user.name poetry
-git -C "$d" config --worktree user.email chen@sentio.xyz
+out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-85 urwt/codex/multi-source-s3f-ledger-85 "$ref")" || exit 1
+d="$(python3 -I -c 'import json,os,sys;d=json.loads(sys.argv[1]);assert isinstance(d,dict) and d.get("action")=="created";p=d.get("path");assert isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$out")" || exit 1
+si_read_85_920_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_85_920_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_85_920_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_85_920_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_85_920_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_85_920_1}" = "${si_read_85_920_2}" ] && [ -z "${si_read_85_920_3}" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+si_read_85_925_1="$(git -C "$d" config --worktree commit.gpgsign)" || exit 1
+[ "${si_read_85_925_1}" = true ] || { echo 'worktree signing is not enabled; stop'; exit 1; }
+printf '%s\n' "$out" > "$L/record-85-worktree.json"
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-85"
 pairs=()
 while IFS= read -r pair; do pairs+=("$pair"); done < "$HOME/si-devnet2-stage3-p6/task85-epoch-pairs"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" 85 "$L/record-85.md" "${pairs[@]}"
-[ "$(git -C "$d" diff --name-only)" = "$rel" ]
+si_read_85_931_1="$(git -C "$d" diff --name-only)" || exit 1
+[ "${si_read_85_931_1}" = "$rel" ] || exit 1
 git -C "$d" diff --check
-git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record PURGE_EPOCH, VOIDING_EPOCH and SELECTION_EPOCH of Plan S3-F (Task 85)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record PURGE_EPOCH, VOIDING_EPOCH and SELECTION_EPOCH of Plan S3-F (Task 85)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel" || { echo 'signed commit failed or canceled; stop and ask the user to unlock the actual configured signing key'; exit 1; }
+si_read_85_934_1="$(git -C "$d" log -1 --format='%an <%ae> %G?')" || exit 1
+[ "${si_read_85_934_1}" = 'poetry <chen@sentio.xyz> G' ] || { echo 'signed poetry commit verification failed; stop'; exit 1; }
 ```
 
 Expected three observed rows and one run item recorded in one signed plan-only commit. `no plan 's3f'`, an already-recorded row, duplicate name, nonmatching ref or a signing error stops. Do not edit Appendix C manually, push a different branch or amend an existing recorded value.
@@ -6675,7 +7869,11 @@ Confirm before running. Gate: publish only the observed Task 85 record to the ex
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-85")"; ref="$(sed -n 2p "$L/record-85")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] && [ "$(git -C "$d" log -1 --format=%G?)" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+si_read_85_947_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+si_read_85_947_2="$(git -C "$d" status --porcelain)" || exit 1
+si_read_85_947_3="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+si_read_85_947_4="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_85_947_1}" = 1 ] && [ -z "${si_read_85_947_2}" ] && [ "${si_read_85_947_3}" = 'poetry <chen@sentio.xyz>' ] && [ "${si_read_85_947_4}" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
 else
@@ -6704,42 +7902,62 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-85")"; ref="$(sed -n 2p "$L/record-85")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-85-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+pr="$(gh pr view "$(cat "$L/record-85-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_85_977_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_85_977_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_85_977_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_85_977_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_977_1}" = "${si_read_85_977_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate --watch --fail-fast
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/reviews" > "$L/record-85-reviews.json"
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/comments" > "$L/record-85-comments.json"
 ```
 
-Confirm before running. Gate: squash merge this single Task 85 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The REST validator rejects empty/malformed/truncated listings and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
+Confirm before running. Gate: squash merge this single Task 85 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The exact current C1 Task 25 FINALv2 REST reader (source SHA-256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`) rejects empty/malformed/truncated listings, non-string/noncanonical/duplicate commit SHAs, a final-listed SHA different from the pinned head and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
 
 ```bash
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-85")"; ref="$(sed -n 2p "$L/record-85")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-85-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash
+pr="$(gh pr view "$(cat "$L/record-85-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_85_991_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_85_991_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_85_991_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_85_991_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_991_1}" = "${si_read_85_991_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_85_994_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_85_994_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_994_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_85_1013_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_85_1013_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_1013_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr checks "$pr" --repo housegate/housegate || exit 1
+si_read_85_1015_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_85_1015_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_85_1015_1}" = "$expected_head" ] || { echo 'local checked head changed; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 - [ ] **Step 14: R4 — read back the exact recorded epochs before handing off**
@@ -6763,17 +7981,27 @@ Expected exact three `NAME=value` lines matching the observed show receipts. Tas
 
 ## Task 86: devnet2 — P6 live, steps 4–5: member entries, consensus mode and placement (S3-F)
 
+**Execution prerequisites.** Require actual Task85 R4 and fresh immutable accepted Task84/85 source/helper/extractor custody before executing the ordered blocks. Re-extract only from that reviewed chain; changed, stale, missing or ambiguous evidence stops instead of adopting a new digest. K86 requires the clickhouse-extra owner’s threshold agreement before Task87 step6. Keep the complete seven-day promotion envelope: a shortfall stops for the user’s voter-resize decision, never automatic resizing, reduced soak, relaxed thresholds or diagnostic promotions.
+
+
+
+
+
 Execute the merged Task 84 runbook §§5–6 after Task 85 completed R4. Spec §6.1–§6.3, §7.1–§7.3 and §10.4, contract §§58–61, K83–K85, D24, D27, D29–D30, D33–D34 and D40 bind. This task adds three permanent host-bound verifier entries with one separately confirmed `--verifier` update; enables member consensus mode in three separately signed single-host commits, b then c then a; and enables the irreversible placement switch in its own confirmed drain window. It creates no member unsafe replica, user, reconciler or readiness record: those wait for Task 87's Keeper gate. Current-member hosts remain read candidates before MemberReady, including host indexer 0.
 
+
+
+
+
 **Files:**
-- Modify, one per production commit: `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, then the corresponding c and a overlays, each with only `siMember.consensus` plus the single `DEVNET2_MEMBER_CONSENSUS[release]` mirror in `charts/storage-integrity/tests/test_render.py`. Use the real Task 84 `si_p6_rollout C-<host>` serializer and `si_p6_commit`, not an independent YAML rewriter. The member image already equals `DEVNET2_STAGE3_P5_SOURCE_IMAGE`; no host or image value changes.
+- Modify, one per production commit: `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, then the corresponding c and a overlays, each with only `siMember.consensus` plus the single `DEVNET2_MEMBER_CONSENSUS[release]` mirror in `charts/storage-integrity/tests/test_render.py`. Use the real Task84 `si_p6_rollout C-<host>` serializer and `si_p6_commit`, not an independent YAML rewriter. The final exact `5.4-commit` body performs `rollout → plan-head C-<host> → si_p6_commit → advance-head C-<host>`; do not duplicate either head operation outside that body. The schema2 plan binds raw staged bytes and exact service-plus-mirror scope; advance requires the signed poetry-G direct child, canonical Claude trailer, unchanged approved diff and chained predecessor receipt. The member image already equals `DEVNET2_STAGE3_P5_SOURCE_IMAGE`; no host or image value changes.
 - Read: `docs/storage-integrity-devnet2-stage3-p6-switches.md`, its complete §0 helper chain, the observed Task 85 receipts and remote ledger readback; Task 83's per-container key guards and render tests.
 - Create locally, never commit: `$HOME/.cache/s3f-task86/{record.py,user-block.sh}` and `$HOME/si-devnet2-stage3-p6/` public evidence and immutable `blocks/` files. Member seeds, replica signer keys and owner keys stay out of agent reads, argv, chat, logs and git.
 - Modify by C1 §19's tool only: housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md`, Appendix C, the three Task 86 rows and `Steps 4–5 run (Task 86)`.
 
 **Interfaces:**
 - Consumes all fifteen recorded pins from Task 85, plus `PURGE_EPOCH`, `VOIDING_EPOCH`, `SELECTION_EPOCH` from a fresh remote-ledger read after Task 85 R4. Do not source `NAME=value` files as shell code. `MEMBER_IDS` is `member-a:0,member-b:1,member-c:<INDEXER_C_ID>`; failure domains come unchanged from `DEVNET2_FAILURE_DOMAINS`.
-- Consumes Task 85's JSON-discovered URWT `codex` live path at `$HOME/.cache/s3f-task85/live-path`, its immutable-helper file `$HOME/si-devnet2-stage3-p6/helpers.sh`, and its `prepare.py block <exact-marker> <new-label>` interface. That extractor creates a new block file, prepending `source helpers.sh` and `cd "$P"`, and refuses a changed runbook hash. Each call below runs that file, never executes a heredoc as an outer wrapper. A missing setup means stop and deliberately recover Task 85, never recreate its evidence directory.
+- Consumes Task 85's JSON-discovered URWT `codex` live path at `$HOME/.cache/s3f-task85/live-path`, its immutable-helper file `$HOME/si-devnet2-stage3-p6/helpers.sh`, and its `prepare.py block <exact-marker> <new-label>` interface. The final schema2 extractor freezes all thirteen source documents, assembled helpers, its own source, URWT lexical path, branch, clean expected phase HEAD and exact marker manifests. `block` prepares only; `run-file <path>` revalidates the exact source/manifest/body/predecessor HEAD, executes once and exclusively records started/done/failed evidence. `verify` performs the same read-only custody preflight before inline helper sourcing. Every prepared body below executes only through `run-file`, never direct Bash or a heredoc outer wrapper. A missing setup means stop and deliberately recover Task 85, never recreate its evidence directory.
 - Consumes `si_member_id`, `si_host_id`, `si_failure_domain`, `si_stage3_update`, `si_step_diff`, `si_p6_verify`, `si_member_serving`, `si_member_metrics`, `si_stage3reads`, `si_groups`, `si_replica_hosts` and `si_block` from the actual merged runbook chain.
 - Produces observed receipts `task86-receipt-step4.json`, `task86-receipt-step5.json`, three production commit ids, exact group/cutover/read-host evidence and safe acceptance values 6501, 6502, 6503. Only after both steps and their verifications pass, atomically records `MEMBERS_EPOCH`, `PLACEMENT_EPOCH`, `PLACEMENT_CUTOVER_BLOCK` through one complete R1–R4 procedure. Local receipts are not published ledger values; the next task waits for R4.
 
@@ -6791,12 +8019,20 @@ mkdir -p "$T"
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 [ -d "$W" ] && [ -s "$HOME/si-devnet2-stage3-p6/helpers.sh" ] || exit 1
 git -C "$W" fetch -q origin main
-[ "$(git -C "$W" rev-parse --abbrev-ref HEAD)" = HEAD ]
-[ -z "$(git -C "$W" status --porcelain)" ]
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved; reconcile in a fresh reviewed checkout without reset'; exit 1; }
+si_read_86_33_1="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${si_read_86_33_1}" = HEAD ] || exit 1
+si_read_86_34_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_86_34_1}" ] || exit 1
+si_read_86_35_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_86_35_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_86_35_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_86_35_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_35_1}" = "${si_read_86_35_2}" ] || { echo 'main moved; reconcile in a fresh reviewed checkout without reset'; exit 1; }
 git -C "$W" config extensions.worktreeConfig true
 git -C "$W" config --worktree user.name poetry
 git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config --worktree commit.gpgsign true
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 [ "$P" = "$W" ]; cd "$P"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
@@ -6847,7 +8083,7 @@ The user may use an equivalent secp256k1 generator instead of Foundry cast: pass
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.1-public 86020-public)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected node ids exactly the ledger, three distinct lowercase 64hex ed25519 public keys, three distinct 0x40hex replica signer addresses and each public `secret_uid` equal to the corresponding Secret metadata UID. No Secret data is retrieved. A missing/malformed file, reused key/address or UID mismatch stops before signing consents.
@@ -6859,13 +8095,13 @@ Confirm before running. Gate: sign the three enrolment consents with the existin
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.2-consents 86030-consents)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.2-check-consents 86031-consent-checks)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected `ES256K`, purpose `arbiter-group-member-v1`, a string `cmd_hash`, one public consent per host and printed member/host/domain mapping exactly the ledger. The JWS binds a hash of network/genesis/host/member/public-key/replica-signer; decoding alone does not verify its signature, and `iat` is not expiry. The real loader/FSM verifies the signature under the committed host si_indexers signer. A mismatched statement, signer, purpose or malformed JWS is a stop before listing; regenerate only with new confirmation and retain prior evidence.
@@ -6879,13 +8115,13 @@ Confirm before running.
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.3-verifiers 86040-verifiers)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.3-diff 86041-verifier-diff)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 cp "$HOME/si-devnet2-stage3-p6/show-after-step4.json" "$HOME/si-devnet2-stage3-p6/task86-receipt-step4.json"
 ```
 
@@ -6895,6 +8131,7 @@ Require every served member field, not just the count, before the first rollout.
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 python3 -I - "$si_backup" <<'PY'
@@ -6921,6 +8158,7 @@ Capture the pre-placement block boundary once now, before the first host selecti
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 [ ! -e "$si_backup/task86-start-sealed" ]
@@ -6945,7 +8183,7 @@ For each x in b,c,a, first prepare/select exactly that host. A new subprocess do
 set -eo pipefail
 x=b; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-select 86050-select-b)"
-printf '%s\n' "$x" | bash -eo pipefail "$f"
+printf '%s\n' "$x" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f"
 ```
 
 Confirm before running. Gate: prepare and sign the b local service-plus-mirror commit. The runbook block runs the full render suite, verifies the exact two-file scope and signed poetry identity. Inspect its expected diff against the table above; any extra diff stops before push. This local commit does not authorise publication or sync.
@@ -6954,23 +8192,32 @@ Confirm before running. Gate: prepare and sign the b local service-plus-mirror c
 set -eo pipefail
 x=b; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-commit 86051-commit-b)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
-Confirm before running. Gate: publish only this signed b commit to current main. Do not force. After push, separately confirm syncing only b; the exact runbook block contains push followed by sync, so its execution requires both explicit confirmations in chat before running. A pushed-but-unsynced state is a stop/resume point, never a reason to replay the whole block blindly.
+Confirm before running. Gate: publish only this signed b commit to current main using the exact `5.4-push` block. Do not force. Publication and sync are distinct prepared blocks and each needs its own confirmation. A pushed-but-unsynced state is a stop/resume point; never replay either completed or ambiguous action. The producer action receipts remain authoritative for action recovery.
+
+```bash
+set -eo pipefail
+x=b; export x
+f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-push 86052-push-b)"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
+```
+
+Confirm before running. Gate: sync only b after its separately confirmed push completed; preserve action and head receipts. A nonzero or ambiguous action stops before identity checks or the next host.
 
 ```bash
 set -eo pipefail
 x=b; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-sync 86052-sync-b)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 x=b; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-identity 86053-identity-b)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 After b has passed Step6 below, the complete c sequence is:
@@ -6979,7 +8226,7 @@ After b has passed Step6 below, the complete c sequence is:
 set -eo pipefail
 x=c; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-select 86054-select-c)"
-printf '%s\n' "$x" | bash -eo pipefail "$f"
+printf '%s\n' "$x" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f"
 ```
 
 Confirm before running the separately approved c signed local commit.
@@ -6988,23 +8235,32 @@ Confirm before running the separately approved c signed local commit.
 set -eo pipefail
 x=c; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-commit 86055-commit-c)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
-Confirm before running. Gate: c publication and, with its own explicit confirmation already obtained, c-only sync.
+Confirm before running. Gate: publish only c through the exact `5.4-push` block. This does not approve its later sync.
+
+```bash
+set -eo pipefail
+x=c; export x
+f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-push 86056-push-c)"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
+```
+
+Confirm before running. Gate: sync only c after its separately confirmed push completed; preserve action and head receipts. A nonzero or ambiguous action stops before identity checks or the next host.
 
 ```bash
 set -eo pipefail
 x=c; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-sync 86056-sync-c)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 x=c; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-identity 86057-identity-c)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 After c has passed Step6, the complete a sequence is:
@@ -7013,7 +8269,7 @@ After c has passed Step6, the complete a sequence is:
 set -eo pipefail
 x=a; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-select 86058-select-a)"
-printf '%s\n' "$x" | bash -eo pipefail "$f"
+printf '%s\n' "$x" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f"
 ```
 
 Confirm before running the separately approved a signed local commit.
@@ -7022,23 +8278,32 @@ Confirm before running the separately approved a signed local commit.
 set -eo pipefail
 x=a; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-commit 86059-commit-a)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
-Confirm before running. Gate: a publication and, with its own explicit confirmation already obtained, a-only sync.
+Confirm before running. Gate: publish only a through the exact `5.4-push` block. This does not approve its later sync.
+
+```bash
+set -eo pipefail
+x=a; export x
+f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-push 86060-push-a)"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
+```
+
+Confirm before running. Gate: sync only a after its separately confirmed push completed; preserve action and head receipts. A nonzero or ambiguous action stops before identity checks or the next host.
 
 ```bash
 set -eo pipefail
 x=a; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-sync 86060-sync-a)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 x=a; export x
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.4-identity 86061-identity-a)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 - [ ] **Step 6: Per-host identity, Active count and no-ring proof before advancing**
@@ -7048,6 +8313,7 @@ Before Step5, write the following complete read-only helper as `$HOME/.cache/s3f
 ```bash
 set -eo pipefail
 x="${1:?host b, c or a required}"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 case "$x" in b) total=4 ;; c) total=5 ;; a) total=6 ;; *) exit 1 ;; esac
@@ -7065,7 +8331,7 @@ import json,sys
 from pathlib import Path
 r=Path(sys.argv[1]); x=sys.argv[2]; pool={'verifier-1','verifier-2','verifier-3'}
 identity=json.loads((r/f'member-identity-{x}.json').read_text()); assert identity['node_id']=='member-'+x
-features=json.loads((r/f'task86-features-{x}.json').read_text()); assert any(n['id']=='member-'+x and n['stage3'] for n in features['nodes'])
+features=json.loads((r/f'task86-features-{x}.json').read_text()); assert any(n['id']=='member-'+x and n['stage3'] is True for n in features['nodes'])
 before=json.loads((r/'task86-receipt-step4.json').read_text()); now=json.loads((r/f'task86-show-{x}.json').read_text()); assert before['epoch']==now['epoch'] and before['current']==now['current']
 assert not [json.loads(line) for line in (r/'groups.jsonl').read_text().splitlines() if 'owner' in json.loads(line)]
 for path in r.glob('task86-preplacement-block-*.json'):
@@ -7097,7 +8363,7 @@ Do not create writes merely to make a new block exist; the code inspects every b
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 5.5-verify 86069-members-complete)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected all three member identities verified and six Active verifiers. Keep MEMBERS_EPOCH as the observed receipt from the one verifier update; member registration does not change that consensus epoch. No ledger write occurs until placement and acceptance also pass.
@@ -7109,7 +8375,7 @@ Run the exact pure preview block and save its public output before the update:
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 6.1-preview 86070-preview)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected one preview group per (owner,database) with any Pending/Active/Retiring/Purging incarnation, genesis-origin included; Legacy/Refused-only databases absent. Each owner gets exactly the other two hosts members, sorted, fill true. Capture every host replica_hosts list before the switch. Check listed members are only self-operated enrolled hosts and committed failure-domain strings match the P4 ledger, not a reconstructed hostOf mapping. Stop for any omission, duplicate, unexpected candidate, wrong host/domain or lack of read candidates; do not rebalance to make the preview pass.
@@ -7123,13 +8389,13 @@ Confirm before running.
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 6.2-update 86080-placement)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 6.3-groups 86081-placement-groups)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Expected exact diff `stage3.placement` and epoch old+1, groups equal the saved preview, every ready_generation0, served host_indexer_id0 preserved, and the same replica_hosts per database as before placement. Readiness relates to hg_member_unsafe only; filtering hosts by MemberReady here is forbidden. The served placement cutover_block_seq equals cutover.txt and its own header has no group_key. Retain this receipt locally; no partial ledger publication.
@@ -7155,7 +8421,7 @@ PY
 export key_file
 (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.started")
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "user-$marker")"
-if bash -eo pipefail "$file"; then
+if python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file"; then
   printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.done"
 else
   echo 'unknown or failed INSERT: preserve evidence, inspect, never repeat blindly' >&2
@@ -7186,13 +8452,14 @@ Expected exactly one safe row for each value. Keep every original acceptance out
 ```bash
 set -eo pipefail
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 6.3-headers 86090-headers)"
-bash -eo pipefail "$f" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f" < /dev/null
 ```
 
 Then strengthen the acceptance proof using only the blocks actually captured for step5; a transition block or empty verify set alone cannot prove a statement was marked:
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"
 cd "$P"
 si_p6_capture
@@ -7217,7 +8484,8 @@ si_tracks > "$si_backup/task86-final-tracks.json"
 jq -e 'all(.indexers[];(.quarantined|not))' "$si_backup/task86-final-tracks.json"
 si_show > "$si_backup/task86-final-show.json"
 cp "$si_backup/show-after-step5.json" "$si_backup/task86-receipt-step5.json"
-[ -z "$(git status --porcelain)" ]
+si_read_86_492_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_86_492_1}" ] || exit 1
 ```
 
 Expected cutover header unkeyed, every subsequent sealed header keyed, three owners with actual marked pool-only acceptance blocks, unchanged per-database host lists, no quarantine and no unsafe member replica. No extra diagnostic promotion is allowed. Wait/read an existing status if marking is not yet complete; stop if it cannot be established within the window. Task87 starts no Keeper sampling as an authoritative successor until this task completes R4.
@@ -7236,22 +8504,62 @@ Write `$HOME/.cache/s3f-task86/record.py` with this complete source. It derives 
 
 ```python
 #!/usr/bin/env python3
-import json
+import json,re
 from pathlib import Path
+def u64(value):
+    assert type(value) is int or (isinstance(value,str) and re.fullmatch(r'0|[1-9][0-9]*',value)), 'invalid uint64 evidence'
+    number=int(value); assert 0<=number<2**64, 'uint64 evidence out of range'
+    return number
+def exact_json(left,right):
+    if type(left) is not type(right): return False
+    if isinstance(left,dict):
+        return left.keys()==right.keys() and all(exact_json(left[k],right[k]) for k in left)
+    if isinstance(left,list):
+        return len(left)==len(right) and all(exact_json(a,b) for a,b in zip(left,right))
+    return left==right
+def same_show(left,right,label):
+    assert u64(left['epoch'])==u64(right['epoch']), label+' epoch mismatch'
+    a=dict(left); b=dict(right); a.pop('epoch'); b.pop('epoch')
+    assert exact_json(a,b), label+' body mismatch'
+def current(show):
+    assert isinstance(show,dict) and isinstance(show['current'],dict)
+    value=dict(show['current']); value.pop('digest',None); return value
+def changed_only(before,after,step):
+    assert u64(after['epoch'])==u64(before['epoch'])+1
+    left,right=current(before),current(after)
+    if step==4:
+        pool=left.pop('verifiers'); members=right.pop('verifiers')
+        assert isinstance(pool,list) and len(pool)==3 and isinstance(members,list) and len(members)==6
+        assert all(isinstance(v,dict) and v.get('host_indexer_id') is None for v in pool)
+        assert exact_json([v for v in members if v.get('host_indexer_id') is None],pool), 'pool type or value changed'
+        assert len({v['node_id'] for v in members})==6
+    else:
+        left_stage=dict(left.pop('stage3')); right_stage=dict(right.pop('stage3'))
+        assert left_stage.pop('placement') is False and right_stage.pop('placement') is True
+        assert exact_json(left_stage,right_stage), 'placement update changed a sibling parameter'
+    assert exact_json(left,right), 'update changed an unrelated current field'
 r=Path.home()/'si-devnet2-stage3-p6'
 read=lambda n:json.loads((r/n).read_text())
 a=read('show-after-step4.json'); b=read('show-after-step5.json')
-assert a==read('task86-receipt-step4.json') and b==read('task86-receipt-step5.json')
+same_show(a,read('task86-receipt-step4.json'),'step4 receipt')
+same_show(b,read('task86-receipt-step5.json'),'step5 receipt')
 for n,after in ((4,a),(5,b)):
     before=read(f'show-before-step{n}.json')
-    assert int(after['epoch'])==int(before['epoch'])+1
+    changed_only(before,after,n)
     assert (r/f'verify-step{n}.txt').read_text().strip() and (r/f'diff-step{n}.txt').read_text().strip()
-assert read('show-before-step4.json')['current']==read('task86-start-show.json')['current']
-assert read('show-before-step5.json')['epoch']==a['epoch'] and read('show-before-step5.json')['current']==a['current']
-final=read('task86-final-show.json'); assert final['epoch']==b['epoch'] and final['current']==b['current']
+start=read('task86-start-show.json'); first=read('show-before-step4.json')
+assert u64(start['epoch'])==u64(first['epoch']), 'start epoch mismatch'
+assert exact_json(start['current'],first['current']), 'start current mismatch'
+continuity=read('show-before-step5.json')
+assert u64(continuity['epoch'])==u64(a['epoch']), 'continuity epoch mismatch'
+assert exact_json(continuity['current'],a['current']), 'continuity current mismatch'
+final=read('task86-final-show.json')
+assert u64(final['epoch'])==u64(b['epoch']), 'final epoch mismatch'
+assert exact_json(final['current'],b['current']), 'final current mismatch'
 assert b['current']['stage3']['placement'] is True
 switches=[s for s in b['stage3_state']['switches'] if s['switch_name']=='placement']; assert len(switches)==1
-cut=(r/'cutover.txt').read_text().strip(); assert cut.isdigit() and cut==str(switches[0]['cutover_block_seq']) and str(switches[0]['epoch'])==str(b['epoch'])
+cut=(r/'cutover.txt').read_text().strip(); assert re.fullmatch(r'0|[1-9][0-9]*',cut)
+assert u64(cut)==u64(switches[0]['cutover_block_seq']) and u64(switches[0]['epoch'])==u64(b['epoch'])
 commits=[]
 for x in 'bca':
     commit=(r/f'step4-{x}-commit').read_text().strip(); assert len(commit)==40 and all(c in '0123456789abcdef' for c in commit)
@@ -7262,11 +8570,12 @@ for x in 'bca':
     commits.append(x+':'+commit)
 assert (r/'task86-acceptance-rings.jsonl').read_text().strip()
 assert (r/'replica-hosts-before-step5.jsonl').read_bytes()==(r/'replica-hosts-step5.jsonl').read_bytes()
-pairs=[('MEMBERS_EPOCH',str(a['epoch'])),('PLACEMENT_EPOCH',str(b['epoch'])),('PLACEMENT_CUTOVER_BLOCK',cut)]
+pairs=[('MEMBERS_EPOCH',str(u64(a['epoch']))),('PLACEMENT_EPOCH',str(u64(b['epoch']))),('PLACEMENT_CUTOVER_BLOCK',str(u64(cut)))]
 L=Path.home()/'.cache/s3-ledger'; L.mkdir(mode=0o700,parents=True,exist_ok=True)
 text='; '.join(k+'='+v for k,v in pairs)+'; steps4 and5 individually confirmed under drain with exact one-field diffs; unchanged pool and three host-bound consent/key/domain bindings checked; consensus rollouts serial b,c,a (signed commits '+', '.join(commits)+'); host state unchanged, member UID replaced, registered Active VERIFIER/stage3_v1, no member unsafe replica or pre-placement ring; physical/genesis database preview matches placement, Legacy/Refused-only absent; served host0 preserved and replica_hosts unchanged before readiness; cutover header unkeyed, later headers keyed; 6501–6503 safe with marked pool-only acceptance blocks; no quarantined track; evidence $HOME/si-devnet2-stage3-p6.'
-(L/'record-86.md').write_text(text+'\n')
-(r/'task86-epoch-pairs').write_text(''.join(k+'='+v+'\n' for k,v in pairs))
+assert not (L/'record-86.md').exists() and not (r/'task86-epoch-pairs').exists(), 'record outputs already exist; reconcile the prior attempt'
+with (L/'record-86.md').open('x') as stream: stream.write(text+'\n')
+with (r/'task86-epoch-pairs').open('x') as stream: stream.write(''.join(k+'='+v+'\n' for k,v in pairs))
 print('three observed values ready; not recorded yet')
 ```
 
@@ -7284,19 +8593,36 @@ python3 -I "$L/s3-ledger.py" empty "$h" MEMBERS_EPOCH PLACEMENT_EPOCH PLACEMENT_
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-86 urwt/codex/multi-source-s3f-ledger-86 "$ref")"
 d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
+si_read_86_559_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_86_559_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_86_559_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_86_559_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_86_559_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_86_559_1}" = "${si_read_86_559_2}" ] && [ -z "${si_read_86_559_3}" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
 git -C "$d" config extensions.worktreeConfig true
 git -C "$d" config --worktree user.name poetry
 git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config --worktree commit.gpgsign true
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-86"
 pairs=()
 while IFS= read -r pair; do pairs+=("$pair"); done < "$HOME/si-devnet2-stage3-p6/task86-epoch-pairs"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" 86 "$L/record-86.md" "${pairs[@]}"
-[ "$(git -C "$d" diff --name-only)" = "$rel" ]
+si_read_86_568_1="$(git -C "$d" diff --name-only)" || exit 1
+[ "${si_read_86_568_1}" = "$rel" ] || exit 1
 git -C "$d" diff --check
-git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record MEMBERS_EPOCH, PLACEMENT_EPOCH and PLACEMENT_CUTOVER_BLOCK of Plan S3-F (Task 86)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+record86_before="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$record86_before" =~ ^[0-9a-f]{40}$ ]] || exit 1
+git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record MEMBERS_EPOCH, PLACEMENT_EPOCH and PLACEMENT_CUTOVER_BLOCK of Plan S3-F (Task 86)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel" || exit 1
+record86_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$record86_head" =~ ^[0-9a-f]{40}$ ]] && [ "$record86_head" != "$record86_before" ] || exit 1
+git -C "$d" verify-commit "$record86_head" || exit 1
+record86_clean="$(git -C "$d" status --porcelain)" || exit 1
+[ -z "$record86_clean" ] || exit 1
+(set -C; printf '%s\n' "$record86_head" > "$L/record-86-head") || exit 1
+si_read_86_571_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_86_571_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_86_572_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_86_572_1}" = G ] || exit 1
 ```
 
 Expected three observed rows and one run item recorded in one signed plan-only commit. `no plan 's3f'`, an already-recorded row, duplicate name, nonmatching ref or a signing error stops. Do not edit Appendix C manually, push a different branch or amend an existing recorded value.
@@ -7309,13 +8635,27 @@ Confirm before running. Gate: publish only the observed Task 86 record to the ex
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-86")"; ref="$(sed -n 2p "$L/record-86")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] && [ "$(git -C "$d" log -1 --format=%G?)" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+si_read_86_585_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+si_read_86_585_2="$(git -C "$d" status --porcelain)" || exit 1
+si_read_86_585_3="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+si_read_86_585_4="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_86_585_1}" = 1 ] && [ -z "${si_read_86_585_2}" ] && [ "${si_read_86_585_3}" = 'poetry <chen@sentio.xyz>' ] && [ "${si_read_86_585_4}" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+record86_head="$(cat "$L/record-86-head")" || exit 1
+[[ "$record86_head" =~ ^[0-9a-f]{40}$ ]] || exit 1
+record86_current="$(git -C "$d" rev-parse HEAD)" || exit 1
+[ "$record86_current" = "$record86_head" ] || exit 1
+git -C "$d" verify-commit "$record86_head" || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
+  record86_branch="$(git -C "$d" symbolic-ref --short HEAD)" || exit 1
+  [ -n "$record86_branch" ] || exit 1
+  record86_target="refs/heads/$record86_branch"
 else
   [ "$ref" = origin/urwt/claude/ms-si-stage3-plans-cf ] || { echo 'unexpected ledger branch'; exit 1; }
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  record86_target="refs/heads/${ref#origin/}"
 fi
+git -C "$d" push origin "$record86_head:$record86_target" || exit 1
+record86_remote="$(git -C "$d" ls-remote --exit-code origin "$record86_target")" || exit 1
+[ "$record86_remote" = "$(printf '%s\t%s' "$record86_head" "$record86_target")" ] || { echo 'published ledger head differs; stop'; exit 1; }
 ```
 
 For `origin/main` only, obtain a separate confirmation to create the housegate docs PR:
@@ -7338,42 +8678,65 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-86")"; ref="$(sed -n 2p "$L/record-86")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-86-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+pr="$(gh pr view "$(cat "$L/record-86-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_86_615_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_86_615_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_86_615_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_86_615_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_615_1}" = "${si_read_86_615_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate --watch --fail-fast
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/reviews" > "$L/record-86-reviews.json"
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/comments" > "$L/record-86-comments.json"
 ```
 
-Confirm before running. Gate: squash merge this single Task 86 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The REST validator rejects empty/malformed/truncated listings and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
+Confirm before running. Gate: squash merge this single Task 86 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The canonical FINALv2 REST validator (C1 Task 25; source SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`) rejects empty/malformed/truncated listings, non-string or duplicate commit SHAs, a final listed SHA unequal to the checked head, and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
 
 ```bash
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-86")"; ref="$(sed -n 2p "$L/record-86")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-86-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash
+pr="$(gh pr view "$(cat "$L/record-86-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_86_629_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_86_629_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_86_629_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_86_629_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_629_1}" = "${si_read_86_629_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_86_632_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_86_632_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_632_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_86_651_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_86_651_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_651_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr checks "$pr" --repo housegate/housegate || exit 1
+si_read_86_653_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_86_653_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_653_1}" = "$expected_head" ] || { echo 'local head changed; repeat review; stop'; exit 1; }
+si_read_86_654_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_86_654_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_86_654_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 - [ ] **Step 14: R4 — read back the exact recorded epochs before handing off**
@@ -7393,28 +8756,56 @@ printf 'Task 86 R4: three observed values verified from the remote ledger copy\n
 
 Expected exact three `NAME=value` lines matching the observed show receipts and served cutover. Task 86 ends only here. Task 87 fetches main and reads these names from the ledger copy anew; it reuses this clean detached live checkout, helper files, pins and evidence without overwriting or rerunning preparation. Keeper mutations, si_member_ddl and reconcilers remain unauthorised until Task87’s separate user/K86 gates. The promotion budget and K86 owner agreement remain binding; this task has not approved either a voter resize or the later shared-Keeper rollout.
 
-**Draft verification:** Rehearse the actual Task84 serializers on a scratch current-main-plus-pending-chain production export at P5_END, running the full `test_render.py` at the initial state and after C-b, C-c, C-a. Inspect each exact two-file diff and rendered host/member resources; no host checksum change, key mount in si-member alone, no reconciler, P5 image unchanged. Run Bash3.2/Bash5 parsers on every actual block and fish -n on user fences, plus local fixtures for host0/physical placement coverage, wrong readiness, changed pool, exact recorded epochs and unknown outcomes. These are local verifications, not a live operation or evidence of an executed ledger row. Record observed base SHAs and outcomes in AppendixB during implementation; never fill execution cells from a rehearsal.
+**Execution revalidation:** Rehearse the actual Task84 serializers on a scratch current-main-plus-pending-chain production export at P5_END, running the full `test_render.py` at the initial state and after C-b, C-c, C-a. Inspect each exact two-file diff and rendered host/member resources; no host checksum change, key mount in si-member alone, no reconciler, P5 image unchanged. Run Bash3.2/Bash5 parsers on every actual block and fish -n on user fences, plus local fixtures for host0/physical placement coverage, wrong readiness, changed pool, exact recorded epochs and unknown outcomes. These are local verifications, not a live operation or evidence of an executed ledger row. Record observed base SHAs and outcomes in AppendixB during implementation; never fill execution cells from a rehearsal.
 
 ---
 
 ## Task 87: devnet2 — Keeper headroom gate, then step 6: member replicas and readiness (S3-F)
+
+**Execution prerequisites.** Require actual Task86 R4 and the accepted immutable Task84/85 source/helper/extractor chain. Execute only separately confirmed publish/dry-run/apply/sync phase bodies, never original combined markers or edited/stubbed bodies. Missing producer custody stops; fresh budget captures precede each private acceptance, and optional writes retain the same guards without extra diagnostic INSERTs. K86 requires actual user/owner agreement and the full seven-day envelope; shortfall stops for the voter-sizing decision. Signing cancellation stops for the user to unlock the actual repository key, with no unsigned fallback.
+
+
+
+
+
+
 
 Execute the merged Task 84 runbook §§7–8 after Task 86 completed R4 for MEMBERS_EPOCH, PLACEMENT_EPOCH and PLACEMENT_CUTOVER_BLOCK. Spec §10.4 fixes this non-switch step between placement and reselection; spec §§8.2–8.3 fix its two-user split and §16 P6 requires measured shared-Keeper headroom. Contract §§58–61, K86, D24, D27, D29, D30, D34 and D40 bind. No new code, release, consensus parameter update, voter resize or membership change is made. The changes are exactly three DDL-user installations, then three reconciler starts, all b → c → a, one service and one test mirror per signed commit. MemberReady is irreversible and may seal an open block; a stopped rollout is repaired forward under §15.4, never by deleting replicas or switching placement off.
 
 **Files:**
 - Read: production `docs/storage-integrity-devnet2-stage3-p6-switches.md`, its complete §0 chain and the recorded P5 pins; `charts/storage-integrity/tests/test_render.py` and Task 83's exact serializers/constants.
 - Modify, one service at a time: `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2-indexer-b-source.yaml`, `storage-integrity-si-v2-indexer-c-source.yaml`, `storage-integrity-si-v2.yaml` (DDL users); `k8s-sea/sentio-network-devnet2/sentio-node-indexer-b-storage-integrity-si-v2.yaml`, `sentio-node-indexer-c-storage-integrity-si-v2.yaml`, `sentio-node-indexer-a-storage-integrity-si-v2.yaml` (reconcilers); `charts/storage-integrity/tests/test_render.py` in each of those six commits. Nothing under `k8s-sea/clickhouse` is modified.
-- Create locally, never commit: `$HOME/.cache/s3f-task87/{run.sh,verify.py,record.py}` and `$HOME/si-devnet2-stage3-p6/{task87-*,keeper-*,member-ddl-*,member-replicas-*,owner-replicas-after-*,ready-*,rings-after-*,replica-hosts-after-*}`. User-generated hash files remain mode 600. Password bytes never enter these files, logs, argv, agent processes, git or chat.
+- Create locally, never commit: `$HOME/.cache/s3f-task87/{run.sh,custody.py,budget.py,verify.py,record.py}` and `$HOME/si-devnet2-stage3-p6/{task87-*,keeper-*,member-ddl-*,member-replicas-*,owner-replicas-after-*,ready-*,rings-after-*,replica-hosts-after-*}`. User-generated hash files remain mode 600. Password bytes never enter these files, logs, argv, agent processes, git or chat.
 - Modify only through R1–R4: housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md`, Appendix C rows KEEPER_HEADROOM and STEP6_END and the one `Keeper headroom gate and step 6 run (Task 87)` record.
 
 **Interfaces:**
 - Consumes the Task 85 pins/extractor at `$HOME/.cache/s3f-task85/{live-path,prepare.py}`, the existing evidence directory and full thirteen-runbook helpers (`helpers.sh`, sets P), Task 86's remote-ledger values and actual placement/registration/replica-hosts evidence. Reuses the clean detached codex URWT checkout whose path came from the creator's JSON; never creates a claude-runtime checkout, assumes a static path, resets a dirty checkout or reruns the first pins block.
-- Consumes exact Task 84 markers `7.1-sample`, `7.2-project`, `7.3-verdict`, `8.2-select`, `8.2-commit`, `8.2-apply`, `8.2-read`, `8.2-probe`, `8.3-select`, `8.3-commit`, `8.3-sync`, `8.3-hour`, `8.4-lists`, `8.4-all-ready`, `8.4-accept-a`, `8.4-accept-b`, `8.4-accept-c`, `8.4-rings`, `8.5-keeper`. User actions are the two fish blocks of §§7.2 and 8.1, split into separately confirmed actions below without changing their script arguments.
+- Consumes exact Task 84 markers `7.1-sample`, `7.2-project`, `7.3-verdict`, `8.2-select`, `8.2-commit`, `8.2-push`, `8.2-dry-run`, `8.2-apply`, `8.2-read`, `8.2-probe`, `8.3-select`, `8.3-commit`, `8.3-push`, `8.3-sync`, `8.3-hour`, `8.4-lists`, `8.4-all-ready`, `8.4-accept-a`, `8.4-accept-b`, `8.4-accept-c`, `8.4-rings`, `8.5-keeper`. User actions are the two fish blocks of §§7.2 and 8.1, split into separately confirmed actions below without changing their script arguments.
 - Produces the observed gate date and observed completion date as local receipts first; atomically records both owned ledger names only after every user probe, hour, readiness, acceptance, ring and final Keeper check passes. KEEPER_HEADROOM is not published before STEP6_END exists. The next live task waits for this task's R4, not a local receipt.
 
 **Stops and execution discipline.** Write every task Bash block to its own new local block file and run it using Bash; do not wrap a block containing its own heredoc inside an outer heredoc. Runbook bodies are extracted verbatim by Task 85's hash-bound exact-marker extractor. `run.sh` below only prepares/executes the explicitly chosen body under the applicable step's confirmation; a mutating body has a `.started` marker and is never blindly retried. Existing evidence means deliberate resume, not overwrite. Preserve failures and unknown outcomes. Every push, CHI dry-run/apply, Helm sync, probe and keyed INSERT has separate explicit user confirmation in chat; an earlier plan-writing approval authorises none of these future operations. Do not merge any planning-stack PR. No cluster or cloud operation is performed while drafting/reviewing this task.
 
 K86 remains an explicit stop for the user to agree the exact thresholds with the clickhouse-extra owner. A stored agreement file alone is not proof the owner agreed: inspect its actual public text and time. Do not contact the owner or accept an agent-authored approval. A capacity shortfall stops before any DDL login; the user decides a separate capacity change, never an automatic resize, Keeper edit, threshold relaxation or znode deletion. Never run helmfile against `k8s-sea/clickhouse`.
+
+Before Step 1, write the following complete local checker to `$HOME/.cache/s3f-task87/custody.py`. It consumes Task85's actual schema2 manifest and expected phase-head chain through the pinned producer's complete verify API; it creates no manifest or phase receipt. The bootstrap checks the existing manifest schema and extractor digest before invoking the producer. Missing or changed custody remains an execution stop; never initialise a new manifest or replace the original run ID here. Actual accepted source and Task86 R4 remain prerequisites.
+
+```python
+#!/usr/bin/env python3
+import hashlib,json,os,stat,subprocess,sys
+from pathlib import Path
+T=Path.home()/'.cache/s3f-task85';R=Path.home()/'si-devnet2-stage3-p6'
+def read(path):
+ s=path.lstat();assert stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid() and not stat.S_IMODE(s.st_mode)&0o022
+ with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW),'rb') as stream:
+  actual=os.fstat(stream.fileno());assert (actual.st_dev,actual.st_ino)==(s.st_dev,s.st_ino)
+  return stream.read()
+assert sys.argv[1:]==['check']
+manifest=json.loads(read(R/'task85-custody.json'))
+assert manifest['schema']==2
+assert hashlib.sha256(read(T/'prepare.py')).hexdigest()==manifest['extractor_sha256'],'Task85 extractor changed'
+subprocess.run([sys.executable,'-I',str(T/'prepare.py'),'verify'],check=True)
+print('Task87 actual Task85 schema2 manifest and expected phase HEAD verified')
+```
 
 - [ ] **Step 1: Reuse the recorded live path, verify predecessor R4 and prepare the exact-block runner**
 
@@ -7432,15 +8823,29 @@ python3 -I "$L" get "$h" MEMBERS_EPOCH PLACEMENT_EPOCH PLACEMENT_CUTOVER_BLOCK >
 python3 -I "$L" empty "$h" KEEPER_HEADROOM STEP6_END
 [ "$(wc -l < "$T/predecessor-ledger" | tr -d ' ')" = 3 ]
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || { echo 'dirty live checkout: stop'; exit 1; }
-[ "$(git -C "$W" rev-parse --abbrev-ref HEAD)" = HEAD ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: reconcile before continuing; never reset'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$W" rev-parse origin/main)" ] || exit 1
+si_read_87_58_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_58_1}" ] || { echo 'dirty live checkout: stop'; exit 1; }
+si_read_87_59_1="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+[ "${si_read_87_59_1}" = HEAD ] || exit 1
+si_read_87_60_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_60_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_60_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_60_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_60_1}" = "${si_read_87_60_2}" ] || { echo 'main moved: reconcile before continuing; never reset'; exit 1; }
+si_read_87_61_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_61_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_61_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_61_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_61_1}" = "${si_read_87_61_2}" ] || exit 1
 git -C "$W" config extensions.worktreeConfig true
 git -C "$W" config --worktree user.name poetry
-git -C "$W" config --worktree user.email chen@sentio.xyz
-[ "$(git -C "$W" config --worktree user.name) <$(git -C "$W" config --worktree user.email)>" = 'poetry <chen@sentio.xyz>' ] || exit 1
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+si_read_87_66_1="$(git -C "$W" config --worktree user.name)" || exit 1
+si_read_87_66_2="$(git -C "$W" config --worktree user.email)" || exit 1
+[ "${si_read_87_66_1} <${si_read_87_66_2}>" = 'poetry <chen@sentio.xyz>' ] || exit 1
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 [ "$(type -t si_keeper_exists)" = function ] || { echo 'reviewed Keeper existence helper is missing: stop for Task84 correction and approved helper rebuild'; exit 1; }
 [ "$P" = "$W" ] || exit 1
 cd "$W"
@@ -7449,7 +8854,9 @@ si_p6_verify 5 | tee "$si_backup/task87-entry.txt"
 python3 -I - "$si_backup" "$T/predecessor-ledger" <<'EOF'
 import json,sys
 from pathlib import Path
-r=Path(sys.argv[1]); pairs=dict(x.split('=',1) for x in Path(sys.argv[2]).read_text().splitlines())
+r=Path(sys.argv[1]); rows=Path(sys.argv[2]).read_text().splitlines(); assert len(rows)==3
+pairs=dict(x.split('=',1) for x in rows); assert set(pairs)=={'MEMBERS_EPOCH','PLACEMENT_EPOCH','PLACEMENT_CUTOVER_BLOCK'} and all(v.isdigit() for v in pairs.values())
+assert (r/'task86-ledger-readback').read_text()==Path(sys.argv[2]).read_text(), 'Task86 R4 mismatch'
 s=json.loads((r/'show.json').read_text()); previous=json.loads((r/'show-after-step5.json').read_text())
 assert str(s['epoch'])==pairs['PLACEMENT_EPOCH']==str(previous['epoch'])
 assert s['current']==previous['current'], 'unrelated governance change since Task86'
@@ -7473,29 +8880,50 @@ Expected all three names recorded remotely, current placement epoch/cutover iden
 set -eo pipefail
 umask 077
 R="$HOME/si-devnet2-stage3-p6"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
 marker="${1:?exact marker}"; label="${2:?unique label}"; x="${3:-}"
+[[ "$label" =~ ^[A-Za-z0-9.-]+$ ]] || exit 1
 case "$marker" in
   7.1-sample|7.2-project|7.3-verdict|8.4-all-ready|8.4-rings|8.5-keeper) mode="read" ;;
   8.2-select|8.2-read|8.3-select|8.3-hour|8.4-lists) mode="read"; case "$x" in b|c|a) ;; *) exit 1 ;; esac ;;
-  8.2-commit|8.2-apply|8.2-probe|8.3-commit|8.3-sync) mode="write"; case "$x" in b|c|a) ;; *) exit 1 ;; esac ;;
+  8.2-dry-run) mode="write"; case "$x" in b|c) ;; *) exit 1 ;; esac ;;
+  8.2-push|8.2-apply|8.3-push|8.3-sync|8.2-commit|8.2-probe|8.3-commit) mode="write"; case "$x" in b|c|a) ;; *) exit 1 ;; esac ;;
   *) echo 'not a Task87 non-keyed marker'; exit 1 ;;
 esac
-file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "$label")"
+file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "$label")" || exit 1
+python3 -I - "$file" "$marker" <<'PHASE87'
+import pathlib,re,sys
+text=pathlib.Path(sys.argv[1]).read_text();marker=sys.argv[2]
+if marker in ('8.2-commit','8.3-commit'):
+ op='D' if marker=='8.2-commit' else 'R'
+ before='python3 -I "$HOME/.cache/s3f-task85/prepare.py" plan-head "'+op+'-$x" || exit 1'
+ after='python3 -I "$HOME/.cache/s3f-task85/prepare.py" advance-head "'+op+'-$x" || exit 1'
+ rollout='si_p6_rollout "'+op+'-$x"'
+ assert text.count(before)==text.count(after)==text.count(rollout)==1, 'missing schema2 phase hooks'
+ assert text.index(rollout)<text.index(before)<text.index('si_p6_commit ')<text.index(after), 'schema2 commit hook order'
+if marker in ('8.2-push','8.3-push'):
+ assert text.count('si_p6_action ')==1 and ' push git push origin HEAD:main' in text
+ assert 'helmfile' not in text and 'si_kubectl apply' not in text
+elif marker in ('8.2-dry-run','8.2-apply','8.3-sync'):
+ assert 'git push' not in text and 'si_p6_action ' in text
+ if marker=='8.2-dry-run': assert '--dry-run=server' in text
+ if marker=='8.2-apply': assert '--dry-run' not in text
+PHASE87
 if [ "$mode" = write ]; then
   receipt="$R/task87-$marker-$x.started"
   (set -C; printf '%s
-' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$receipt")
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$receipt") || exit 1
 fi
 export x
 if [ "$marker" = 8.2-select ] || [ "$marker" = 8.3-select ]; then
   printf '%s
-' "$x" | bash -eo pipefail "$file"
+' "$x" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" || exit 1
 else
-  bash -eo pipefail "$file" < /dev/null
+  python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null || exit 1
 fi
 if [ "$mode" = write ]; then
-  printf '%s
-' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/task87-$marker-$x.done"
+  (set -C; printf '%s
+' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/task87-$marker-$x.done") || exit 1
 fi
 ```
 
@@ -7557,8 +8985,12 @@ def keeper(name,baseline=False):
             need(avg*scale<=10 and outstanding*scale<=10,'Keeper projected request pressure')
     need(all(sorted(x[1] for x in rs)==['0','1','2'] and sum(x[2]=='leader' for x in rs)==1 for rs in buckets.values()),'incomplete/duplicate replica sample')
     times=sorted(buckets)
+    for replica in '012':
+        observed=[row for row in rows if row[1]==replica]
+        need(len({(row[2],row[13]) for row in observed})==1,'Keeper baseline role/restart changed')
     if baseline:
         need(len(times)>=7 and times[-1]-times[0]>=86400,'24h boundary missing')
+        need(all(0<b-a<=14400 for a,b in zip(times,times[1:])),'baseline four-hour monitoring gap')
         need({min((x-times[0])//14400,5) for x in times}==set(range(6)),'missing four-hour window')
     else:
         base=table('keeper-baseline.tsv')
@@ -7777,7 +9209,8 @@ Read the public text/time; refuse blank text, a generic operator note or an agre
 ```bash
 set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 7.3-verdict 8703-verdict
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 si_keeper_abort "$si_backup/keeper-baseline.tsv" "$si_backup/keeper-baseline.tsv"
 python3 -I - "$si_backup" <<'EOF'
 import csv,datetime,json,sys
@@ -7859,11 +9292,35 @@ Confirm before running. Gate: push this one signed D-b commit to freshly fetched
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-indexer-b-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_515_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_515_1}" ] || exit 1
+si_read_87_516_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_516_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_516_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_516_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_516_1}" = "${si_read_87_516_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_517_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_517_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_517_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-indexer-b-commit")" ] || exit 1
+si_read_87_518_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_518_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_519_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_519_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.2-push 8705-D-b-push b
+```
+
+Confirm before running. Gate: only the separately published b CHI server dry-run; no actual apply.
+
+```bash
+set -eo pipefail
+bash "$HOME/.cache/s3f-task87/run.sh" 8.2-dry-run 8705-D-b-dry-run b
+```
+
+Confirm before running. Gate: only this host’s already-published apply after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.2-apply 8705-D-b-apply b
 ```
 
@@ -7901,11 +9358,35 @@ Confirm before running. Gate: push this one signed D-c commit to freshly fetched
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-indexer-c-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_572_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_572_1}" ] || exit 1
+si_read_87_573_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_573_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_573_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_573_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_573_1}" = "${si_read_87_573_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_574_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_574_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_574_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-indexer-c-commit")" ] || exit 1
+si_read_87_575_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_575_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_576_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_576_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.2-push 8705-D-c-push c
+```
+
+Confirm before running. Gate: only the separately published c CHI server dry-run; no actual apply.
+
+```bash
+set -eo pipefail
+bash "$HOME/.cache/s3f-task87/run.sh" 8.2-dry-run 8705-D-c-dry-run c
+```
+
+Confirm before running. Gate: only this host’s already-published apply after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.2-apply 8705-D-c-apply c
 ```
 
@@ -7943,11 +9424,28 @@ Confirm before running. Gate: push this one signed D-a commit to freshly fetched
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-network-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_629_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_629_1}" ] || exit 1
+si_read_87_630_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_630_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_630_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_630_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_630_1}" = "${si_read_87_630_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_631_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_631_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_631_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-ddl-network-commit")" ] || exit 1
+si_read_87_632_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_632_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_633_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_633_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.2-push 8705-D-a-push a
+```
+
+Confirm before running. Gate: only this host’s already-published apply after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.2-apply 8705-D-a-apply a
 ```
 
@@ -8001,11 +9499,28 @@ Confirm before running. Gate: push this single signed R-b commit without force. 
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-b-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_695_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_695_1}" ] || exit 1
+si_read_87_696_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_696_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_696_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_696_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_696_1}" = "${si_read_87_696_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_697_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_697_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_697_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-b-commit")" ] || exit 1
+si_read_87_698_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_698_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_699_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_699_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.3-push 8706-R-b-push b
+```
+
+Confirm before running. Gate: only this host’s already-published sync after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.3-sync 8706-R-b-sync b
 ```
 
@@ -8013,7 +9528,8 @@ Read-only bounded convergence wait first (no writes/restarts), then the one-hour
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=b
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
@@ -8034,21 +9550,12 @@ Keeper abort is immediate for working set>2GiB, average latency>max(10ms, twice 
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=b
 si_pod_state "sentio-node-devnet2-indexer-$x-0" > "$si_backup/task87-host-hour-$x.txt"
 cmp "$si_backup/host-before-R-$x.txt" "$si_backup/task87-host-hour-$x.txt"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
 si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
 si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
@@ -8078,11 +9585,28 @@ Confirm before running. Gate: push this single signed R-c commit without force. 
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-c-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_772_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_772_1}" ] || exit 1
+si_read_87_773_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_773_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_773_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_773_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_773_1}" = "${si_read_87_773_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_774_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_774_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_774_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-c-commit")" ] || exit 1
+si_read_87_775_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_775_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_776_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_776_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.3-push 8706-R-c-push c
+```
+
+Confirm before running. Gate: only this host’s already-published sync after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.3-sync 8706-R-c-sync c
 ```
 
@@ -8090,7 +9614,8 @@ Read-only bounded convergence wait first (no writes/restarts), then the one-hour
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=c
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
@@ -8111,21 +9636,12 @@ Keeper abort is immediate for working set>2GiB, average latency>max(10ms, twice 
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=c
 si_pod_state "sentio-node-devnet2-indexer-$x-0" > "$si_backup/task87-host-hour-$x.txt"
 cmp "$si_backup/host-before-R-$x.txt" "$si_backup/task87-host-hour-$x.txt"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
 si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
 si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
@@ -8155,11 +9671,28 @@ Confirm before running. Gate: push this single signed R-a commit without force. 
 set -eo pipefail
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 git -C "$W" fetch -q origin main
-[ -z "$(git -C "$W" status --porcelain)" ] || exit 1
-[ "$(git -C "$W" rev-parse HEAD^)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: stop before publishing'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-a-commit")" ] || exit 1
-[ "$(git -C "$W" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] || exit 1
-[ "$(git -C "$W" log -1 --format=%G?)" = G ] || exit 1
+si_read_87_849_1="$(git -C "$W" status --porcelain)" || exit 1
+[ -z "${si_read_87_849_1}" ] || exit 1
+si_read_87_850_1="$(git -C "$W" rev-parse HEAD^)" || exit 1
+[[ "$si_read_87_850_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_850_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_87_850_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_850_1}" = "${si_read_87_850_2}" ] || { echo 'main moved: stop before publishing'; exit 1; }
+si_read_87_851_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_851_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_851_1}" = "$(cat "$HOME/si-devnet2-stage3-p6/step6-reconciler-a-commit")" ] || exit 1
+si_read_87_852_1="$(git -C "$W" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_852_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_853_1="$(git -C "$W" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_853_1}" = G ] || exit 1
+git -C "$W" verify-commit HEAD || exit 1
+bash "$HOME/.cache/s3f-task87/run.sh" 8.3-push 8706-R-a-push a
+```
+
+Confirm before running. Gate: only this host’s already-published sync after its matching successful phase receipts; never repush or batch another host.
+
+```bash
+set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.3-sync 8706-R-a-sync a
 ```
 
@@ -8167,7 +9700,8 @@ Read-only bounded convergence wait first (no writes/restarts), then the one-hour
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=a
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
@@ -8188,21 +9722,12 @@ Keeper abort is immediate for working set>2GiB, average latency>max(10ms, twice 
 
 ```bash
 set -eo pipefail
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 x=a
 si_pod_state "sentio-node-devnet2-indexer-$x-0" > "$si_backup/task87-host-hour-$x.txt"
 cmp "$si_backup/host-before-R-$x.txt" "$si_backup/task87-host-hour-$x.txt"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
-si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
-case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
-si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
-cmp "$si_backup/member-replicas-$x.tsv" "$si_backup/task87-member-end-$x.tsv"
-cmp "$si_backup/owner-replicas-after-$x.tsv" "$si_backup/task87-owners-end-$x.tsv"
 si_member_ch "$x" "SELECT table,replica_name,zookeeper_path,is_readonly FROM system.replicas WHERE database='hg_member_unsafe' ORDER BY table FORMAT TSV" > "$si_backup/task87-member-end-$x.tsv"
 case "$x" in b) done_hosts=(b) ;; c) done_hosts=(b c) ;; a) done_hosts=(b c a) ;; esac
 si_unsafe_replicas "${done_hosts[@]}" > "$si_backup/task87-owners-end-$x.tsv"
@@ -8213,6 +9738,28 @@ python3 -I "$HOME/.cache/s3f-task87/verify.py" hour "$x"
 ```
 
 Expected: hg_member_unsafe has exactly one writable replica named member-x for each physical SI table in the member’s current groups, on the registry incarnation’s exact chroot-relative scoped/unscoped path. ClickHouse system.replicas.zookeeper_path is `/sentio/0/unsafe_inc/<db__table>/<seq>` or `/sentio/0/unsafe/<db__table>`; the configured Keeper root is separate. Raw Keeper commands use the ledger root plus that relative path. Do not prepend KEEPER_ROOT when comparing the ClickHouse row, accept an arbitrary matching suffix, or treat a doubled root as the right table. Owner-side replica names must be the owner’s SNode, verifier1..3 and only the already-started current members. Owner a/b/c counts after b are5/4/5; after c6/5/5; after a6/6/6, not6 at every intermediate stage. `ready_generation` must equal current generation for every started member’s group. A missing physical table, extra stale replica, wrong replica identity/path, readonly table, empty/duplicated row or missing group/readiness stops. `replica_hosts` must remain byte-identical to Task86 step5 for all three hosts: it lists every current member host, not ready-only members. `group_switch` seals are expected only while an owner’s databases differ in ready verify sets. Preserve intermediate groups/readiness even if no statement block was produced during that hour; never spend unbudgeted promotions to manufacture a ring sample.
+
+Write this complete local public-input guard to `$HOME/.cache/s3f-task87/budget.py`. Its JSON inputs must be the actual inherited CRC/Size-checked estimator outputs; passing synthetic JSON here establishes no live capacity. It retains the original network-wide seven-day forecast plus six lifecycle units and eighteen acceptance writes, subtracting only actual global promotion spend. It never increases the forecast or chooses a resize.
+
+```python
+#!/usr/bin/env python3
+import json,sys
+from pathlib import Path
+R=Path.home()/'si-devnet2-stage3-p6';fresh=Path(sys.argv[1])
+def integer(v):
+ assert isinstance(v,int) and not isinstance(v,bool) and v>=0
+ return v
+def number(path):
+ v=path.read_text();assert v.endswith('\n') and v[:-1].isdigit();return int(v[:-1])
+initial=json.loads((R/'budget.txt').read_text().splitlines()[-1]);current=json.loads((fresh/'budget.txt').read_text().splitlines()[-1])
+forecast=number(R/'soak-promotions-upper-bound');start=number(R/'traffic-start-seq');live=number(fresh/'budget-live-seq')
+assert live>=start,'live sequence precedes original budget anchor'
+spent=live-start;envelope=24+forecast
+assert spent<=envelope,'original full-run promotion envelope exhausted: user decision required'
+remaining=envelope-spent
+assert remaining<=integer(current['half_budget']) and remaining<=integer(initial['half_budget'])-spent,'budget shortfall: ask user about voter sizing'
+print('original full-run forecast and original/fresh half-budget caps verified')
+```
 
 - [ ] **Step 7: All-ready proof and three private-terminal acceptance writes**
 
@@ -8232,7 +9779,12 @@ R="$HOME/si-devnet2-stage3-p6"
 marker="${1:?one step6 marker}"
 case "$marker" in 8.4-accept-a|8.4-accept-b|8.4-accept-c) ;; *) exit 1 ;; esac
 [ -t 0 ] || { echo 'user private terminal required'; exit 1; }
-python3 -I "$HOME/.cache/s3f-task87/verify.py" preaccept
+python3 -I "$HOME/.cache/s3f-task87/verify.py" preaccept || exit 1
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
+budget_dir="$(mktemp -d "$R/task87-budget-$marker.XXXXXX")" || exit 1
+( si_backup="$budget_dir"; si_budget_capture && si_budget_v21 > "$budget_dir/budget.txt" ) || exit 1
+python3 -I "$HOME/.cache/s3f-task87/budget.py" "$budget_dir" || exit 1
 printf 'Existing devuser1 owner key file path (never contents): ' >&2
 IFS= read -r key_file
 python3 -I - "$key_file" <<'EOF'
@@ -8242,7 +9794,7 @@ EOF
 export key_file
 (set -C; date -u +%Y-%m-%dT%H:%M:%SZ > "$R/user-$marker.started")
 f="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "user-$marker")"
-if bash -eo pipefail "$f"; then
+if python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$f"; then
   date -u +%Y-%m-%dT%H:%M:%SZ > "$R/user-$marker.done"
 else
   echo 'failed or outcome unknown: retain evidence; no blind retry'; exit 1
@@ -8282,7 +9834,8 @@ Expected a nonempty actually marked acceptance block for each owner with eligibl
 ```bash
 set -eo pipefail
 bash "$HOME/.cache/s3f-task87/run.sh" 8.5-keeper 8708-final-keeper
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"
+python3 -I "$HOME/.cache/s3f-task87/custody.py" check || exit 1
+source "$HOME/si-devnet2-stage3-p6/helpers.sh" || exit 1
 cd "$P"
 si_p6_verify 6 | tee "$si_backup/task87-final-state.txt"
 si_show > "$si_backup/task87-final-show.json"
@@ -8327,7 +9880,8 @@ hashes={f:hashlib.sha256((r/f).read_bytes()).hexdigest() for f in files}
 commits={f'{op}-{x}':(r/(f'step6-ddl-'+{'b':'indexer-b','c':'indexer-c','a':'network'}[x]+'-commit' if op=='D' else f'step6-reconciler-{x}-commit')).read_text().strip() for op in ('D','R') for x in 'bca'}
 text='; '.join(pairs)+'; 24-hour seven-boundary three-replica baseline; maxima '+json.dumps(peaks,sort_keys=True)+'; projection Z+SI*(6/4-1), working<=2GiB, data/du<=1GiB, du<=free/2, latency<=10ms, outstanding<=10; user/owner agreement: '+(r/'keeper-thresholds-agreed.txt').read_text().strip()+'; three DDL grants/probes497 and452 passed, b/c/a one service each; three full-hour reconciler windows passed, no CHI/SNode restart or Keeper UID/leader/restart change; staged owner replica counts5/4/5 then6/5/5 then6/6/6, exact member paths/readiness, unchanged replica_hosts;6601–6603 safe exactly once with all three marked five-node rings; final actual Keeper measurement clean and all keeper-findings zero; signed production commits '+json.dumps(commits,sort_keys=True)+'; evidence $HOME/si-devnet2-stage3-p6 hashes '+json.dumps(hashes,sort_keys=True)+'.\n'
 L=Path.home()/'.cache/s3-ledger'; L.mkdir(mode=0o700,parents=True,exist_ok=True)
-(L/'record-87.md').write_text(text); (r/'task87-date-pairs').write_text('\n'.join(pairs)+'\n')
+with (L/'record-87.md').open('x') as out: out.write(text)
+with (r/'task87-date-pairs').open('x') as out: out.write('\n'.join(pairs)+'\n')
 print('two observed dates ready; no partial ledger set')
 ```
 
@@ -8345,19 +9899,40 @@ python3 -I "$L/s3-ledger.py" empty "$h" KEEPER_HEADROOM STEP6_END
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-87 urwt/codex/multi-source-s3f-ledger-87 "$ref")"
 d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
+si_read_87_1068_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1068_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_1068_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_87_1068_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_1068_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_87_1068_1}" = "${si_read_87_1068_2}" ] && [ -z "${si_read_87_1068_3}" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
 git -C "$d" config extensions.worktreeConfig true
 git -C "$d" config --worktree user.name poetry
-git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+base="$(git -C "$d" rev-parse HEAD)" || exit 1
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-87"
 pairs=()
 while IFS= read -r pair; do pairs+=("$pair"); done < "$HOME/si-devnet2-stage3-p6/task87-date-pairs"
-python3 -I "$L/s3-ledger.py" set "$d/$rel" 87 "$L/record-87.md" "${pairs[@]}"
-[ "$(git -C "$d" diff --name-only)" = "$rel" ]
+python3 -I "$L/s3-ledger.py" set "$d/$rel" 87 "$L/record-87.md" "${pairs[@]}" || exit 1
+si_read_87_1078_1="$(git -C "$d" diff --name-only)" || exit 1
+[ "${si_read_87_1078_1}" = "$rel" ] || exit 1
 git -C "$d" diff --check
 git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record KEEPER_HEADROOM and STEP6_END of Plan S3-F (Task 87)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+si_read_87_1081_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_87_1081_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_87_1082_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_1082_1}" = G ] || exit 1
+head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "$head" != "$base" ] || exit 1
+si_read_87_1085_1="$(git -C "$d" rev-list --count "$base..$head")" || exit 1
+[ "${si_read_87_1085_1}" = 1 ] || exit 1
+git -C "$d" verify-commit "$head" || exit 1
+message="$(git -C "$d" log -1 --format=%B)" || exit 1
+python3 -I - "$message" "$L/record-87-head" "$head" <<'PY87'
+import pathlib,re,sys
+assert re.findall(r'(?im)^co-authored-by:.*$',sys.argv[1])==['Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>']
+with pathlib.Path(sys.argv[2]).open('x') as out: out.write(sys.argv[3]+'\n')
+PY87
 ```
 
 Expected two observed rows and one run item recorded in one signed plan-only commit. `no plan 's3f'`, an already-recorded row, duplicate name, nonmatching ref or a signing error stops. Do not edit Appendix C manually, push a different branch or amend an existing recorded value.
@@ -8370,13 +9945,28 @@ Confirm before running. Gate: publish only the observed Task 87 record to the ex
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-87")"; ref="$(sed -n 2p "$L/record-87")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] && [ "$(git -C "$d" log -1 --format=%G?)" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+si_read_87_1105_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+si_read_87_1105_2="$(git -C "$d" status --porcelain)" || exit 1
+si_read_87_1105_3="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+si_read_87_1105_4="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_87_1105_1}" = 1 ] && [ -z "${si_read_87_1105_2}" ] && [ "${si_read_87_1105_3}" = 'poetry <chen@sentio.xyz>' ] && [ "${si_read_87_1105_4}" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+head="$(cat "$L/record-87-head")" || exit 1
+si_read_87_1107_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1107_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[[ "$head" =~ ^[0-9a-f]{40}$ ]] && [ "${si_read_87_1107_1}" = "$head" ] || exit 1
+git -C "$d" verify-commit "$head" || exit 1
 if [ "$ref" = origin/main ]; then
-  git -C "$d" push -u origin HEAD
+  target=urwt/codex/multi-source-s3f-ledger-87
 else
   [ "$ref" = origin/urwt/claude/ms-si-stage3-plans-cf ] || { echo 'unexpected ledger branch'; exit 1; }
-  git -C "$d" push origin "HEAD:${ref#origin/}"
+  target="${ref#origin/}"
 fi
+git -C "$d" push origin "$head:refs/heads/$target" || exit 1
+remote="$(git -C "$d" ls-remote --heads origin "refs/heads/$target")" || exit 1
+[ "$remote" = "$(printf '%s\trefs/heads/%s' "$head" "$target")" ] || exit 1
+si_read_87_1118_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1118_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1118_1}" = "$head" ] || exit 1
 ```
 
 For `origin/main` only, obtain a separate confirmation to create the housegate docs PR:
@@ -8387,7 +9977,7 @@ L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-87")"; ref="$(sed -n 2p "$L/record-87")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no docs PR'; exit 0; }
 printf '%s\n\n%s\n' 'Record the observed Keeper gate and step6 completion dates and their verified live run in Plan S3-F Appendix C only. All rollouts, probes and acceptance writes were separately confirmed; no deployment files change.' '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$L/record-87-pr.md"
-(cd "$d" && gh pr create --repo housegate/housegate --base main --title 'docs(plan): record Plan S3-F Keeper gate and step6 (Task 87)' --body-file "$L/record-87-pr.md") | tee "$L/record-87-pr-url"
+(cd "$d" && gh pr create --repo housegate/housegate --base main --head urwt/codex/multi-source-s3f-ledger-87 --title 'docs(plan): record Plan S3-F Keeper gate and step6 (Task 87)' --body-file "$L/record-87-pr.md") | tee "$L/record-87-pr-url"
 ```
 
 - [ ] **Step 11: R3 — current-head CI, exact REST primary authors and confirmed docs merge**
@@ -8399,8 +9989,12 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-87")"; ref="$(sed -n 2p "$L/record-87")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-87-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+pr="$(gh pr view "$(cat "$L/record-87-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_87_1142_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_87_1142_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_1142_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1142_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1142_1}" = "${si_read_87_1142_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate --watch --fail-fast
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/reviews" > "$L/record-87-reviews.json"
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/comments" > "$L/record-87-comments.json"
@@ -8413,28 +10007,47 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-87")"; ref="$(sed -n 2p "$L/record-87")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-87-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$(git -C "$d" rev-parse HEAD)"
+pr="$(gh pr view "$(cat "$L/record-87-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_87_1156_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_87_1156_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_87_1156_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1156_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1156_1}" = "${si_read_87_1156_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_87_1159_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_87_1159_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1159_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_87_1178_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_87_1178_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1178_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr checks "$pr" --repo housegate/housegate || exit 1
+si_read_87_1180_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_87_1180_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1180_1}" = "$expected_head" ] || { echo 'local head changed; repeat review; stop'; exit 1; }
+si_read_87_1181_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_87_1181_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_87_1181_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 - [ ] **Step 12: R4 — read back the exact recorded dates before handing off**
@@ -8448,17 +10061,35 @@ L="$HOME/.cache/s3-ledger"
 R="$HOME/si-devnet2-stage3-p6"
 git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" get "$h" KEEPER_HEADROOM STEP6_END > "$R/task87-ledger-readback"
-diff -u "$R/task87-date-pairs" "$R/task87-ledger-readback"
+diff -u "$R/task87-date-pairs" "$R/task87-ledger-readback" || exit 1
 printf 'Task 87 R4: two observed dates verified from the remote ledger copy\n'
 ```
 
 Expected exact two `NAME=value` lines matching the observed gate/end receipts. Task 87 ends only here. Task 88 fetches main and reads these names from the ledger copy anew; it reuses this clean detached live checkout, helper files, pins and evidence without overwriting or rerunning preparation. Reselection remains unauthorised until its own step7 confirmation. The promotion budget, actual Keeper monitoring and owner agreement remain binding; this task approves no later switch or voter resize.
 
+
+
+Phase receipts: Task84 si_p6_action owns action-D-<host>-push/dry-run/apply or sync and action-R-<host>-push/sync started/output/done files. A live phase requires its original successful push receipt at the same exact HEAD and runbook digest; b/c apply also requires the corresponding dry-run receipt. Every receipt binds started/output hashes. Unknown outcomes retain started evidence and stop; do not regenerate or prefill receipts. Formal owner must validate the complete action helper on the actual accepted source.
+
+
+
+
+
 ---
 
 ## Task 88: devnet2 — P6 live, steps 7–9: `reselection`, `checkpoints` and `narrowed_drain` (S3-F)
 
+**Execution prerequisites.** Require actual Task87 R4, accepted immutable helper/extractor/source custody and the exact phase/receipt lifecycle before this task executes. Missing, changed or ambiguous evidence stops. K86 owner agreement and the full seven-day promotion envelope remain binding: shortfall stops for the user’s voter-resize decision, never automatic resize, reduced soak, relaxed thresholds or diagnostic writes.
+
+
+
+
+
+
+
 Execute Task84's merged runbook §§9–11 after Task87 completed R4 for KEEPER_HEADROOM and STEP6_END. Contract §§58–61, K83, D24/D27/D30/D33/D34 and spec §7.4/§9.1–§9.3/§10.1/§10.4 bind. Each switch is a separately confirmed irreversible expected-epoch update under drain. Step9 itself still uses drain; issuance begins only after narrowed_drain commits. k remains1. Task89 owns raising k, the exit-alert commit and seven-day soak, and waits for this task's complete R4.
+
+
 
 **Files:**
 - Read production `docs/storage-integrity-devnet2-stage3-p6-switches.md`, its complete §0 chain, `charts/storage-integrity/tests/test_render.py`, and Task85–87 public receipts/remote readbacks. Task88 changes no production source, image, Helm value, chart, Secret or service file.
@@ -8466,13 +10097,13 @@ Execute Task84's merged runbook §§9–11 after Task87 completed R4 for KEEPER_
 - Modify only with C1§19's s3-ledger.py: housegate `docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md`, AppendixC rows RESELECTION_EPOCH, CHECKPOINTS_EPOCH, NARROWED_DRAIN_EPOCH and its single `Steps 7–9 run (Task 88)` item.
 
 **Interfaces:**
-- Consumes Task85's fifteen pins, Task86's three values and Task87's two dates only from the remote ledger after their R4. Reuses Task85's JSON-discovered codex URWT detached path at `$HOME/.cache/s3f-task85/live-path`, frozen helpers/hash files and exact-marker `prepare.py block marker unique-label`; never assumes a claude worktree path, resets a checkout, recreates the evidence directory or sources pins as shell code.
+- Consumes Task85's fifteen pins, Task86's three values and Task87's two dates only from the remote ledger after their R4. Reuses Task85's JSON-discovered codex URWT detached path at `$HOME/.cache/s3f-task85/live-path`, final schema2 helpers/source/manifest/expected-phase-head custody and exact-marker `prepare.py block marker unique-label`; `verify` revalidates the complete chain before inline sourcing, and every prepared file runs only through `run-file <path>` with exact attempt/prepared/body/head binding and exclusive started/done/failed execution evidence; never assumes a claude worktree path, resets a checkout, recreates the evidence directory or sources pins as shell code.
 - Uses exact merged Task84 blocks `9.1-ready`, `9.1-update`, `9.2-verify`, `10.1-update`, `10.2-verify`, `10.2-before`, `10.2-accept-a/b/c`, `10.2-classes`, `11.1-classes`, `11.1-update`, `11.2-verify` and §16.3 recovery. Uses the real si_stage3_update, si_step_diff, si_p6_verify, si_p6_capture, si_groups, si_stage3reads, si_member_metrics, si_voter_series, si_keeper_findings and si_acceptance8host. Only already-served fields are read; no ExpectedSet/IncarnationSeq/ReadyVerifyMembers is invented.
 - Produces local observed show receipts, safe6801–6803, six member/other-owner accepted-counter and published-sequence advances, CaughtUp/latest-entry evidence, refused counters unchanged and actual acceptance unsafe cleanup with floor-held age0 at k1. Only after all three steps pass, atomically records the three owned epochs through one R1–R4. Local in-task receipts are never published values for Task89.
 
 **Stops.** Every live/remote/keyed mutation has its own explicit user confirmation in chat. No eviction/failure injection, lagging/rebalance command, readiness rewrite, key rotation, restart, sync, cloud operation, voter resize or k change is authorised here. Freeze governance and SI rollouts for each window. Keep leader/member identity evidence so counters cannot reset unnoticed. The original CRC-checked same-snapshot P6 promotion reserve must still cover the remaining writes and seven-day soak; a short budget stops for the user's voter decision. Never generate diagnostic INSERTs. K86's actual clickhouse-extra-owner agreement and thresholds remain unchanged; Keeper abort/finding stops. Never helmfile under k8s-sea/clickhouse, roll a switch back or disable signing.
 
-Write every task Bash block to its own new file and execute that file with Bash. Do not wrap inner heredocs in an outer heredoc. Every runbook body is extracted verbatim by its exact marker and bound to the frozen document hash. Read-only retries retain new evidence files; writes are never blindly repeated.
+Write every task Bash block to its own new file and execute that file with Bash. Do not wrap inner heredocs in an outer heredoc. Every runbook body is extracted verbatim by its exact marker and bound to final Task85 schema2 custody: all thirteen helper documents, assembled helpers, extractor, URWT lexical path, branch and explicit expected phase HEAD. `block` prepares only; `run-file` revalidates and executes once. Do not hand-create, edit or waive any custody/head/action receipt; this task makes no production commit or head advance. Read-only retries retain new evidence files; writes are never blindly repeated.
 
 - [ ] **Step 1: Resume exact detached main and verify Task87 R4**
 
@@ -8483,11 +10114,19 @@ T="$HOME/.cache/s3f-task88"; mkdir -p "$T"
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
 [ -d "$W" ] && [ -s "$HOME/si-devnet2-stage3-p6/helpers.sh" ] || exit 1
 git -C "$W" fetch -q origin main
-[ "$(git -C "$W" rev-parse --abbrev-ref HEAD)" = HEAD ] && [ -z "$(git -C "$W" status --porcelain)" ] || { echo 'not clean/detached'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved; reconcile, never reset'; exit 1; }
+si_read_88_30_1="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+si_read_88_30_2="$(git -C "$W" status --porcelain)" || exit 1
+[ "${si_read_88_30_1}" = HEAD ] && [ -z "${si_read_88_30_2}" ] || { echo 'not clean/detached'; exit 1; }
+si_read_88_31_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_88_31_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_88_31_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_88_31_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_31_1}" = "${si_read_88_31_2}" ] || { echo 'main moved; reconcile, never reset'; exit 1; }
 git -C "$W" config extensions.worktreeConfig true
 git -C "$W" config --worktree user.name poetry
 git -C "$W" config --worktree user.email chen@sentio.xyz
+git -C "$W" config --worktree commit.gpgsign true
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; [ "$P" = "$W" ]; cd "$P"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger/s3-ledger.py"
@@ -8502,8 +10141,51 @@ si_show > "$si_backup/task88-start-show.json"
 python3 -I - "$si_backup" <<'PY'
 import json,sys
 from pathlib import Path
-r=Path(sys.argv[1]); a=json.loads((r/'task87-final-show.json').read_text()); b=json.loads((r/'task88-start-show.json').read_text())
-assert a['epoch']==b['epoch'] and a['current']==b['current'], 'params changed since Task87'
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+def exact_json(a,b):
+    if type(a) is not type(b): return False
+    if isinstance(a,dict): return a.keys()==b.keys() and all(exact_json(a[k],b[k]) for k in a)
+    if isinstance(a,list): return len(a)==len(b) and all(exact_json(x,y) for x,y in zip(a,b))
+    return a==b
+
+def epoch_value(value):
+    assert type(value) is int and value>=0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value);assert result<=(1<<64)-1, 'unsigned epoch exceeds uint64'
+    return result
+
+def local_receipt(value):
+    for key in ('epoch','promotion_seq'):
+        assert type(value[key]) is int;epoch_value(value[key])
+    state=value['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        assert type(state[key]) is int;epoch_value(state[key])
+    seen=set()
+    for cut in state['switches']:
+        assert cut['switch_name'] not in seen, 'duplicate switch cutover';seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            assert type(cut[key]) is int;epoch_value(cut[key])
+    return value
+
+
+r=Path(sys.argv[1]); a=strict_json((r/'task87-final-show.json').read_text()); b=strict_json((r/'task88-start-show.json').read_text())
+assert epoch_value(a['epoch'])==epoch_value(b['epoch']) and exact_json(a['current'],b['current']), 'params changed since Task87'
 assert b['current']['stage3']['placement'] and int(b['current']['stage3']['min_safe_copies'])==1
 assert not any(b['current']['stage3'].get(k,False) for k in ('reselection','checkpoints','narrowed_drain'))
 PY
@@ -8521,6 +10203,7 @@ Recompute the remaining promotion budget before any switch or acceptance write. 
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 original="$si_backup"
 [ ! -e "$original/task88-budget" ] || { echo 'budget receipt exists; resume by inspecting it'; exit 1; }
@@ -8534,11 +10217,39 @@ cp "$original/pins" "$original/task88-budget/pins"
 python3 -I - "$original" <<'PY'
 import json,sys
 from pathlib import Path
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+
 r=Path(sys.argv[1]); bound=(r/'soak-promotions-upper-bound').read_text().strip()
 assert bound.isdigit(), 'missing user seven-day promotion upper bound'
-b=json.loads((r/'task88-budget/budget.txt').read_text().splitlines()[-1])
-assert 12+int(bound)<=b['half_budget'], 'P6 remainder exceeds half-budget: stop and ask the user about voter capacity'
-print('P6 remaining reserve',12+int(bound),'<= half-budget',b['half_budget'])
+b=strict_json((r/'task88-budget/budget.txt').read_text().splitlines()[-1])
+initial=strict_json((r/'budget.txt').read_text().splitlines()[-1])
+def natural(value):
+    assert isinstance(value,int) and not isinstance(value,bool) and value>=0, 'malformed promotion-budget integer'
+    return value
+remaining=12+int(bound)
+fresh_half=natural(b['half_budget']); live=natural(b['live_promotion_seq'])
+initial_half=natural(initial['half_budget']); initial_live=natural(initial['live_promotion_seq'])
+assert remaining<=fresh_half, 'P6 remainder exceeds fresh half-budget: stop and ask the user about voter capacity'
+assert live>=initial_live, 'promotion sequence regressed: stop for evidence review'
+assert live-initial_live+remaining<=initial_half, 'original P6 half-budget exhausted: stop and ask the user about voter capacity'
+print('P6 remaining reserve',remaining,'within fresh and original CRC-checked half-budget caps')
 PY
 ```
 
@@ -8555,12 +10266,86 @@ case "$marker" in
   *) echo 'not a Task88 agent block'; exit 1 ;;
 esac
 R="$HOME/si-devnet2-stage3-p6"
+if [ "$write" = yes ]; then
+  python3 -I - "$R" "$marker" <<'PY'
+import json,os,stat,sys
+from pathlib import Path
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+def exact_json(a,b):
+    if type(a) is not type(b): return False
+    if isinstance(a,dict): return a.keys()==b.keys() and all(exact_json(a[k],b[k]) for k in a)
+    if isinstance(a,list): return len(a)==len(b) and all(exact_json(x,y) for x,y in zip(a,b))
+    return a==b
+
+def epoch_value(value):
+    assert type(value) is int and value>=0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value);assert result<=(1<<64)-1, 'unsigned epoch exceeds uint64'
+    return result
+
+def local_receipt(value):
+    for key in ('epoch','promotion_seq'):
+        assert type(value[key]) is int;epoch_value(value[key])
+    state=value['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        assert type(state[key]) is int;epoch_value(state[key])
+    seen=set()
+    for cut in state['switches']:
+        assert cut['switch_name'] not in seen, 'duplicate switch cutover';seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            assert type(cut[key]) is int;epoch_value(cut[key])
+    return value
+
+
+r=Path(sys.argv[1]); marker=sys.argv[2]
+def checked(name):
+    path=r/name; info=path.lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_uid==os.getuid(), 'non-regular or unowned phase evidence: '+name
+    data=path.read_text(); assert data.strip(), 'empty phase evidence: '+name
+    return data
+phases={
+ '9.1-update':('task88-start-show.json','task88-preread-step7.json','reselection',('task88-ready-before-step7.jsonl',)),
+ '10.1-update':('task88-receipt-step7.json','task88-preread-step8.json','checkpoints',('diff-step7.txt','verify-step7.txt','task88-metrics-baseline-pass','task88-groups-before-step8.jsonl','task88-watermark-before-step8.json')),
+ '11.1-update':('task88-receipt-step8.json','task88-preread-step9.json','narrowed_drain',('diff-step8.txt','verify-step8.txt','task88-convergence-pass','task88-groups-after-step8.jsonl','task88-watermark-after-step8.json')),
+}
+prior,preread,target,required=phases[marker]
+a=strict_json(checked(prior)); b=strict_json(checked(preread))
+if prior.startswith('task88-receipt-'): local_receipt(a)
+assert epoch_value(a['epoch'])==epoch_value(b['epoch']) and exact_json(a['current'],b['current']), 'phase epoch/current mismatch'
+order=('purge','eviction_voiding','owner_aware_selection','placement','reselection','checkpoints','narrowed_drain')
+stage=b['current']['stage3']; position=order.index(target)
+assert int(stage['min_safe_copies'])==1, 'Task88 requires k1'
+assert all(stage.get(key,False) is (i<position) for i,key in enumerate(order)), 'wrong switch phase'
+for name in required: checked(name)
+if marker=='10.1-update': assert checked('diff-step7.txt').strip()=='stage3.reselection'
+if marker=='11.1-update': assert checked('diff-step8.txt').strip()=='stage3.checkpoints'
+for suffix in ('started','done'):
+    assert not os.path.lexists(r/('task88-'+marker+'.'+suffix)), 'update already started/completed: preserve evidence and recover'
+print('local phase evidence checked; this is not mutation approval')
+PY
+fi
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "$label")"
 if [ "$write" = yes ]; then
   (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/task88-$marker.started")
 fi
-bash -eo pipefail "$file" < /dev/null
-if [ "$write" = yes ]; then printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/task88-$marker.done"; fi
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null
+if [ "$write" = yes ]; then (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/task88-$marker.done"); fi
 ```
 
 Before use, Bash3.2/Bash5 parse every task/generated block/runner and fish-n parses all user fish commands. Task85 extractor refuses reused labels or changed runbook hashes. A runner's existence authorises no update.
@@ -8575,6 +10360,23 @@ from pathlib import Path
 import re
 import sys
 
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
 R = Path.home()/'si-devnet2-stage3-p6'
 
 def need(ok, message):
@@ -8582,10 +10384,10 @@ def need(ok, message):
         raise SystemExit(message)
 
 def load(name):
-    return json.loads((R/name).read_text())
+    return strict_json((R/name).read_text())
 
 def lines(name):
-    return [json.loads(s) for s in (R/name).read_text().splitlines() if s]
+    return [strict_json(s) for s in (R/name).read_text().splitlines() if s]
 
 def metric(name):
     out = {}
@@ -8652,6 +10454,21 @@ def convergence():
     latest = frontiers('watermark.json', hosts.values())
     old = frontiers('task88-watermark-before-step8.json', hosts.values())
     groups = [x for x in lines('groups.jsonl') if 'owner' in x]
+    targets = [row.split('\t') for row in (R/'acceptance-databases.tsv').read_text().splitlines()]
+    need(len(targets) == 3 and all(len(row) == 2 and row[1] for row in targets), 'need three acceptance owner/database rows')
+    need({row[0] for row in targets} == set(hosts.values()) and len({tuple(row) for row in targets}) == 3, 'acceptance target owner coverage differs')
+    prior_groups = [x for x in lines('task88-groups-before-step8.jsonl') if 'owner' in x]
+    for owner, database in targets:
+        prior_target = [g for g in prior_groups if (str(g['owner']), g['database']) == (owner, database)]
+        current_target = [g for g in groups if (str(g['owner']), g['database']) == (owner, database)]
+        need(len(prior_target) == len(current_target) == 1, 'missing/duplicate selected acceptance group baseline/current')
+        need(prior_target[0]['generation'] == current_target[0]['generation'], 'selected acceptance group generation changed')
+        expected_members = {n for n,h in members.items() if h != owner}
+        need(len(prior_target[0]['members']) == 2 and {m['node_id'] for m in prior_target[0]['members']} == expected_members, 'selected acceptance group baseline membership differs')
+    expected_pairs = {(n,o) for n,h in members.items() for o in hosts.values() if o != h}
+    need(expected_pairs <= set(before) and expected_pairs <= set(after), 'missing original/current published checkpoint pair')
+    findings = (R/'task88-findings-1.txt').read_text().splitlines()
+    need(findings == [f'sentio_node_storage_integrity_keeper_findings{{reason="{reason}"}} 0' for _ in 'abc' for reason in ('unknown_replica','non_incarnation_root')], 'Keeper findings missing, duplicate, malformed or nonzero')
     need(groups, 'no groups')
     expected = set()
     keys = set()
@@ -8672,7 +10489,7 @@ def convergence():
             cp = m['checkpoint_entry']
             need(cp is not None, 'missing checkpoint')
             need((int(cp['safe_block_seq']),int(cp['applied_promotion_seq'])) == latest[owner], 'checkpoint not latest owner entry')
-            need(pair in after and after[pair] > before.get(pair,0) and int(m['checkpoint_seq']) == after[pair], 'published checkpoint sequence did not advance or group/book differs')
+            need(pair in after and after[pair] > before[pair] and int(m['checkpoint_seq']) == after[pair], 'published checkpoint sequence did not advance or group/book differs')
     need(expected == {(n,o) for n,h in members.items() for o in hosts.values() if o != h}, 'incomplete member/owner coverage')
     for x,host in hosts.items():
         prior = metric(f'task88-checkpoints-before-{x}.txt')
@@ -8726,18 +10543,171 @@ if __name__ == '__main__':
         raise SystemExit('expected baseline, convergence or sql DATABASE')
 ```
 
+Write this complete `record.py` beside `verify.py` now, before the first local receipt is needed. Its `receipt STEP` mode reads only that step’s actual retained raw show and exclusively writes a typed local receipt; it does not read later-step evidence or create ledger text. The raw CLI files remain unchanged. No T variable or later helper is required by this mode.
+
+```python
+#!/usr/bin/env python3
+import copy,json,math,re,sys
+from pathlib import Path
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+R=Path.home()/'si-devnet2-stage3-p6'
+load=lambda n:strict_json((R/n).read_text())
+ORDER=('purge','eviction_voiding','owner_aware_selection','placement','reselection','checkpoints','narrowed_drain')
+
+def epoch(value):
+    assert type(value) is int and value >= 0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value)
+    assert result <= (1 << 64) - 1, 'unsigned epoch exceeds uint64'
+    return result
+
+def exact(a,b):
+    if type(a) is not type(b):
+        return False
+    if isinstance(a,dict):
+        return a.keys()==b.keys() and all(exact(a[key],b[key]) for key in a)
+    if isinstance(a,list):
+        return len(a)==len(b) and all(exact(x,y) for x,y in zip(a,b))
+    return a==b
+
+def show(value, local=False):
+    assert type(value) is dict, 'show must be an object'
+    out=copy.deepcopy(value)
+    def uint64(row,key):
+        raw=row[key]
+        assert not local or type(raw) is int, 'local receipt uint64 must be an exact integer: '+key
+        row[key]=epoch(raw)
+    for key in ('epoch','promotion_seq'):
+        uint64(out,key)
+    stage=out['current']['stage3']
+    assert type(stage['min_safe_copies']) is int and stage['min_safe_copies']==1, 'Task88 requires typed k1'
+    assert all(type(stage.get(key)) is bool for key in ORDER), 'explicit boolean switch fields required'
+    state=out['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        uint64(state,key)
+    assert type(state['switches']) is list, 'switch cutover list required'
+    seen=set()
+    for cut in state['switches']:
+        assert type(cut) is dict and type(cut.get('switch_name')) is str and cut['switch_name'] in ORDER and cut['switch_name'] not in seen, 'unknown or duplicate switch cutover'
+        seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            uint64(cut,key)
+    return out
+
+def read_show(name, local=False):
+    return show(load(name),local)
+
+# Receipt mode is available from Step1 and touches only this observed show and a new local receipt.
+if sys.argv[1:]:
+    assert len(sys.argv)==3 and sys.argv[1]=='receipt' and sys.argv[2] in ('7','8','9'), 'expected receipt STEP'
+    step=sys.argv[2]
+    observed=read_show('show-after-step'+step+'.json')
+    with (R/('task88-receipt-step'+step+'.json')).open('x') as target:
+        target.write(json.dumps(observed,allow_nan=False)+'\n')
+    print('exclusive typed local receipt preserved; raw CLI show unchanged')
+    raise SystemExit(0)
+
+previous=read_show('task88-start-show.json');pairs=[]
+assert all(previous['current']['stage3'][field] is (i < 4) for i,field in enumerate(ORDER)), 'wrong initial Task88 switch phase'
+for step,field,name in ((7,'reselection','RESELECTION_EPOCH'),(8,'checkpoints','CHECKPOINTS_EPOCH'),(9,'narrowed_drain','NARROWED_DRAIN_EPOCH')):
+    before=read_show(f'show-before-step{step}.json');after=read_show(f'show-after-step{step}.json')
+    assert before['epoch']==previous['epoch'] and exact(before['current'],previous['current'])
+    assert before['current']['stage3'][field] is False, 'target switch was already on'
+    receipt=read_show(f'task88-receipt-step{step}.json',local=True)
+    assert after['epoch']==before['epoch']+1 and exact(after,receipt)
+    expected=copy.deepcopy(before['current']);expected['stage3'][field]=True
+    assert exact(after['current'],expected)
+    assert all(after['current']['stage3'][key] is (i <= ORDER.index(field)) for i,key in enumerate(ORDER)), 'wrong committed Task88 switch phase'
+    cut=[x for x in after['stage3_state']['switches'] if x['switch_name']==field]
+    assert len(cut)==1 and cut[0]['epoch']==after['epoch']
+    assert (R/f'diff-step{step}.txt').read_text().strip()=='stage3.'+field
+    assert (R/f'verify-step{step}.txt').read_text().strip()
+    pairs.append((name,str(after['epoch'])));previous=after
+final=read_show('task88-final-show.json')
+assert final['epoch']==previous['epoch'] and exact(final['current'],previous['current']) and exact(final['stage3_state'],previous['stage3_state'])
+assert (R/'task88-convergence-pass').read_text().strip()
+assert all((R/f'user-10.2-accept-{x}.done').is_file() for x in 'abc')
+tracks=load('task88-final-tracks.json')['indexers'];assert len(tracks)==3 and not any(x.get('quarantined',False) for x in tracks)
+assert (R/'task88-findings-final.txt').read_text().splitlines()==[f'sentio_node_storage_integrity_keeper_findings{{reason="{reason}"}} 0' for _ in 'abc' for reason in ('unknown_replica','non_incarnation_root')]
+L=Path.home()/'.cache/s3-ledger';L.mkdir(mode=0o700,parents=True,exist_ok=True)
+recoveries=[str(n) for n in (7,8,9) if (R/f'recovery-step{n}.txt').exists()]
+text='; '.join(k+'='+v for k,v in pairs)+'; three individually confirmed expected-epoch updates used drain, exactly one switch each; Task87 readiness/Keeper prerequisites retained; no failure injection/rollout;6801–6803 safe with keyed quorum-latched three-of-five stored sets on all owners; six member/other-owner accepted counters and published sequences advanced, refused unchanged; latest-entry CaughtUp evidence and unsafe acceptance cleanup proved; k1 floor age/count and under-replicated groups0; host0 preserved; no quarantined track or Keeper findings; evidence $HOME/si-devnet2-stage3-p6; recovered unknown CLI steps '+(','.join(recoveries) if recoveries else 'none')+'.'
+(L/'record-88.md').write_text(text+'\n')
+(R/'task88-epoch-pairs').write_text(''.join(k+'='+v+'\n' for k,v in pairs))
+print('three actual epochs ready, not yet recorded')
+```
+
 - [ ] **Step 2: Readiness and irreversible reselection**
 
 ```bash
 set -eo pipefail
 bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 9.1-ready 88020-ready
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 cp "$si_backup/groups.jsonl" "$si_backup/task88-ready-before-step7.jsonl"
 si_show > "$si_backup/task88-preread-step7.json"
 python3 -I - "$si_backup" <<'PY'
 import json,sys
 from pathlib import Path
-r=Path(sys.argv[1]); a=json.loads((r/'task88-start-show.json').read_text()); b=json.loads((r/'task88-preread-step7.json').read_text()); assert a['epoch']==b['epoch'] and a['current']==b['current']
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+def exact_json(a,b):
+    if type(a) is not type(b): return False
+    if isinstance(a,dict): return a.keys()==b.keys() and all(exact_json(a[k],b[k]) for k in a)
+    if isinstance(a,list): return len(a)==len(b) and all(exact_json(x,y) for x,y in zip(a,b))
+    return a==b
+
+def epoch_value(value):
+    assert type(value) is int and value>=0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value);assert result<=(1<<64)-1, 'unsigned epoch exceeds uint64'
+    return result
+
+def local_receipt(value):
+    for key in ('epoch','promotion_seq'):
+        assert type(value[key]) is int;epoch_value(value[key])
+    state=value['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        assert type(state[key]) is int;epoch_value(state[key])
+    seen=set()
+    for cut in state['switches']:
+        assert cut['switch_name'] not in seen, 'duplicate switch cutover';seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            assert type(cut[key]) is int;epoch_value(cut[key])
+    return value
+
+
+r=Path(sys.argv[1]); a=strict_json((r/'task88-start-show.json').read_text()); b=strict_json((r/'task88-preread-step7.json').read_text()); assert epoch_value(a['epoch'])==epoch_value(b['epoch']) and exact_json(a['current'],b['current'])
 PY
 ```
 
@@ -8755,7 +10725,7 @@ bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 9.1-update 88021-reselection
 set -eo pipefail
 bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 9.2-verify 88022-reselection-verify
 R="$HOME/si-devnet2-stage3-p6"
-cp "$R/show-after-step7.json" "$R/task88-receipt-step7.json"
+python3 -I "$HOME/.cache/s3f-task88/record.py" receipt 7
 ```
 
 Expected exact field stage3.reselection and epoch old+1, all other current parameters unchanged. Save served reselections on any already-known affected blocks; if none occurred, record that actual fact, not a fabricated test. Preserve the observed local receipt, never publish this row alone.
@@ -8767,6 +10737,7 @@ The runbook aggregate loses member identity when concatenating three endpoints. 
 ```bash
 set -eo pipefail
 bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 10.2-before 88030-before
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 si_p6_capture
 cp "$si_backup/groups.jsonl" "$si_backup/task88-groups-before-step8.jsonl"
@@ -8777,7 +10748,50 @@ si_show > "$si_backup/task88-preread-step8.json"
 python3 -I - "$si_backup" <<'PY'
 import json,sys
 from pathlib import Path
-r=Path(sys.argv[1]); a=json.loads((r/'task88-receipt-step7.json').read_text()); b=json.loads((r/'task88-preread-step8.json').read_text()); assert a['epoch']==b['epoch'] and a['current']==b['current']
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+def exact_json(a,b):
+    if type(a) is not type(b): return False
+    if isinstance(a,dict): return a.keys()==b.keys() and all(exact_json(a[k],b[k]) for k in a)
+    if isinstance(a,list): return len(a)==len(b) and all(exact_json(x,y) for x,y in zip(a,b))
+    return a==b
+
+def epoch_value(value):
+    assert type(value) is int and value>=0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value);assert result<=(1<<64)-1, 'unsigned epoch exceeds uint64'
+    return result
+
+def local_receipt(value):
+    for key in ('epoch','promotion_seq'):
+        assert type(value[key]) is int;epoch_value(value[key])
+    state=value['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        assert type(state[key]) is int;epoch_value(state[key])
+    seen=set()
+    for cut in state['switches']:
+        assert cut['switch_name'] not in seen, 'duplicate switch cutover';seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            assert type(cut[key]) is int;epoch_value(cut[key])
+    return value
+
+
+r=Path(sys.argv[1]); a=local_receipt(strict_json((r/'task88-receipt-step7.json').read_text())); b=strict_json((r/'task88-preread-step8.json').read_text()); assert epoch_value(a['epoch'])==epoch_value(b['epoch']) and exact_json(a['current'],b['current'])
 PY
 ```
 
@@ -8816,7 +10830,7 @@ PY
 export key_file
 (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.started")
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "user-$marker")"
-if bash -eo pipefail "$file"; then
+if python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file"; then
   printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.done"
 else
   echo 'unknown or failed INSERT: preserve evidence, inspect, never repeat blindly' >&2
@@ -8846,20 +10860,23 @@ Expected each value exactly once and safe, existing owner statement-block receip
 
 - [ ] **Step 5: Checkpoint, class, counter and actual cleanup convergence**
 
-Use the complete Step1 verifier. It requires finite/present/unique per-member metrics, all six member/other-owner sequence pairs and exact latest published entry, including host0; an empty ring/list cannot pass.
+Use the complete Step1 verifier. It binds the three selected acceptance owner/database groups to their preserved step8 baseline, requires all original/current published checkpoint pairs and the exact six zero Keeper-finding rows before producing convergence-pass. Unrelated newly created tenant groups are not required to equal the earlier global group-key set. It requires finite/present/unique per-member metrics, all six member/other-owner sequence pairs and exact latest published entry, including host0; an empty ring/list cannot pass.
 
 
 
-Execute this bounded read-only convergence loop:31 attempts at30s spacing, at most15minutes, no writes. Every attempt extracts the original classes block to a new immutable filename; all attempt results remain available. A readiness/class wait is allowed; a real refusal/reset/restart/finding is a stop to investigate, never permission for a replacement write:
+Execute this fail-closed read-only convergence attempt, with no writes. The original classes block is extracted to a new immutable filename; all output remains available. The current verifier has no typed distinction between a transient wait and a refusal/reset/restart/finding. Therefore every nonzero child/verifier result stops before another read attempt or later phase; preserve the original evidence and obtain a reviewed read-only recovery procedure. Never automatically retry or create a replacement write:
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 T="$HOME/.cache/s3f-task88"
 [ ! -e "$si_backup/task88-convergence-pass" ] || { echo 'already passed; read evidence'; exit 1; }
-for attempt in $(seq 1 31); do
+set -C
+for attempt in 1; do
   file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 10.2-classes "88050-classes-$attempt")"
-  if bash -eo pipefail "$file" < /dev/null > "$si_backup/task88-classes-$attempt.out" 2>&1; then
+  python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null > "$si_backup/task88-classes-$attempt.out" 2>&1 || { cat "$si_backup/task88-classes-$attempt.out" >&2; echo 'classes block failed: stop, preserve evidence'; exit 1; }
+  if [ -s "$si_backup/task88-classes-$attempt.out" ]; then
     for x in a b c; do
       si_member_metrics "$x" 'sentio_node_si_member_checkpoints_total|sentio_node_si_member_checkpoint_seq' > "$si_backup/task88-checkpoints-after-$x.txt"
       si_pod_state "$(si_member_pod "$x")" > "$si_backup/task88-member-after-$x.txt"
@@ -8874,14 +10891,21 @@ for attempt in $(seq 1 31); do
     if python3 -I "$T/verify.py" convergence > "$si_backup/task88-convergence-$attempt.txt" 2>&1; then
       cp "$si_backup/task88-convergence-$attempt.txt" "$si_backup/task88-convergence-pass"
       break
+    else
+      cat "$si_backup/task88-convergence-$attempt.txt" >&2
+      echo 'convergence verification failed: stop and preserve evidence; no automatic retry' >&2
+      exit 1
     fi
+  else
+    cat "$si_backup/task88-classes-$attempt.out" >&2
+    echo 'classes block failed: stop and preserve evidence; no automatic retry' >&2
+    exit 1
   fi
-  [ "$attempt" = 31 ] || sleep 30
 done
-[ -s "$si_backup/task88-convergence-pass" ] || { echo 'no checkpoint convergence within15min; stop, no extra INSERT'; exit 1; }
+[ -s "$si_backup/task88-convergence-pass" ] || { echo 'checkpoint convergence not proved; stop, no extra INSERT'; exit 1; }
 cp "$si_backup/groups.jsonl" "$si_backup/task88-groups-after-step8.jsonl"
 cp "$si_backup/watermark.json" "$si_backup/task88-watermark-after-step8.json"
-cp "$si_backup/show-after-step8.json" "$si_backup/task88-receipt-step8.json"
+python3 -I "$HOME/.cache/s3f-task88/record.py" receipt 8
 ```
 
 Expected accepted counters rise for all six(member,other-owner) pairs, refused unchanged, no resets, book sequences rise, every current-generation group CaughtUp at exact latest owner entry with empty exclusions. Local sequence must be at least accepted book. Each owner publication advances and its acceptance unsafe rows reach0, proving cleanup continued. Actual captured acceptance blocks must cover every owner with a keyed quorum-latched three-of-five set from pool+two ready peers, never its own hosted member. Zero floor-held age/count and under-replicated groups at k1 makes near0 concrete. Missing/nonfinite series, stale entry, false readiness, duplicate/missing group/member, lost host0, unmarked-only blocks, restart or incomplete cleanup cannot pass.
@@ -8891,13 +10915,57 @@ Expected accepted counters rise for all six(member,other-owner) pairs, refused u
 ```bash
 set -eo pipefail
 bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 11.1-classes 88060-settled
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 [ -s "$si_backup/task88-convergence-pass" ]
 si_show > "$si_backup/task88-preread-step9.json"
 python3 -I - "$si_backup" <<'PY'
 import json,sys
 from pathlib import Path
-r=Path(sys.argv[1]); a=json.loads((r/'task88-receipt-step8.json').read_text()); b=json.loads((r/'task88-preread-step9.json').read_text()); assert a['epoch']==b['epoch'] and a['current']==b['current']
+import math,re
+def strict_json(text):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise ValueError('duplicate JSON key: '+key)
+            out[key] = value
+        return out
+    def constant(value):
+        raise ValueError('nonfinite JSON value: '+value)
+    def finite(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError('nonfinite JSON number')
+        return result
+    return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=finite)
+
+def exact_json(a,b):
+    if type(a) is not type(b): return False
+    if isinstance(a,dict): return a.keys()==b.keys() and all(exact_json(a[k],b[k]) for k in a)
+    if isinstance(a,list): return len(a)==len(b) and all(exact_json(x,y) for x,y in zip(a,b))
+    return a==b
+
+def epoch_value(value):
+    assert type(value) is int and value>=0 or isinstance(value,str) and re.fullmatch(r'(?:0|[1-9][0-9]*)',value), 'malformed canonical unsigned epoch'
+    result=int(value);assert result<=(1<<64)-1, 'unsigned epoch exceeds uint64'
+    return result
+
+def local_receipt(value):
+    for key in ('epoch','promotion_seq'):
+        assert type(value[key]) is int;epoch_value(value[key])
+    state=value['stage3_state']
+    for key in ('activation_epoch','activation_block_seq','activation_promotion_seq'):
+        assert type(state[key]) is int;epoch_value(state[key])
+    seen=set()
+    for cut in state['switches']:
+        assert cut['switch_name'] not in seen, 'duplicate switch cutover';seen.add(cut['switch_name'])
+        for key in ('epoch','cutover_block_seq','cutover_promotion_seq'):
+            assert type(cut[key]) is int;epoch_value(cut[key])
+    return value
+
+
+r=Path(sys.argv[1]); a=local_receipt(strict_json((r/'task88-receipt-step8.json').read_text())); b=strict_json((r/'task88-preread-step9.json').read_text()); assert epoch_value(a['epoch'])==epoch_value(b['epoch']) and exact_json(a['current'],b['current'])
 PY
 ```
 
@@ -8914,13 +10982,15 @@ bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 11.1-update 88061-narrowed-dr
 ```bash
 set -eo pipefail
 bash -eo pipefail "$HOME/.cache/s3f-task88/run.sh" 11.2-verify 88062-narrowed-verify
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 si_show > "$si_backup/task88-final-show.json"
 si_tracks > "$si_backup/task88-final-tracks.json"
 jq -e '(.indexers|length)==3 and all(.indexers[];(.quarantined|not))' "$si_backup/task88-final-tracks.json"
 for x in a b c; do si_keeper_findings "$x"; done > "$si_backup/task88-findings-final.txt"
-cp "$si_backup/show-after-step9.json" "$si_backup/task88-receipt-step9.json"
-[ -z "$(git status --porcelain)" ]
+python3 -I "$HOME/.cache/s3f-task88/record.py" receipt 9
+si_read_88_523_1="$(git status --porcelain)" || exit 1
+[ -z "${si_read_88_523_1}" ] || exit 1
 ```
 
 Expected only narrowed_drain true, epoch old+1, all seven switches on, k1 and other fields unchanged. All three actual updates used drain. No production file changed; Task89 remains blocked on this task R4.
@@ -8931,6 +11001,7 @@ Stop before any next window. The first recovery action is a current leader read 
 
 ```bash
 set -eo pipefail
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify || exit 1
 source "$HOME/si-devnet2-stage3-p6/helpers.sh"; cd "$P"
 si_show | tee "$si_backup/show-recovery.json"
 ```
@@ -8941,38 +11012,9 @@ INSERT ambiguity is resolved through its existing statement/status/safe rows in 
 
 - [ ] **Step 8: R1 — all three observed epochs atomically**
 
-Write record.py with this complete source. The three actual receipts must chain exactly; no predicted epoch or partial set is accepted:
+Use the complete `record.py` already written in Step1. The three typed local receipts and independently validated raw CLI reads must chain exactly; no predicted epoch or partial set is accepted:
 
-```python
-#!/usr/bin/env python3
-import copy,json
-from pathlib import Path
-R=Path.home()/'si-devnet2-stage3-p6'
-load=lambda n:json.loads((R/n).read_text())
-previous=load('task88-start-show.json');pairs=[]
-for step,field,name in ((7,'reselection','RESELECTION_EPOCH'),(8,'checkpoints','CHECKPOINTS_EPOCH'),(9,'narrowed_drain','NARROWED_DRAIN_EPOCH')):
-    before=load(f'show-before-step{step}.json');after=load(f'show-after-step{step}.json')
-    assert before['epoch']==previous['epoch'] and before['current']==previous['current']
-    assert int(after['epoch'])==int(before['epoch'])+1 and after==load(f'task88-receipt-step{step}.json')
-    expected=copy.deepcopy(before['current']);expected['stage3'][field]=True
-    assert after['current']==expected and int(after['current']['stage3']['min_safe_copies'])==1
-    cut=[x for x in after['stage3_state']['switches'] if x['switch_name']==field]
-    assert len(cut)==1 and str(cut[0]['epoch'])==str(after['epoch'])
-    assert (R/f'diff-step{step}.txt').read_text().strip()=='stage3.'+field
-    assert (R/f'verify-step{step}.txt').read_text().strip()
-    pairs.append((name,str(after['epoch'])));previous=after
-final=load('task88-final-show.json');assert final['epoch']==previous['epoch'] and final['current']==previous['current']
-assert (R/'task88-convergence-pass').read_text().strip()
-assert all((R/f'user-10.2-accept-{x}.done').is_file() for x in 'abc')
-tracks=load('task88-final-tracks.json')['indexers'];assert len(tracks)==3 and not any(x.get('quarantined',False) for x in tracks)
-assert (R/'task88-findings-final.txt').read_text().splitlines()==[f'sentio_node_storage_integrity_keeper_findings{{reason="{reason}"}} 0' for _ in 'abc' for reason in ('unknown_replica','non_incarnation_root')]
-L=Path.home()/'.cache/s3-ledger';L.mkdir(mode=0o700,parents=True,exist_ok=True)
-recoveries=[str(n) for n in (7,8,9) if (R/f'recovery-step{n}.txt').exists()]
-text='; '.join(k+'='+v for k,v in pairs)+'; three individually confirmed expected-epoch updates used drain, exactly one switch each; Task87 readiness/Keeper prerequisites retained; no failure injection/rollout;6801–6803 safe with keyed quorum-latched three-of-five stored sets on all owners; six member/other-owner accepted counters and published sequences advanced, refused unchanged; latest-entry CaughtUp evidence and unsafe acceptance cleanup proved; k1 floor age/count and under-replicated groups0; host0 preserved; no quarantined track or Keeper findings; evidence $HOME/si-devnet2-stage3-p6; recovered unknown CLI steps '+(','.join(recoveries) if recoveries else 'none')+'.'
-(L/'record-88.md').write_text(text+'\n')
-(R/'task88-epoch-pairs').write_text(''.join(k+'='+v+'\n' for k,v in pairs))
-print('three actual epochs ready, not yet recorded')
-```
+Use the complete `record.py` written in Step1. Recording still requires every Step8 prerequisite below; receipt mode alone records no epoch pair or ledger text.
 
 Execute locally from a block file:
 
@@ -8988,19 +11030,28 @@ python3 -I "$L/s3-ledger.py" empty "$h" RESELECTION_EPOCH CHECKPOINTS_EPOCH NARR
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-88 urwt/codex/multi-source-s3f-ledger-88 "$ref")"
 d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
+si_read_88_592_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_88_592_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_88_592_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_88_592_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_88_592_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_88_592_1}" = "${si_read_88_592_2}" ] && [ -z "${si_read_88_592_3}" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
 git -C "$d" config extensions.worktreeConfig true
 git -C "$d" config --worktree user.name poetry
 git -C "$d" config --worktree user.email chen@sentio.xyz
+git -C "$d" config --worktree commit.gpgsign true
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-88"
 pairs=()
 while IFS= read -r pair; do pairs+=("$pair"); done < "$HOME/si-devnet2-stage3-p6/task88-epoch-pairs"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" 88 "$L/record-88.md" "${pairs[@]}"
-[ "$(git -C "$d" diff --name-only)" = "$rel" ]
+si_read_88_601_1="$(git -C "$d" diff --name-only)" || exit 1
+[ "${si_read_88_601_1}" = "$rel" ] || exit 1
 git -C "$d" diff --check
 git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record RESELECTION_EPOCH, CHECKPOINTS_EPOCH and NARROWED_DRAIN_EPOCH of Plan S3-F (Task 88)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+si_read_88_604_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_88_604_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_88_605_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_88_605_1}" = G ] || exit 1
 ```
 
 Expected three observed rows and one run item recorded in one signed plan-only commit. `no plan 's3f'`, an already-recorded row, duplicate name, nonmatching ref or a signing error stops. Do not edit Appendix C manually, push a different branch or amend an existing recorded value.
@@ -9013,7 +11064,11 @@ Confirm before running. Gate: publish only the observed Task 88 record to the ex
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-88")"; ref="$(sed -n 2p "$L/record-88")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] && [ "$(git -C "$d" log -1 --format=%G?)" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+si_read_88_618_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+si_read_88_618_2="$(git -C "$d" status --porcelain)" || exit 1
+si_read_88_618_3="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+si_read_88_618_4="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_88_618_1}" = 1 ] && [ -z "${si_read_88_618_2}" ] && [ "${si_read_88_618_3}" = 'poetry <chen@sentio.xyz>' ] && [ "${si_read_88_618_4}" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
 else
@@ -9042,42 +11097,65 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-88")"; ref="$(sed -n 2p "$L/record-88")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-88-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+pr="$(gh pr view "$(cat "$L/record-88-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_88_648_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_88_648_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_88_648_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_88_648_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_648_1}" = "${si_read_88_648_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate --watch --fail-fast
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/reviews" > "$L/record-88-reviews.json"
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/comments" > "$L/record-88-comments.json"
 ```
 
-Confirm before running. Gate: squash merge this single Task 88 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The REST validator rejects empty/malformed/truncated listings and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
+Confirm before running. Gate: squash merge this single Task 88 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The canonical FINALv2 REST validator (C1 Task25; source SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`) rejects malformed SHA shapes, duplicate SHAs, final-list/pinned-head mismatch, empty/malformed/truncated pages and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
 
 ```bash
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-88")"; ref="$(sed -n 2p "$L/record-88")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-88-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
-gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash
+pr="$(gh pr view "$(cat "$L/record-88-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_88_662_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_88_662_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_88_662_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_88_662_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_662_1}" = "${si_read_88_662_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_88_665_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_88_665_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_665_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_88_684_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_88_684_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_684_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr checks "$pr" --repo housegate/housegate || exit 1
+si_read_88_686_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_88_686_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_686_1}" = "$expected_head" ] || { echo 'local head changed; repeat review; stop'; exit 1; }
+si_read_88_687_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_88_687_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_88_687_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review and author validation; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 - [ ] **Step 11: R4 — read back the exact recorded epochs before handing off**
@@ -9103,7 +11181,15 @@ Expected exact three `NAME=value` lines matching the observed show receipts and 
 
 ## Task 89: devnet2 — P6 live, step 10 and the exit: k = 2, seven-day soak, acceptance purge and record PR (S3-F)
 
+**Execution prerequisites.** Require actual Task88 R4 and accepted immutable predecessor/source/helper custody before executing. No local fixture establishes seven-day success, release pins, ledger values, capacity choices or owner agreement. Preserve K86, the complete promotion budget, actual interval/raw/user-review evidence and every independent live confirmation below.
+
+
+
+
+
 Execute Task84's merged runbook §§12–14 after Task88 completed its single R4. Spec§9.3/§10.4/§16, contract§§58–61, K83/K86/K87 and D24/D27/D33/D34/D39/D40 bind. The min_safe_copies raise is one irreversible expected-epoch update with issuance. k stays2 thereafter. One signed single-service commit enables the exit alert; a separate docs-only record PR records the actual seven days and public member identities. Only after all closing checks/purges and that PR succeed, atomically record K2_EPOCH and P6_END through one R1–R4. Never publish K2_EPOCH early, estimate P6_END or move another task's ledger ownership.
+
+
 
 **Files:**
 - Read production `docs/storage-integrity-devnet2-stage3-p6-switches.md`, its complete §0 chain and exact §§12–14 bodies, prior public pins/receipts, current monitoring/Keeper state and Task88's completed remote readback.
@@ -9116,7 +11202,7 @@ Execute Task84's merged runbook §§12–14 after Task88 completed its single R4
 
 **Stops and confirmations.** Every future update, push, sync, SQL INSERT/DROP, PR creation/merge and irreversible action has its own explicit user confirmation in chat. All keyed SQL runs only in the user's own private terminal with the existing key-file path, never read or launched by an agent. No cluster/cloud action occurs while drafting/reviewing this task. Never lower k, turn a switch off, inject eviction/failure, force a push, reset main, remove Keeper znodes manually, broaden grants, relax K86, or resize voters automatically. K86 remains the clickhouse-extra owner's real agreement. If the seven-day promotion bound does not fit a fresh CRC/Size/same-snapshot budget, stop and ask the user about voter capacity; do not choose capacity or lower the forecast to pass. A real bad/missing-coverage day retains all evidence and requires a fresh full seven-day interval after repair/user confirmation, with k2 preserved; no deleted day or silent rebaseline. Signing failure stops for user unlock, never an unsigned fallback. No planning-stack PR is merged by these instructions.
 
-Every task Bash block is written to a new local file and executed with Bash. Every runbook body is extracted verbatim by exact marker into its own immutable file after sourcing the frozen helper chain. Do not wrap an inner heredoc in an outer one. New helper/runbook hashes require a reviewed rebuild, not disabling Task85's stale-hash guard.
+Every task Bash block is written to a new local file and executed with Bash. Run every prepared D24 file with Task85 `prepare.py run-file`, which rechecks exact source/phase-head/helper/extractor/body custody immediately before execution and keeps exclusive execution receipts. The canonical Task84 X commit body runs `plan-head X` after its exact two-file serializer and `advance-head X` after the signed direct-child commit; Task89 never edits the frozen source head or adopts an unrelated main movement. Only the ordered C-b/C-c/C-a/D-b/D-c/D-a/R-b/R-c/R-a/X phase receipts may advance its expected execution head. Every runbook body is extracted verbatim by exact marker into its own immutable file after sourcing the frozen helper chain. Do not wrap an inner heredoc in an outer one. New helper/runbook hashes require a reviewed rebuild, not disabling Task85's stale-hash guard.
 
 - [ ] **Step 1: Reuse the clean live checkout and require Task88 R4**
 
@@ -9125,14 +11211,34 @@ set -eo pipefail
 umask 077
 T="$HOME/.cache/s3f-task89"; mkdir -p "$T"
 W="$(cat "$HOME/.cache/s3f-task85/live-path")"
+[ "$W" = "$(jq -er .path "$HOME/.cache/s3f-task85/live-worktree.json")" ] || { echo 'live path differs from persisted URWT JSON'; exit 1; }
 [ -d "$W" ] && [ -s "$HOME/si-devnet2-stage3-p6/helpers.sh" ] || exit 1
 git -C "$W" fetch -q origin main
-[ "$(git -C "$W" rev-parse --abbrev-ref HEAD)" = HEAD ] && [ -z "$(git -C "$W" status --porcelain)" ] || { echo 'live checkout not clean/detached'; exit 1; }
-[ "$(git -C "$W" rev-parse HEAD)" = "$(git -C "$W" rev-parse origin/main)" ] || { echo 'main moved: reconcile, never reset'; exit 1; }
-git -C "$W" config extensions.worktreeConfig true
-git -C "$W" config --worktree user.name poetry
-git -C "$W" config --worktree user.email chen@sentio.xyz
-source "$HOME/si-devnet2-stage3-p6/helpers.sh"; [ "$P" = "$W" ]; cd "$P"
+si_read_89_30_1="$(git -C "$W" rev-parse --abbrev-ref HEAD)" || exit 1
+si_read_89_30_2="$(git -C "$W" status --porcelain)" || exit 1
+[ "${si_read_89_30_1}" = HEAD ] && [ -z "${si_read_89_30_2}" ] || { echo 'live checkout not clean/detached'; exit 1; }
+si_read_89_31_1="$(git -C "$W" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_31_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_31_2="$(git -C "$W" rev-parse origin/main)" || exit 1
+[[ "$si_read_89_31_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_31_1}" = "${si_read_89_31_2}" ] || { echo 'main moved: reconcile, never reset'; exit 1; }
+git -C "$W" config extensions.worktreeConfig true || exit 1
+git -C "$W" config --worktree user.name poetry || exit 1
+git -C "$W" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$W" config --worktree commit.gpgsign true || exit 1
+python3 -I - <<'PY'
+import hashlib,json,os,stat
+from pathlib import Path
+r=Path.home()/'si-devnet2-stage3-p6';t=Path.home()/'.cache/s3f-task85'
+def read(p):
+    s=p.lstat();assert stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid() and not stat.S_IMODE(s.st_mode)&0o022, 'unsafe local custody file'
+    return p.read_bytes()
+j=json.loads(read(r/'task85-custody.json'));assert j['schema']==2
+for path,key in ((t/'prepare.py','extractor_sha256'),(r/'helpers.sh','helpers_sha256')):
+    assert hashlib.sha256(read(path)).hexdigest()==j[key], 'installed producer/helper drift; stop before sourcing'
+PY
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" verify
+source "$HOME/si-devnet2-stage3-p6/helpers.sh"; [ "$P" = "$W" ] || exit 1; cd "$P"
 h=/Users/uranuswch/Dev/projects/sentio-network/housegate
 L="$HOME/.cache/s3-ledger/s3-ledger.py"
 git -C "$h" fetch -q origin
@@ -9177,8 +11283,15 @@ import json,sys
 from pathlib import Path
 r=Path(sys.argv[1]);bound=(r/'soak-promotions-upper-bound').read_text().strip();assert bound.isdigit()
 b=json.loads((r/'task89-budget-before/budget.txt').read_text().splitlines()[-1])
-assert 9+int(bound)<=b['half_budget'], 'P6 remainder/soak does not fit: stop and ask the user about voter capacity'
-print('remaining P6 reserve',9+int(bound),'<= half-budget',b['half_budget'])
+initial=json.loads((r/'budget.txt').read_text().splitlines()[-1])
+def natural(value):
+    assert type(value)is int and value>=0, 'malformed promotion-budget integer'
+    return value
+remaining=9+int(bound);live=natural(b['live_promotion_seq']);initial_live=natural(initial['live_promotion_seq'])
+assert remaining<=natural(b['half_budget']), 'P6 remainder/soak exceeds fresh CRC half-budget: stop and ask the user about voter capacity'
+assert live>=initial_live, 'promotion sequence regressed; stop for evidence review'
+assert live-initial_live+remaining<=natural(initial['half_budget']), 'original P6 half-budget exhausted: stop and ask the user about voter capacity'
+print('remaining P6 reserve',remaining,'within fresh and original CRC-checked half-budget caps')
 PY
 ```
 
@@ -9190,11 +11303,12 @@ Write this complete local run.sh in the task directory. It executes only the sel
 #!/usr/bin/env bash
 set -eo pipefail
 umask 077
+[ "$(shasum -a 256 "$HOME/.cache/s3f-task89/receipts.py" | cut -d' ' -f1)" = 64a8e9d239cf87322a1265fcfba14c11e5740bb9c29ac3d448926a8195be6eab ] || { echo 'action receipt helper changed; stop for reviewed rebuild'; exit 1; }
 marker="${1:?exact marker required}"; label="${2:?fresh unique label required}"
 shift 2
 case "$marker" in
   12.1-preview|12.2-affinity|12.3-keeper|12.5-verify|13.2-exit|14-before|14-purge|14-end) write=no ;;
-  12.4-update|12.5-alert-commit|12.5-alert-sync|12.5-soak-start) write=yes ;;
+  12.4-update|12.5-alert-commit|12.5-alert-push|12.5-alert-sync|12.5-soak-start) write=yes ;;
   *) echo 'not a Task89 agent marker'; exit 1 ;;
 esac
 R="$HOME/si-devnet2-stage3-p6"
@@ -9221,10 +11335,76 @@ else
 fi
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "$label")"
 if [ "$write" = yes ]; then
-  (set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/$receipt.started")
+  python3 -I "$HOME/.cache/s3f-task89/receipts.py" start "$R/$receipt" "$file" "$marker" "$label"
+  if (set -C; python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null > "$R/$receipt.out" 2>&1); then rc=0; else rc="$?"; fi
+  cat "$R/$receipt.out" || exit 1
+  [ "$rc" = 0 ] || { echo 'failed/unknown action: retain STARTED and stop'; exit 1; }
+  python3 -I "$HOME/.cache/s3f-task89/receipts.py" 'done' "$R/$receipt"
+else
+  python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null
 fi
-bash -eo pipefail "$file" < /dev/null
-if [ "$write" = yes ]; then printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/$receipt.done"; fi
+```
+
+Write receipts.py with this complete source in `$HOME/.cache/s3f-task89/`. It atomically publishes exclusive STARTED/DONE JSON, binds the exact immutable D24 body and captured output, and refuses any existing or ambiguous action. A child or output failure retains STARTED without DONE; never clear it to retry. It performs local evidence I/O only. Exact UTF-8 source SHA256: `64a8e9d239cf87322a1265fcfba14c11e5740bb9c29ac3d448926a8195be6eab`; action wrappers and record.py refuse a different installed helper.
+
+```python
+#!/usr/bin/env python3
+"""Exclusive local action receipts; this helper executes no action or endpoint."""
+import hashlib,json,os,stat,sys,tempfile,time
+def strict_json(text):
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise ValueError('duplicate JSON key')
+            result[key]=value
+        return result
+    def constant(value):raise ValueError('nonfinite JSON constant')
+    def finite(token):
+        value=float(token)
+        if value!=value or value in (float('inf'),float('-inf')):raise ValueError('nonfinite JSON number')
+        return value
+    return json.loads(text,object_pairs_hook=pairs,parse_constant=constant,parse_float=finite)
+
+from pathlib import Path
+
+def regular(p):
+    s=p.lstat()
+    assert stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid(), 'nonregular, linked or foreign evidence'
+    return p.read_bytes()
+def sha(p):return hashlib.sha256(regular(p)).hexdigest()
+def atomic(p,value):
+    data=(json.dumps(value,sort_keys=True)+'\n').encode()
+    fd,name=tempfile.mkstemp(prefix='.receipt-',dir=p.parent)
+    try:
+        with os.fdopen(fd,'wb') as f:f.write(data);f.flush();os.fsync(f.fileno())
+        os.link(name,p) # Atomic no-replace publication; any existing path refuses.
+    finally:os.unlink(name)
+def receipt(prefix,suffix):return Path(str(prefix)+suffix)
+def validate(prefix):
+    begin=receipt(prefix,'.started');done=receipt(prefix,'.done');out=receipt(prefix,'.out')
+    a=strict_json(regular(begin));b=strict_json(regular(done))
+    assert type(a['schema']) is int and type(b['schema']) is int and a['schema']==b['schema']==1 and b['started_sha256']==sha(begin), 'changed start receipt'
+    assert all(b[k]==a[k] for k in ('marker','label','body','body_sha256','started_at')), 'action receipt identity differs'
+    assert sha(Path(a['body']))==a['body_sha256'] and b['output_sha256']==sha(out), 'body/output changed'
+    assert type(a['started_at'])is int and type(b['completed_at'])is int and b['completed_at']>=a['started_at'], 'invalid receipt chronology'
+    return b
+if __name__=='__main__':
+    command,prefix,*args=sys.argv[1:];prefix=Path(prefix)
+    assert prefix.parent.is_dir() and not prefix.parent.is_symlink(), 'unsafe receipt directory'
+    if command=='start':
+        body,marker,label=args;body=Path(body).absolute()
+        assert all(not os.path.lexists(receipt(prefix,s)) for s in ('.started','.done','.out')), 'existing/unknown action; inspect, never replay'
+        atomic(receipt(prefix,'.started'),{'schema':1,'marker':marker,'label':label,'body':str(body),'body_sha256':sha(body),'started_at':int(time.time())})
+    elif command=='done':
+        assert not args
+        a=strict_json(regular(receipt(prefix,'.started')))
+        assert sha(Path(a['body']))==a['body_sha256'], 'action body changed'
+        atomic(receipt(prefix,'.done'),{**a,'completed_at':int(time.time()),'started_sha256':sha(receipt(prefix,'.started')),'output_sha256':sha(receipt(prefix,'.out'))})
+        validate(prefix)
+    elif command=='check':
+        b=validate(prefix)
+        assert not args or b['marker']==args[0], 'unexpected action marker'
+    else:raise SystemExit('expected start/done/check')
 ```
 
 Write counters.py with this complete local, read-only source. It rejects missing, duplicate, malformed, nonfinite or changed/reset process-local samples:
@@ -9318,7 +11498,7 @@ r=Path(sys.argv[1]);a=json.loads((r/'show-before-step10.json').read_text());b=js
 PY
 step=10;export step
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 16.3-archive "89031-refused-attempt$attempt")"
-bash -eo pipefail "$file" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null
 date -u +%s > "$si_backup/task89-attempt$attempt-refused-epoch"
 printf '%s\n' 'original explicit precondition refusal, unchanged params/epoch and resolved RPC verified; evidence archived' > "$si_backup/task89-attempt$attempt.definitely-refused"
 ```
@@ -9356,7 +11536,7 @@ assert int(after['epoch'])==int(before['epoch'])+1 and after['current']==want
 PY
 step=10;export step
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 16.3-committed 89035-k2-committed-recovery)"
-bash -eo pipefail "$file" < /dev/null
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" < /dev/null
 ```
 
 A third precondition refusal retains its original files and stops for the user; do not lower the precondition/k or fabricate a successful receipt. Every non-precondition refusal/unknown stops immediately; successful prior attempts never permit another.
@@ -9381,6 +11561,7 @@ Write this complete user-block.sh in the task directory. It permits only these t
 set -eo pipefail
 umask 077
 R="$HOME/si-devnet2-stage3-p6"
+[ "$(shasum -a 256 "$HOME/.cache/s3f-task89/receipts.py" | cut -d' ' -f1)" = 64a8e9d239cf87322a1265fcfba14c11e5740bb9c29ac3d448926a8195be6eab ] || { echo 'action receipt helper changed; stop for reviewed rebuild'; exit 1; }
 marker="${1:?exact Task89 acceptance marker required}"
 case "$marker" in 12.5-accept-a|12.5-accept-b|12.5-accept-c) ;; *) echo 'not a Task89 keyed block'; exit 1 ;; esac
 [ -t 0 ] || { echo 'run only in the user private terminal'; exit 1; }
@@ -9391,10 +11572,11 @@ import os,stat,sys
 s=os.lstat(sys.argv[1]); assert stat.S_ISREG(s.st_mode) and s.st_uid==os.getuid() and stat.S_IMODE(s.st_mode)==0o600
 PY
 export key_file
-(set -C; printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.started")
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "user-$marker")"
-if bash -eo pipefail "$file"; then
-  printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$R/user-$marker.done"
+python3 -I "$HOME/.cache/s3f-task89/receipts.py" start "$R/user-$marker" "$file" "$marker" "user-$marker"
+if (set -C; python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" > "$R/user-$marker.out" 2>&1); then
+  cat "$R/user-$marker.out" || exit 1
+  python3 -I "$HOME/.cache/s3f-task89/receipts.py" 'done' "$R/user-$marker"
 else
   echo 'unknown or failed INSERT: preserve evidence, inspect, never repeat blindly' >&2
   exit 1
@@ -9473,16 +11655,26 @@ index e0ec695..d90ed2e 100644
 bash -eo pipefail "$HOME/.cache/s3f-task89/run.sh" 12.5-alert-commit 89050-exit-alert-commit
 ```
 
-Confirm before running. Gate: push only this signed current-main commit, with a separate explicit confirmation already obtained for syncing storage-integrity-si-v2. A rejected push or moved head stops; never force. A pushed-but-unsynced state is resumed by verifying the actual commit and confirming only the remaining sync, never replaying the whole block blindly:
+Confirm before running. Gate: push only this signed current-main commit. This confirmation does not authorize sync. A rejected push or moved head stops; never force. A pushed-but-unsynced state is resumed by verifying the actual commit and confirming only the remaining sync, never replaying the whole block blindly:
 
 ```bash
 set -eo pipefail
 source "$HOME/si-devnet2-stage3-p6/helpers.sh";cd "$P"
 git fetch -q origin main
-[ "$(git rev-list --left-right --count origin/main...HEAD)" = "0	1" ] || { echo 'unexpected divergence: inspect, never force';exit 1; }
-[ "$(git log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git log -1 --format=%G?)" = G ]
-bash -eo pipefail "$HOME/.cache/s3f-task89/run.sh" 12.5-alert-sync 89051-exit-alert-sync
+si_read_89_457_1="$(git rev-list --count origin/main..HEAD)" || exit 1
+si_read_89_457_2="$(git rev-list --count HEAD..origin/main)" || exit 1
+[ "${si_read_89_457_1}" = 1 ] && [ "${si_read_89_457_2}" = 0 ] || { echo 'unexpected divergence: inspect, never force';exit 1; }
+si_read_89_458_1="$(git log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_89_458_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_89_459_1="$(git log -1 --format=%G?)" || exit 1
+[ "${si_read_89_459_1}" = G ] || exit 1
+bash -eo pipefail "$HOME/.cache/s3f-task89/run.sh" 12.5-alert-push 89051-exit-alert-push
+```
+
+Confirm before running. Gate: sync only storage-integrity-si-v2 at the observed signed X commit after verifying its immutable push receipt. No push is repeated.
+
+```bash
+bash -eo pipefail "$HOME/.cache/s3f-task89/run.sh" 12.5-alert-sync 89052-exit-alert-sync
 ```
 
 Read-only gate before starting any soak clock: the live vmalert group must contain exactly one healthy alert rule with that exact name and no lastError. Missing/unhealthy data is a stop, not a no-data success. Preserve the response:
@@ -9541,9 +11733,9 @@ label="task89-$marker-day$day-$(date -u +%Y%m%dT%H%M%SZ)"
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block "$marker" "$label")"
 if [ "$marker" = 13.1-review ]; then
   echo "At the actual runbook prompt enter day $day, then your own public review." >&2
-  bash -eo pipefail "$file"
+  python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file"
 else
-  printf '%s\n' "$day" | bash -eo pipefail "$file"
+  printf '%s\n' "$day" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file"
 fi
 ```
 
@@ -9694,7 +11886,7 @@ Only after an actual user-approved repair and explicit confirmation, the exact13
 set -eo pipefail
 [ -t 0 ] || { echo 'user terminal only';exit 1; }
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 13.1-restart "task89-restart-$(date -u +%Y%m%dT%H%M%SZ)")"
-bash -eo pipefail "$file"
+python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file"
 ```
 
 Confirm before running. Gate: record the actual approved repair and start a wholly new full seven-day interval preserving k2, the original bound/cap and failed run evidence; no capacity or threshold decision is made by this helper. User terminal:
@@ -9721,13 +11913,14 @@ Capture exact registry/groups/acceptance-database mapping before dropping any ta
 bash -eo pipefail "$HOME/.cache/s3f-task89/run.sh" 14-before 89080-before-end
 ```
 
-Write drop.sh with the complete source below; the agent never executes it. It accepts only a,b,c in order, validates the existing key-file metadata without reading contents, runs the exact selector and exports its actual owner/database to the exact drop body. Every invocation needs its own user confirmation. The logging pipeline retains automated stdout/stderr; when this fresh audit requires a tail-event explanation, the runbook helper independently opens and validates the actual controlling terminal on a function-local descriptor for its prompt and real user input. A pipe or prefilled input is never operational approval, and no controlling terminal means refusal before a positive guard or DDL. Agents never launch this keyed wrapper or synthesize a terminal for approval; local public fixtures use no endpoint, key or DDL execution. The runbook takes a fresh closing proof inside14-drop before agent start, and writes the exclusive drop-query-<x>.started immediately before DDL. A guard refusal with DROP_NOT_ATTEMPTED and no query-start proves DDL not attempted; any query-start/ambiguous SQL result requires investigation of the original query and registry, never blind resubmission. Preserve the wrapper started receipt even on failure:
+Write drop.sh with the complete source below; the agent never executes it. It accepts only a,b,c in order, validates the existing key-file metadata without reading contents, runs the exact selector and exports its actual owner/database to the exact drop body. Every invocation needs its own user confirmation. The exclusive output file retains automated stdout/stderr and the immutable receipt binds its SHA256; when this fresh audit requires a tail-event explanation, the runbook helper independently opens and validates the actual controlling terminal on a function-local descriptor for its prompt and real user input. A pipe or prefilled input is never operational approval, and no controlling terminal means refusal before a positive guard or DDL. Agents never launch this keyed wrapper or synthesize a terminal for approval; local public fixtures use no endpoint, key or DDL execution. The runbook takes a fresh closing proof inside14-drop before agent start, and writes the exclusive drop-query-<x>.started immediately before DDL. A guard refusal with DROP_NOT_ATTEMPTED and no query-start proves DDL not attempted; any query-start/ambiguous SQL result requires investigation of the original query and registry, never blind resubmission. Preserve the wrapper started receipt even on failure:
 
 ```bash
 #!/usr/bin/env bash
 set -eo pipefail
 umask 077
 [ -t 0 ] || { echo 'user private terminal only'; exit 1; }
+[ "$(shasum -a 256 "$HOME/.cache/s3f-task89/receipts.py" | cut -d' ' -f1)" = 64a8e9d239cf87322a1265fcfba14c11e5740bb9c29ac3d448926a8195be6eab ] || { echo 'action receipt helper changed; stop for reviewed rebuild'; exit 1; }
 x="${1:?acceptance host a,b,c required}"
 R="$HOME/si-devnet2-stage3-p6"
 case "$x" in
@@ -9745,15 +11938,16 @@ PY
 source "$R/helpers.sh";si_backup="$R";cd "$P"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 selector="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 14-select "task89-select-$x-$stamp")"
-printf '%s\n' "$x" | bash -eo pipefail "$selector"
+printf '%s\n' "$x" | python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$selector"
 owner="$(si_host_id "$x")"
 db="$(awk -F '\t' -v o="$owner" '$1==o {print $2}' "$si_backup/acceptance-databases.tsv")"
 [ -n "$db" ] && [[ "$db" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || exit 1
 export x owner db key_file
-(set -C;printf '%s\n' "$stamp" > "$R/task89-drop-$x.started")
 file="$(python3 -I "$HOME/.cache/s3f-task85/prepare.py" block 14-drop "task89-drop-$x-$stamp")"
-if bash -eo pipefail "$file" 2>&1 | tee "$R/task89-drop-$x-$stamp.out";then
-  date -u +%Y-%m-%dT%H:%M:%SZ > "$R/task89-drop-$x.done"
+python3 -I "$HOME/.cache/s3f-task89/receipts.py" start "$R/task89-drop-$x" "$file" 14-drop "$stamp"
+if (set -C; python3 -I "$HOME/.cache/s3f-task85/prepare.py" run-file "$file" > "$R/task89-drop-$x.out" 2>&1); then
+  cat "$R/task89-drop-$x.out" || exit 1
+  python3 -I "$HOME/.cache/s3f-task89/receipts.py" 'done' "$R/task89-drop-$x"
 else
   echo 'retain started/guard/query evidence; investigate, never replay this DROP blindly' >&2
   exit 1
@@ -9769,9 +11963,9 @@ set -eo pipefail
 x="${1:?host a,b,c required}";case "$x" in a|b|c) ;; *) exit 1 ;; esac
 R="$HOME/si-devnet2-stage3-p6"
 [ -s "$R/task89-drop-$x.started" ] && [ ! -e "$R/drop-query-$x.started" ] && [ ! -e "$R/drop-guard-$x.json" ] && [ ! -e "$R/task89-drop-$x.done" ] || { echo 'not a positively unattempted DROP; stop';exit 1; }
-stamp="$(cat "$R/task89-drop-$x.started")"
+stamp="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["label"])' "$R/task89-drop-$x.started")"
 [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || exit 1
-log="$R/task89-drop-$x-$stamp.out"
+log="$R/task89-drop-$x.out"
 grep -F 'DROP_NOT_ATTEMPTED: closing guard refused' "$log" >/dev/null
 archive="$R/task89-guard-refused-$x-$stamp";mkdir -m 700 "$archive"
 mv "$R/task89-drop-$x.started" "$log" "$archive/"
@@ -9840,6 +12034,34 @@ Write record.py with the complete source below. It validates the actual k2 recei
 import copy,datetime,hashlib,json,re,sys
 from pathlib import Path
 
+def strict_json(text):
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise ValueError('duplicate JSON key')
+            result[key]=value
+        return result
+    def constant(value):raise ValueError('nonfinite JSON constant')
+    def finite(token):
+        value=float(token)
+        if value!=value or value in (float('inf'),float('-inf')):raise ValueError('nonfinite JSON number')
+        return value
+    return json.loads(text,object_pairs_hook=pairs,parse_constant=constant,parse_float=finite)
+
+def uint64(value):
+    # Proto JSON uint64 may be a canonical decimal string; local JSON emits int.
+    if type(value) is int:
+        number=value
+    elif type(value) is str and re.fullmatch(r'0|[1-9][0-9]*',value):
+        number=int(value)
+    else:raise ValueError('expected exact uint64 integer or canonical decimal string')
+    if not 0<=number<2**64:raise ValueError('uint64 out of range')
+    return number
+
+def local_integer(value):
+    if type(value) is not int or value<0:raise ValueError('expected local nonnegative JSON integer')
+    return value
+
 def require(ok,why):
     if not ok: raise ValueError(why)
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -9847,7 +12069,23 @@ def pairs(p):
     items=[x.split('=',1) for x in p.read_text().splitlines()]
     require(all(len(x)==2 for x in items) and len(dict(items))==len(items),'malformed/duplicate pair')
     return dict(items)
-def load(p):return json.loads(p.read_text())
+def load(p):
+    value=strict_json(p.read_text())
+    # These fields are emitted as integers by the local Task84/89 writers.
+    local_fields={'schema','day','start_epoch','end_epoch','k2_epoch','start_promotion_seq','forecast_upper_bound','interval_start','interval_end','read1_begin','read1_end','read2_begin','read2_end','completed_at','reviewed_at','evaluated_at','live_promotion_seq','half_budget','actual_global_spent','approved_total_envelope','remaining_envelope','remaining_lifecycle_reserve'}
+    def check(item):
+        if isinstance(item,dict):
+            for key,child in item.items():
+                if key in local_fields:local_integer(child)
+                if key=='stage3' and isinstance(child,dict):
+                    flags={'network_fill_default','strict_copies','exclude_quarantined_hosts','purge','eviction_voiding','owner_aware_selection','placement','reselection','checkpoints','narrowed_drain'}
+                    for flag in flags & child.keys():
+                        if type(child[flag]) is not bool:raise ValueError('present stage3 flag must be JSON boolean')
+                check(child)
+        elif isinstance(item,list):
+            for child in item:check(child)
+    check(value)
+    return value
 def bound(base,files):
     require(files,'empty evidence file manifest')
     for name,sha in files.items():
@@ -9867,34 +12105,41 @@ def closing(run,path,sha,manifest):
     require(audit['files_sha256']==proof['files_sha256'],'closing audit manifest differs')
     guard=proof['budget_guard'];require(guard==audit['budget_guard'] and guard['closing'] is True,'closing budget guard missing/changed')
     selected=manifest['selected_acceptance'];require(len(selected)==3,'missing original three acceptance incarnations')
-    identity=lambda x:tuple(str(x[k]) for k in ('owner','database_id','table','incarnation'))
+    identity=lambda x:(uint64(x['owner']),x['database_id'],x['table'],uint64(x['incarnation']))
     original={identity(x) for x in selected};purged=[identity(x) for x in guard['purged_selected']]
     require(len(original)==3 and len(set(purged))==len(purged) and set(purged)<=original,'foreign/duplicate purged acceptance identity')
-    current=load(path.parent/'budget.json');spent=int(current['live_promotion_seq'])-int(manifest['start_promotion_seq']);envelope=int(manifest['forecast_upper_bound'])+6;remaining=envelope-spent;reserve=2*(3-len(purged))
+    current=load(path.parent/'budget.json');spent=uint64(current['live_promotion_seq'])-uint64(manifest['start_promotion_seq']);envelope=uint64(manifest['forecast_upper_bound'])+6;remaining=envelope-spent;reserve=2*(3-len(purged))
     require(spent>=0 and guard['actual_global_spent']==spent and guard['approved_total_envelope']==envelope and guard['remaining_envelope']==remaining and guard['remaining_lifecycle_reserve']==reserve,'closing budget arithmetic differs')
-    require(remaining>=reserve and remaining<=int(current['half_budget']),'closing remaining reserve/fresh half-budget exhausted')
-    initial=manifest['initial_budget'];live=int(current['live_promotion_seq']);require(live>=int(initial['live_promotion_seq']) and live-int(initial['live_promotion_seq'])+remaining<=int(initial['half_budget']),'original half-budget exhausted')
+    require(remaining>=reserve and remaining<=uint64(current['half_budget']),'closing remaining reserve/fresh half-budget exhausted')
+    initial=manifest['initial_budget'];live=uint64(current['live_promotion_seq']);require(live>=uint64(initial['live_promotion_seq']) and live-uint64(initial['live_promotion_seq'])+remaining<=uint64(initial['half_budget']),'original half-budget exhausted')
     require(not audit['needs_review'] or proof['review_sha256'] is not None,'closing event has no actual review')
     if proof['review_sha256'] is not None:
         review=load(path.parent/'review.json')
         require(proof['review_sha256']==digest(path.parent/'review.json') and review['audit_sha256']==proof['audit_sha256'] and len(review['public_explanation_and_resolution'].strip())>=40 and review['reviewed_at']>=audit['completed_at'],'closing tail review missing/changed')
     return proof
 def validate(R):
+    import importlib.util
+    path=Path.home()/'.cache/s3f-task89/receipts.py'
+    require(digest(path)=='64a8e9d239cf87322a1265fcfba14c11e5740bb9c29ac3d448926a8195be6eab','action receipt helper changed')
+    spec=importlib.util.spec_from_file_location('task89_receipts',path);custody=importlib.util.module_from_spec(spec);spec.loader.exec_module(custody)
+    for name,marker in [(f'user-12.5-accept-{x}',f'12.5-accept-{x}') for x in 'abc']+[(f'task89-drop-{x}','14-drop') for x in 'abc']+[(f'task89-12.5-alert-{a}',f'12.5-alert-{a}') for a in ('commit','push','sync')]:
+        require(custody.validate(R/name)['marker']==marker,'missing/changed original action receipt')
     before=load(R/'show-before-step10.json');after=load(R/'show-after-step10.json')
     require(after==load(R/'task89-receipt-step10.json'),'k2 receipt differs')
+    local_integer(before['current']['stage3']['min_safe_copies']);local_integer(after['current']['stage3']['min_safe_copies'])
     wanted=copy.deepcopy(before['current']);wanted['stage3']['min_safe_copies']=2
-    require(after['current']==wanted and int(before['current']['stage3']['min_safe_copies'])==1,'wrong k update')
-    require(int(after['epoch'])==int(before['epoch'])+1,'k2 epoch not successor')
+    require(after['current']==wanted and uint64(before['current']['stage3']['min_safe_copies'])==1 and type(after['current']['stage3']['min_safe_copies']) is int,'wrong k update')
+    require(uint64(after['epoch'])==uint64(before['epoch'])+1,'k2 epoch not successor')
     require((R/'diff-step10.txt').read_text().strip()=='stage3.min_safe_copies','wrong changed field')
     require((R/'verify-step10.txt').read_text().strip(),'missing k2 verification')
     name=(R/'soak-current').read_text().strip()
     require(re.fullmatch('[A-Za-z0-9_-]+',name),'unsafe soak run pointer')
     run=(R/'soak-runs'/name).resolve()
     require(run.parent==(R/'soak-runs').resolve() and not (run/'FAILED.json').exists(),'run outside soak-runs/failed')
-    manifest=load(run/'run.json');epoch=int(after['epoch'])
+    manifest=load(run/'run.json');epoch=uint64(after['epoch'])
     require(manifest['schema']==1,'unsupported run schema')
-    require(int(manifest['k2_epoch'])==epoch,'soak started under wrong k2 epoch')
-    start=int(manifest['start_epoch']);end=int(manifest['end_epoch'])
+    require(uint64(manifest['k2_epoch'])==epoch,'soak started under wrong k2 epoch')
+    start=uint64(manifest['start_epoch']);end=uint64(manifest['end_epoch'])
     require(end==start+7*86400,'not seven complete intervals')
     require(digest(R/'pins')==manifest['pins_sha256'],'pins changed')
     days=[]
@@ -9918,13 +12163,19 @@ def validate(R):
         require(audit.parent==(D/'audits').resolve(),'unsafe audit pointer')
         require(receipt['audit_sha256']==digest(audit/'audit.json'),'audit hash differs')
         require(receipt['review_sha256']==digest(audit/'review.json'),'review hash differs')
+        actual_audit=load(audit/'audit.json')
+        require(actual_audit['schema']==1 and actual_audit['run_id']==manifest['run_id'] and actual_audit['day']==day,'foreign/malformed daily audit')
+        require((actual_audit['interval_start'],actual_audit['interval_end'])==(s,e),'daily audit interval differs')
+        require(actual_audit['observation_sha256']==receipt['observation_sha256'] and actual_audit['files_sha256']==receipt['files_sha256'],'daily audit observation/full manifest differs')
         review=load(audit/'review.json')
+        require(review['schema']==1 and review['run_id']==manifest['run_id'] and review['day']==day,'foreign/malformed daily review')
+        require(receipt['completed_at']>=review['reviewed_at']>=actual_audit['evaluated_at']>=e,'daily audit/review/completion order differs')
         require(review['audit_sha256']==receipt['audit_sha256'] and len(review['public_review'].strip())>=40,'empty/wrong actual user review')
         require(receipt['completed_at']>=e and review['reviewed_at']>=e,'premature completion/review')
         bound(audit,receipt['files_sha256'])
         days.append((day,s,e,receipt))
     exit=load(R/'soak-exit.json')
-    require(exit['run_id']==manifest['run_id'] and int(exit['k2_epoch'])==epoch,'exit not same run/k2')
+    require(exit['run_id']==manifest['run_id'] and uint64(exit['k2_epoch'])==epoch,'exit not same run/k2')
     require((exit['start_epoch'],exit['end_epoch'])==(start,end),'exit intervals differ')
     closing(run,exit['closing_receipt'],exit['closing_sha256'],manifest)
     final_path=Path((R/'soak-last-closing').read_text().strip())
@@ -9942,7 +12193,10 @@ def validate(R):
         require(guard['owner_label']==x and guard['run_id']==manifest['run_id'],'wrong positive closing guard')
         proof=closing(run,guard['closing_receipt'],guard['closing_sha256'],manifest)
         require(when.timestamp()>=proof['completed_at'],'end precedes DROP closing proof')
-        require((R/f'keeper-purge-{x}.txt').read_text().strip().startswith('absent /storage-integrity/devnet2/devnet2-si-v2/sentio/0/unsafe_inc/'),'missing exact scoped Keeper absence')
+        selected=[i for i in manifest['selected_acceptance'] if str(i['owner'])==dict((a,str(b)) for a,b in (('a',0),('b',1),('c',pairs(R/'pins')['INDEXER_C_ID'])))[x]]
+        require(len(selected)==1 and selected[0]['table']=='s3_p6' and guard['database']==selected[0]['database_id'],'DROP guard differs from original selected database')
+        i=selected[0];expected=f"absent /storage-integrity/devnet2/devnet2-si-v2/sentio/0/unsafe_inc/{i['database_id']}__{i['table']}/{i['incarnation']}"
+        require((R/f'keeper-purge-{x}.txt').read_text().strip()==expected,'missing exact original scoped Keeper absence')
     return epoch,when.date().isoformat(),manifest,days
 
 def docs(R,tree):
@@ -9980,7 +12234,9 @@ if __name__=='__main__':
         epoch,date,run,days=validate(R)
         source=load(R/'task89-record-source.json')
         require(source=={'schema':1,'run_id':run['run_id'],'k2_epoch':epoch,'p6_end':date,'p6_end_sha256':digest(R/'p6-end.txt'),'daily_receipts':{str(day):digest(R/'soak-runs'/run['run_id']/f'day-{day}'/'receipt.json') for day,_,_,_ in days}},'public record facts changed while its PR was reviewed; stop and reconcile record PR/evidence before R1')
-        pr=load(R/'task89-record-merged.json');require(pr['state']=='MERGED' and pr['mergedAt'] and pr['mergeCommit']['oid'],'record PR not merged')
+        pr=load(R/'task89-record-merged.json');require(pr['state']=='MERGED' and pr['mergedAt'],'record PR not merged')
+        require(re.fullmatch('[0-9a-f]{40}',pr['mergeCommit']['oid']) and re.fullmatch('[0-9a-f]{40}',pr['headRefOid']),'invalid observed merged record/head SHA')
+        require(pr['headRefOid']==(R/'task89-record-checked-head').read_text().strip(),'merged record is not the reviewed head')
         require(re.fullmatch(r'https://github.com/sentioxyz/production/pull/[1-9][0-9]*',pr['url']),'unexpected record PR')
         ledger=Path.home()/'.cache/s3-ledger';ledger.mkdir(mode=0o700,parents=True,exist_ok=True)
         (R/'task89-epoch-pairs').write_text(f'K2_EPOCH={epoch}\nP6_END={date}\n')
@@ -9998,11 +12254,20 @@ p=/Users/uranuswch/Dev/projects/sentio-network/production
 T="$HOME/.cache/s3f-task89"; R="$HOME/si-devnet2-stage3-p6"
 git -C "$p" fetch -q origin main
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$p" codex multi-source-s3f-record-89 urwt/codex/multi-source-s3f-record-89 origin/main)"
-d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$p" rev-parse origin/main)" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'record checkout not newly created clean at main'; exit 1; }
-git -C "$d" config extensions.worktreeConfig true
-git -C "$d" config --worktree user.name poetry
-git -C "$d" config --worktree user.email chen@sentio.xyz
+d="$(python3 -I -c 'import json,os,sys;d=json.loads(sys.argv[1]);assert isinstance(d,dict) and d.get("action")=="created";p=d.get("path");assert isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$out")" || exit 1
+si_read_89_1002_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1002_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1002_2="$(git -C "$p" rev-parse origin/main)" || exit 1
+[[ "$si_read_89_1002_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1002_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_89_1002_1}" = "${si_read_89_1002_2}" ] && [ -z "${si_read_89_1002_3}" ] || { echo 'record checkout not newly created clean at main'; exit 1; }
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+si_read_89_1007_1="$(git -C "$d" config --worktree commit.gpgsign)" || exit 1
+[ "${si_read_89_1007_1}" = true ] || exit 1
+printf '%s\n' "$out" > "$T/record-worktree.json"
 printf '%s\n' "$d" > "$T/record-path"
 python3 -I "$T/record.py" docs "$d"
 git -C "$d" diff --check
@@ -10020,10 +12285,13 @@ Confirm before running. Gate: sign only this two-doc record commit, with verifie
 ```bash
 set -eo pipefail
 T="$HOME/.cache/s3f-task89";d="$(cat "$T/record-path")"
-[ "$(git -C "$d" diff --name-only | wc -l | tr -d ' ')" = 2 ]
-git -C "$d" -c commit.gpgsign=true commit -m 'docs(storage-integrity): record P6 k2 and completed seven-day soak' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- docs/storage-integrity-devnet2-multi-source.md docs/storage-integrity-devnet2-stage3-p6-switches.md
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+si_read_89_1026_1="$(git -C "$d" diff --name-only | wc -l | tr -d ' ')" || exit 1
+[ "${si_read_89_1026_1}" = 2 ] || exit 1
+git -C "$d" -c commit.gpgsign=true commit -m 'docs(storage-integrity): record P6 k2 and completed seven-day soak' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- docs/storage-integrity-devnet2-multi-source.md docs/storage-integrity-devnet2-stage3-p6-switches.md || { echo 'signed commit failed or canceled; stop and ask the user to unlock the actual configured signing key'; exit 1; }
+si_read_89_1028_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_89_1028_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_89_1029_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_89_1029_1}" = G ] || exit 1
 ```
 
 Confirm before running. Gate: push only the signed record branch after checking ahead/behind and author; no force. Then obtain a separate explicit confirmation to create its production docs PR:
@@ -10033,7 +12301,8 @@ set -eo pipefail
 T="$HOME/.cache/s3f-task89";d="$(cat "$T/record-path")"
 git -C "$d" fetch -q origin
 git -C "$d" rev-list --left-right --count origin/main...HEAD
-[ "$(git -C "$d" rev-list --left-right --count origin/main...HEAD | awk '{print $1}')" = 0 ] || { echo 'main moved: reconcile signed record and recheck';exit 1; }
+si_read_89_1039_1="$(git -C "$d" rev-list --left-right --count origin/main...HEAD | awk '{print $1}')" || exit 1
+[ "${si_read_89_1039_1}" = 0 ] || { echo 'main moved: reconcile signed record and recheck';exit 1; }
 python3 -I - "$d" <<'PY'
 import re,subprocess,sys
 d=sys.argv[1];git=lambda *a:subprocess.check_output(['git','-C',d,*a],text=True)
@@ -10043,7 +12312,7 @@ for revision in revisions:
     name,email,signature,message=git('log','-1','--format=%an%x00%ae%x00%G?%x00%B',revision).split('\0',3)
     coauthors=re.findall(r'(?im)^[ \t]*co-authored-by[ \t]*:.*$',message)
     parsed=subprocess.run(['git','interpret-trailers','--parse'],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
-    assert (name,email,signature)==('poetry','chen@sentio.xyz','G') and coauthors in ([],[trailer]) and parsed.count(trailer)==len(coauthors),'publication identity/signature/trailer mismatch'
+    assert (name,email,signature)==('poetry','chen@sentio.xyz','G') and coauthors==[trailer] and parsed.count(trailer)==1,'publication identity/signature/trailer mismatch'
 print('every local publication commit identity/signature verified')
 PY
 git -C "$d" push -u origin urwt/codex/multi-source-s3f-record-89
@@ -10063,8 +12332,12 @@ Wait for current-head CI and read every AgentConnect/Bugbot review/inline findin
 ```bash
 set -eo pipefail
 T="$HOME/.cache/s3f-task89";d="$(cat "$T/record-path")"
-pr="$(gh pr view "$(cat "$T/record-pr-url")" --repo sentioxyz/production --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || exit 1
+pr="$(gh pr view "$(cat "$T/record-pr-url")" --repo sentioxyz/production --json number --jq .number)" || exit 1
+si_read_89_1070_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1070_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1070_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1070_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1070_1}" = "${si_read_89_1070_2}" ] || exit 1
 gh pr checks "$pr" --repo sentioxyz/production --watch --fail-fast
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/reviews" > "$T/record-reviews.json"
 gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/comments" > "$T/record-comments.json"
@@ -10075,30 +12348,47 @@ Confirm before running. Gate: merge only this completed production record PR aft
 ```bash
 set -eo pipefail
 T="$HOME/.cache/s3f-task89";R="$HOME/si-devnet2-stage3-p6";d="$(cat "$T/record-path")"
-pr="$(gh pr view "$(cat "$T/record-pr-url")" --repo sentioxyz/production --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || exit 1
-gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+pr="$(gh pr view "$(cat "$T/record-pr-url")" --repo sentioxyz/production --json number --jq .number)" || exit 1
+si_read_89_1082_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1082_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1082_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1082_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1082_1}" = "${si_read_89_1082_2}" ] || exit 1
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_89_1085_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1085_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1085_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review; stop'; exit 1; }
+gh api --paginate --slurp "repos/sentioxyz/production/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_89_1104_1="$(gh pr view "$pr" --repo sentioxyz/production --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1104_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1104_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review; stop'; exit 1; }
 
 gh pr checks "$pr" --repo sentioxyz/production
-gh pr merge "$pr" --repo sentioxyz/production --squash
-gh pr view "$pr" --repo sentioxyz/production --json number,url,state,mergeCommit,mergedAt > "$R/task89-record-merged.json"
+si_read_89_1107_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1107_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1107_1}" = "$expected_head" ] || { echo 'local checked head changed; stop'; exit 1; }
+gh pr merge "$pr" --repo sentioxyz/production --squash --match-head-commit "$expected_head" || exit 1
+printf '%s\n' "$expected_head" > "$R/task89-record-checked-head"
+gh pr view "$pr" --repo sentioxyz/production --json number,url,state,headRefOid,mergeCommit,mergedAt > "$R/task89-record-merged.json"
 [ "$(jq -r .state "$R/task89-record-merged.json")" = MERGED ]
 git -C "$d" fetch -q origin main
 git -C "$d" merge-base --is-ancestor "$(jq -r .mergeCommit.oid "$R/task89-record-merged.json")" origin/main
@@ -10121,20 +12411,38 @@ git -C "$h" fetch -q origin
 python3 -I "$L/s3-ledger.py" empty "$h" K2_EPOCH P6_END
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
 out="$(bash ~/.agents/skills/urwt/scripts/urwt-create.sh "$h" codex multi-source-s3f-ledger-89 urwt/codex/multi-source-s3f-ledger-89 "$ref")"
-d="$(printf '%s\n' "$out" | jq -er .path)"
-[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "$(git -C "$d" rev-parse HEAD)" = "$(git -C "$h" rev-parse "$ref")" ] && [ -z "$(git -C "$d" status --porcelain)" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
-git -C "$d" config extensions.worktreeConfig true
-git -C "$d" config --worktree user.name poetry
-git -C "$d" config --worktree user.email chen@sentio.xyz
+d="$(python3 -I -c 'import json,os,sys;d=json.loads(sys.argv[1]);assert isinstance(d,dict) and d.get("action")=="created";p=d.get("path");assert isinstance(p,str) and os.path.isabs(p) and p!="/" and not any(c in p for c in ("\n","\r","\x00"));print(p)' "$out")" || exit 1
+si_read_89_1134_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1134_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1134_2="$(git -C "$h" rev-parse "$ref")" || exit 1
+[[ "$si_read_89_1134_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1134_3="$(git -C "$d" status --porcelain)" || exit 1
+[ "$(printf '%s\n' "$out" | jq -er .action)" = created ] && [ "${si_read_89_1134_1}" = "${si_read_89_1134_2}" ] && [ -z "${si_read_89_1134_3}" ] || { echo 'ledger checkout is not newly created clean at ref'; exit 1; }
+git -C "$d" config extensions.worktreeConfig true || exit 1
+git -C "$d" config --worktree user.name poetry || exit 1
+git -C "$d" config --worktree user.email chen@sentio.xyz || exit 1
+git -C "$d" config --worktree commit.gpgsign true || exit 1
+si_read_89_1139_1="$(git -C "$d" config --worktree commit.gpgsign)" || exit 1
+[ "${si_read_89_1139_1}" = true ] || exit 1
+printf '%s\n' "$out" > "$L/record-89-worktree.json"
 printf '%s\n%s\n' "$d" "$ref" > "$L/record-89"
+python3 -I - "$HOME/si-devnet2-stage3-p6/task89-epoch-pairs" <<'PY'
+import re,sys
+from pathlib import Path
+lines=Path(sys.argv[1]).read_text().splitlines()
+assert len(lines)==2 and re.fullmatch(r'K2_EPOCH=[0-9]+',lines[0]) and re.fullmatch(r'P6_END=20[0-9]{2}-[01][0-9]-[0-3][0-9]',lines[1]),'Task89 must record exactly its two observed names'
+PY
 pairs=()
 while IFS= read -r pair; do pairs+=("$pair"); done < "$HOME/si-devnet2-stage3-p6/task89-epoch-pairs"
 python3 -I "$L/s3-ledger.py" set "$d/$rel" 89 "$L/record-89.md" "${pairs[@]}"
-[ "$(git -C "$d" diff --name-only)" = "$rel" ]
+si_read_89_1151_1="$(git -C "$d" diff --name-only)" || exit 1
+[ "${si_read_89_1151_1}" = "$rel" ] || exit 1
 git -C "$d" diff --check
-git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record K2_EPOCH and P6_END of Plan S3-F (Task 89)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel"
-[ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ]
-[ "$(git -C "$d" log -1 --format=%G?)" = G ]
+git -C "$d" -c commit.gpgsign=true commit -m 'docs(plan): record K2_EPOCH and P6_END of Plan S3-F (Task 89)' -m 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>' -- "$rel" || { echo 'signed commit failed or canceled; stop and ask the user to unlock the actual configured signing key'; exit 1; }
+si_read_89_1154_1="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+[ "${si_read_89_1154_1}" = 'poetry <chen@sentio.xyz>' ] || exit 1
+si_read_89_1155_1="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_89_1155_1}" = G ] || exit 1
 ```
 
 Expected two observed rows and one run item recorded in one signed plan-only commit. `no plan 's3f'`, an already-recorded row, duplicate name, nonmatching ref or a signing error stops. Do not edit Appendix C manually, push a different branch or amend an existing recorded value.
@@ -10147,7 +12455,11 @@ Confirm before running. Gate: publish only the observed Task 89 record to the ex
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-89")"; ref="$(sed -n 2p "$L/record-89")"
-[ "$(git -C "$d" rev-list --count "$ref..HEAD")" = 1 ] && [ -z "$(git -C "$d" status --porcelain)" ] && [ "$(git -C "$d" log -1 --format='%an <%ae>')" = 'poetry <chen@sentio.xyz>' ] && [ "$(git -C "$d" log -1 --format=%G?)" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
+si_read_89_1168_1="$(git -C "$d" rev-list --count "$ref..HEAD")" || exit 1
+si_read_89_1168_2="$(git -C "$d" status --porcelain)" || exit 1
+si_read_89_1168_3="$(git -C "$d" log -1 --format='%an <%ae>')" || exit 1
+si_read_89_1168_4="$(git -C "$d" log -1 --format=%G?)" || exit 1
+[ "${si_read_89_1168_1}" = 1 ] && [ -z "${si_read_89_1168_2}" ] && [ "${si_read_89_1168_3}" = 'poetry <chen@sentio.xyz>' ] && [ "${si_read_89_1168_4}" = G ] || { echo 'ledger identity/range/signature/cleanliness mismatch'; exit 1; }
 if [ "$ref" = origin/main ]; then
   git -C "$d" push -u origin HEAD
 else
@@ -10176,42 +12488,62 @@ set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-89")"; ref="$(sed -n 2p "$L/record-89")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-89-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+pr="$(gh pr view "$(cat "$L/record-89-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_89_1198_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1198_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1198_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1198_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1198_1}" = "${si_read_89_1198_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate --watch --fail-fast
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/reviews" > "$L/record-89-reviews.json"
 gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/comments" > "$L/record-89-comments.json"
 ```
 
-Confirm before running. Gate: squash merge this single Task 89 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The REST validator rejects empty/malformed/truncated listings and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
+Confirm before running. Gate: squash merge this single Task 89 docs ledger PR after rechecking its exact HEAD, CI and every primary author/trailer. This is not any planning-stack PR. The exact C1 Task25 FINALv2 reader (SHA256 `6395780f959a158af7ebbfb9c586b895b74e3c9496c36f8df02cd88c8f960d97`) rejects empty/malformed/truncated listings, non-string/noncanonical/duplicate SHAs, a final-listed SHA different from the checked head and unexpected/duplicate trailers; GraphQL `authors` is never used to infer the primary author.
 
 ```bash
 set -eo pipefail
 L="$HOME/.cache/s3-ledger"
 d="$(sed -n 1p "$L/record-89")"; ref="$(sed -n 2p "$L/record-89")"
 [ "$ref" = origin/main ] || { echo 'ledger branch: no R3'; exit 0; }
-pr="$(gh pr view "$(cat "$L/record-89-pr-url")" --repo housegate/housegate --json number --jq .number)"
-[ "$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" = "$(git -C "$d" rev-parse HEAD)" ] || { echo 'ledger PR head differs; stop'; exit 1; }
-gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -c 'import json
-import re
-import subprocess
-import sys
-pages = json.load(sys.stdin)
-if not isinstance(pages, list) or not pages or any(not isinstance(page, list) or not page for page in pages):
-    sys.exit("missing PR commits; stop")
-if sum(map(len, pages)) >= 250:
-    sys.exit("PR commit listing reached the REST limit; inspect the full range before merging; stop")
-trailer = "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-for commit in [commit for page in pages for commit in page]:
-    author = commit["commit"]["author"]
-    message = commit["commit"]["message"]
-    coauthors = re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$", message)
-    parsed = subprocess.run(["git", "interpret-trailers", "--parse"], input=message, text=True, check=True, capture_output=True).stdout.splitlines()
-    if (author["name"], author["email"]) != ("poetry", "chen@sentio.xyz") or coauthors not in ([], [trailer]) or parsed.count(trailer) != len(coauthors):
-        sys.exit("unexpected primary author or coauthor on " + commit["sha"] + "; rewrite identities first; stop")
-print("PR commit identities verified")'
+pr="$(gh pr view "$(cat "$L/record-89-pr-url")" --repo housegate/housegate --json number --jq .number)" || exit 1
+si_read_89_1212_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1212_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+si_read_89_1212_2="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1212_2" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1212_1}" = "${si_read_89_1212_2}" ] || { echo 'ledger PR head differs; stop'; exit 1; }
+expected_head="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$expected_head" =~ ^[0-9a-f]{40}$ ]] || { echo 'invalid checked PR head; stop'; exit 1; }
+si_read_89_1215_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1215_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1215_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review; stop'; exit 1; }
+gh api --paginate --slurp "repos/housegate/housegate/pulls/$pr/commits" | python3 -I -c '"""Fail-closed REST primary-author and trailer check for a pinned PR head."""
+import json,re,subprocess,sys
+head=sys.argv[1]
+if re.fullmatch(r"[0-9a-f]{40}",head)is None:sys.exit("invalid checked PR head; stop")
+pages=json.load(sys.stdin)
+if not isinstance(pages,list)or not pages or any(not isinstance(p,list)or not p or len(p)>100 for p in pages):sys.exit("missing or malformed paginated PR commits; stop")
+commits=[c for p in pages for c in p]
+if len(commits)>=250:sys.exit("REST commit listing reached its limit; stop")
+trailer="Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>";seen=set()
+for c in commits:
+ if not isinstance(c,dict)or not isinstance(c.get("sha"),str)or re.fullmatch(r"[0-9a-f]{40}",c["sha"])is None or c["sha"]in seen:sys.exit("malformed or duplicate PR commit; stop")
+ seen.add(c["sha"]);a=c["commit"]["author"];message=c["commit"]["message"]
+ if not isinstance(message,str)or(a["name"],a["email"])!=("poetry","chen@sentio.xyz"):sys.exit("unexpected primary author; stop")
+ coauthors=re.findall(r"(?im)^[ \t]*co-authored-by[ \t]*:.*$",message)
+ parsed=subprocess.run(["git","interpret-trailers","--parse"],input=message,text=True,check=True,capture_output=True).stdout.splitlines()
+ if coauthors not in ([],[trailer])or parsed.count(trailer)!=len(coauthors):sys.exit("unexpected or duplicated coauthor trailer; stop")
+if commits[-1]["sha"]!=head:sys.exit("REST listing head differs from the checked head; stop")
+print("PR commit identities and pinned head verified")
+' "$expected_head" || exit 1
+si_read_89_1234_1="$(gh pr view "$pr" --repo housegate/housegate --json headRefOid --jq .headRefOid)" || exit 1
+[[ "$si_read_89_1234_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1234_1}" = "$expected_head" ] || { echo 'PR head changed; repeat review; stop'; exit 1; }
 gh pr checks "$pr" --repo housegate/housegate
-gh pr merge "$pr" --repo housegate/housegate --squash
+si_read_89_1236_1="$(git -C "$d" rev-parse HEAD)" || exit 1
+[[ "$si_read_89_1236_1" =~ ^[0-9a-f]{40}$ ]] || exit 1
+[ "${si_read_89_1236_1}" = "$expected_head" ] || { echo 'local checked head changed; stop'; exit 1; }
+gh pr merge "$pr" --repo housegate/housegate --squash --match-head-commit "$expected_head" || exit 1
 ```
 
 - [ ] **Step 13: R4 — read back the exact recorded epochs before handing off**
@@ -10231,11 +12563,14 @@ printf 'Task 89 R4: two observed values verified from the remote ledger copy\n'
 
 Expected exact two `NAME=value` lines matching the actual k2 epoch and successful full-soak/purge end date, and one completed Task89 run item from the remote ledger copy. Task89/P6 ends only after this R4. Keep k2, all switches/pins and the private immutable evidence; the later shared-Keeper rollout remains separately gated. The user's promotion budget/voter decision and K86 owner agreement have not been inferred or relaxed.
 
-**Local verification:** Use actual origin/main exports plus the actual prior chain. Run the unchanged postTask87 full render suite and the exact X two-file serializer/full suite; inspect rendered delta. Parse every actual Bash3.2/Bash5/fish/Python block and every immutable D24 marker after the final Task84 daily fix. Exercise same-run/fixed-interval/two-read/hash/review/drop/end/merged-record validation, four-reason counter malformed/missing/duplicate/nonfinite/reset changes, and the actual C1 tool's partial/full/overwrite behavior in isolated fixtures. No live observation, secret read, keyed SQL, forecast ledger value or seven-day success is claimed by local tests.
+**Execution revalidation:** Before future execution, use the actual accepted predecessor chain and verified production base; local fixtures do not substitute for actual Task88 R4 or live evidence. Run the unchanged postTask87 full render suite and the exact X two-file serializer/full suite; inspect rendered delta. Parse every actual Bash3.2/Bash5/fish/Python block and every immutable D24 marker after the final Task84 daily fix. Exercise same-run/fixed-interval/two-read/hash/review/drop/end/merged-record validation, four-reason counter malformed/missing/duplicate/nonfinite/reset changes, and the actual C1 tool's partial/full/overwrite behavior in isolated fixtures. No live observation, secret read, keyed SQL, forecast ledger value or seven-day success is claimed by local tests.
+
 
 ---
 
 ## Appendix A: binding contract (continues the Appendix A of Plans S3-A to S3-E4)
+
+**Conditional current-literal scope (2026-10-18; formal credit 0).** Current Task84 has114 D24 markers; older112-marker extraction/proof statements retain their historical input cut. Tasks83–89 are selected byte-exact from Appendix B’s owning paths/hashes. Their actual source/release/R4/live/user gates remain unfulfilled by composition. Local SOURCE_CUSTODY review needs root-accepted local source/hash/fixture proof and a fresh local grant, never fabricated live R4 or signed HEAD; true live execution retains every original predecessor R4 gate. No acceptance/grant is created here.
 
 ### 58. What Plan S3-F changes and what it consumes (Tasks 83–89)
 
@@ -10268,7 +12603,7 @@ Appendix A of Plans S3-A to S3-E4 (§0–§57) stays binding; this appendix cont
 | Admission codes | `ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12`, `ADMISSION_CODE_COPIES_BACKPRESSURE = 13` | S3-E1 §39 (K59) |
 | Feature and purposes | `stage3_v1`; `arbiter-group-member-v1` (consent, ES256K by the host's `si_indexers` signer), `arbiter-member-ready-v1` (ed25519), `arbiter-member-checkpoint-v1` (ES256K `replica_signer`), `arbiter-rebalance-group-v1`, `arbiter-reselect-verifiers-v1`, `arbiter-mark-member-lagging-v1`; placement and key digests `arbiter-group-placement-v1`, `arbiter-group-key-v1` | S3-E1 §38–§43 (K63), spec §6.3, §7.1 |
 | Commands and RPCs | `RebalanceGroup` (tag 38), `ReselectVerifiers` (39), `MemberReady` (40), `MemberCheckpoint` (41), `MarkMemberLagging` (42); `ConsensusAdmin.RebalanceGroup` (method 16), `ConsensusAdmin.MarkMemberLagging` (method 17; 18 methods, after S3-D's `SettleTrack` 14 and `GetTrackSettle` 15 on `PROTO_TAG_P4`, D26); `VerifierGateway.SubmitMemberReady`, `SubmitMemberCheckpoint`; no `GetStage3State` (K64): `GetConsensusParams`, `GetTableRegistry`, `GetBlockVerification` carry every runbook read | S3-E1 §39, S3-E3 §49–§52 |
-| arbiter-admin commands | `arbiter-admin consensus groups`, `arbiter-admin group rebalance`, `arbiter-admin member lagging`, the local placement preview; `consensus update --stage3` and its switch flags, the extended `--verifier`, `--indexer-failure-domain`; default `--hold issuance` once the leader reports `narrowed_drain` | S3-E2 §45 (Task 65), S3-E3 (Tasks 71, 75), S3-E4 (Task 77) |
+| arbiter-admin commands | `arbiter-admin consensus groups`, `arbiter-admin group rebalance`, `arbiter-admin member lagging`, the local placement preview; `consensus update --stage3` and its switch flags, the extended `--verifier`, `--indexer-failure-domain`; default `--hold issuance` once the leader reports `narrowed_drain` for an update touching no track, otherwise drain; an explicit `--hold` wins | S3-E2 §45 (Task 65), S3-E3 (Tasks 71, 75), S3-E4 (Task 77) |
 | Metrics | `arbiter_block_seal_reason{reason}` with `group_switch` (spec §7.2), `arbiter_group_members{owner,class}`, `arbiter_floor_held_cleanup_age_seconds` (K78), `arbiter_snapshot_encoding_fallback_total`; `sentio_node_si_member_shadow_{blocks,mismatches,missed_scans}_total`; the member consensus series `sentio_node_si_member_consensus_registered`, `sentio_node_si_member_ready_groups`, `sentio_node_si_member_checkpoint_seq{owner}`, `sentio_node_si_member_checkpoints_total{owner,result}` (`accepted`, `switch_off`, `refused`) on the `si-member` registry, the reconciler's `sentio_node_si_member_unsafe_replicas` and `sentio_node_si_member_replica_already_exists_total`, and the host's `sentio_node_storage_integrity_keeper_findings{reason}` (`unknown_replica`, `non_incarnation_root`, both always exported) on the embedded HouseGate registry `:9091` | S3-E3 (Tasks 71–72), S3-E4 (Task 76), S3-E2 (Task 67), S3-C2 (§24.4); the member consensus, reconciler and keeper-findings series named by S3-E1 §42.1 and §42.3 and registered or exported by S3-E4 Task 79 (§56, D30) |
 | sentio-node | `sentio-node si-member --config-path` (separate process), the `storage_integrity.member` config block, `sentio-node storage-integrity member-consent-statement` (the enrolment-statement pattern), the member consensus-mode config keys (ed25519 seed file, `replica_signer` key file, consent file) | S3-C2 (Task 35), S3-E4 (Task 79) |
 | production | the `siMember` StatefulSet of each host release with its own ConfigMap, PVC, checksum, image pin, metrics, status Service and bearer token, containers `si-member` (as `si_member`) and the `si-member-reconciler` slot (off until step 6); the `si_member` user and its Secret `storage-integrity-si-v2-member-<installation>` (key `clickhouse-password`) made by `make-p2-logins.sh`; the member status token in its own Secret `<release>-si-member-status-token` (`sentio-node-devnet2-indexer-<x>-si-member-status-token`), never the `si_member` password Secret, mounted by the host's `sentio-node` (D29; how S3-C3 and S3-C4 make and mount it is theirs, and this plan only keeps every member Secret apart from it); the member alerts | S3-C3 (Tasks 37–38), S3-C4 (Task 47), D29 |
@@ -10331,6 +12666,8 @@ Each consensus row's update changes exactly its field: `show-after-step<N>.json`
 - Checksums: no `siMember` value enters the host pod's `checksum/config` (`templates/node.yaml:486`); the member StatefulSet's own checksum covers the new ConfigMap keys and the consent, never Secret data. A release with every new value unset renders byte-identically.
 - Secrets (namespace `sentio-network-devnet2`), made only by the user's scripts (§59.5): `sentio-node-devnet2-indexer-a-si-member-keys`, `sentio-node-devnet2-indexer-b-si-member-keys`, `sentio-node-devnet2-indexer-c-si-member-keys` (keys `ed25519-seed`, `replica-signer-key`); `sentio-node-devnet2-indexer-a-si-member-ddl`, `sentio-node-devnet2-indexer-b-si-member-ddl`, `sentio-node-devnet2-indexer-c-si-member-ddl` (key `password`). Each is distinct from the `si_member` password Secret `storage-integrity-si-v2-member-<installation>` and from the status token Secret `sentio-node-devnet2-indexer-<x>-si-member-status-token` (D29), which this plan neither makes nor mounts.
 
+- Current Task83 raw-type qualification: selected causal-type-repaired text requires explicit real boolean enabled values before default/coercion, and a present integral numeric reconciler.metricsPort in1–65535 distinct from member metrics/status ports, including disabled mode. This was the historical static input qualification, not a source execution result. Current bounded local source checks are separately accepted by root receipt `task83-v5-full65-root-source-acceptance.json` SHA256 `ea5d7ce8e5dfcede2c51b07d0b5c8443a3d9c411b219714452757ba2bb8ea9c8`; historical static evidence retains its original scope. Complete operator runtime, releases, ledger R4 and live checks remain pending.
+
 **59.2 `si_member_ddl` (Task 83; live per installation in Task 87).**
 - charts/storage-integrity value `clickhouse.access.memberDDL` (`false`) renders, on the network CHI, the user and the profile below; `clickhouse.access.passwordSha256.si_member_ddl` (default `""`, like every other user's) is required exactly when it is rendered. Refusals (verbatim), in this order: `clickhouse.access.memberDDL requires clickhouse.access.lockDefault: si_member_ddl exists only on a locked installation`; `clickhouse.access.memberDDL requires clickhouse.access.member: si_member_ddl comes at stage 3 P6 step 6, after the member stage restarted this installation with the replicated_merge_tree merge default 0 (spec §8.2)`; `clickhouse.access.passwordSha256.si_member_ddl must be 64 lowercase hex characters`; and Plan S3-C3's `si_member_ddl is not created before stage 3 P6 step 6 (Plan S3-F)` for a non-empty hash without `memberDDL`.
 - User (S3-B §11 form): `si_member_ddl/password_sha256_hex: "<64 lowercase hex>"`, `si_member_ddl/networks/ip: ["::/0"]`, `si_member_ddl/profile: si_member_ddl`, `si_member_ddl/grants/query`, exactly and in this order: `GRANT CREATE DATABASE ON hg_member_unsafe.*`; `GRANT CREATE TABLE, DROP TABLE ON hg_member_unsafe.*`; `GRANT TABLE ENGINE ON ReplicatedMergeTree` (spec §8.2: no `INSERT`, `ALTER`, `OPTIMIZE`, `TRUNCATE` or `SYSTEM` anywhere, no `CREATE TABLE` elsewhere, nothing on `hg_safe`, `hg_unsafe` or `hg_promote`, no `SYSTEM DROP REPLICA`).
@@ -10354,12 +12691,15 @@ Each consensus row's update changes exactly its field: `show-after-step<N>.json`
 - `scripts/storage-integrity/make-clickhouse-logins.sh` gains `si_member_ddl` for the installations `network` (Secret `sentio-node-devnet2-indexer-a-si-member-ddl`), `indexer-b` (`...-indexer-b-si-member-ddl`) and `indexer-c` (`...-indexer-c-si-member-ddl`), key `password`, in S3-C1's single-user mode of §58.3 (`--add-user si_member_ddl <installation> <hashes-file>`), writing `passwordSha256: {si_member_ddl: <hex>}` to the hashes file; the user's hashes files are `$HOME/si-devnet2-stage3-p6/hashes-member-ddl-<installation>.yaml`.
 
 **59.6 test_render.py (Task 83).**
-- Constants: `SI_MEMBER_DDL_GRANTS = ("GRANT CREATE DATABASE ON hg_member_unsafe.*", "GRANT CREATE TABLE, DROP TABLE ON hg_member_unsafe.*", "GRANT TABLE ENGINE ON ReplicatedMergeTree")`; `SI_MEMBER_DDL_CONSTRAINT = "merge_tree_max_bytes_to_merge_at_max_space_in_pool"`; `DEVNET2_MEMBER_HOSTS = {"sentio-node-devnet2-indexer-a": ("a", 0, "storage-integrity-si-v2"), "sentio-node-devnet2-indexer-b": ("b", 1, "storage-integrity-si-v2-indexer-b"), "sentio-node-devnet2-indexer-c": ("c", <INDEXER_C_ID>, "storage-integrity-si-v2-indexer-c")}` (the id written as an integer literal from the ledger); `DEVNET2_MEMBER_KEY_SECRETS` (release → `<release>-si-member-keys`); `DEVNET2_MEMBER_DDL_SECRETS` (release → `<release>-si-member-ddl`); `DEVNET2_MEMBER_CONSENSUS` (release → `False` | `True`; all `False` in the PR); `DEVNET2_MEMBER_RECONCILER` (release → bool; all `False`); `DEVNET2_MEMBER_DDL_USERS` (CHI → bool; all `False`); `P6_HELD_CLEANUP_AGE_BOUND_SECONDS = 1800`; `DEVNET2_P6_EXIT_ALERT = False`; added (Appendix B): `SI_MEMBER_DDL_PROFILE`, `TEST_P6_PASSWORD_SHA256`, `TEST_CONSENT_JWS`, `DEVNET2_MEMBER_DDL_ROLLOUT`, `STAGE3_P6_RUNBOOK`, `STAGE3_P6_EXIT_SECTION`, `MAKE_MEMBER_KEYS`, `MONITORING_ALERTS["stage3-p6"]`; `DEVNET2_MEMBER_HOSTS` is derived from Plan S3-C3's `DEVNET2_INDEXER_IDS` and `DEVNET2_MEMBER_CHIS`, so `INDEXER_C_ID` is not written again.
+- Constants: `SI_MEMBER_DDL_GRANTS = ("GRANT CREATE DATABASE ON hg_member_unsafe.*", "GRANT CREATE TABLE, DROP TABLE ON hg_member_unsafe.*", "GRANT TABLE ENGINE ON ReplicatedMergeTree")`; `SI_MEMBER_DDL_CONSTRAINT = "merge_tree_max_bytes_to_merge_at_max_space_in_pool"`; `DEVNET2_MEMBER_HOSTS` (release → host letter, indexer id and CHI, derived from the existing C3 constants); `DEVNET2_MEMBER_KEY_SECRETS` (release → `<release>-si-member-keys`); `DEVNET2_MEMBER_DDL_SECRETS` (release → `<release>-si-member-ddl`); `DEVNET2_MEMBER_CONSENSUS` (release → `False` | `True`; all `False` in the PR); `DEVNET2_MEMBER_RECONCILER` (release → bool; all `False`); `DEVNET2_MEMBER_DDL_USERS` (CHI → bool; all `False`); `P6_HELD_CLEANUP_AGE_BOUND_SECONDS = 1800`; `DEVNET2_P6_EXIT_ALERT = False`; added (Appendix B): `SI_MEMBER_DDL_PROFILE`, `TEST_P6_PASSWORD_SHA256`, `TEST_CONSENT_JWS`, `DEVNET2_MEMBER_DDL_ROLLOUT`, `STAGE3_P6_RUNBOOK`, `STAGE3_P6_EXIT_SECTION`, `MAKE_MEMBER_KEYS`, `MONITORING_ALERTS["stage3-p6"]`; `DEVNET2_MEMBER_HOSTS` is derived from Plan S3-C3's `DEVNET2_INDEXER_IDS` and `DEVNET2_MEMBER_CHIS`, so `INDEXER_C_ID` is not written again.
 - New class `MemberConsensusTest` (after S3-C3's member test class): `test_default_renders_no_member_consensus`, `test_member_consensus_renders_the_consensus_mode_keys`, `test_member_consensus_mounts_its_keys_only_into_the_member_container`, `test_member_reconciler_takes_its_password_only_from_its_secret`, `test_member_reconciler_needs_consensus_mode`, `test_member_changes_never_touch_the_host_checksum`, `test_member_consensus_guards_fail_closed`, `test_unset_member_consensus_renders_unchanged`, `test_si_member_ddl_holds_exactly_its_grants`, `test_si_member_ddl_profile_makes_merges_const`, `test_si_member_ddl_carries_only_a_literal_hash`, `test_si_member_ddl_needs_a_locked_installation`, `test_grant_probe_covers_si_member_ddl` (every grant of `SI_MEMBER_DDL_GRANTS` has an `ok` row; `denied` rows for `INSERT`, `OPTIMIZE`, `TRUNCATE`, `DROP PARTITION`, `SYSTEM`, a `MergeTree` table, a table in `hg_replica`, a `Replicated` database; one `constrained` row), `test_p6_exit_alert_reads_the_held_cleanup_gauge`.
 - In `ActualFreshNetworkTest`: `test_member_consensus_needs_a_reviewed_image` (a release with `siMember.consensus.enabled` runs its member on `DEVNET2_STAGE3_P5_SOURCE_IMAGE`), `test_devnet2_member_consensus_follows_the_rollout`, `test_devnet2_member_reconcilers_follow_the_rollout`, `test_devnet2_member_ddl_users_follow_the_rollout`, `test_devnet2_member_secrets_are_per_host` (each enabled release names exactly its `DEVNET2_MEMBER_KEY_SECRETS` and `DEVNET2_MEMBER_DDL_SECRETS` entries, and neither is its `siMember.secret.name` or its `<release>-si-member-status-token`, D29), `test_devnet2_p6_exit_alert_follows_the_rollout`.
 - Earlier tests amended in place (each keeping its assertions): S3-B's `test_default_renders_no_monitoring`, `test_alert_names_are_the_reviewed_set`, `test_grant_probe_covers_every_protocol_grant`, `test_devnet2_clickhouse_logins_follow_the_rollout`, `test_indexer_b_source_clickhouse_carries_the_network_source_profile`, `test_indexer_c_source_clickhouse_carries_the_network_source_profile_and_a_member_disk`, `ClickHouseLoginsScriptTest.ADDED`, `test_si_clients_take_clickhouse_passwords_only_from_secrets`; S3-C3's `SIMemberTest.setUpClass`, `test_default_renders_no_si_member`, `test_si_member_reconciler_stays_off_in_p2`, `test_si_member_ddl_never_exists_in_p2`, `test_engine_grants_follow_the_census_constants`, `test_si_member_config_names_the_hosts_own_source_clickhouse`, and its helpers `member_values`, `p2_overrides`, `without_p2_users`, `without_p2_chi`, `p2_chi`, `_p2_strip_manifest_lines`, `p2_manifest_text`, `p2_overlay_text`; S3-C4's `test_replica_reads_guards_fail_closed`, `test_member_status_token_comes_only_from_a_secret`, `test_devnet2_replica_reads_follow_the_rollout`; S3-B's `probe_atoms` asks `p6_probe_atoms`.
 
 **59.7 Runbook `docs/storage-integrity-devnet2-stage3-p6-switches.md` (Task 84).**
+- Current literal producer: Task84 V3 SHA256 `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`; runbook `2bd21e7ffce25da73987838fd02a36fe9575837bb00a99a95e21cd1c9c728f44`;114 unique markers including `16.1-restart-before` and `16.1-restart-after`. P6 file SHA256 `f6f2698f48d509042ca1197820d698aa5a326b101bfcc2f2a84395341f4e171e` includes one final LF; delimiter body SHA256 `0424122e61049183555a3f272a1cd27655059729b9637e38669d97d0007f6e5f` excludes that LF. These are static identities, not a helper/checker/selftest/product run.85–89 retain their typed JSON/epoch/receipt/pool/domain/one-way/terminal/import-restoration checks; no old custody freeze is refreshed.
+- Explicit approved restarts in §16.1 preserve stable member/owner placement while separately binding actual approval, selected process identity, before/after raw/health evidence and completed predecessor receipts. Evidence helpers do not restart anything. Current restart chronology/receipt rederivation belongs to selected84; actual startup/UID/raw/approval verification remains pending. K86 thresholds, seven-day windows, promotion caps and every user stop remain unchanged.
+- Public procedure custody: Task84 owns `si_p6_action <operation> <push|sync|dry-run|apply> <argv...>` and its schema1 exclusive started/out/done evidence. The22 dynamic actions are10 separately confirmed pushes,10 separately confirmed infrastructure mutations and2 separately confirmed b/c dry-runs; an unknown result never permits automatic replay. Task85 owns schema2 `prepare.py setup`, `verify`, `block`, `run-file`, `plan-head <operation>` and `advance-head <operation>`. Exact immutable source/document/helper/extractor custody and explicit phase predecessors apply in order C-b,C-c,C-a,D-b,D-c,D-a,R-b,R-c,R-a,X; each commit body calls plan-head after rollout and advance-head after its signed direct-child commit. Run prepared D24 bodies only through run-file. Task89 owns `receipts.py` exclusive STARTED/DONE evidence bound to its exact body/output; incomplete STARTED never permits a retry. The current producer also owns `si_p6_monitoring_preflight`, `si_p6_restart_before` and `si_p6_restart_after`; consumers retain the complete selected producer definitions and validators. These summaries grant no execution, head advance, R4 substitution or live permission.
 - Sections (binding for Tasks 85–89 and for every `runbook_url`; each top-level heading `## <n>. <title>` with exactly these titles): §0 Session helpers; §1 Preparation (§1.1 Pins and ledger values, §1.2 Identities, §1.3 Preconditions and baseline, §1.4 Promotion budget); §2 Step 1: purge (§2.1 Prerequisites, §2.2 Update, §2.3 Verify and acceptance tables); §3 Step 2: eviction voiding (§3.1 Prerequisites, §3.2 Update, §3.3 Verify); §4 Step 3: owner-aware selection (§4.1 Host check, §4.2 Update, §4.3 Verify); §5 Step 4: member entries and registration (§5.1 Member keys (user action), §5.2 Consent statements, §5.3 Verifiers update, §5.4 Consensus mode, one host at a time, §5.5 Verify); §6 Step 5: placement (§6.1 Placement preview, §6.2 Update, §6.3 Verify groups, cutover and replica hosts); §7 Keeper headroom gate (§7.1 Baseline, §7.2 Projection and thresholds, §7.3 Verdict); §8 Step 6: member replicas and readiness (§8.1 si_member_ddl logins (user action), §8.2 si_member_ddl users, one installation at a time, §8.3 Reconcilers, one host at a time, §8.4 MemberReady and eligible rings, §8.5 Keeper re-measure); §9 Step 7: re-selection (§9.1 Update, §9.2 Verify); §10 Step 8: checkpoints (§10.1 Update, §10.2 Verify); §11 Step 9: narrowed drain (§11.1 Update, §11.2 Verify); §12 Step 10: raising k to 2 (§12.1 Precondition preview, §12.2 Anti-affinity proof, §12.3 Keeper check, §12.4 Update, §12.5 Verify); §13 Exit soak (§13.1 Daily checks, §13.2 Exit); §14 End; §15 Forward fixes (§15.1 Steps 1–3, §15.2 Step 4, §15.3 Step 5, §15.4 Step 6, §15.5 Steps 7–9, §15.6 Step 10); §16 Operating rules (§16.1 Restarts one at a time, §16.2 Operator playbook, §16.3 Holds, §16.4 Promotion budget, §16.5 Keeper). Alert anchors used: `131-daily-checks`, `162-operator-playbook`.
 - Runbook constants (first bash block of §0): `si_backup="$HOME/si-devnet2-stage3-p6"`; `KEEPER_ROOT=/storage-integrity/devnet2/devnet2-si-v2`; `KEEPER_R0=4`; `KEEPER_R1=6`; `KEEPER_MAX_WORKING_SET_BYTES=2147483648`; `KEEPER_MAX_DATA_BYTES=1073741824`; `KEEPER_MAX_DU_BYTES=1073741824`; `KEEPER_MAX_AVG_LATENCY_MS=10`; `KEEPER_MAX_OUTSTANDING=10`; `P6_HELD_CLEANUP_AGE_BOUND_SECONDS=1800`; `P6_SOAK_DAYS=7`; `SI_AUTHORITY=0x9Ef3A259D1D87C864431CAb5Ed5F6578Ad5Ad705`; `SI_MAX_WRITERS=3`.
 - Keeper reads: `si_keeper_exists <absolute-path>` accepts only an exact successful `0` or `1`, capturing protocol-error text even when keeper-client exits 0. CH `system.replicas.zookeeper_path` is the exact chroot-relative DDL path; raw Keeper access prepends `KEEPER_ROOT` exactly once. Empty `ls` output or CLI exit status alone never proves absence.
@@ -10372,10 +12712,10 @@ Each consensus row's update changes exactly its field: `show-after-step<N>.json`
 
 **59.8 Runbook checker (Task 84).** `$W.runbook-check.py` (local, beside the worktree, never committed, S3-B's pattern) checks: `headings` (exactly §59.7's headings, unique anchors), `bash-parse` (every actual bash block separately under bash 5 and `/bin/bash` 3.2.57, every actual fish block separately under `fish -n`), `confirm-before-mutating`, `stop-before-irreversible` (every block that calls `si_stage3_update` follows `Stop here and obtain explicit confirmation.`), `hold-modes` (§2–§11 pass `drain`, §12 `issuance`), `switch-order` (the switch flags appear in §2, §3, §4, §6, §9, §10, §11 in that order and nowhere else), `restates-verifiers` (the only `--verifier` flags are §5.3's, built from `show-before-step4.json` and the three public files), `keeper-gate-first` (§8's first mutating block refuses unless `keeper-verdict.txt` is `PASS` and `keeper-thresholds-agreed.txt` exists), `no-secret-data-in-blocks` (no block reads `.data` of a Secret except into `kubectl exec -i` stdin), `runbook-urls` (every `runbook_url` anchor the chart renders exists); plus `shellcheck -S warning` over the combined shared-session Bash context, with the earlier secret-client command represented by an inert analysis-only definition; only SC2034 is excluded for documented public/cross-block constants. This analysis context never executes blocks or replaces either Bash parser check. The local adverse-fixture self-test is also outside the worktree.
 
-**59.9 The P6 PR (Task 84).** Branch `urwt/claude/multi-source-s3f` from production `origin/main` after Plan S3-E4's P5 PR merged and `P5_END` is recorded; title `storage-integrity: multi-source SI stage 3 P6 (member consensus values, si_member_ddl, exit alert, switch-on runbook)`; it carries Tasks 83 and 84 and renders every release byte-identically (`render-inertness.sh origin/main`).
+**59.9 The P6 PR (Task 84).** Branch is the retained actual Task83 URWT JSON `.branch` under the executing codex runtime, with its exact `.path` and checked signed handoff HEAD; never infer it from a path or historical claude example. It starts from production `origin/main` after Plan S3-E4's P5 PR merged and `P5_END` is recorded; title `storage-integrity: multi-source SI stage 3 P6 (member consensus values, si_member_ddl, exit alert, switch-on runbook)`; it carries Tasks 83 and 84 and renders every release byte-identically (`render-inertness.sh origin/main`).
 
 
-- Daily/closing helper extension (50 named P6 helpers, all in §0): `si_p6_vm_at <query> <fixed-end>` and `si_p6_vm_raw <start> <end>`; `si_p6_soak_path`, `si_p6_soak_sample`, `si_p6_soak_budget`, `si_p6_soak_start`, `si_p6_soak_finalize`, `si_p6_soak_review`, `si_p6_soak_close`, `si_p6_soak_tail_review`, `si_p6_soak_restart` and `si_p6_drop_guard`. `si_p6_daily <day>` captures its two served views inside the fixed day; it is not a rolling post-day proof. New exact markers are `13.1-finalize`, `13.1-review`, `13.1-complete`, `13.1-restart`, alongside `12.5-soak-start`, `13.1-day`, `13.2-exit`, `14-drop` and `14-end`.
+- Daily/closing helper extension (named P6 helpers, all in §0): `si_p6_vm_at <query> <fixed-end>` and `si_p6_vm_raw <start> <end>`; `si_p6_soak_path`, `si_p6_soak_sample`, `si_p6_soak_budget`, `si_p6_soak_start`, `si_p6_soak_finalize`, `si_p6_soak_review`, `si_p6_soak_close`, `si_p6_soak_tail_review`, `si_p6_soak_restart` and `si_p6_drop_guard`. `si_p6_daily <day>` captures its two served views inside the fixed day; it is not a rolling post-day proof. New exact markers are `13.1-finalize`, `13.1-review`, `13.1-complete`, `13.1-restart`, alongside `12.5-soak-start`, `13.1-day`, `13.2-exit`, `14-drop` and `14-end`.
 - Immutable soak evidence: `soak-current` contains only a run ID. `run.json` fixes the start/end, original network-wide bound, initial half-budget and three selected acceptance incarnations; it never automatically increases the forecast. Daily observation hashes bind complete within-window timestamps; audit file manifests are audit-relative; actual user-TTY review binds its audit hash; exclusive daily receipts bind observation/audit/review. Late metrics may recover the original fixed interval, never a missed historical served check. Failed-run restart first requires all three exact original selected incarnations still Active, preserves the old evidence and actual repair/full-run approval, and exclusively restores the old FAILED local pointer if a later new-start gate fails before publication; it returns failure for user diagnosis and never overwrites an existing current pointer. Once irreversible closing began, preserve all evidence and stop for user-directed forward repair. No k rollback, automatic retry, acceptance-table recreation or automatic voter resize.
 - Closing budgets consume the original network-bound-plus-six total envelope minus actual global promotion spend, retaining two conservative reserve units for each original selected incarnation not yet served Purged. These are allocations of the existing reserve, not attributed or predicted per-table promotions. Fresh and original half-budget caps both apply. Closing audit/review/receipt hashes are mandatory; positive `drop-guard-<x>.json` precedes the immediately-before-SQL `drop-query-<x>.started`. A started/ambiguous DROP is never automatically replayed. No secret belongs in a review or receipt.
 
@@ -10396,15 +12736,69 @@ Each consensus row's update changes exactly its field: `show-after-step<N>.json`
 - **Produced, in order:** `P6_PR` (Task 84); `PURGE_EPOCH`, `VOIDING_EPOCH`, `SELECTION_EPOCH` (Task 85); `MEMBERS_EPOCH`, `PLACEMENT_EPOCH`, `PLACEMENT_CUTOVER_BLOCK` (Task 86); `KEEPER_HEADROOM`, `STEP6_END` (Task 87); `RESELECTION_EPOCH`, `CHECKPOINTS_EPOCH`, `NARROWED_DRAIN_EPOCH` (Task 88); `K2_EPOCH`, `P6_END` (Task 89). Value forms: `P6_PR` a PR number (`[1-9][0-9]*`); every `*_EPOCH` and `PLACEMENT_CUTOVER_BLOCK` an unsigned integer (`[0-9]+`); `KEEPER_HEADROOM`, `STEP6_END`, `P6_END` dates (`20[0-9]{2}-[01][0-9]-[0-3][0-9]`): the day the gate passed, the day every member was ready with the Keeper re-measured, the end date of runbook §14. The names are unique among the stage-3 plan files, as `s3-ledger.py` requires.
 - **Appendix C** keeps S3-B's shape (D23): one heading `## Appendix C: execution record`; one table `| Name | Value | Recorded by |` with one row per produced name above, in that order, `| \`NAME\` |  | Task N |` until recorded; then "Run records" with one item per recording task: `- P6 PR (Task 84):`, `- Steps 1–3 run (Task 85):`, `- Steps 4–5 run (Task 86):`, `- Keeper headroom gate and step 6 run (Task 87):`, `- Steps 7–9 run (Task 88):`, `- Step 10 and the exit soak (Task 89):`, each filled in the same commit as its task's rows. The `KEEPER_HEADROOM` run record holds the baseline maxima, the projection, the agreed thresholds and every step-6 re-measure; the Task 89 record the seven daily lines.
 - **Task-boundary recording.** A live task may own several independently confirmed switch steps. Every step first preserves and verifies its actual `show-after`/diff/acceptance evidence; later steps in that same task may read those observed receipts, never predicted epochs. Once all steps and required acceptance checks of that task pass, one `set` records every name owned by that task and its one run record atomically, followed by R2–R4. No partial task record, overwrite or use of another task’s unpublished receipt is allowed. The next live task waits for all prior names to pass R4. This keeps the ledger tool’s existing all-owned-rows rule unchanged.
-- **Ledger tool and record procedure.** `$HOME/.cache/s3-ledger/s3-ledger.py`, written verbatim from Plan S3-C1 contract §19 by each recording task's first ledger step; `s3-ledger.py ref <housegate> s3f`, `get` (`NAME=value` lines), `empty`, `set <plan file> <task> <record file> NAME=VALUE...`. R1: `git -C /Users/uranuswch/Dev/projects/sentio-network/housegate fetch -q origin`; `ref` (`python3 -I "$HOME/.cache/s3-ledger/s3-ledger.py" ref /Users/uranuswch/Dev/projects/sentio-network/housegate s3f`); a URWT worktree `multi-source-s3f-ledger-<N>` of housegate at `$ref` (`bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/housegate claude multi-source-s3f-ledger-<N> urwt/claude/multi-source-s3f-ledger-<N> "$ref"`), its path and `$ref` in `$HOME/.cache/s3-ledger/record-<N>`; the run record in `$HOME/.cache/s3-ledger/record-<N>.md`; `s3-ledger.py set <worktree>/docs/superpowers/plans/2026-10-15-multi-source-si-s3f-p6-switch-on.md <N> $HOME/.cache/s3-ledger/record-<N>.md <NAME=VALUE for each of the task's names>`; one commit of the plan file only, `docs(plan): record <names> of Plan S3-F (Task <N>)`. R2 (explicit confirmation): when `$ref` is a plans branch, `git push origin HEAD:<that branch>` (never forced; a rejected push means the branch moved: stop and ask); when it is `origin/main`, `git push -u origin HEAD` and `gh pr create --repo housegate/housegate --base main` with the commit's subject and the body file `$HOME/.cache/s3-ledger/record-<N>-pr.md`. R3 (explicit confirmation, `origin/main` only): `gh pr merge <number> --repo housegate/housegate --squash`. R4: fetch again and `s3-ledger.py get` the task's names, which must print the values just written, else stop and ask. A task ends only after R4. Ledger copy (D34, as S3-C1 §19 states it): this plan's is `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`, so R2 pushes to that branch before the merge and goes through a docs PR after it; the consumed names of Plans S3-B to S3-E4 are read from their own ledger copies, which `ref` names per plan (S3-B's on `origin/main` since housegate#237). When R1's `ref` stops with `no plan 's3f'`, the task stops and asks the user to push the plans branch; it never records into a local checkout.
-- **Repositories and worktrees.** Local repositories `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. production: `multi-source-s3f` (Tasks 83–84; `bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/sentio-network/production claude multi-source-s3f`, branch `urwt/claude/multi-source-s3f`, its JSON `path` is `$W`) and `multi-source-s3f-live` (Tasks 85–89, detached at a freshly fetched `origin/main`, never a phase branch, never the user's checkout); housegate: `multi-source-s3f-ledger-<N>` (N = 84 to 89). arbiter-core: none (`stage3reads` is built from `git -C /Users/uranuswch/Dev/projects/sentio-network/arbiter-core archive <CORE_TAG_P5>` into a temporary directory).
+- **Ledger tool and record procedure.** `$HOME/.cache/s3-ledger/s3-ledger.py` is bootstrapped from the unique complete Plan S3-C1 contract §19 source by each recording task, with exact installed-source equality. Its APIs remain `ref <housegate> s3f`, `get` (`NAME=value` lines), `empty`, and `set <plan file> <task> <record file> NAME=VALUE...`. Use the complete checked Bash steps in Tasks 84–89, rather than treating this summary as an executable substitute. R1 fetches the ledger repository, resolves the observed D34 ref, creates a fresh codex URWT `multi-source-s3f-ledger-<N>` / `urwt/codex/multi-source-s3f-ledger-<N>` at that ref, validates the returned absolute path and observed HEAD, and retains the task's exact path/ref/record artifacts under `$HOME/.cache/s3-ledger/record-<N>*`. One `set` writes every owned name and its single run record, and one signed poetry commit changes only this plan file. R2 and R3 each require their own explicit user confirmation: the plans branch is pushed without force, or `origin/main` uses a docs PR. The immutable expected PR head is retained before checks; checked GH reads, current-head CI and the canonical paginated REST primary-author/Claude-trailer validator must all bind that same head. R3 uses the owning task's checked-head `gh pr merge ... --squash --match-head-commit "$expected_head"` form, with explicit failure exit, and never recaptures a replacement expected head. R4 fetches and remotely reads all of the task's names, requiring exact equality with the observed values just written; a task ends only after R4. D34's ledger copy remains `origin/urwt/claude/ms-si-stage3-plans-cf` until the stage-3 plans PR merges, then `origin/main`; this historical ledger-copy branch is separate from codex execution-worktree naming. Consumed names use their owning plans' remote ledger copies. Missing `s3f`, moved branches, failed/empty reads or mismatched readback stop; no local checkout is a ledger substitute.
+- **Repositories and worktrees.** Local repositories are `/Users/uranuswch/Dev/projects/sentio-network/<repo>`. Task 83 creates production's codex `multi-source-s3f` / `urwt/codex/multi-source-s3f` worktree and retains the actual returned JSON in `$HOME/.cache/s3f-task83/worktree.json`; Task 84 reuses its checked `.path` and `.branch` plus the actual signed `task83-handoff-head`, never a guessed path or predicted HEAD. Task 85 creates `multi-source-s3f-live` through codex URWT, records its JSON/path and freshly fetched source HEAD, and follows its specified initial detached checkout. Tasks 86–89 reuse that exact live path and Task 85 schema2 custody: immutable source/doc/helper/extractor hashes and only the explicit authorized phase-head advances, not arbitrary clean descendants. Ledger tasks 84–89 create their separate codex `multi-source-s3f-ledger-<N>` worktrees. arbiter-core has no worktree: `stage3reads` is built from the recorded `CORE_TAG_P5` archive into a temporary directory.
 - **production checks (Tasks 83–84 and every live commit).** `python3 -B charts/storage-integrity/tests/test_render.py` (all tests; the count printed is recorded); `helm lint charts/storage-integrity -f charts/storage-integrity/tests/legacy-devnet2-values.yaml --namespace sentio-network-devnet2 --strict`, the same with `-f charts/storage-integrity/tests/fresh-values.yaml --namespace storage-integrity-render-test --strict` and with `--set arbiter.consensusUpdatesEnabled=true --set arbiter.authoritySigningEnabled=false`; `bash scripts/storage-integrity/render-inertness.sh origin/main` printing `<release> identical` for every release (the PR); `bash -n` and `shellcheck -S warning` on both scripts; the runbook checker of §59.8.
-- **Commits and PRs.** Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Markdown is never hard-wrapped; runbook text and comments in English.
+- **Commits and PRs.** Every new commit is explicitly signed and checked as `poetry <chen@sentio.xyz> G` at its observed new HEAD, with the exact staged scope and parent required by its owning task. Commit messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`. Markdown is never hard-wrapped; runbook text and comments in English.
 - **Remote and live actions** — pushes, PRs, merges, `helmfile sync`, `kubectl apply`/`patch`/`delete`/`exec` that writes, consensus updates, Grafana actions — require explicit user confirmation in chat, each for its own step; commands handed to the user are fish (`bash <script> <args>` or `bash -c '...'` wrappers allowed).
 
+
+**Bounded procedural read-status rule (2026-10-18).** Every required Bash Git/GH acceptance read captures and explicitly checks status before stdout comparison, independently of set-e and direct/conditional callers; required object IDs are nonempty lowercase40-hex. Enumerated signature-check ranges are checked and nonempty before iteration. This rule changes no runtime algorithm, held-update order, confirmation or schema2 API. The qualified Task84 document/marker overlay requires independently reviewed fresh preparation against the final actual global source chain; an existing custody freeze is never edited in place.
 ## Appendix B: drafting decisions and cross-task facts
 
-Facts the drafters recorded while drafting and verifying each task in scratch exports. The plan consistency pass replaces this appendix with its final form; until then it is the drafters' record only. `<scratch>` stands for local verification directories that are not part of the plan.
+### Reviewed owning text and bounded local-source evidence
+
+The seven root-accepted full-task preimages below retain their separately stated local/synthetic/projected proof scopes. The current Tasks83–89 are document-only successors: superseded preparation/status narratives are relocated to the dated history below, while every code/runbook/helper fence, execution step and future operator gate remains unchanged. Full-task hashes therefore differ and require new documentary root selection; old fixture/source proofs are not retagged as executions of the new wholes. D25 is approved and E1/E2/E3 adoption is recorded separately. Independent F root adoption remains ordered after E4; this candidate creates no execution grant, live/R4 result or formal increment.
+
+| Task | Accepted pre-cleanup owning text under the Track-B agents directory | Historical full-task SHA256 |
+| --- | --- | --- |
+| 83 | `prepare-task83-checkpoint-continuation-driver-v3/task-83-after-causal-type-repair.md` | `6859c7172a7db4a73638f065382d1b950134995d2b0b4ae824fa16835d5449d1` |
+| 84 | `prepare-task84-local-runtime-dispatch-v3/task-84.md` | `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01` |
+| 85 | `prepare-f85-89-task84v3-consumer-bindings/task85/task-85.md` | `b55f9af45513d51f81cedca60c2191b6c9e49066a4f46de7f4741baf9f208b82` |
+| 86 | `prepare-f85-89-task84v3-consumer-bindings/task86/task-86.md` | `12c19871a47a382c956d2a590185c99c30bd665c4b13f501b3c874451a2ebb88` |
+| 87 | `prepare-f85-89-task84v3-consumer-bindings/task87/task-87.md` | `f183105158aba88e0d3f56007020d5ec85102254952003a657b4afdbeec25fb0` |
+| 88 | `prepare-f85-89-task84v3-consumer-bindings/task88/task-88.md` | `7b7a3f0f99e374ee8659f79d0f5def505b60981114f9084b9c35f4434791edb6` |
+| 89 | `prepare-f85-89-task84v3-consumer-bindings/task89/task-89.md` | `9277a1b371592da13baa8590c55abc0d6c4e985a62d04faa430365ce75e6f405` |
+
+Current P6 has114 markers; historical112/107/103 evidence stays historical.85’s canonical guard retains its three old import contexts plus only the exact restart datetime ImportFrom.86/87 selected APIs remain exact;88/89 need no direct P6 body rewrite. Raw CLI uint64 and typed local receipt rules stay with their owning producer/consumer. Actual custody, fresh grants and real R1–R4/live/user gates remain separate.
+
+### Current root-accepted bounded source-review evidence
+
+| Task | Named root receipt under `agents/controller-candidate-inspection` | Exact receipt SHA256 | Accepted evidence and retained limits |
+| --- | --- | --- | --- |
+| 83 | `task83-v5-full65-root-source-acceptance.json` | `ea5d7ce8e5dfcede2c51b07d0b5c8443a3d9c411b219714452757ba2bb8ea9c8` | All65 obligations:60 historical imports plus5 fresh completions; fresh259 PASS/0 SKIP and8 direct render comparisons/96 objects. Full owning task6859c717 is exact. Runtime1774-file INERT qualification is separate from the restored1773-file baseline. Original V3 primary error UNKNOWN/HOLD remains; no deployment or live proof. |
+| 84 | `task84-v5-root-final-local-source-acceptance.json` | `4de62b6248fa8c2ff510b1909a44ac0322e127f32c8fabd6fb2e7a61d08f3300` | Exact task e3c1bd82/runbook2bd21e7f,114 markers; fresh V5 render259 PASS/0 failures/errors/skips and3 strict lints. V4 checker17sections/114Bash/3fish and52 local checks/10 witnesses are inherited evidence, not V5 reruns. Private utility/HOME fixes do not change owning text; original V4 render failure remains. |
+| 85 | `task85-accepted-task86-local-input-v1.json` | `69b61396374c1916279b0084918c97d759c1d88e40ebfc1d7645d3b776b70e85` | Bounded local syntax, pure data/AST and literal84 selftest review:62 dual-Bash syntax checks,52 literal84 checks and59 new85 pure controls, within64 recorded commands. Thirty selected blocks are store-only;31 syntax-data files include assembled helpers. Explicit reviewed tool-file/mode admission and raw canonical tool strings resolve earlier precheck/alias findings; predecessor failures remain. No operator/live outcome or R4. |
+| 86 | `task86-accepted-task87-local-input-v1.json` | `abc64c31680c5b6e0038d10ba3d4634c191f65343ef609459ede20fc05bfc298` |24 local cases =6P6 +18 record cases;18 record cases use two-path fixture AST projection. Explicit fixture-root/HOME corrections preserve helper semantics. No complete unmodified operator runtime, actual user consent or live R4 is established. |
+| 87 | `task87-accepted-task88-local-input-v1.json` | `40ecefd1b25ad5c879abb372b8d73fa5fcb8444ebd2de1dd6bf4c4afee96d61c` |42 local cases =15 positive +27 negative =18Task87 +24P6. Explicit fixture home and two R-path AST projections, not complete unmodified operator execution. Earlier interpreter-alias precheck refusal remains; no real hour/seven-day/CRC proof. Historical Task88 consumer-base63ed9e5a is not rebound to current7b7a3f0f. |
+| 88 | `task88-accepted-task89-local-input-v1.json` | `4a6e1e1f889f0b0ca0d4b4737fe874e6aa84b02e1613d307991a022de0ab1573` |45 local cases =19 expected-zero +26 expected-nonzero. V3 qualifies the12-observation decimal-string selector and two diagnostic expectations; V1 broad-selector and V2 stale-boolean HOLDs remain. Correct negative first-error evidence is not a campaign error. Fixture projection only; no real checkpoint/epoch/consensus/CRC/metrics/seven-day/R4 result or Task89 grant. |
+| 89 | `task89-local-root-source-acceptance.json` | `6fddf91f589a4abe56e274b0bd31f47e0d8902d806915c3ef888d67366e0e790` | Exact whole9277a1b3 unchanged; one outer43537 exit0 and59 ordered outcomes:29 admissions/30 refusals. All17 old-reader admissions are deliberate baseline witnesses, not new-reader acceptance of malformed input. Private0700 RUN contains5files:3 exact0600 fixture-data copies and2 results;26-profile/64-accepted88-pin postcheck and root7-member/101-pin verification. Fixture AST projects only the single validate receipt path; HOME preserved, no child. Finally restoration is qualified by normal exit, not injected fault/signal proof. No real seven-day/R4/ledger/live result; runtime outcomes UNKNOWN. |
+
+Each receipt accepts only its stated bounded local source-input qualification. Source approval in that local typed scope is true; this composition creates no source authority or execution grant. Actual live approval and formal increments remain false/zero. This document-only pass reads named receipts and report proofs, not actual source, tools or raw logs; none of the test counts above was rerun here. Task83 full65 acceptance supersedes the earlier partial checkpoint only in its stated bounded scope; the original V3 UNKNOWN/HOLD and all later retained harness failures remain recorded. Task84 checker/fixture evidence stays inherited rather than a fresh V5 rerun. Tasks86–89 use fixture path/AST projections and do not prove complete unmodified literal operator execution. Historical consumer-base pins remain historical.
+
+The proof table records the original accepted whole-task preimages, not the current document-only successor hashes. Task83 accepted preimage6859c717 and Task84 accepted preimagee3c1 retain their original source-proof scope; the embedded Task84 runbook2bd21/114-marker bodies and existing scoped helper names remain unchanged. Current successor hashes appear below. No combined helper count, released value, actual epoch, completed soak or ledger observation is inferred.
+
+### Six documentary corrections after the bounded whole-F audit
+
+The root-approved D1–D6 documentary repair follows `audit-f-whole-plan-consistency-current-v1` (report SHA256 `d4dd98b0b77bea18217fc5c9c8a3b6217307f96a54659340c38e0846690e6bbb`): retain C3-derived member host ids; correct the chart file map; name the existing action/schema2 phase-head/run-file/receipt interfaces; use current soak evidence paths; clarify drain for step9 and issuance from10; and qualify historical static Task83 source wording against its separate root full65 local acceptance. All seven tasks/helper code and the seven root-review rows remain unchanged. The existing whole-F documentary map and exact114 dual-Bash/3fish runbook proof are reused with their original scope; the62 Task85 syntax invocations cover31 datafiles, not every outer wrapper. No new syntax/helper/product test, complete unmodified operator runtime or global consistency PASS is claimed. Ordered E1/D25, final whole-plan/global review and all live/user/R4 execution gates remain separate; formal increment0.
+
+Historical facts the drafters recorded while drafting and verifying each task in scratch exports. The statements below retain their original local scope and are not current source approval, formal adversarial review, ledger values or live outcomes. This bounded static consistency candidate adds the current evidence qualification; the controller still owns final whole-plan/cross-plan acceptance. `<scratch>` stands for local verification directories that are not part of the plan.
+
+
+### Final documentary consistency and published-owner reconciliation
+
+The published/current F whole `6862bc4fbad3906c020aaa963f4e688feab595aedc717c73b8e793f84d000088` is the preserved procedural-owner preimage. Conditional root `93523e7c901efba3dc32a5f167cdea33fbb4232ebadbf89f1b2e3929d9824b16` selects the seven reviewed full task/source/helper bodies and D1–D6 documentary corrections; root `38d98e5c9f66f4427dfcc0a7fdd38114d8c6067f1d6d0d4baebeb5396c9b7294` adds only the AppA default-hold qualification: issuance after narrowed_drain only for an update touching no track, otherwise drain; explicit hold wins. All seven final task whole hashes remain exact to their accepted preimages, and all317 outer fenced bodies remain exact to the accepted conditional selection. The current runbook remains114 D24 Bash markers and3 fish blocks; its historical exact114 dual-Bash/3fish proof is reused, not rerun. Task85's62 syntax calls cover31 datafiles, not every outer wrapper.
+
+The front task/file/coverage/ReviewFocus maps and AppA public action/schema2/head/receipt/helper contracts retain the already reviewed corrections. AppC retains14 unique empty values and six empty unique run records. No actual ledger/R4/live value is invented. Source/projection/HOME/tool-profile/environment and UNKNOWN/HOLD qualifications in the seven root rows and historical evidence remain unchanged. Official rawABC assembly/split roundtrip and Markdown checks are new documentary checks only. Final F adoption, publication and any later grant remain root decisions after E4; absence of actual P5 release/R4/R5/live operation does not itself prevent reviewed-plan adoption when its future gates and bounded proof scopes are explicit.
+
+### Historical bounded evidence and predecessor alignment (earlier18cbb proof cut, 2026-10-18)
+
+- Task 83 driver V2: root receipt `task83-driver-v2-static-root-acceptance.json`, SHA-256 `3ce1b8369acda705ac5e2f7ecf60a353839652aed559d61eef0534be970eea19`, accepts bounded static checked-tool dispatch only. No actual Task 83 source application or product run is established. The older chart counts, 103/107-marker measurements and pre-overlay hashes below are historical, not a rerun of the current task bytes. At that historical proof cut, Task84 had112 marker blocks; changed procedural document bytes require fresh actual source/helper custody before execution.
+- E4 source: `task80-81-82-verified-source-root-acceptance.json`, SHA-256 `9eb253e6442dd6c660036e604a87daa2e30c3a2941c527648645511a985c2513`, accepts bounded actual synthetic verification of 1,773 safe source files. It does not supply actual Task 79, release/P5_END/R4, standalone crypto, rehearsal or live evidence. The E4 master is `fix-e4-host-indexer-id-contract/parts`; Task 80 uses the controller-selected `qualify-80-tdd-evidence/task-80.md` override (`08c0e469bedef0587ed3a36166382b90fd2a015bdd009a8459a9f9ae8a03fecf`). `wire.GroupMember.HostIndexerID` is `*uint64`: nil is unserved/delisted, a present zero is host 0; it is served metadata, not a new FSM/Raft field. From placement, read candidates use all current members' served hosts independently of readiness.
+- E3 master `prepare-e3-readiness-field-ownership/parts`: Task 71 uniquely declares `ReadyGeneration`, `ReadySignature`, `ReadyEpoch`; Task 72 consumes and Task 73 populates/validates them. This is separate from a served `ReadyVerifyMembers` list: F still derives that set from current readiness/generation and the verify tuple. Static alignment is not actual Task 70/71 execution approval.
+- Task 36 baseline receipt `task36-v2-actual-baseline-root-verified.json` (`f8924677ccb8472188f03e2681abbeba628c9197746652d311113bc918a5de7c`) records 63 PASS / 5 SKIP / 0 FAIL for the 68-test baseline. The older `task36-full500-root-acceptance-and-window-release.json` (`f34c9ee7dc7c2665640909e7ad77662bbcd8efeb8f6311f32caf99514d4b0112`) is qualified memo-repaired product plus separate observer-V3 full500 evidence; it is not that current baseline or proof of the original pre-memo source. The affected current build exited 0; independent closure audit and affected runtime acceptance remain pending in this candidate's input state. Build closure is not a runtime grant.
+- Task 70 fixed-tool receipt `task70-fixed-tool-qualification-static-root-acceptance.json` (`542201119ee945629814735bf51424a8ae471a3a6ab8b48678663d24e53f7941`) is bounded STATIC acceptance awaiting exclusive actual qualification. The original HOLD and Task 69 failure/risk qualification remain historical evidence; no actual tool run, source approval or Task 71 grant follows.
+- Tasks 84–89 remain drafted PREP consumers; the exact producer/API/ledger/run-record static inventory accompanies this candidate. All seven task files and all existing fenced bodies are unchanged. Appendix C's former placeholder is replaced only by the exact §61/D23 empty table and six empty run-record items. No value, observation, approval, date, daily line or completion is invented. K86 owner consent, the seven complete days, promotion-cap/user capacity stops, and task-atomic R1–R4 remain required. Formal increment: 0.
 
 ### Review fixes (AgentConnect round 1)
 
@@ -10483,6 +12877,176 @@ Task84 Keeper follow-up: actual isolated26.3.37.3 proof established ls empty/mis
 **Review fixes (AgentConnect round5), Tasks84/89:** reproduced current-head P2 with the exact old tail-review helper and Task89 DROP logging stanza in a real local controlling PTY: parent stderr TTY, child stderr pipe, direct old call passes but documented tee call refuses. The shared helper now opens/validates fixed `/dev/tty` on a function-local descriptor for the actual user's prompt/input, preserving automated tee/pipefail logs and caller descriptors. No controlling terminal, piped/prefilled or empty approval, stale/wrong audit and ambiguous query still refuse before a positive guard; actual user/action gates remain, and agents never synthesize operational approval. All P6PY and Task89 executable fences are byte-identical;50 helpers remain and only0-helpers marker changes. Removed two outside-runbook trailing spaces. Verification:12 actual PTY/logging/audit/guard cases,52 embedded selftests,107 actual Task85 exact-marker checks,79 Task89 consumer cases and78 fences/24 exact markers/13 helper sections pass; full Bash/fish/shellcheck/Markdown/diff-whitespace checks pass. No endpoint, key, DDL body, live operation or new container was exercised.
 
 **Review fixes (AgentConnect round 6):** Task85 bootstraps C1's ledger source only after locating its unique complete heading line. Reuse that verified line index rather than splitting at an earlier substring inside a verification script. Preserve exact source bytes and compile/installed-tool equality gates. Execute ten isolated actual-bootstrap cases against the current pushed C1 document, including the original failure, matching/mismatched installed tools, missing/duplicate headings, malformed/missing source, remote fallback and unavailable refs. No live operation or ledger value is produced.
+
+**Bounded failed-read procedural fix, Tasks83–89 (2026-10-18; formal credit0).** Exact-old inert direct/conditional Bash3.2/Bash5 controls reproduce swallowed nonzero Git/GH reads; checked captures and explicit exit/return guard the comparisons, and checked nonempty enumeration closes Task84's signature-loop bypass. Task85 prepare.py, protected Go/P6PY/runtime/SQL/private-TTY bodies, nine held updates,112-marker ordering and22 action confirmations remain unchanged. The new Task84 document/marker hashes and Task85–89 static consumer provenance are separately qualified with actual unchanged schema2 extraction on explicitly synthetic predecessor documents; old freezes/proofs remain historical. No new actual post83 source, full global thirteen-document custody, rollout, release, ledger, formal review or live acceptance follows.
+
+
+### Documentary status cleanup and successor selection (2026-10-20)
+
+The V1 final-candidate task banners were a real consistency defect: current-looking STATIC/PREP/WAIT, not-root-accepted and formal-zero prose survived completed bounded review. This V2 relocates that exact dated historical text below and retains concise actionable future execution prerequisites. The seven named root bounded source reviews above supersede these old plan-review status statements only within their original scopes; they do not satisfy actual future predecessor R4, release/source custody, keys/private-terminal, K86, budget, live or soak gates. Closed Task56/D/C1/C3 procedural overlays and completed S3-B work are not reopened. All317 fences and every numbered execution step are byte-identical to V1; AppA01b61 and AppC remain exact. New full task hashes require independent documentary review and root selection. No prior fixture is retagged.
+
+| Task | Accepted pre-cleanup full-task SHA256 | Current document-only successor SHA256 |
+| --- | --- | --- |
+| 83 | `6859c7172a7db4a73638f065382d1b950134995d2b0b4ae824fa16835d5449d1` | `6cf8c5338d8ee5b9a53a01d8153f3a7249e6608a5ff7eb50598b49a6479b5a80` |
+| 84 | `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01` | `a580e81ca7f4ae89a039d72b0861335bca094b59363fc89c26733a67e5593d1c` |
+| 85 | `b55f9af45513d51f81cedca60c2191b6c9e49066a4f46de7f4741baf9f208b82` | `895988dd6f02ce66595bbfc1f676b418ff5dd4dbdd51c632fe691009a396ec41` |
+| 86 | `12c19871a47a382c956d2a590185c99c30bd665c4b13f501b3c874451a2ebb88` | `30347f703682f1fe3cfc515289e008e863190ef88d6ad1342052c3ce6d961116` |
+| 87 | `f183105158aba88e0d3f56007020d5ec85102254952003a657b4afdbeec25fb0` | `6bab55cea7a3b228488c3c9ce1f4add0dd52a47bc5e829a25da4fa01e79815d8` |
+| 88 | `7b7a3f0f99e374ee8659f79d0f5def505b60981114f9084b9c35f4434791edb6` | `521b150eb8b711452d8b868ec7412f1776973dde7db76ddbfdaa0aa24f94c66f` |
+| 89 | `9277a1b371592da13baa8590c55abc0d6c4e985a62d04faa430365ce75e6f405` | `61306742e37f6095f9ac855c514819fc5850d09175a70f6e672e2e3db0f9c5ab` |
+
+#### Superseded historical task narratives — original text, not current blockers
+
+The following exact fragments retain their original wording and proof cuts. Their original dates and status claims are historical even where they say “current”, “pending”, “WAIT”, “not accepted” or “formal0”. The archive preserves provenance, not an active prerequisite to repeat closed plan reviews.
+
+
+##### Historical fragment 1: Task 83
+
+**STATIC PREPARATION — WAIT82.** Canonical `render-inertness.sh` invokes Helmfile; do not execute it in this controller run. Its future execution lines below are held until a separately audited exact direct-Helm equivalent is available and the controller authorizes verification; no stubbed wrapper result counts. This complete candidate is not a formal Task 83 review or execution approval. Actual reviewed post-82 production source does not exist in this preparation. All implementation diff, user-script and rollout-tool fences below are retained byte-for-byte from the draft; their old source anchors, counts and historical output require fresh verification after Tasks 80–82 freeze. Apply only the actual predecessor chain, preserving enacted source pins, 100GiB keep-free, 10GiB member PVC and monitoring provenance. No source-shaped assertion or inert workflow fixture establishes chart, runtime, deployment, release, END or ledger acceptance. Stop before Step 1 until actual P5_END R4 and P5_PR/base custody pass. K86 owner agreement and the seven-day promotion-budget user stop remain unchanged.
+
+##### Historical fragment 2: Task 83
+
+- **Verified while drafting (2026-10-17).** On a scratch production tree rebuilt from `origin/main` (`febc6c4ac`) with Plan S3-B's Tasks 16, 19 and 20 applied from their text and stand-ins for its live commits (repair mode, the lockdown's posture C and logins, indexer-c's monitoring and ledger row), then Plans S3-C1 Task 26, S3-C3 Tasks 37–38, S3-C4 Task 47, S3-D Task 53 and S3-E4 Task 80 applied from their text with stand-in ledger values (local corrections recorded in Appendix B), without the two key-bearing `k8s-sea/clickhouse` manifests: `test_render.py` ran 237 tests OK at the base; after Step 2 `Ran 231 tests` / `FAILED (failures=21, errors=14)`; after Step 3 the sentio-node half of `MemberConsensusTest` passed; after Step 4 the suite failed only on the logins script; after Step 5 `Ran 257 tests` / `OK`; the three `helm lint --strict` profiles passed; `render-inertness.sh` printed the eight `identical` lines; Step 6's rehearsal (on top of stand-ins for the P2 end state and Plan S3-E4 Task 80's own P5 rehearsal, whose `MON` state was made by hand because the stand-in has no P3 live `replicaReads`) printed `OK (257 tests)` for all ten states and `refused` for all ten bites; its first run went red at `C-b` and found the nine earlier tests the Notes list, which this text amends; and a replay of Steps 2–5 from this task's text on a second clone of the base ended in the same tree. `make-member-keys.sh` ran against stand-in `kubectl` and `cast` under OpenSSL 3.6.4 and 4.0.3 (derived addresses of the keys 2 and 3 as published, the key never in a call, every refusal of §59.5) and LibreSSL 3.3.6 was refused. Every bash block of this task passes `bash -n`, `/bin/bash -n` (3.2) and `shellcheck -S warning`; both scripts pass `shellcheck` at every severity.
+
+##### Historical fragment 3: Task 84
+
+**Bounded F1–F3 v2 proposal (NOT ROOT ACCEPTED; actual UNKNOWN, formal0).** Archive comparison checks both jq producers before cmp/moves; selected process tuples are independently sampled before and at both AFTER reads; every restart receipt is rederived from retained started/approval/targets/raw/health/predecessor evidence before any day/closing/raw/checkpoint consumer trusts it. The roster stays114 with new `0-helpers` and `16.3-archive` bodies/hashes. All v1/preflight/audit freezes remain immutable; no old custody or fixture proof is upgraded.
+
+##### Historical fragment 4: Task 84
+
+**Bounded failed-read procedure overlay (2026-10-18; formal credit 0).** Git/GH acceptance reads now preserve command status before comparing stdout, with nonempty lowercase40-hex object IDs; signature-range enumeration is checked before its loop. This requalifies these document bytes and their D24 marker hashes only. Historical chart/wire/runtime proofs remain historical; actual accepted post-83 source and the complete current thirteen-document helper chain remain future producer gates. No existing execution custody manifest may be edited or resealed to accept this document.
+
+##### Historical fragment 5: Task 84
+
+**Independent preflight successor proposal (2026-10-18; NOT ROOT ACCEPTED).** The independent preflight base roster is 112; `0-helpers` and `12.4-update` have new bytes/hashes and require new immutable custody. Historical 283/52/16 receipts do not validate these changed bodies. This separate unaccepted restart-evidence successor adds two read-only evidence markers; the new roster is 114. It distinguishes approved process replacement from stable node/owner identity and keeps complete raw time coverage. Neither local fixture nor a public text reference proves actual operator approval or startup health; live owner review remains required.
+
+##### Historical fragment 6: Task 84
+
+**Static preparation (2026-10-18): STATIC WAIT83; formal count 0.** This candidate has no actual Task 83 source export or live proof. Prior drafting render/Go/Helm results are historical and do not discharge the current source, producer-interface or execution gates. Read Task 83’s exact retained creator JSON; never fabricate that handoff.
+
+##### Historical fragment 7: Task 84
+
+production origin/main `36a680517c1c6e43930b44bfa178344203b03e0e`, plus pending S3-B Tasks 19–21 and remaining lockdown state, then the production chain
+
+##### Historical fragment 8: Task 85
+
+**Current literal qualification (STATIC only).** Root receipt `8c9b7a306bb0fe3eb1a889834b008afffc392e9e2680410d744853355239ea47` accepts Task84 V3 text `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`, its114-marker runbook and exact helper for static consumer reconciliation only. The older25a81/112 qualification and measurements below are a historical proof cut, not retagged tests of these new bytes. The accompanying binding-context.json records the current literal hashes and AST compatibility; it supplies no actual83/84/predecessor source acceptance, local fixture grant, R4 or signed HEAD. Existing real execution gates remain binding.
+
+##### Historical fragment 9: Task 85
+
+**Local-review successor (STATIC; actual outcomes UNKNOWN; formal0).** This complete candidate fixes only the budget dispatch custody, explicit preread capture failures, independent recovery task-directory binding and strict observed-window recording predicate. No budget, keyed statement, switch, release or ledger operation was executed. Local adapter dispatch requires a separately hash-bound ROOT_ACCEPTED84 typed source and a fresh scoped root grant; the ongoing Task84 proposal is not accepted by this candidate. All inherited actual producer/merged P6_PR/R4/live stops below remain binding.
+
+##### Historical fragment 10: Task 85
+
+**Bounded document-interface overlay (2026-10-18; formal credit 0).** Current procedure input is the independently qualified Task84 text SHA256 `25a81e009284946802c4ad80d11285e5e02d4562d40d8c5eb3c5e0501482cc77`, extracted P6 document no-final-LF SHA256 `8e50dd74f8efececc6a711d31259ec89c93ae30bc4a5e545bf7e6d3f6769b9b9`, one-final-LF SHA256 `284f19c53b7af0c3b41ec6ebeced15efb01d1fe963a7fa170854a020fbb9881c`. All112 exact D24 bodies are re-extracted with this task's unchanged schema2 prepare.py SHA256 `fa4373a54a72a349925004f267c32b3b7dee5b667de9648930ee9fdfa5770e2c`. Earlier Task84 eddf9626/8b840c05 provenance and its controls are historical, not proof of these new bytes. These pure controls use twelve explicitly synthetic predecessor helper documents; no actual full thirteen-document source freeze or post83 source readiness is claimed. Before real preparation, owning reviews must qualify the final independently accepted global chain and create fresh custody through setup; never update any existing manifest or hash inventory in place.
+
+##### Historical fragment 11: Task 85
+
+**Static preparation checkpoint (2026-10-18): STATIC WAIT84; formal review credit 0.** This candidate is a procedure-only preparation. It is not post-Task-84 source, release, chart-chain, wire, runtime, cluster or live proof. Before execution, the owning formal reviews must accept Tasks 83 and 84 on the actual current production chain; Task 84 must merge and record P6_PR through R4; all consumed P5 release/END records and their exact source/image identities must be verified from their authoritative ledger copies. Missing producer evidence stops before Step 1. Synthetic controls associated with this preparation cannot satisfy these gates.
+
+##### Historical fragment 12: Task 85
+
+**Producer and source gates (future formal verification).**
+
+##### Historical fragment 13: Task 85
+
+This preparation leaves the producer implementation and runtime tools unchanged.
+
+##### Historical fragment 14: Task 86
+
+**Current literal qualification (STATIC only).** Root receipt `8c9b7a306bb0fe3eb1a889834b008afffc392e9e2680410d744853355239ea47` accepts Task84 V3 text `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`, its114-marker runbook and exact helper for static consumer reconciliation only. The older25a81/112 qualification and measurements below are a historical proof cut, not retagged tests of these new bytes. The accompanying binding-context.json records the current literal hashes and AST compatibility; it supplies no actual83/84/predecessor source acceptance, local fixture grant, R4 or signed HEAD. Existing real execution gates remain binding.
+
+##### Historical fragment 15: Task 86
+
+**Current bounded procedural interfaces (2026-10-18; formal credit 0).** Qualified Task84 document SHA256 `25a81e009284946802c4ad80d11285e5e02d4562d40d8c5eb3c5e0501482cc77` (P6 no-final-LF `8e50dd74f8efececc6a711d31259ec89c93ae30bc4a5e545bf7e6d3f6769b9b9`, one-final-LF `284f19c53b7af0c3b41ec6ebeced15efb01d1fe963a7fa170854a020fbb9881c`), Task85 complete procedure SHA256 `a9b67ecc15039285085664133b529b6285228858bc0ac2c6893ea53afa7b2d3e` and unchanged schema2 extractor SHA256 `fa4373a54a72a349925004f267c32b3b7dee5b667de9648930ee9fdfa5770e2c` are this overlay's static inputs. Earlier preparation hashes cited below are retained historical provenance only. Re-extraction uses the actual unchanged prepare.py and all112 new producer markers; it changes no API, C/D/R/X phase order, private-terminal/SQL lifecycle, confirmation or actual source requirement. The twelve other helper documents in these controls are explicitly synthetic. Actual accepted current post83 production source and the final global thirteen-document custody remain future gates, including independently pending Task56/D/C1/C3 overlays; consume no WIP, edited freeze, consumer-authored receipt or stale-head shortcut.
+
+##### Historical fragment 16: Task 86
+
+**Local helper PREP successor.** Default-refusing local adapter and exact extracted Python/checker/self-test sources are supplied separately for future root-approved fixture execution only. Actual Task85 R4 and a fresh typed root grant remain required; no helper execution or runtime acceptance is established by static extraction. R1 record validation now requires typed uint64 epochs/cutover and exact step4/5 transitions; record outputs are exclusive, and R1/R2 bind the newly checked signed clean SHA. All live, remote, key, cluster and ledger execution remains unperformed.
+
+##### Historical fragment 17: Task 86
+
+**Static preparation boundary (2026-10-18).** STATIC WAIT85; formal review count 0. This candidate is not execution approval or post-Task85 source/runtime proof. The final pinned Task85 schema2 custody procedure is consumed as static background only; the owning formal review must verify that exact producer and acceptance lifecycle against accepted Task84 source, then complete actual R4 before this task can run. Re-extract all Task86 markers only from that reviewed, immutable chain; do not repair a changed helper by silently accepting a new digest. Missing, changed, stale or ambiguous evidence stops the sequence. K86 remains the actual clickhouse-extra owner's threshold agreement before Task87 step6; no threshold is selected here. Preserve the original complete seven-day promotion envelope: shortfall stops for the user's voter-resize decision, never an automatic resize, reduced soak or extra diagnostic promotion.
+
+##### Historical fragment 18: Task 86
+
+**Draft verification:**
+
+##### Historical fragment 19: Task 87
+
+**Current literal qualification (STATIC only).** Root receipt `8c9b7a306bb0fe3eb1a889834b008afffc392e9e2680410d744853355239ea47` accepts Task84 V3 text `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`, its114-marker runbook and exact helper for static consumer reconciliation only. The older25a81/112 qualification and measurements below are a historical proof cut, not retagged tests of these new bytes. The accompanying binding-context.json records the current literal hashes and AST compatibility; it supplies no actual83/84/predecessor source acceptance, local fixture grant, R4 or signed HEAD. Existing real execution gates remain binding.
+
+##### Historical fragment 20: Task 87
+
+**Current bounded procedural interfaces (2026-10-18; formal credit 0).** Qualified Task84 document SHA256 `25a81e009284946802c4ad80d11285e5e02d4562d40d8c5eb3c5e0501482cc77` (P6 no-final-LF `8e50dd74f8efececc6a711d31259ec89c93ae30bc4a5e545bf7e6d3f6769b9b9`, one-final-LF `284f19c53b7af0c3b41ec6ebeced15efb01d1fe963a7fa170854a020fbb9881c`), Task85 complete procedure SHA256 `a9b67ecc15039285085664133b529b6285228858bc0ac2c6893ea53afa7b2d3e` and unchanged schema2 extractor SHA256 `fa4373a54a72a349925004f267c32b3b7dee5b667de9648930ee9fdfa5770e2c` are this overlay's static inputs. Earlier preparation hashes cited below are retained historical provenance only. Re-extraction uses the actual unchanged prepare.py and all112 new producer markers; it changes no API, C/D/R/X phase order, private-terminal/SQL lifecycle, confirmation or actual source requirement. The twelve other helper documents in these controls are explicitly synthetic. Actual accepted current post83 production source and the final global thirteen-document custody remain future gates, including independently pending Task56/D/C1/C3 overlays; consume no WIP, edited freeze, consumer-authored receipt or stale-head shortcut.
+
+##### Historical fragment 21: Task 87
+
+**STATIC PREP / WAIT86:** formal increment 0. Actual accepted Task84 and actual post86 source/R4 are absent here. Final Task84/85 static interfaces are pinned below; the Task86 snapshot remains interface background only. The formal owner must first accept full helper/extractor custody and the separate Task84 publish/dry-run/apply/sync phases. This candidate consumes the final static Task84/schema2 interface documented below; missing or original combined markers stop, and no preparation hash is actual live-source approval. Never remove that stop merely to make the old text execute. All implementation fences remain unchanged. No endpoint, chart-chain, runtime, Go/Bazel, GPG or ledger result follows from this preparation. K86 requires the actual user/owner agreement; the original complete seven-day promotion envelope remains binding, and a shortfall stops for the user to decide voter sizing.
+
+##### Historical fragment 22: Task 87
+
+Historical pre-overlay execution-gate provenance (not a current source pin): only the reviewed separate Task84 phase bodies may execute; original combined publish/live bodies are refused. The historical phase-interface PREP snapshot was agents/review-84-prep/task-84.md SHA256 eddf962637f51a5b1262fa01956408f0e2ed40480f1deaa365e8600e2a4df8cc, inspected for exact 8.2-push/dry-run/apply and 8.3-push/sync bodies. These are producer background only; actual accepted source and full-chain custody remain mandatory. Do not bypass this stop or execute an edited/stubbed body. Fresh budget capture runs before each private acceptance and is retained separately; optional writes need the same complete guard, never a diagnostic extra INSERT. Missing actual producers stop before execution. Signing cancellation stops for the user to unlock the actual repository key; no unsigned fallback.
+
+##### Historical fragment 23: Task 87
+
+Historical pre-overlay schema2 reconciliation: Task85 preparation SHA256 bdc51e339a9c4caa3a84e0563acbe9860ffed8029479e3fa3b36efeeb3fdcaba and Task84 preparation SHA256 eddf962637f51a5b1262fa01956408f0e2ed40480f1deaa365e8600e2a4df8cc are immutable interface provenance, never actual source readiness. The accepted Task85 schema2 custody manifest owns the original lexical URWT path/branch, source documents, extractor and marker hashes. Its actual chain order is C-b,C-c,C-a,D-b,D-c,D-a,R-b,R-c,R-a,X. Task87 consumes the first three actual advances from Task86, then exactly D-b/c/a followed by R-b/c/a. Each exact Task84 commit body runs rollout → plan-head <operation> → signed commit → advance-head <operation>; the consumer asserts this order without changing any prepared byte. plan-head stages only the actual service and test mirror and records their raw staged diff hash. advance-head requires a direct signed poetry/G child on the same branch/run ID with exactly that diff/scope and unchanged source documents, then exclusively records the producer-defined chain receipt. Every prepared execution uses the producer's run-file API, which verifies the immutable manifest, current expected phase HEAD and exact prepared bytes immediately before one execution; existing/partial/failed attempts stop. No consumer-authored phase receipt, reconstructed HEAD or independently resealed manifest is allowed. The old dd02 delivery and all its proof remain frozen under work/prior-freeze-dd02/.
+
+##### Historical fragment 24: Task 88
+
+**Current literal qualification (STATIC only).** Root receipt `8c9b7a306bb0fe3eb1a889834b008afffc392e9e2680410d744853355239ea47` accepts Task84 V3 text `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`, its114-marker runbook and exact helper for static consumer reconciliation only. The older25a81/112 qualification and measurements below are a historical proof cut, not retagged tests of these new bytes. The accompanying binding-context.json records the current literal hashes and AST compatibility; it supplies no actual83/84/predecessor source acceptance, local fixture grant, R4 or signed HEAD. Existing real execution gates remain binding.
+
+##### Historical fragment 25: Task 88
+
+**Minimal local-validation successor (V2; formal0).** Every active Python JSON reader refuses duplicate/nonfinite values. Raw CLI uint64 strings/integers are independently validated; local observed receipts contain exact integer epoch/cutover values, are exclusively produced by `record.py receipt STEP`, and never replace the retained raw show. This is not live execution/source approval.
+
+##### Historical fragment 26: Task 88
+
+**Current bounded procedural interfaces (2026-10-18; formal credit 0).** Qualified Task84 document SHA256 `25a81e009284946802c4ad80d11285e5e02d4562d40d8c5eb3c5e0501482cc77` (P6 no-final-LF `8e50dd74f8efececc6a711d31259ec89c93ae30bc4a5e545bf7e6d3f6769b9b9`, one-final-LF `284f19c53b7af0c3b41ec6ebeced15efb01d1fe963a7fa170854a020fbb9881c`), Task85 complete procedure SHA256 `a9b67ecc15039285085664133b529b6285228858bc0ac2c6893ea53afa7b2d3e` and unchanged schema2 extractor SHA256 `fa4373a54a72a349925004f267c32b3b7dee5b667de9648930ee9fdfa5770e2c` are this overlay's static inputs. Earlier preparation hashes cited below are retained historical provenance only. Re-extraction uses the actual unchanged prepare.py and all112 new producer markers; it changes no API, C/D/R/X phase order, private-terminal/SQL lifecycle, confirmation or actual source requirement. The twelve other helper documents in these controls are explicitly synthetic. Actual accepted current post83 production source and the final global thirteen-document custody remain future gates, including independently pending Task56/D/C1/C3 overlays; consume no WIP, edited freeze, consumer-authored receipt or stale-head shortcut.
+
+##### Historical fragment 27: Task 88
+
+**Static preparation boundary (2026-10-18).** STATIC WAIT87; formal review count0. Task84–87 text and in-progress reviews are static background, not actual post87 source/runtime/live evidence or a substitute for Task87 R4. The final pinned Task85 schema2 procedure is static background only; actual upstream helper/extractor custody, acceptance lifecycle, phase and receipt contracts still need their owning formal review and real Task87 R4 before this task can execute; missing/changed/ambiguous evidence stops. K86 still requires actual clickhouse-extra-owner agreement, and the full seven-day promotion envelope remains binding: a shortfall stops for the user's voter-resize decision, never automatic resize, reduced soak, relaxed thresholds or diagnostic writes.
+
+##### Historical fragment 28: Task 89
+
+**Current literal qualification (STATIC only).** Root receipt `8c9b7a306bb0fe3eb1a889834b008afffc392e9e2680410d744853355239ea47` accepts Task84 V3 text `e3c1bd8278abddc61990fa135777f5444d21d7c5b91cc2c60a670ca72bd9df01`, its114-marker runbook and exact helper for static consumer reconciliation only. The older25a81/112 qualification and measurements below are a historical proof cut, not retagged tests of these new bytes. The accompanying binding-context.json records the current literal hashes and AST compatibility; it supplies no actual83/84/predecessor source acceptance, local fixture grant, R4 or signed HEAD. Existing real execution gates remain binding.
+
+##### Historical fragment 29: Task 89
+
+**Current bounded procedural interfaces (2026-10-18; formal credit 0).** Qualified Task84 document SHA256 `25a81e009284946802c4ad80d11285e5e02d4562d40d8c5eb3c5e0501482cc77` (P6 no-final-LF `8e50dd74f8efececc6a711d31259ec89c93ae30bc4a5e545bf7e6d3f6769b9b9`, one-final-LF `284f19c53b7af0c3b41ec6ebeced15efb01d1fe963a7fa170854a020fbb9881c`), Task85 complete procedure SHA256 `a9b67ecc15039285085664133b529b6285228858bc0ac2c6893ea53afa7b2d3e` and unchanged schema2 extractor SHA256 `fa4373a54a72a349925004f267c32b3b7dee5b667de9648930ee9fdfa5770e2c` are this overlay's static inputs. Earlier preparation hashes cited below are retained historical provenance only. Re-extraction uses the actual unchanged prepare.py and all112 new producer markers; it changes no API, C/D/R/X phase order, private-terminal/SQL lifecycle, confirmation or actual source requirement. The twelve other helper documents in these controls are explicitly synthetic. Actual accepted current post83 production source and the final global thirteen-document custody remain future gates, including independently pending Task56/D/C1/C3 overlays; consume no WIP, edited freeze, consumer-authored receipt or stale-head shortcut.
+
+##### Historical fragment 30: Task 89
+
+**Static preparation boundary (2026-10-18).** STATIC WAIT88; formal review count 0. Tasks84–88 candidate interfaces and isolated local controls do not establish the actual accepted postTask88 source/runtime state or replace any producer R4. No actual seven-day result, release pin, ledger value, capacity choice or owner agreement is produced here. Preserve every implementation/runtime fence and the live execution stop until the owning source-chain review passes.
+
+##### Historical fragment 31: Task 89
+
+**Local verification:** Formal execution remains blocked pending the actual postTask88 producer chain. Static prep controls do not establish source/runtime or live proof. At formal review, use actual origin/main exports plus the actual prior chain.
 ## Appendix C: execution record
 
-Written by the plan consistency pass from the release ledger table above (one row per ledger name this plan produces, empty until recorded, in the S3-B D23 shape), together with the run-record list. Not written yet: see `2026-10-15-multi-source-si-s3cf-status.md`.
+| Name | Value | Recorded by |
+| --- | --- | --- |
+| `P6_PR` |  | Task 84 |
+| `PURGE_EPOCH` |  | Task 85 |
+| `VOIDING_EPOCH` |  | Task 85 |
+| `SELECTION_EPOCH` |  | Task 85 |
+| `MEMBERS_EPOCH` |  | Task 86 |
+| `PLACEMENT_EPOCH` |  | Task 86 |
+| `PLACEMENT_CUTOVER_BLOCK` |  | Task 86 |
+| `KEEPER_HEADROOM` |  | Task 87 |
+| `STEP6_END` |  | Task 87 |
+| `RESELECTION_EPOCH` |  | Task 88 |
+| `CHECKPOINTS_EPOCH` |  | Task 88 |
+| `NARROWED_DRAIN_EPOCH` |  | Task 88 |
+| `K2_EPOCH` |  | Task 89 |
+| `P6_END` |  | Task 89 |
+
+Run records
+
+- P6 PR (Task 84):
+- Steps 1–3 run (Task 85):
+- Steps 4–5 run (Task 86):
+- Keeper headroom gate and step 6 run (Task 87):
+- Steps 7–9 run (Task 88):
+- Step 10 and the exit soak (Task 89):
