@@ -1799,7 +1799,10 @@ func TestStatementKindCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StatementKindCode(KindInsert): %v", err)
 	}
-	if code != StatementKindCodeInsert || code != 1 {
+	if code != StatementKindCodeInsert {
+		t.Fatalf("StatementKindCode(KindInsert) = %d, want StatementKindCodeInsert (%d)", code, StatementKindCodeInsert)
+	}
+	if code != 1 {
 		t.Fatalf("StatementKindCode(KindInsert) = %d, want 1", code)
 	}
 	if _, err := StatementKindCode(Kind("")); err == nil {

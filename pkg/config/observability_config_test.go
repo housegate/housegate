@@ -44,7 +44,7 @@ func TestObservabilityValidateNonPositiveInterval(t *testing.T) {
 	cfg.Listen = ":9001"
 	cfg.NetworkState.Source = "localhost:6379"
 	cfg.Observability.Collector.Enabled = true
-	cfg.Observability.Collector.Interval = Duration{0}
+	cfg.Observability.Collector.Interval = Duration{Duration: 0}
 	err := cfg.Validate()
 	if err == nil || !strings.Contains(err.Error(), "collector.interval") {
 		t.Errorf("expected collector.interval validation error, got %v", err)
@@ -56,7 +56,7 @@ func TestObservabilityDisabledSkipsIntervalCheck(t *testing.T) {
 	cfg.Listen = ":9001"
 	cfg.NetworkState.Source = "localhost:6379"
 	cfg.Observability.Collector.Enabled = false
-	cfg.Observability.Collector.Interval = Duration{0}
+	cfg.Observability.Collector.Interval = Duration{Duration: 0}
 	if err := cfg.Validate(); err != nil && strings.Contains(err.Error(), "collector.interval") {
 		t.Errorf("disabled collector should not trigger interval error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestObservabilityDisabledSkipsIntervalCheck(t *testing.T) {
 
 func TestObservabilityJSONRoundTrip(t *testing.T) {
 	cfg := Default()
-	cfg.Observability.Collector.Interval = Duration{30 * time.Second}
+	cfg.Observability.Collector.Interval = Duration{Duration: 30 * time.Second}
 	cfg.Observability.Collector.CHAddr = "127.0.0.1:9000"
 	cfg.Observability.Pprof.Enabled = true
 	cfg.Observability.Pprof.Token = "tok"

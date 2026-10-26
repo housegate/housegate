@@ -53,12 +53,12 @@ type ReplicationProxyInterserverRoute struct {
 func defaultReplicationProxyConfig() ReplicationProxyConfig {
 	return ReplicationProxyConfig{
 		Keeper: ReplicationProxyKeeperConfig{
-			DialTimeout: Duration{5 * time.Second},
+			DialTimeout: Duration{Duration: 5 * time.Second},
 		},
 		Interserver: ReplicationProxyInterserverConfig{
-			DialTimeout:     Duration{5 * time.Second},
-			ReadTimeout:     Duration{30 * time.Second},
-			WriteTimeout:    Duration{30 * time.Second},
+			DialTimeout:     Duration{Duration: 5 * time.Second},
+			ReadTimeout:     Duration{Duration: 30 * time.Second},
+			WriteTimeout:    Duration{Duration: 30 * time.Second},
 			PeerUserHeader:  defaultReplicationProxyPeerUserHeader,
 			PeerTokenHeader: defaultReplicationProxyPeerTokenHeader,
 		},

@@ -444,11 +444,11 @@ func Default() Config {
 		Listen:                EnvOrDefault("HOUSEGATE_LISTEN", ":9001"),
 		Upstream:              os.Getenv("HOUSEGATE_UPSTREAM"),
 		MetricsListen:         EnvOrDefault("HOUSEGATE_METRICS_LISTEN", ":9091"),
-		DialTimeout:           Duration{5 * time.Second},
-		IdleTimeout:           Duration{5 * time.Minute},
-		ShutdownTimeout:       Duration{30 * time.Second},
-		StatsInterval:         Duration{10 * time.Second},
-		MaxConnectionLifetime: Duration{24 * time.Hour},
+		DialTimeout:           Duration{Duration: 5 * time.Second},
+		IdleTimeout:           Duration{Duration: 5 * time.Minute},
+		ShutdownTimeout:       Duration{Duration: 30 * time.Second},
+		StatsInterval:         Duration{Duration: 10 * time.Second},
+		MaxConnectionLifetime: Duration{Duration: 24 * time.Hour},
 		StreamingBufSize:      131072,
 		ValidateChecksum:      false,
 
@@ -464,15 +464,15 @@ func Default() Config {
 
 		// Feature sections
 		Auth: authplugin.Config{
-			MaxTokenAge: Duration{1 * time.Minute},
+			MaxTokenAge: Duration{Duration: 1 * time.Minute},
 		},
 		Rewriter: rewrite.Config{
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
-			Timeout:     Duration{5 * time.Second},
+			Timeout:     Duration{Duration: 5 * time.Second},
 			Engine:      EnvOrDefault("HOUSEGATE_REWRITER_ENGINE", ""),
 		},
 		Materialize: materializeplugin.Config{
-			Timeout:        Duration{5 * time.Second},
+			Timeout:        Duration{Duration: 5 * time.Second},
 			RandomPoolSize: 16,
 		},
 		Agent: agent.Config{
@@ -488,7 +488,7 @@ func Default() Config {
 		ConcurrencyLimit: concurrency.Config{
 			Enabled:  false,
 			PerUser:  0,
-			Timeout:  Duration{60 * time.Second},
+			Timeout:  Duration{Duration: 60 * time.Second},
 			FailOpen: true,
 		},
 		StorageIntegrity: defaultStorageIntegrityConfig(),
@@ -512,8 +512,8 @@ func Default() Config {
 		Observability: ObservabilityConfig{
 			Collector: CollectorConfig{
 				Enabled:     EnvOrDefault("HOUSEGATE_COLLECTOR_ENABLED", "true") != "false",
-				Interval:    Duration{15 * time.Second},
-				PollTimeout: Duration{5 * time.Second},
+				Interval:    Duration{Duration: 15 * time.Second},
+				PollTimeout: Duration{Duration: 5 * time.Second},
 				CHAddr:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_ADDR", ""),
 			},
 			Pprof: PprofConfig{

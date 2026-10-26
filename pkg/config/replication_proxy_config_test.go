@@ -16,7 +16,7 @@ func minimalServerConfigWithPeerAuth(t *testing.T) Config {
 	cfg.RelayPrivateKeyHex = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	cfg.Auth.Enabled = true
 	cfg.Auth.AllowedAddresses = []string{trustedInterserverPeerAddress}
-	cfg.Auth.MaxTokenAge = Duration{time.Minute}
+	cfg.Auth.MaxTokenAge = Duration{Duration: time.Minute}
 	return cfg
 }
 
@@ -26,7 +26,7 @@ func validReplicationProxyConfig() ReplicationProxyConfig {
 			Enabled:     true,
 			Listen:      "127.0.0.1:9181",
 			Upstreams:   []string{"keeper-1:9181", "keeper-2:9181"},
-			DialTimeout: Duration{5 * time.Second},
+			DialTimeout: Duration{Duration: 5 * time.Second},
 		},
 		Interserver: ReplicationProxyInterserverConfig{
 			Enabled:         true,
@@ -34,9 +34,9 @@ func validReplicationProxyConfig() ReplicationProxyConfig {
 			LocalUpstream:   "127.0.0.1:9009",
 			PeerUserHeader:  "X-Housegate-Peer-User",
 			PeerTokenHeader: "X-Housegate-Peer-Token",
-			DialTimeout:     Duration{5 * time.Second},
-			ReadTimeout:     Duration{30 * time.Second},
-			WriteTimeout:    Duration{30 * time.Second},
+			DialTimeout:     Duration{Duration: 5 * time.Second},
+			ReadTimeout:     Duration{Duration: 30 * time.Second},
+			WriteTimeout:    Duration{Duration: 30 * time.Second},
 			Routes: []ReplicationProxyInterserverRoute{
 				{Peer: "1001", Upstream: "peer-2.example:9010"},
 				{Peer: "1002", Upstream: "peer-3.example:9010"},
