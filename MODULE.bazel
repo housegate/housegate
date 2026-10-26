@@ -17,7 +17,7 @@ bazel_dep(name = "rules_img", version = "0.3.17")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.26.3")
+go_sdk.download(version = "1.26.10")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
