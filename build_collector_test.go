@@ -27,8 +27,8 @@ func (f fakeCredProvider) GetCredentialForIndexer(uint64) (string, string, error
 func obsTestConfig(enabled bool, chAddr string) config.Config {
 	cfg := config.Default()
 	cfg.Observability.Collector.Enabled = enabled
-	cfg.Observability.Collector.Interval = config.Duration{15 * time.Second}
-	cfg.Observability.Collector.PollTimeout = config.Duration{2 * time.Second}
+	cfg.Observability.Collector.Interval = config.Duration{Duration: 15 * time.Second}
+	cfg.Observability.Collector.PollTimeout = config.Duration{Duration: 2 * time.Second}
 	cfg.Observability.Collector.CHAddr = chAddr
 	return cfg
 }
