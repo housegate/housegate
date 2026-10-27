@@ -18131,8 +18131,8 @@ Every value and run record is empty until its owning task records an actual outc
 | `CORE_MEMBER_TAG_P2` | `v0.18.1` | Task 37 |
 | `SN_MEMBER_COMMIT_P2` | `6ec59b933da367399fe2187462f221f877e5698d` | Task 37 |
 | `SN_MEMBER_DIGEST_P2` | `sha256:8954a338ea2fae62e0d492844bf6e78ecd162837a52ae24d1d36c6389188d525` | Task 37 |
-| `P2_PR` |  | Task 39 |
-| `MEMBER_IDS` |  | Task 39 |
+| `P2_PR` | `779` | Task 39 |
+| `MEMBER_IDS` | `member-a:0,member-b:1,member-c:2` | Task 39 |
 | `ENGINE_CENSUS` |  | Task 40 |
 | `P2_RESTART_END` |  | Task 40 |
 | `UNSAFE_INC_ROOT` |  | Task 40 |
@@ -18140,6 +18140,6 @@ Every value and run record is empty until its owning task records an actual outc
 
 Run records:
 
-- P2 PR (Task 39):
+- P2 PR (Task 39): `sentioxyz/production#779` (Tasks 37, 38 and 39, plus `18148fc` which filters the new si-member release scan through `permitted_worktree_names` and extends `test_safe_source.py`'s broad-reader audit to six scans) squash-merged as `bfd2acd6cd3332612e7ff8657131d8d52b3fe0fb` at 2026-10-27T15:39:31Z UTC; `test_render.py` 185 tests OK; the three `helm lint --strict` profiles passed (`1 chart(s) linted, 0 chart(s) failed` each); `render-inertness.sh origin/main` printed the eight `identical` lines; `make-p2-logins.sh` parses and is shellcheck clean; the runbook's conventions check (`headings ok (36)`, `mutating blocks confirmed (53)`, `devuser1 blocks for the live task (4)`, `shellcheck -S warning clean (115)`) and the §0 self-test passed; `blockowners` builds against arbiter-core `v0.18.0`; CI `validate` passed on `18148fc`; the merge gate read `P2_INTEGRATION_SOAK` `500` at `ARBITER_PIN_P2` `ee62b7f7a7c938c38a50bf41f054054a66727ba1` (D38); the member ids are those of the merged §1.2 rows (`member-a:0,member-b:1,member-c:2`); the member image is `SN_MEMBER_COMMIT_P2` / `SN_MEMBER_DIGEST_P2` (sentio-node `6ec59b9`, arbiter-core `v0.18.1`, housegate#273); Tasks 37 and 38 record nothing of their own (contract §28.1).
 - P2 census, restarts and member users (Task 40):
 - P2 members, soak and exit (Task 41):
