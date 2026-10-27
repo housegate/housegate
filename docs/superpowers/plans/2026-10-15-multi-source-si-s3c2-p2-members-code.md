@@ -30179,8 +30179,8 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure after t
 |---|---|---|
 | `CORE_TAG_P2` | `v0.18.0` | Task 34 |
 | `P2_CONFINEMENT` | `2026-10-27` | Task 34 |
-| `SN_COMMIT_P2` | | Task 35 |
-| `SN_DIGEST_P2` | | Task 35 |
+| `SN_COMMIT_P2` | `8652bc092016f049940d3d431e76ec20d631f47e` | Task 35 |
+| `SN_DIGEST_P2` | `sha256:42a4c1f032bd372e65a0d5f073b28289a8ad6c1006383e20125afc566a9810f7` | Task 35 |
 | `ARBITER_PIN_P2` | | Task 36 |
 | `P2_INTEGRATION_SOAK` | | Task 36 |
 
@@ -30209,5 +30209,11 @@ Run records (one item per recording task, filled in the same commit as all of th
   - clickhouse/clickhouse-server:26.3.37.3: confinement: RESTORE FROM S3 without READ ON S3: accepted
   - clickhouse/clickhouse-server:26.3.37.3: confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3
   - clickhouse/clickhouse-server:26.3.37.3: sources: 13 ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3
-- sentio-node release (Task 35):
+- sentio-node release (Task 35): sentio-node PR merged and its main CI Build pushed the image; the image's binary lists the si-member commands.
+  - `sentioxyz/sentio-node#201` squash-merged as `8652bc092016f049940d3d431e76ec20d631f47e` on 2026-10-27 UTC
+  - `CI Build` run `40491213522` with `docker-push` `success` and the step `si-member install acceptance` passing
+  - `ghcr.io/sentioxyz/sentio-node:sha-8652bc092016f049940d3d431e76ec20d631f47e`, index digest `sha256:42a4c1f032bd372e65a0d5f073b28289a8ad6c1006383e20125afc566a9810f7`, revision label `8652bc092016f049940d3d431e76ec20d631f47e`
+  - `go.mod` at `8652bc092016f049940d3d431e76ec20d631f47e` requires housegate `v0.22.0`, arbiter-core `v0.18.0` and arbiter-proto `v0.13.0` (dependency-only drift over HG_TAG_P1 `v0.21.0` / PROTO_TAG `v0.12.0`, accepted)
+  - the image's `/sentio-node --help` lists `si-member` and `/sentio-node si-member --help` lists `clear-foreign`
+  - local acceptance: --- PASS: TestSIMemberInstallsACopyFromTheOwnerPull (0.91s) on clickhouse/clickhouse-server:26.3.37.3
 - arbiter pin and integration run (Task 36):
