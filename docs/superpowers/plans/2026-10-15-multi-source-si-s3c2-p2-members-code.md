@@ -30177,8 +30177,8 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure after t
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `CORE_TAG_P2` | | Task 34 |
-| `P2_CONFINEMENT` | | Task 34 |
+| `CORE_TAG_P2` | `v0.18.0` | Task 34 |
+| `P2_CONFINEMENT` | `2026-10-27` | Task 34 |
 | `SN_COMMIT_P2` | | Task 35 |
 | `SN_DIGEST_P2` | | Task 35 |
 | `ARBITER_PIN_P2` | | Task 36 |
@@ -30186,6 +30186,28 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure after t
 
 Run records (one item per recording task, filled in the same commit as all of that task's owned rows):
 
-- arbiter-core release and confinement runs (Task 34):
+- arbiter-core release and confinement runs (Task 34): `sentioxyz/arbiter-core#54` squash-merged as `f5225822f97010c88cc79a49de56c954dfd56ad5` on 2026-10-27 UTC; Cut Release run `40487143071` tagged `v0.18.0` at `f5225822f97010c88cc79a49de56c954dfd56ad5`, pinning housegate `v0.22.0` (accepted by the user as equivalent to HG_TAG_P1 `v0.21.0`: dependency-only bumps) and arbiter-proto `v0.12.0`, `arbiter.LocalNodeFeatures()` unchanged; its `validate member confinement` step printed `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; the deployed-image run of `2026-10-27` on `093d906221c2d2ad34c7470e2728eda54c59127b` printed `confinement: 14 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` on ClickHouse `26.3.12.1`.
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement server CH_ADDR: image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16, ClickHouse 26.3.12.1, up 4s
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement server CH_PEER_ADDR: image us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16, ClickHouse 26.3.12.1, up 4s
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: CREATE DATABASE hg_rstage ENGINE = Memory as si_member: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: CREATE DATABASE hg_replica ENGINE = Memory as si_member: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: system.grants as si_member: unreadable
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: remote() with an explicit address and login as si_member: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: CREATE VIEW in hg_rstage as si_member: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: CREATE VIEW in hg_replica as si_member: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: RESTORE FROM S3 without READ ON S3: accepted
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: confinement: 14 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16
+  - us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16: sources: 13 ClickHouse test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16
+  - clickhouse/clickhouse-server:26.3.37.3: confinement server CH_ADDR: image clickhouse/clickhouse-server:26.3.37.3, ClickHouse 26.3.37.3, up 3s
+  - clickhouse/clickhouse-server:26.3.37.3: confinement server CH_PEER_ADDR: image clickhouse/clickhouse-server:26.3.37.3, ClickHouse 26.3.37.3, up 3s
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: CREATE DATABASE hg_rstage ENGINE = Memory as si_member: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: CREATE DATABASE hg_replica ENGINE = Memory as si_member: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: system.grants as si_member: unreadable
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: remote() with an explicit address and login as si_member: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: CREATE VIEW in hg_rstage as si_member: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: CREATE VIEW in hg_replica as si_member: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: RESTORE FROM S3 without READ ON S3: accepted
+  - clickhouse/clickhouse-server:26.3.37.3: confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3.37.3
+  - clickhouse/clickhouse-server:26.3.37.3: sources: 13 ClickHouse test(s) passed on clickhouse/clickhouse-server:26.3.37.3
 - sentio-node release (Task 35):
 - arbiter pin and integration run (Task 36):
