@@ -30181,8 +30181,8 @@ Record only through `s3-ledger.py` and contract §19's R1–R4 procedure after t
 | `P2_CONFINEMENT` | `2026-10-27` | Task 34 |
 | `SN_COMMIT_P2` | `8652bc092016f049940d3d431e76ec20d631f47e` | Task 35 |
 | `SN_DIGEST_P2` | `sha256:42a4c1f032bd372e65a0d5f073b28289a8ad6c1006383e20125afc566a9810f7` | Task 35 |
-| `ARBITER_PIN_P2` | | Task 36 |
-| `P2_INTEGRATION_SOAK` | | Task 36 |
+| `ARBITER_PIN_P2` | `ee62b7f7a7c938c38a50bf41f054054a66727ba1` | Task 36 |
+| `P2_INTEGRATION_SOAK` | `500` | Task 36 |
 
 Run records (one item per recording task, filled in the same commit as all of that task's owned rows):
 
@@ -30216,4 +30216,9 @@ Run records (one item per recording task, filled in the same commit as all of th
   - `go.mod` at `8652bc092016f049940d3d431e76ec20d631f47e` requires housegate `v0.22.0`, arbiter-core `v0.18.0` and arbiter-proto `v0.13.0` (dependency-only drift over HG_TAG_P1 `v0.21.0` / PROTO_TAG `v0.12.0`, accepted)
   - the image's `/sentio-node --help` lists `si-member` and `/sentio-node si-member --help` lists `clear-foreign`
   - local acceptance: --- PASS: TestSIMemberInstallsACopyFromTheOwnerPull (0.91s) on clickhouse/clickhouse-server:26.3.37.3
-- arbiter pin and integration run (Task 36):
+- arbiter pin and integration run (Task 36): `sentioxyz/arbiter#135` squash-merged as `ee62b7f7a7c938c38a50bf41f054054a66727ba1` on 2026-10-27 UTC, pinning arbiter-core `v0.18.0` and housegate `v0.22.0` (HG_TAG_P1 `v0.21.0` plus dependency-only bumps, accepted; arbiter-core `v0.18.0` requires it) (arbiter-proto `v0.12.0`), no release; `ci` run https://github.com/sentioxyz/arbiter/actions/runs/40492058945 succeeded on it, its `integration-clickhouse-member` job reporting `member soak: owner 0: 50 blocks, 0 mismatches, 5 missed scans, 0 unverdicted`; `Member Soak` run https://github.com/sentioxyz/arbiter/actions/runs/40492099959 (head `ee62b7f7a7c938c38a50bf41f054054a66727ba1`, dispatched on main) succeeded in 35m34s.
+  - member soak: owner 0: 500 blocks, 0 mismatches, 5 missed scans, 0 unverdicted
+  - --- PASS: TestPipeline_MemberCopyFollowsTheOwnerAcrossPromotions (6.27s)
+  - --- PASS: TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement (5.40s)
+  - --- PASS: TestPipeline_MemberKilledMidStreamResumesFromItsJournal (1.37s)
+  - --- PASS: TestPipeline_MemberShadowSoak (2084.97s)
