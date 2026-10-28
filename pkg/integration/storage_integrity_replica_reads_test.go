@@ -14,6 +14,7 @@ import (
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
 	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/sitable"
 )
 
@@ -85,8 +86,9 @@ func downAddress(t *testing.T) (string, uint16) {
 // startReplicaReadsHost starts the member host (indexer 1) with state as its
 // table state, the signed lane on (as on every SI host, so the rewriter
 // passes writes to sitablestate) and the promotion port wired, and indexer 2
-// advertised at an address that refuses connections.
-func startReplicaReadsHost(t *testing.T, state sitable.TableState) *testenv.TestProxy {
+// advertised at an address that refuses connections. extra options are applied
+// after these.
+func startReplicaReadsHost(t *testing.T, state sitable.TableState, extra ...testenv.ProxyOption) *testenv.TestProxy {
 	t.Helper()
 	lib := requireNativeLib(t)
 	signer, err := auth.NewRelaySigner(authTestKey1)
@@ -94,7 +96,7 @@ func startReplicaReadsHost(t *testing.T, state sitable.TableState) *testenv.Test
 		t.Fatal(err)
 	}
 	ownerHost, ownerPort := downAddress(t)
-	return testenv.StartServerProxy(t, chEnv.Addr,
+	opts := []testenv.ProxyOption{
 		testenv.WithIndexerID(1),
 		testenv.WithLogicalDatabaseAt(chEnv.Database, 1),
 		testenv.WithLogicalDatabaseAt(replicaReadsDB, replicaReadsOwner),
@@ -116,7 +118,8 @@ func startReplicaReadsHost(t *testing.T, state sitable.TableState) *testenv.Test
 			opts.StorageIntegrityTableState = state
 			opts.StorageIntegrityAdmissionConsumer = &capturingConsumer{}
 		},
-	)
+	}
+	return testenv.StartServerProxy(t, chEnv.Addr, append(opts, extra...)...)
 }
 
 func queryUint64(t *testing.T, conn clickhouse.Conn, sql string) uint64 {
@@ -278,5 +281,61 @@ func TestReplicaReads_ServingEndedMidSessionAsksToReconnect(t *testing.T) {
 	state.Set(replicaReadsServed()...)
 	if got := queryUint64(t, conn, "SELECT count() FROM a"); got != 3 {
 		t.Fatalf("read once serving resumed = %d, want 3", got)
+	}
+}
+
+// replicaReadsStrangerKey signs for an account that holds no permission on
+// rrdb; authTestKey1 is the SI ingress signer and authTestKey2 the permitted
+// reader.
+const replicaReadsStrangerKey = "3333333333333333333333333333333333333333333333333333333333333333"
+
+// TestReplicaReads_AnAccountWithoutTheDatabasePermissionIsRefused: with auth
+// on, a served copy stays readable only by rrdb's permitted accounts (K48).
+// The table state lists the copy for every session, so the engine's
+// database_map check is what refuses another tenant on the member host,
+// qualified or after a hello on rrdb, before ClickHouse is contacted.
+func TestReplicaReads_AnAccountWithoutTheDatabasePermissionIsRefused(t *testing.T) {
+	seedReplicaReads(t)
+	permitted, err := auth.NewRelaySigner(authTestKey2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, err := auth.NewRelaySigner(replicaReadsStrangerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := startReplicaReadsHost(t, sitable.NewFake(sitable.Ordinary, replicaReadsServed()...),
+		authProxyConfig([]string{permitted.Address(), stranger.Address()}, false),
+		testenv.WithDatabasePermission(permitted.Address(), replicaReadsDB, registry.DbAuthRead),
+		testenv.WithDatabasePermission(permitted.Address(), chEnv.Database, registry.DbAuthRead),
+		testenv.WithDatabasePermission(stranger.Address(), chEnv.Database, registry.DbAuthRead),
+	)
+	ctx := context.Background()
+
+	if got := queryUint64(t, openSignedConn(t, host.Addr, permitted), "SELECT sum(id) FROM rrdb.a"); got != 6 {
+		t.Fatalf("permitted sum(id) of rrdb.a = %d, want 6 from the copy", got)
+	}
+
+	const refusal = "storage-integrity logical database rrdb is not authorized by database_map"
+	qualified := openSignedConn(t, host.Addr, stranger)
+	for _, sql := range []string{
+		"SELECT sum(id) FROM rrdb.a",
+		"SELECT count() FROM rrdb.a AS x JOIN rrdb.b AS y ON x.id = y.id",
+		"WITH c AS (SELECT id FROM rrdb.a) SELECT count() FROM c WHERE id IN (SELECT id FROM rrdb.b)",
+	} {
+		var n uint64
+		err := qualified.QueryRow(ctx, sql).Scan(&n)
+		t.Logf("stranger: %s -> %d, %v", sql, n, err)
+		if err == nil || !strings.Contains(err.Error(), refusal) {
+			t.Fatalf("stranger: %s = %d, %v; want the refusal %q", sql, n, err, refusal)
+		}
+	}
+
+	byHello := openSignedConnPinnedDB(t, host.Addr, stranger, replicaReadsDB)
+	var n uint64
+	err = byHello.QueryRow(ctx, "SELECT sum(id) FROM a").Scan(&n)
+	t.Logf("stranger after a hello on rrdb: SELECT sum(id) FROM a -> %d, %v", n, err)
+	if err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("stranger after a hello on rrdb = %d, %v; want the refusal %q", n, err, refusal)
 	}
 }

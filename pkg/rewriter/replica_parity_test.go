@@ -11,6 +11,7 @@ import (
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/sitable"
 )
 
@@ -237,4 +238,126 @@ func TestGRPCEngineReplicaTableResolvesBeforeRemoteMapping(t *testing.T) {
 	}
 	defer f.Close()
 	requireReplicaParity(t, f)
+}
+
+// The permission tests pin K48's "each database stays readable only by its
+// permitted accounts" for a served copy. buildStorageIntegrityArgs lists every
+// served table for every session, whatever the account, while
+// buildDatabaseMap keeps only the account's permitted databases, so the
+// engine is what keeps a copy from another tenant: it must check the
+// database_map before it resolves an SI table to its physical surface. The
+// host's own Active table owndb.t pins the same check for a table that
+// predates replica serving.
+
+const (
+	replicaPermitted = "0xpermitted" // Read on rrdb and owndb
+	replicaStranger  = "0xstranger"  // Read on otherdb only
+)
+
+// replicaPermissionFactory is the member host of the parity tests with auth
+// on, an own Active table owndb.t, an ordinary local database otherdb and
+// the two accounts above.
+func replicaPermissionFactory(t *testing.T, o Options) *SentioNetworkFactory {
+	t.Helper()
+	st := replicaParityNetwork()
+	st.DatabaseInfos["owndb"] = network.DatabaseInfo{DatabaseId: "owndb", IndexerId: 1}
+	st.DatabaseInfos["otherdb"] = network.DatabaseInfo{DatabaseId: "otherdb", IndexerId: 1}
+	st.DatabasePermissions[replicaPermitted] = network.DatabasePermissions{"rrdb": registry.DbAuthRead, "owndb": registry.DbAuthRead}
+	st.DatabasePermissions[replicaStranger] = network.DatabasePermissions{"otherdb": registry.DbAuthRead}
+	si := replicaParityOptions()
+	si.TableState = sitable.NewFake(sitable.Ordinary,
+		sitable.Table{ID: "rrdb.a", Status: sitable.Replica, CopyTable: replicaParityCopyA, ReplicaOf: 2},
+		sitable.Table{ID: "rrdb.b", Status: sitable.Replica, CopyTable: replicaParityCopyB, ReplicaOf: 2},
+		sitable.Table{ID: "owndb.t", Status: sitable.Active},
+	)
+	o.PhysicalDatabase = "phys"
+	o.Listen = ":9000"
+	o.AuthEnabled = true
+	o.StorageIntegrity = si
+	f, err := NewSentioNetworkFactory(o, st)
+	if err != nil {
+		t.Fatalf("NewSentioNetworkFactory(%s): %v", o.Engine, err)
+	}
+	f.SetGetIndexerId(func() uint64 { return 1 })
+	return f
+}
+
+// requireReplicaTableNeedsTheDatabasePermission drives one real engine: the
+// permitted account reads the copy, and every statement of an account
+// without a permission on rrdb (or of no account) that reaches a served
+// table is refused by the engine's database_map check, with no SQL.
+func requireReplicaTableNeedsTheDatabasePermission(t *testing.T, f *SentioNetworkFactory) {
+	t.Helper()
+	ctx := context.Background()
+	copyA := sitable.ReplicaDatabase + "." + replicaParityCopyA
+
+	res, err := f.NewRewriter(&fakeSession{}).Rewrite(ctx, "SELECT count() FROM rrdb.a", replicaPermitted)
+	if err != nil || !strings.Contains(res.SQL, copyA) {
+		t.Fatalf("permitted read of rrdb.a -> %q, %v; want it to read %s", res.SQL, err, copyA)
+	}
+
+	for _, tc := range []struct {
+		account, logical, sql, db string
+	}{
+		{replicaStranger, "", "SELECT count() FROM rrdb.a", "rrdb"},
+		{replicaStranger, "rrdb", "SELECT count() FROM a", "rrdb"},
+		{replicaStranger, "", "SELECT * FROM rrdb.a AS x JOIN rrdb.b AS y ON x.id = y.id", "rrdb"},
+		{replicaStranger, "", "SELECT * FROM otherdb.x JOIN rrdb.a AS y ON x.id = y.id", "rrdb"},
+		{replicaStranger, "", "SELECT * FROM otherdb.x WHERE id IN (SELECT id FROM rrdb.a)", "rrdb"},
+		{replicaStranger, "", "WITH c AS (SELECT * FROM rrdb.a) SELECT * FROM c", "rrdb"},
+		{replicaStranger, "", "SELECT id FROM otherdb.x UNION ALL SELECT id FROM rrdb.a", "rrdb"},
+		{"", "", "SELECT count() FROM rrdb.a", "rrdb"},
+		{replicaStranger, "", "SELECT count() FROM owndb.t", "owndb"},
+	} {
+		sess := &fakeSession{logical: tc.logical}
+		if tc.logical != "" {
+			sess.physical = "phys"
+		}
+		res, err := f.NewRewriter(sess).Rewrite(ctx, tc.sql, tc.account)
+		t.Logf("account %q, logical %q: %s -> %q, %v", tc.account, tc.logical, tc.sql, res.SQL, err)
+		var rej *RejectedError
+		want := "storage-integrity logical database " + tc.db + " is not authorized by database_map"
+		if !errors.As(err, &rej) || !strings.Contains(rej.Message, want) || res.SQL != "" {
+			t.Fatalf("account %q, logical %q: %s -> %q, %v; want the refusal %q and no SQL", tc.account, tc.logical, tc.sql, res.SQL, err, want)
+		}
+	}
+
+	// The permitted account still reads its own database's copy after the
+	// refusals: the engine keeps no per-statement state across accounts.
+	if res, err := f.NewRewriter(&fakeSession{}).Rewrite(ctx, "SELECT count() FROM rrdb.a", replicaPermitted); err != nil || !strings.Contains(res.SQL, copyA) {
+		t.Fatalf("permitted read of rrdb.a after the refusals -> %q, %v; want it to read %s", res.SQL, err, copyA)
+	}
+}
+
+// TestNativeEngineReplicaTableNeedsTheDatabasePermission runs the permission
+// cases on the in-process rewriter-go engine. Skips without the FFI library;
+// run locally with:
+//
+//	bazel test //pkg/rewriter:rewriter_test \
+//	  --test_filter=TestNativeEngineReplicaTableNeedsTheDatabasePermission \
+//	  --test_env=POLYGLOT_SQL_FFI_PATH=<libpolyglot_sql_ffi path>
+func TestNativeEngineReplicaTableNeedsTheDatabasePermission(t *testing.T) {
+	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
+	}
+	f := replicaPermissionFactory(t, Options{Engine: EngineNative})
+	defer f.Close()
+	requireReplicaTableNeedsTheDatabasePermission(t, f)
+}
+
+// TestGRPCEngineReplicaTableNeedsTheDatabasePermission runs the permission
+// cases on a rewriter-grpc service, the devnet2 housegate-rewriter image.
+// Skips without its address; run locally with:
+//
+//	bazel test //pkg/rewriter:rewriter_test \
+//	  --test_filter=TestGRPCEngineReplicaTableNeedsTheDatabasePermission \
+//	  --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551
+func TestGRPCEngineReplicaTableNeedsTheDatabasePermission(t *testing.T) {
+	addr := os.Getenv("HOUSEGATE_TEST_REWRITER_GRPC_ADDR")
+	if addr == "" {
+		t.Skip("HOUSEGATE_TEST_REWRITER_GRPC_ADDR not set; rewriter-grpc service unavailable")
+	}
+	f := replicaPermissionFactory(t, Options{Engine: EngineGRPC, ServiceAddr: addr, Timeout: 10 * time.Second})
+	defer f.Close()
+	requireReplicaTableNeedsTheDatabasePermission(t, f)
 }
