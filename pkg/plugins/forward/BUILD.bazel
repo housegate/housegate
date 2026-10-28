@@ -17,6 +17,7 @@ go_library(
         "//pkg/peer",
         "//pkg/plugin",
         "//pkg/registry",
+        "//pkg/sitable",
         "//pkg/storageintegrity",
     ],
 )
@@ -34,5 +35,6 @@ go_test(
         "//pkg/chsession",
         "//pkg/network",
         "//pkg/plugin",
+        "//pkg/sitable",
     ],
 )

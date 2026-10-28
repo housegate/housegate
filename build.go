@@ -847,6 +847,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		LocalDialer:      localDialer,
 		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
 	}
+	if siOptions.Enabled {
+		// Spec 2026-10-14 §11: a hello or USE of a database this host serves
+		// from its member's copy stays local.
+		forwardPlug.TableState = siState
+	}
 	queryPlugins = append(queryPlugins, forwardPlug)
 
 	var rewritePlug *rewrite.Plugin
