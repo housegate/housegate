@@ -267,3 +267,82 @@ func TestNegotiateAddendum_StoresParallelReplicasVersion(t *testing.T) {
 		t.Fatalf("NegotiateAddendum wrote %d bytes to client; expected 0", n)
 	}
 }
+
+// TestNegotiateAddendum_ChunkedQueryInSameReadAsAddendum reproduces the
+// devnet2 replica-failover drill (Plan S3-C4 Task 48b): a client that sends
+// its addendum and its first chunked packet back to back, so both arrive in
+// one socket read, must still have that packet deframed. The agent's
+// ReplicaFailover writes hello, addendum, Query and the empty Data
+// terminator without waiting, so a replica host often receives the addendum
+// and the chunked Query together. The host codec's 128KB bufio prefetched
+// the Query's chunk frame while chunked reads were still disabled, and the
+// frame header's low byte (the Query's length mod 256) was then read as the
+// packet type: "skip body for client type=16|17 not yet supported".
+func TestNegotiateAddendum_ChunkedQueryInSameReadAsAddendum(t *testing.T) {
+	const rev = RevisionMinChunkedPackets
+	// Agent side: a chunked_optional upstream leg, as ReplicaFailover's
+	// prepareReadCandidate resolves it against a Housegate host.
+	var wire bytes.Buffer
+	agent := NewCodec(&readerWriter{r: &bytes.Buffer{}, w: &wire}, DirToUpstream)
+	agent.serverSendChunked = "chunked_optional"
+	agent.serverRecvChunked = "chunked_optional"
+	agent.SetRevision(rev)
+	res := agent.ResolveUpstreamAddendum(AddendumResult{}, AddendumOpts{
+		ProposedRecv: "chunked_optional",
+		ProposedSend: "chunked_optional",
+	})
+	if err := agent.SendAddendum(res); err != nil {
+		t.Fatalf("SendAddendum: %v", err)
+	}
+	q := &Query{
+		ID:   "failover-qid",
+		Body: "SELECT count() FROM s3e_e2e SETTINGS SQL_x_read_mode='safe'",
+		Info: proto.ClientInfo{
+			ProtocolVersion: rev,
+			Major:           25,
+			Minor:           8,
+			Interface:       proto.InterfaceTCP,
+			Query:           proto.ClientQueryInitial,
+		},
+	}
+	if err := agent.WriteQuery(q); err != nil {
+		t.Fatalf("WriteQuery: %v", err)
+	}
+	var empty proto.Buffer
+	empty.PutUVarInt(uint64(proto.ClientCodeData))
+	empty.PutString("")
+	(&proto.Block{}).EncodeAware(&empty, rev)
+	if err := agent.WriteRawPacket(empty.Buf); err != nil {
+		t.Fatalf("write terminator: %v", err)
+	}
+
+	// Host side: everything is available in a single Read, as when TCP
+	// coalesces the agent's back-to-back writes.
+	host := NewCodec(&readerWriter{r: bytes.NewBuffer(wire.Bytes()), w: &bytes.Buffer{}}, DirFromClient)
+	host.SetRevision(rev)
+	hostRes, err := host.NegotiateAddendum(AddendumOpts{
+		ProposedRecv: "chunked_optional",
+		ProposedSend: "chunked_optional",
+	})
+	if err != nil {
+		t.Fatalf("NegotiateAddendum: %v", err)
+	}
+	if hostRes.NegotiatedRecv != "chunked" {
+		t.Fatalf("host NegotiatedRecv=%q, want chunked", hostRes.NegotiatedRecv)
+	}
+	pkt, err := host.ReadPacket(uint64(proto.ClientCodeQuery))
+	if err != nil {
+		t.Fatalf("host ReadPacket after the addendum: type=%d err=%v", pkt.Type, err)
+	}
+	got, ok := pkt.Decoded.(*Query)
+	if !ok || got.Body != q.Body || got.ID != q.ID {
+		t.Fatalf("host decoded %T %+v, want the agent's Query", pkt.Decoded, pkt.Decoded)
+	}
+	term, err := host.ReadPacket()
+	if err != nil {
+		t.Fatalf("host ReadPacket terminator: type=%d err=%v", term.Type, err)
+	}
+	if term.Type != uint64(proto.ClientCodeData) {
+		t.Fatalf("terminator type=%d, want Data", term.Type)
+	}
+}

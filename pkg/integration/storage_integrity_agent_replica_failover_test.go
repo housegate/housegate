@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -252,5 +253,117 @@ func TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember(t *testing
 	}
 	if got := replicaFailovers(t, "owner_unreachable"); got != unreachable+1 {
 		t.Fatalf("failovers{owner_unreachable} = %g, want %g", got, unreachable+1)
+	}
+}
+
+// heldConn buffers writes while hold is set, so a test can put several
+// packets on the wire in one segment, as TCP does when a sender's
+// back-to-back writes reach a busy or distant receiver together.
+type heldConn struct {
+	net.Conn
+	hold bool
+	buf  bytes.Buffer
+}
+
+func (c *heldConn) Write(p []byte) (int, error) {
+	if c.hold {
+		return c.buf.Write(p)
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *heldConn) release() error {
+	c.hold = false
+	_, err := c.Conn.Write(c.buf.Bytes())
+	c.buf.Reset()
+	return err
+}
+
+// TestServerProxy_ServesAChunkedQuerySentWithTheAddendum is the devnet2
+// replica-failover drill (Plan S3-C4 Task 48b) against a real HouseGate host:
+// the agent's failover replay writes the addendum, the chunked Query and its
+// empty Data terminator back to back, and when they reach the host in one
+// read the host must still deframe the Query. Before the fix the host's
+// bufio had prefetched the chunk frame while chunked reads were disabled,
+// read the frame header's low byte as the packet type and closed the
+// session ("skip body for client type=16|17 not yet supported").
+func TestServerProxy_ServesAChunkedQuerySentWithTheAddendum(t *testing.T) {
+	proxy := testenv.StartServerProxy(t, chEnv.Addr)
+	raw, err := net.DialTimeout("tcp", proxy.Addr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	_ = raw.SetDeadline(time.Now().Add(30 * time.Second))
+	conn := &heldConn{Conn: raw}
+	codec := chproto.NewCodec(conn, chproto.DirToUpstream)
+
+	hello := &chproto.ClientHello{
+		Name: "failover-replay", Major: 25, Minor: 8,
+		ProtocolVersion: chproto.MaxSupportedRevision,
+		Database:        chEnv.Database, User: chEnv.User, Password: chEnv.Password,
+	}
+	if err := codec.WriteClientHello(hello); err != nil {
+		t.Fatal(err)
+	}
+	codec.SetServerHelloRevisionHint(int(hello.ProtocolVersion))
+	pkt, err := codec.ReadPacket(uint64(chproto.ServerHelloCode), uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("read server hello: %v", err)
+	}
+	srv, ok := pkt.Decoded.(*chproto.ServerHello)
+	if !ok {
+		t.Fatalf("server hello = %T %+v", pkt.Decoded, pkt.Decoded)
+	}
+	rev := min(int(hello.ProtocolVersion), int(srv.Revision))
+	codec.SetRevision(rev)
+	if !chproto.SupportsChunkedPackets(rev) {
+		t.Fatalf("negotiated revision %d has no chunked transport", rev)
+	}
+
+	conn.hold = true
+	res := codec.ResolveUpstreamAddendum(chproto.AddendumResult{}, chproto.AddendumOpts{
+		ProposedRecv: "chunked_optional",
+		ProposedSend: "chunked_optional",
+	})
+	if res.NegotiatedSend != "chunked" {
+		t.Fatalf("the host does not take chunked packets (send=%q); the drill's framing is not reproduced", res.NegotiatedSend)
+	}
+	if err := codec.SendAddendum(res); err != nil {
+		t.Fatal(err)
+	}
+	if err := codec.WriteQuery(&chproto.Query{
+		ID:   "chunked-with-addendum",
+		Body: "SELECT 42",
+		Info: proto.ClientInfo{
+			ProtocolVersion: rev, Major: 25, Minor: 8,
+			Interface: proto.InterfaceTCP, Query: proto.ClientQueryInitial,
+			InitialAddress: "127.0.0.1:0", ClientHostname: "failover-replay", ClientName: "failover-replay",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var terminator proto.Buffer
+	terminator.PutUVarInt(uint64(chproto.ClientDataCode))
+	terminator.PutString("")
+	(&proto.Block{}).EncodeAware(&terminator, rev)
+	if err := codec.WriteRawPacket(terminator.Buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.release(); err != nil {
+		t.Fatal(err)
+	}
+
+	for {
+		pkt, err := codec.ReadPacket(uint64(chproto.ServerExceptionCode))
+		if err != nil {
+			t.Fatalf("the host broke before answering the Query sent with the addendum: %v", err)
+		}
+		if exc, ok := pkt.Decoded.(*chproto.Exception); ok {
+			t.Fatalf("the host answered code=%d %s", exc.Code, exc.Message)
+		}
+		if pkt.Type == uint64(chproto.ServerEndOfStreamCode) {
+			return
+		}
 	}
 }

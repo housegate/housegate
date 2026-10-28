@@ -1,6 +1,7 @@
 package chproto
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -72,6 +73,15 @@ func (cr *ChunkedReader) Enabled() bool {
 // the final addendum field has been consumed.
 func (cr *ChunkedReader) Enable() {
 	cr.enabled = true
+}
+
+// prepend makes the next reads return b before the underlying stream. Codec
+// uses it to return bytes its bufio prefetched before chunked reads were
+// enabled, so they are deframed like the rest of the stream.
+func (cr *ChunkedReader) prepend(b []byte) {
+	if len(b) > 0 {
+		cr.r = io.MultiReader(bytes.NewReader(b), cr.r)
+	}
 }
 
 // ReadChunk returns one complete logical ClickHouse chunk with transport
