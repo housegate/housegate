@@ -22,7 +22,7 @@ pkg/plugins/
 |-- sireserved/     # privileged and peer-loopback SI reserved-name/placeholder guard
 |-- sistatement/    # agent-side signed SI INSERT lane and successful-USE tracking
 |-- sisnapshotquery/ # agent-side signed INSERT ... SELECT preparation (default-off, injection-only ports)
-|-- sitablestate/   # server-side SI table-status gate: Pending/Refused/Gone refusals (spec 2026-09-24 §7)
+|-- sitablestate/   # server-side SI table-status gate: Pending/Refused/Gone/Replica refusals and in-flight replica reads (spec 2026-09-24 §7, 2026-10-14 §11)
 |-- storageintegrity/ # server-side signed SI ingress and admission
 `-- usage/          # query billing usage reporting
 ```
