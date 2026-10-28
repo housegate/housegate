@@ -6,7 +6,7 @@ Each subdirectory is one plugin package plus its config and tests. `build.go` ow
 ## STRUCTURE
 ```
 pkg/plugins/
-|-- agent/          # agent-mode query signing and driver/payer settings
+|-- agent/          # agent-mode query signing, driver/payer settings, upstream Selector and replica read failover
 |-- auth/           # SQL-bound JWS auth
 |-- commitgate/     # DDL/DCL observer gate
 |-- concurrency/    # per-query/session quota acquisition and release
@@ -35,6 +35,7 @@ pkg/plugins/
 | New plugin template | `../../.claude/skills/add-housegate-plugin/SKILL.md` | Skim before adding to the chain. |
 | SQL metadata source | `rewrite/`, `../../pkg/rewriter/` | Ordinary policy consumes `QueryContext`; the narrow text-inspection exceptions are listed below. |
 | SI INSERT identity | `sistatement/`, `storageintegrity/`, `../storageintegrity/` | Agent and ingress share INSERT-target helpers; the agent also parses column lists, and only payload-local Native INSERTs are statement-signed. With `storage_integrity.agent.inline_values` enabled, `sistatement` additionally admits the 26.x full-text inline `INSERT ... VALUES` shape: it closes the rows lexically (`../storageintegrity` `ValuesClosure`), evaluates them once through the tenant's ClickHouse on a dedicated upstream connection, installs a `SynthesizedInsert` plan and signs the encoded Native payload. |
+| Agent replica read failover | `agent/replica_failover.go`, `../proxy/relay_replica_failover.go`, `../plugin/upstream_failover.go` | The relay decides when a session may fail over (hello, or an eligible read's first answer) and replays it; `agent.ReplicaFailover` names the candidates and classifies the failure. The port lives in `../plugin/` so the agent package never imports `pkg/proxy` (spec 2026-10-14 §11, Plan S3-C4 K46). |
 | Agent USE state | `sistatement/` | Strictly parses standalone USE candidates and commits the database only after upstream success; USE is not statement-signed and server ingress does not use this parser. |
 | Snapshot-query agent lane | `sisnapshotquery/` | OnQuery installs an async AgentPrepare plan; classification is local, analysis/reservation/catalog/journal are injected ports; nothing wires it in build.go. |
 | Other USE routing/state | `forward/`, `rewrite/`, `../../pkg/rewriter/` | `forward.matchUse` delegates to shared fail-open `ParseUseDatabase`; `sentioRewriter` uses backend classification plus a known-physical fallback to mirror state. With `forward.Plugin.TableState`, a hello or standalone USE of a replica-served database stays local and marks the session, which gets the retryable 733 reconnect refusal once serving ends (spec 2026-10-14 §11). |
