@@ -316,3 +316,153 @@ func TestCopyTableIsInjectiveAcrossIncarnations(t *testing.T) {
 		}
 	}
 }
+
+// replicaTable is another SI indexer's table that this host serves read-only
+// from its member's copy of incarnation seq (spec 2026-10-14 §11): it carries
+// the owner's registry schema and hash, the copy's name in hg_replica and the
+// owner.
+func replicaTable(id string, seq, owner uint64) Table {
+	return Table{
+		ID: id, Status: Replica,
+		Schema: testSchema(id), SchemaHash: payloadexec.TableSchemaHash("net", testSchema(id)),
+		CopyTable: CopyTable(id, seq), ReplicaOf: owner,
+	}
+}
+
+// TestStatusReplicaRoundTrips pins the Replica status (spec 2026-10-14 §11):
+// it is appended after Gone, so the stage-2 values keep 0..4 and Replica is 5,
+// and its wire name is "replica".
+func TestStatusReplicaRoundTrips(t *testing.T) {
+	for want, s := range []Status{Ordinary, Pending, Refused, Active, Gone, Replica} {
+		if int(s) != want {
+			t.Fatalf("status %s = %d, want %d", s, s, want)
+		}
+	}
+	if Replica.String() != "replica" {
+		t.Fatalf("Replica.String() = %q, want %q", Replica.String(), "replica")
+	}
+	if got, ok := ParseStatus("replica"); !ok || got != Replica {
+		t.Fatalf(`ParseStatus("replica") = %v, %v; want Replica, true`, got, ok)
+	}
+	if got := Status(6).String(); got != "unknown" {
+		t.Fatalf("Status(6).String() = %q, want unknown", got)
+	}
+}
+
+// TestSnapshotServedListsReplicaTablesSortedAndCloned is spec 2026-10-14 §11:
+// Served lists exactly the Replica tables, sorted by id, with their copy name
+// and owner. Like Active, it clones on the way in and on the way out, and a
+// Replica table is never Active.
+func TestSnapshotServedListsReplicaTablesSortedAndCloned(t *testing.T) {
+	cols := []lthash.Column{{Name: "a", Type: "UInt32"}}
+	in := replicaTable("db2.b", 3, 0)
+	in.Schema.Columns = cols
+	snap := NewSnapshot(4, Ordinary, []Table{
+		in,
+		{ID: "db1.a", Status: Active, Schema: testSchema("db1.a")},
+		replicaTable("db3.c", 1, 2),
+		replicaTable("db2.a", 7, 0),
+		{ID: "db1.p", Status: Pending},
+	})
+	cols[0].Name = "mutated-in"
+
+	served := snap.Served()
+	var ids []string
+	for _, table := range served {
+		ids = append(ids, table.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"db2.a", "db2.b", "db3.c"}) {
+		t.Fatalf("Served ids = %v, want sorted [db2.a db2.b db3.c]", ids)
+	}
+	if served[0].CopyTable != "db2__a__i7" || served[0].ReplicaOf != 0 || served[2].CopyTable != "db3__c__i1" || served[2].ReplicaOf != 2 {
+		t.Fatalf("Served = %+v, want each entry's copy table and owner", served)
+	}
+	if served[1].Schema.Columns[0].Name != "a" {
+		t.Fatalf("Served must not alias the caller's Columns slice, got %+v", served[1].Schema.Columns)
+	}
+	served[1].Schema.Columns[0].Name = "mutated-out"
+	if again := snap.Served(); again[1].Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating a Served()-returned Table's Columns leaked into the snapshot: %+v", again[1].Schema.Columns)
+	}
+	if lookup := snap.Lookup("db2", "b"); lookup.Status != Replica || lookup.CopyTable != "db2__b__i3" || lookup.ReplicaOf != 0 || lookup.SchemaHash == "" {
+		t.Fatalf("Lookup(db2, b) = %+v, want the Replica entry with its copy table, owner and hash", lookup)
+	}
+	if active := snap.Active(); len(active) != 1 || active[0].ID != "db1.a" {
+		t.Fatalf("Active() = %+v, want only db1.a: a Replica table is not Active", active)
+	}
+	if empty := NewSnapshot(1, Ordinary, []Table{{ID: "db1.a", Status: Active}}).Served(); len(empty) != 0 {
+		t.Fatalf("Served() of a snapshot without Replica tables = %+v, want none", empty)
+	}
+}
+
+// TestServedDatabasesAreSortedAndUnique: the replica-served databases are the
+// sorted, de-duplicated databases of Served(); a nil snapshot, or one that
+// serves nothing, gives nil.
+func TestServedDatabasesAreSortedAndUnique(t *testing.T) {
+	snap := NewSnapshot(2, Ordinary, []Table{
+		replicaTable("db3.c", 1, 2),
+		replicaTable("db2.b", 3, 0),
+		{ID: "db1.a", Status: Active},
+		replicaTable("db2.a", 7, 0),
+	})
+	if got := ServedDatabases(snap); !reflect.DeepEqual(got, []string{"db2", "db3"}) {
+		t.Fatalf("ServedDatabases = %v, want [db2 db3]", got)
+	}
+	if got := ServedDatabases(nil); got != nil {
+		t.Fatalf("ServedDatabases(nil) = %v, want nil", got)
+	}
+	if got := ServedDatabases(NewSnapshot(1, Pending, []Table{{ID: "db1.a", Status: Active}})); got != nil {
+		t.Fatalf("ServedDatabases of a snapshot without Replica tables = %v, want nil", got)
+	}
+}
+
+// TestSnapshotSchemaMissesAReplicaTable: a Replica entry carries the owner's
+// registry schema for DESCRIBE and the rewriter's projection, but Schema
+// misses it, since journal recovery and cleanup never run for a peer's table.
+func TestSnapshotSchemaMissesAReplicaTable(t *testing.T) {
+	snap := NewSnapshot(1, Ordinary, []Table{replicaTable("db2.a", 7, 0)})
+	if table, ok := snap.Schema("db2.a"); ok {
+		t.Fatalf("Schema(db2.a) = %+v, want a miss for a Replica table", table)
+	}
+	if lookup := snap.Lookup("db2", "a"); lookup.Schema.TableID != "db2.a" || lookup.SchemaHash == "" {
+		t.Fatalf("Lookup(db2, a) = %+v, want the Replica entry to keep its schema and hash", lookup)
+	}
+}
+
+// TestFakeServesReplicaTables: the Fake serves exactly the Replica tables its
+// latest Set was given, and an earlier snapshot keeps what it served.
+func TestFakeServesReplicaTables(t *testing.T) {
+	f := NewFake(Ordinary, replicaTable("db2.a", 7, 0))
+	first := f.Current()
+	if served := first.Served(); len(served) != 1 || served[0].ID != "db2.a" {
+		t.Fatalf("Served() = %+v, want db2.a", served)
+	}
+	if v := f.Set(Table{ID: "db2.a", Status: Ordinary}); v != 2 {
+		t.Fatalf("Set returned version %d, want 2", v)
+	}
+	if served := f.Current().Served(); len(served) != 0 {
+		t.Fatalf("after serving ended Served() = %+v, want none", served)
+	}
+	if got := ServedDatabases(f.Current()); got != nil {
+		t.Fatalf("after serving ended ServedDatabases = %v, want nil", got)
+	}
+	if served := first.Served(); len(served) != 1 {
+		t.Fatalf("an earlier snapshot must stay immutable, Served() = %+v", served)
+	}
+	f.Set(replicaTable("db2.a", 8, 0), replicaTable("db2.b", 2, 0))
+	if got := ServedDatabases(f.Current()); !reflect.DeepEqual(got, []string{"db2"}) {
+		t.Fatalf("ServedDatabases = %v, want [db2]", got)
+	}
+}
+
+// TestStaticServesNoReplicaTable: the static table set is the host's own
+// tables, every one Active, so it serves nothing from a copy.
+func TestStaticServesNoReplicaTable(t *testing.T) {
+	st := NewStatic([]string{"db1.t", "db1.u"}, nil, "net")
+	if served := st.Current().Served(); len(served) != 0 {
+		t.Fatalf("Static Served() = %+v, want none", served)
+	}
+	if got := ServedDatabases(st.Current()); got != nil {
+		t.Fatalf("Static ServedDatabases = %v, want nil", got)
+	}
+}

@@ -238,3 +238,34 @@ func TestIngressEnabledWithoutSnapshotRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestSnapshotSchemaRefusesAReplicaTable pins spec 2026-10-14 §11 at the
+// signed lane: a Replica entry carries its owner's registry schema and hash,
+// but the ingress admits only Active tables, so snapshotSchema refuses it with
+// its existing not-active text, and a signed or unsigned INSERT into it is
+// refused 392 before anything is captured. The ingress needs no change.
+func TestSnapshotSchemaRefusesAReplicaTable(t *testing.T) {
+	const notActive = "storage_integrity: table tenant.events is not active; the signed lane admits only active tables"
+	schema := registrySchema()
+	snap := sitable.NewSnapshot(3, sitable.Ordinary, []sitable.Table{{
+		ID: "tenant.events", Status: sitable.Replica, Schema: schema, SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
+		CopyTable: sitable.CopyTable("tenant.events", 2), ReplicaOf: 1,
+	}})
+	gotSchema, gotHash, err := snapshotSchema(snap, resolvedTableTarget{id: "tenant.events", database: "tenant", table: "events"})
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != notActive || gotSchema != nil || gotHash != "" {
+		t.Fatalf("snapshotSchema = %v, %q, %v; want the 392 not-active refusal", gotSchema, gotHash, err)
+	}
+	p, signer, _ := newV2Ingress(t)
+	for _, signed := range []bool{false, true} {
+		qctx := snapshotQueryContext(t, 48, signer, snap)
+		if signed {
+			withDefaultCaptureToken(t, qctx, signer, []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd})
+		}
+		err := p.OnQuery(context.Background(), qctx)
+		ce = nil
+		if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != notActive {
+			t.Fatalf("signed=%v: err = %v, want code 392 %q", signed, err, notActive)
+		}
+	}
+}

@@ -6,7 +6,8 @@ import "sync"
 // publishes a new snapshot with the next version and wakes every Changed
 // waiter. Its snapshots are NewSnapshot's, so Schema answers exactly what
 // NewSnapshot does, including a Refused or Pending table that carries a
-// schema. It is safe for concurrent use.
+// schema, and Served lists the Replica tables of the latest Set. It is safe
+// for concurrent use.
 type Fake struct {
 	mu       sync.Mutex
 	fallback Status

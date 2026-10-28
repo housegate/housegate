@@ -6,6 +6,7 @@
 package sitable
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,18 @@ const (
 	Active
 	// Gone means the newest incarnation is Retiring or Purging.
 	Gone
+	// Replica is a table of another SI indexer that this host serves
+	// read-only from its member's copy while that owner is quarantined or
+	// unreachable (spec 2026-10-14 §11): reads and metadata are answered from
+	// hg_replica.<CopyTable>, writes and DDL are refused naming ReplicaOf.
+	//
+	// A host answers Replica only for a database whose serving lease it
+	// holds from its member, and then for every SI table of that database.
+	// The entry carries the owner's registry incarnation (Schema and
+	// SchemaHash), CopyTable and ReplicaOf. Schema misses it: journal
+	// recovery and cleanup never run for another indexer's table, and the
+	// signed lane admits only Active tables.
+	Replica
 )
 
 // String returns the lowercase wire name used by the JSON-RPC contract.
@@ -62,6 +75,8 @@ func (s Status) String() string {
 		return "active"
 	case Gone:
 		return "gone"
+	case Replica:
+		return "replica"
 	default:
 		return "unknown"
 	}
@@ -80,6 +95,8 @@ func ParseStatus(name string) (Status, bool) {
 		return Active, true
 	case "gone":
 		return Gone, true
+	case "replica":
+		return Replica, true
 	default:
 		return Ordinary, false
 	}
@@ -91,8 +108,10 @@ type Table struct {
 	Status        Status
 	RefusedCode   string // Refused only; the arbiter's refused_code vocabulary or the host's "indexer_quarantined"
 	RefusedReason string
-	Schema        payloadexec.TableSchema // set for Active and Gone, for a Refused table whose indexer is quarantined, and for a Pending table its host holds back
+	Schema        payloadexec.TableSchema // set for Active and Gone, for a Refused table whose indexer is quarantined, for a Pending table its host holds back, and for Replica
 	SchemaHash    string
+	CopyTable     string // Replica only: the copy's table name in hg_replica, CopyTable(ID, incarnation seq)
+	ReplicaOf     uint64 // Replica only: the SI indexer that owns the table
 }
 
 // cloneSchema returns a TableSchema whose Columns slice is a fresh copy, so
@@ -123,12 +142,18 @@ func cloneTable(t Table) Table {
 // carries one (an Active incarnation its host holds back, spec 2026-10-14
 // §14); NewSnapshot, Static and Fake do. It misses for every other table,
 // including a Refused or Pending one without a schema (an admission refusal,
-// default deny) and an Ordinary one.
+// default deny), a Replica one and an Ordinary one.
+//
+// Served lists the Replica tables: another SI indexer's tables this host
+// serves read-only from its member's copies (spec 2026-10-14 §11). Their
+// databases (ServedDatabases) are the replica-served ones. NewSnapshot and
+// Fake serve the Replica tables they are given; Static serves none.
 type Snapshot interface {
 	Version() uint64
 	Lookup(database, table string) Table // answers for any table
 	Active() []Table                     // sorted by ID
 	Schema(id string) (Table, bool)      // Active or Gone, or Refused or Pending with a schema
+	Served() []Table                     // every Replica table, sorted by ID
 }
 
 // TableState hands out snapshots. Changed returns a channel that is closed at
@@ -194,6 +219,23 @@ func TableID(database, table string) string {
 	return database + "." + table
 }
 
+// ServedDatabases returns the sorted, de-duplicated logical databases of
+// s.Served(): the databases this host serves read-only from its member's
+// copies (spec 2026-10-14 §11). A nil snapshot, or one that serves nothing,
+// gives nil.
+func ServedDatabases(s Snapshot) []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, t := range s.Served() {
+		database, _, _ := strings.Cut(t.ID, ".")
+		out = append(out, database)
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
 type tableKey struct {
 	database string
 	table    string
@@ -205,6 +247,7 @@ type snapshot struct {
 	byKey    map[tableKey]Table
 	byID     map[string]Table
 	active   []Table
+	served   []Table
 }
 
 // NewSnapshot builds an immutable snapshot. Every table not listed answers
@@ -224,11 +267,15 @@ func NewSnapshot(version uint64, fallback Status, tables []Table) Snapshot {
 		database, table, _ := strings.Cut(ct.ID, ".")
 		s.byKey[tableKey{database: database, table: table}] = ct
 		s.byID[ct.ID] = ct
-		if ct.Status == Active {
+		switch ct.Status {
+		case Active:
 			s.active = append(s.active, ct)
+		case Replica:
+			s.served = append(s.served, ct)
 		}
 	}
 	sort.Slice(s.active, func(i, j int) bool { return s.active[i].ID < s.active[j].ID })
+	sort.Slice(s.served, func(i, j int) bool { return s.served[i].ID < s.served[j].ID })
 	return s
 }
 
@@ -251,6 +298,14 @@ func (s *snapshot) Active() []Table {
 	return out
 }
 
+func (s *snapshot) Served() []Table {
+	out := make([]Table, len(s.served))
+	for i, t := range s.served {
+		out[i] = cloneTable(t)
+	}
+	return out
+}
+
 // Schema answers an Active or Gone table, and a Refused or Pending table that
 // carries a schema: a host keeps the schema of each table it reports Refused
 // because its SI indexer is quarantined (code "indexer_quarantined", spec
@@ -258,8 +313,9 @@ func (s *snapshot) Active() []Table {
 // holds it back (not ready on its SNode, or an unclean owner hg_safe audit in
 // repair mode, spec 2026-10-14 §14), so journal recovery and cleanup still
 // resolve it. A Refused table without a schema (the arbiter's admission
-// refusal), a Pending one without a schema (default deny), an Ordinary one and
-// an unlisted one all miss.
+// refusal), a Pending one without a schema (default deny), a Replica one (its
+// owner recovers and cleans it, not this host), an Ordinary one and an unlisted
+// one all miss.
 func (s *snapshot) Schema(id string) (Table, bool) {
 	t, ok := s.byID[id]
 	if !ok {

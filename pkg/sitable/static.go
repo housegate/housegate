@@ -7,8 +7,9 @@ const StaticVersion uint64 = 1
 
 // Static is the TableState of a fixed configured table set: every listed
 // table is Active, every other table is Ordinary, the version is always
-// StaticVersion and Changed never fires. It serves the standalone binary,
-// tests, and every host that does not inject a TableState.
+// StaticVersion and Changed never fires. It serves no Replica table, so its
+// snapshots' Served is empty. It serves the standalone binary, tests, and
+// every host that does not inject a TableState.
 type Static struct {
 	snap Snapshot
 	ids  []string
