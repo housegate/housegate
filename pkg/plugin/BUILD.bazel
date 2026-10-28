@@ -9,6 +9,7 @@ go_library(
         "hooks.go",
         "plugin.go",
         "query_only_host.go",
+        "upstream_failover.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/plugin",
     visibility = ["//visibility:public"],

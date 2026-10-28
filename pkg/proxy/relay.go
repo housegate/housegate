@@ -103,6 +103,19 @@ type Relay struct {
 	// packet, the already-framed packet is handed back to the outer loop here
 	// rather than starting a second reader on the same Codec.
 	prefetchedClient *clientPacketResult
+
+	// failover is the agent's replica failover (spec 2026-10-14 §11, Plan
+	// S3-C4 K46), set by Server.handle from Server.UpstreamFailover; nil keeps
+	// the relay exactly as before. failoverMu guards failoverQuery and
+	// serializes every client-to-upstream write of an armed query with a read
+	// failover's upstream switch.
+	failover      UpstreamFailover
+	failoverMu    sync.Mutex
+	failoverQuery *failoverQuery
+	// closing is set once one of the two pump goroutines has returned and
+	// runPostHandshake closes the session: an upstream read error after it is
+	// the session's own teardown, never a reason to fail over.
+	closing atomic.Bool
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -705,21 +718,28 @@ func (r *Relay) handshake(ctx context.Context) error {
 	// Tests that pre-bind via sess.BindUpstream pass dialer=nil and
 	// reuse the existing binding.
 	upstream := r.sess.Upstream()
+	// dialErr is kept only with a replica failover: phase 2 below then moves
+	// the session to a replica host instead of failing (K46).
+	var dialErr error
 	if upstream == nil {
 		if r.dialer == nil {
 			return chsession.ErrNoUpstream
 		}
-		up, dialErr := r.dialer(ctx, r.sess)
-		if dialErr != nil {
-			return fmt.Errorf("dial upstream: %w", dialErr)
-		}
-		if err := r.sess.BindUpstream(ctx, up); err != nil {
-			if closer, ok := up.Conn().(interface{ Close() error }); ok {
-				_ = closer.Close()
+		up, err := r.dialer(ctx, r.sess)
+		switch {
+		case err != nil && r.failover == nil:
+			return fmt.Errorf("dial upstream: %w", err)
+		case err != nil:
+			dialErr = fmt.Errorf("dial upstream: %w", err)
+		default:
+			if err := r.sess.BindUpstream(ctx, up); err != nil {
+				if closer, ok := up.Conn().(interface{ Close() error }); ok {
+					_ = closer.Close()
+				}
+				return fmt.Errorf("bind upstream: %w", err)
 			}
-			return fmt.Errorf("bind upstream: %w", err)
+			upstream = up
 		}
-		upstream = up
 	}
 
 	state := r.sess.State()
@@ -771,37 +791,29 @@ func (r *Relay) handshake(ctx context.Context) error {
 			// Upstream addendum was already sent by RebindToPeer; do not repeat.
 		}
 	} else {
-		upstreamHello := chproto.ClientHelloForUpstream(hello)
-		if err := upstream.WriteClientHello(upstreamHello); err != nil {
-			return fmt.Errorf("forward client hello: %w", err)
+		var (
+			upstreamHello *chproto.ClientHello
+			srvPkt        *chproto.Packet
+			srv           *chproto.ServerHello
+			exc           *chproto.Exception
+			err           = dialErr
+		)
+		if err == nil {
+			upstreamHello, srvPkt, srv, exc, err = exchangeUpstreamHello(upstream, hello)
 		}
-		upstream.SetServerHelloRevisionHint(int(upstreamHello.ProtocolVersion))
-		logger.Debugw("client hello processed and forwarded to upstream",
+		if err != nil && r.failover != nil {
+			upstream, upstreamHello, srvPkt, srv, err = r.failoverAtHello(ctx, upstream, hello, err, exc)
+		}
+		if err != nil {
+			return err
+		}
+		logger.Debugw("client hello forwarded and server hello received from upstream",
 			"upstream", upstreamAddr(upstream),
 			"client_hostname", state.ClientHostname,
 			"client_version", state.ClientVersion,
 			"database", state.Database,
 			"mapped_user", state.MappedUser,
 		)
-
-		srvPkt, err := upstream.ReadPacket(uint64(chproto.ServerHelloCode), uint64(chproto.ServerExceptionCode))
-		if err != nil {
-			return fmt.Errorf("read server hello: %w", err)
-		}
-		// Upstream may answer ClientHello with a ServerException instead —
-		// e.g. invalid credentials forwarded by routing / peer-trust paths,
-		// or a misconfigured peer port that lands on plain CH which doesn't
-		// recognise our envelope user. Decode the Exception and surface its
-		// message so operators don't see an opaque "decode failed".
-		if exc, ok := srvPkt.Decoded.(*chproto.Exception); ok {
-			return fmt.Errorf("upstream rejected handshake: code=%d %s: %s", exc.Code, exc.Name, exc.Message)
-		}
-		logger.Debugw("received server hello from upstream")
-		srv, ok := srvPkt.Decoded.(*chproto.ServerHello)
-		if !ok {
-			return fmt.Errorf("server hello: unexpected packet type=%d (want ServerHello=%d): %w",
-				srvPkt.Type, chproto.ServerHelloCode, chproto.ErrDecode)
-		}
 
 		rev := int(upstreamHello.ProtocolVersion)
 		if int(srv.Revision) < rev {
@@ -854,6 +866,9 @@ func (r *Relay) handshake(ctx context.Context) error {
 		state.SetUpstreamHello(upstreamHello)
 	}
 
+	if r.failover != nil {
+		state.ReplicaFailoverEligible = true
+	}
 	elapsed := time.Since(start)
 	logger.Infow("chsession handshake complete",
 		"user", state.MappedUser,
@@ -893,6 +908,7 @@ func (r *Relay) runPostHandshake(ctx context.Context) error {
 	go func() { errCh <- r.upstreamToClient(ctx) }()
 
 	first := <-errCh
+	r.closing.Store(true)
 	_ = r.sess.Close() // nudge the second goroutine to exit
 	<-errCh
 	if errors.Is(first, io.EOF) || first == nil {
@@ -1050,6 +1066,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				rejectedQctx = qctx
 				continue
+			}
+			if r.failover != nil {
+				r.noteFailoverStatement(qctx)
 			}
 			if qctx.SynthesizedInsert != nil && (qctx.AgentPrepare != nil || qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess) {
 				err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID))
@@ -1276,7 +1295,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					return err
 				}
 			}
-			if err := up.WriteQuery(qctx.Query); err != nil {
+			if err := r.writeQuery(up, qctx); err != nil {
 				r.takeActiveQuery()
 				// Forwarding failed — fire OnQueryComplete so per-query
 				// resources held by plugins are released before we tear down.
@@ -1418,7 +1437,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			"name", clientPacketName(pkt.Type),
 			"raw_len", pkt.RawLen,
 		)
-		if err := up.WriteRawPacket(pkt.Raw); err != nil {
+		if err := r.spliceClientPacket(up, pkt, inputComplete); err != nil {
 			return fmt.Errorf("splice client→upstream type=%d: %w", pkt.Type, err)
 		}
 		if inputComplete {
@@ -1823,6 +1842,12 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		}
 
 		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
+		if r.failover != nil {
+			var moved bool
+			if moved, pkt, err = r.failoverRead(ctx, up, pkt, err); moved {
+				continue
+			}
+		}
 		if err != nil {
 			if errors.Is(err, chproto.ErrUnsupportedResultType) && pkt != nil {
 				err = r.relayOpaqueResult(ctx, up, pkt)

@@ -122,6 +122,15 @@ type SessionState struct {
 	// client-to-upstream goroutine and read there.
 	ReplicaServedDatabase string
 
+	// ReplicaFailoverEligible is true while an agent session with a replica
+	// failover may still move to a replica host (spec 2026-10-14 §11, Plan
+	// S3-C4 K46): the relay sets it once the handshake completed and clears
+	// it at the first forwarded statement that is not a SELECT, WITH or
+	// standalone USE, or that carries client Data. Same concurrency invariant
+	// as IsForwarding: written and read by the relay's handshake and its
+	// client-to-upstream goroutine only.
+	ReplicaFailoverEligible bool
+
 	LastQueryID    string
 	LastClientInfo *chproto.ClientInfo
 	// LastRewriteArgs is the rewriter.RewriteArgs interface from pkg/proxy,

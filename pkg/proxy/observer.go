@@ -97,7 +97,20 @@ var (
 		Name: "clickhouse_proxy_agent_si_inflight",
 		Help: "Agent SI statements between client_seq reservation and outcome",
 	})
+	agentReplicaFailoversTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_replica_failovers_total",
+		Help: "Agent sessions moved to a replica host after their owner refused a read as quarantined or could not be reached, by reason",
+	}, []string{"reason"})
+	agentReplicaFailoverExhaustedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_replica_failover_exhausted_total",
+		Help: "Agent replica failovers in which no candidate replica host served and the client got the original error, by reason",
+	}, []string{"reason"})
 )
+
+// replicaFailoverReasons are the reason label values of the two replica
+// failover counters, exported at 0 from startup; agent.ReplicaFailover's
+// FailoverReasonOwnerQuarantined and FailoverReasonOwnerUnreachable.
+var replicaFailoverReasons = [...]string{"owner_quarantined", "owner_unreachable"}
 
 func init() {
 	prometheus.MustRegister(activeConnections)
@@ -121,6 +134,12 @@ func init() {
 	prometheus.MustRegister(agentSIUpstreamSwitchesTotal)
 	prometheus.MustRegister(agentSILaneRotationsTotal)
 	prometheus.MustRegister(agentSIInflight)
+	prometheus.MustRegister(agentReplicaFailoversTotal)
+	prometheus.MustRegister(agentReplicaFailoverExhaustedTotal)
+	for _, reason := range replicaFailoverReasons {
+		agentReplicaFailoversTotal.WithLabelValues(reason)
+		agentReplicaFailoverExhaustedTotal.WithLabelValues(reason)
+	}
 }
 
 type MetricsObserver struct{}
@@ -224,6 +243,16 @@ func (m *MetricsObserver) LaneRotated(reason string) {
 	agentSILaneRotationsTotal.WithLabelValues(reason).Inc()
 }
 func (m *MetricsObserver) SIInflight(delta int) { agentSIInflight.Add(float64(delta)) }
+
+// ReplicaFailover counts an agent session that a replica failover moved to a
+// serving replica host; ReplicaFailoverExhausted counts a failover in which
+// every candidate failed (spec 2026-10-14 §11, Plan S3-C4 K46).
+func (m *MetricsObserver) ReplicaFailover(reason string) {
+	agentReplicaFailoversTotal.WithLabelValues(reason).Inc()
+}
+func (m *MetricsObserver) ReplicaFailoverExhausted(reason string) {
+	agentReplicaFailoverExhaustedTotal.WithLabelValues(reason).Inc()
+}
 
 func (m *MetricsObserver) InlineValuesSynthesized() {
 	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()
