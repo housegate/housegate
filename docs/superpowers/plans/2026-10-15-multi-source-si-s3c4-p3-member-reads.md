@@ -32083,8 +32083,8 @@ Execution record intentionally empty; release/live recording gates remain pendin
 | `HG_TAG_P3` | `v0.23.0` | Task 44 |
 | `HG_DIGEST_P3` | `sha256:8e0fac771ed052940b0146de2f63f4e9c03f9bf8a10a1bc1d3a7eef95e7e39d3` | Task 44 |
 | `CORE_TAG_P3` | `v0.19.0` | Task 45 |
-| `SN_COMMIT_P3` |  | Task 46 |
-| `SN_DIGEST_P3` |  | Task 46 |
+| `SN_COMMIT_P3` | `532bb1064366f2f71551ada7ed98a23707406158` | Task 46 |
+| `SN_DIGEST_P3` | `sha256:d1567c79d7ea71be6b3d57a72cfabf132d30d3d1a79074adaeab79ae3ea72dca` | Task 46 |
 | `P3_PR` |  | Task 47 |
 | `P3_END` |  | Task 48 |
 
@@ -32094,6 +32094,6 @@ Run records:
   - Review fix rounds on #279: a `WITH`-led write is not a failover-eligible read; replica-read registrations keyed by session identity across listeners; a replica read's end bound to its own query with an atomic active-to-terminal handoff.
 - arbiter-core release (Task 45): `sentioxyz/arbiter-core#56` (`feat(member): stage 3 P3 serving view, owner probe and serving leases`) squash-merged as `f870e99e0d608cf8b364e47d78f66e13c3327eee` at 2026-10-28T14:26:56Z UTC on `CORE_MEMBER_TAG_P2` `v0.18.1` (which contains `CORE_TAG_P2` `v0.18.0`; housegate `v0.22.0`, arbiter-proto `v0.12.0` unchanged), its checks green (`test`, `integration-clickhouse` with `//member/serve:serve_test`, `clickhouse-mechanics`, `member-confinement`; ci run https://github.com/sentioxyz/arbiter-core/actions/runs/40705218980); locally `TestServeHoldsInstallsOfAServedDatabase`, `TestInstallerWithoutAGateIsUnchanged` and `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` passed on ClickHouse `26.3.37.3`; Cut Release run `40706050765` tagged `v0.19.0` (annotated) at `f870e99e0d608cf8b364e47d78f66e13c3327eee`; the content check found the protected sources (wire, authority, conformance, consensus.go, domains.go, types.go, table_registry.go, snode, verifier, dataplane, cut-release.yml) unchanged from `v0.18.1`, the housegate and arbiter-proto pins unchanged, and the release tree equal to the reviewed PR head `6a66f39`.
   - The base is `CORE_MEMBER_TAG_P2` `v0.18.1` per the plan header (2026-10-28 amendment), so `CORE_TAG_P3` keeps arbiter-core#55's three si-member fixes.
-- sentio-node release (Task 46):
+- sentio-node release (Task 46): `sentioxyz/sentio-node#204` (`feat(storage-integrity): multi-source SI stage 3 P3 replica reads (Replica table state, member serving)`) squash-merged as `532bb1064366f2f71551ada7ed98a23707406158` at 2026-10-28T15:54:26Z UTC on sentio-node `a37ece5` (which contains `SN_MEMBER_COMMIT_P2` and #203), pinning housegate `v0.23.0` (`HG_TAG_P3`) and arbiter-core `v0.19.0` (`CORE_TAG_P3`) in go.mod, `bazel_dep` and `git_override`; its PR checks green (build, integration-clickhouse); the push CI run `40720681612` on `532bb1064366f2f71551ada7ed98a23707406158` succeeded (build, integration-clickhouse with the storage-integrity acceptance step expecting 10 PASS markers, including `TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost` and `TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost`, and docker-push); `ghcr.io/sentioxyz/sentio-node:sha-532bb1064366f2f71551ada7ed98a23707406158` is the OCI image index `sha256:d1567c79d7ea71be6b3d57a72cfabf132d30d3d1a79074adaeab79ae3ea72dca`, whose linux/amd64 image carries `org.opencontainers.image.revision=532bb1064366f2f71551ada7ed98a23707406158` and whose binary lists `storage-integrity member-serving` and `si-member clear-foreign`; locally `bazel build //...`, `bazel test //...` (18/18), `go test -race ./...` and the ClickHouse-gated tests (`SENTIO_SI_CH_E2E=1`, 11/11 on 25.8.32.4 and 26.3.37.3) passed.
 - P3 PR (Task 47):
 - P3 run (Task 48):
