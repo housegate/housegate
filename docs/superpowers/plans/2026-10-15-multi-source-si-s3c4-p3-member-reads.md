@@ -32080,8 +32080,8 @@ Execution record intentionally empty; release/live recording gates remain pendin
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `HG_TAG_P3` |  | Task 44 |
-| `HG_DIGEST_P3` |  | Task 44 |
+| `HG_TAG_P3` | `v0.23.0` | Task 44 |
+| `HG_DIGEST_P3` | `sha256:8e0fac771ed052940b0146de2f63f4e9c03f9bf8a10a1bc1d3a7eef95e7e39d3` | Task 44 |
 | `CORE_TAG_P3` | `v0.19.0` | Task 45 |
 | `SN_COMMIT_P3` |  | Task 46 |
 | `SN_DIGEST_P3` |  | Task 46 |
@@ -32090,7 +32090,8 @@ Execution record intentionally empty; release/live recording gates remain pendin
 
 Run records:
 
-- housegate release (Task 44):
+- housegate release (Task 44): `housegate/housegate#279` (`feat(si): stage 3 P3 reads from members (Replica status, replica routing, agent read failover)`, Tasks 42–44) squash-merged as `74a100b38348e3532cbdc3fafdd012069ef10fe6` at 2026-10-28T15:34:30Z UTC on housegate `v0.22.0`, its checks green (Build, Integration (ClickHouse), Release tooling, Cursor Bugbot, AgentConnect PR Review) after two review fix rounds; locally `bazel build //...` and `bazel test //...` passed, the ClickHouse integration tests (`TestReplicaReads_*`, `TestAgentReplicaFailover_ReadsAQuarantinedOwnersTableFromAMember`, the peer-guard tests) passed, and `Test{Native,GRPC}EngineReplicaTableResolvesBeforeRemoteMapping` and `Test{Native,GRPC}EngineReplicaTableNeedsTheDatabasePermission` passed on rewriter-go native FFI v0.17.0 and on `housegate-rewriter` 0.17.0 (the devnet2 pin's digest) over gRPC; Release run `40717359857` (`bump=auto`) tagged `v0.23.0` (annotated) at `74a100b38348e3532cbdc3fafdd012069ef10fe6` and published `housegate-v0.23.0-darwin-arm64`, `housegate-v0.23.0-linux-amd64` and `SHA256SUMS`; `ghcr.io/housegate/housegate:v0.23.0` is the OCI image index `sha256:8e0fac771ed052940b0146de2f63f4e9c03f9bf8a10a1bc1d3a7eef95e7e39d3`, whose linux/amd64 image prints `housegate v0.23.0 commit 74a100b38348e3532cbdc3fafdd012069ef10fe6 go1.26.10`.
+  - Review fix rounds on #279: a `WITH`-led write is not a failover-eligible read; replica-read registrations keyed by session identity across listeners; a replica read's end bound to its own query with an atomic active-to-terminal handoff.
 - arbiter-core release (Task 45): `sentioxyz/arbiter-core#56` (`feat(member): stage 3 P3 serving view, owner probe and serving leases`) squash-merged as `f870e99e0d608cf8b364e47d78f66e13c3327eee` at 2026-10-28T14:26:56Z UTC on `CORE_MEMBER_TAG_P2` `v0.18.1` (which contains `CORE_TAG_P2` `v0.18.0`; housegate `v0.22.0`, arbiter-proto `v0.12.0` unchanged), its checks green (`test`, `integration-clickhouse` with `//member/serve:serve_test`, `clickhouse-mechanics`, `member-confinement`; ci run https://github.com/sentioxyz/arbiter-core/actions/runs/40705218980); locally `TestServeHoldsInstallsOfAServedDatabase`, `TestInstallerWithoutAGateIsUnchanged` and `TestInstallerHoldsEachChangedDatabaseUntilItsJournalWrite` passed on ClickHouse `26.3.37.3`; Cut Release run `40706050765` tagged `v0.19.0` (annotated) at `f870e99e0d608cf8b364e47d78f66e13c3327eee`; the content check found the protected sources (wire, authority, conformance, consensus.go, domains.go, types.go, table_registry.go, snode, verifier, dataplane, cut-release.yml) unchanged from `v0.18.1`, the housegate and arbiter-proto pins unchanged, and the release tree equal to the reviewed PR head `6a66f39`.
   - The base is `CORE_MEMBER_TAG_P2` `v0.18.1` per the plan header (2026-10-28 amendment), so `CORE_TAG_P3` keeps arbiter-core#55's three si-member fixes.
 - sentio-node release (Task 46):
