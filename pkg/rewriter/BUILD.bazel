@@ -25,6 +25,7 @@ go_library(
         "//pkg/route",
         "//pkg/sitable",
         "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
         "@com_github_google_uuid//:uuid",
         "@com_github_housegate_rewriter_go//:rewriter-go",
         "@com_github_housegate_rewriter_proto//gen/pb",
@@ -49,6 +50,7 @@ go_test(
         "native_smoke_test.go",
         "probe_test.go",
         "read_mode_key_test.go",
+        "replica_parity_test.go",
         "sentio_test.go",
         "snapshot_query_test.go",
         "storage_integrity_test.go",
@@ -66,5 +68,6 @@ go_test(
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//connectivity",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
     ],
 )

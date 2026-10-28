@@ -304,6 +304,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 		return RewriteResult{}, r.engineFailure(fmt.Errorf("build database map: %w", err))
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
+	localizeReplicaServedUse(sql, snap, logicalToRemote)
 	mode := si.DefaultReadMode
 	if m, ok := ReadModeFromContext(ctx); ok {
 		mode = m
@@ -332,6 +333,11 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	// between the two passes, since the parts were chosen from the first.
 	if si.Enabled && mode == ReadModeUnsafeLatest && resp.GetCode() == pb.RewriteCode_Success {
 		accessed := storageIntegrityAccessedIDs(resp.GetOriginalAccessedTables())
+		// Spec 2026-10-14 §11: a copy answers safe reads only. The first
+		// pass never reaches ClickHouse, so refusing here sends nothing.
+		if err := requireNoReplicaUnderUnsafeLatest(snap, accessed); err != nil {
+			return RewriteResult{}, err
+		}
 		if err := requireActiveAccessedIDs(snap, accessed); err != nil {
 			return RewriteResult{}, err
 		}
@@ -545,6 +551,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	if snap == nil {
 		snap = r.factory.options.StorageIntegrity.snapshotFor(ctx)
 	}
+	localizeReplicaServedUse(sql, snap, logicalToRemote)
 	siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, snap, r.factory.options.StorageIntegrity.DefaultReadMode, nil)
 	dynArgs := buildDynamicArgs(dbMap, knownPhys, protectedDatabases(r.factory.options.PhysicalDatabase), r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 

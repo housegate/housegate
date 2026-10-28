@@ -3,6 +3,7 @@ package rewriter
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/sitable"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // ReadModeSettingKey is the per-query ClickHouse custom setting that selects
@@ -157,6 +159,13 @@ func (e *UnavailableError) Unwrap() error { return e.Cause }
 // version (spec 2026-09-24 H6), and it always names the reserved databases. Every Active table of the snapshot is listed;
 // parts carries the promoted-but-not-yet-cleaned unsafe parts of the Active
 // tables the query accesses, and is consulted only in unsafe_latest mode.
+//
+// Every Replica table (spec 2026-10-14 §11) is listed too, with SafeTable =
+// UnsafeTable = hg_replica.<CopyTable> (both engines refuse an empty unsafe
+// table) and no excluded parts in any mode; unsafe_latest reads of it are
+// refused after the first pass (requireNoReplicaUnderUnsafeLatest), so the
+// copy is never read twice. A Replica table without a copy table, or listed
+// Active too, is refused.
 func buildStorageIntegrityArgs(opts StorageIntegrityOptions, snap sitable.Snapshot, mode ReadMode, parts map[string][]string) (*pb.StorageIntegrityArgs, error) {
 	if !opts.Enabled {
 		return nil, nil
@@ -165,8 +174,9 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, snap sitable.Snapsh
 		mode = ReadModeSafe
 	}
 	active := snap.Active()
+	served := snap.Served()
 	out := &pb.StorageIntegrityArgs{
-		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(active)),
+		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(active)+len(served)),
 		ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 		ReservedRowIdColumn: DefaultReservedRowIDColumn,
 		ContractVersion:     StorageIntegrityContractV2,
@@ -192,6 +202,14 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, snap sitable.Snapsh
 		}
 		out.Tables[t.ID] = entry
 	}
+	for _, t := range served {
+		if _, isActive := out.Tables[t.ID]; isActive || t.CopyTable == "" {
+			return nil, &RejectedError{Code: pb.RewriteCode_RewriteError,
+				Message: fmt.Sprintf("storage-integrity table %s is listed both Active and Replica, or Replica without a copy table", t.ID)}
+		}
+		replica := sitable.ReplicaDatabase + "." + t.CopyTable
+		out.Tables[t.ID] = &pb.StorageIntegrityArgs_Table{SafeTable: replica, UnsafeTable: replica}
+	}
 	return out, nil
 }
 
@@ -212,6 +230,42 @@ func promotedPartsFor(rs StorageIntegrityReadState, tableIDs []string) (map[stri
 		}
 	}
 	return out, nil
+}
+
+// requireNoReplicaUnderUnsafeLatest refuses an unsafe_latest read of a table
+// the host serves from its member's copy (spec 2026-10-14 §11 Read modes): the
+// copy holds the owner's published safe data only, and its args entry names
+// the copy as both surfaces, so the first pass's rendering would read it
+// twice. It runs on the first pass's accessed ids, before anything reaches
+// ClickHouse, and names the first served id in sorted order.
+func requireNoReplicaUnderUnsafeLatest(snap sitable.Snapshot, ids []string) error {
+	owners := make(map[string]uint64)
+	for _, t := range snap.Served() {
+		owners[t.ID] = t.ReplicaOf
+	}
+	for _, id := range ids {
+		if owner, served := owners[id]; served {
+			return &RejectedError{Code: pb.RewriteCode_RewriteError,
+				Message: fmt.Sprintf("storage_integrity read mode unsafe_latest is not available for %s: it is served read-only from a copy of indexer %d's published data; read it with SQL_x_read_mode='safe'", id, owner)}
+		}
+	}
+	return nil
+}
+
+// localizeReplicaServedUse drops the remote mapping of the target of a bare
+// USE (the form forward.Plugin routes, sicore.ParseUseDatabase) when the
+// query's snapshot serves that database from a member's copy (spec 2026-10-14
+// §11): forward.Plugin kept the session on this host, and both engines refuse
+// a USE of a remote-mapped database. A USE names no table, so no read loses
+// its remote mapping; every later statement rebuilds the mapping and keeps it.
+func localizeReplicaServedUse(sql string, snap sitable.Snapshot, logicalToRemote map[string]string) {
+	if len(logicalToRemote) == 0 || snap == nil {
+		return
+	}
+	db, ok := sicore.ParseUseDatabase(sql)
+	if ok && slices.Contains(sitable.ServedDatabases(snap), db) {
+		delete(logicalToRemote, db)
+	}
 }
 
 // requireActiveAccessedIDs refuses an SI-flagged accessed id that is not an
@@ -291,20 +345,28 @@ type StorageIntegrityScrubber struct {
 }
 
 // NewStorageIntegrityScrubber builds the scrubber for one snapshot: every
-// Active table's qualified physical names map back to its logical id, and
-// every reserved database (sitable.ReservedDatabases) and the row-id column
-// are always redacted, even when no table is Active.
+// Active table's qualified physical names and every Replica table's
+// hg_replica.<CopyTable> map back to its logical id, and every reserved
+// database (sitable.ReservedDatabases) and the row-id column are always
+// redacted, even when no table is Active.
 func NewStorageIntegrityScrubber(snap sitable.Snapshot) *StorageIntegrityScrubber {
 	active := snap.Active()
+	served := snap.Served()
 	reserved := sitable.ReservedDatabases()
 	// Qualified names must precede their bare database prefixes.
-	pairs := make([]string, 0, len(active)*4+2*len(reserved)+2)
+	pairs := make([]string, 0, len(active)*4+len(served)*2+2*len(reserved)+2)
 	for _, table := range active {
 		phys := sitable.PhysicalTable(table.ID)
 		pairs = append(pairs,
 			sitable.SafeDatabase+"."+phys, table.ID,
 			sitable.UnsafeDatabase+"."+phys, table.ID,
 		)
+	}
+	for _, table := range served {
+		if table.CopyTable == "" {
+			continue
+		}
+		pairs = append(pairs, sitable.ReplicaDatabase+"."+table.CopyTable, table.ID)
 	}
 	for _, db := range reserved {
 		pairs = append(pairs, db, storageIntegrityRedaction)
