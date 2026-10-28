@@ -220,7 +220,8 @@ func (p *Plugin) endReplicaRead(sess chsession.Session) {
 
 // OnQueryComplete ends the in-flight replica read OnQuery began for the
 // session's query. Calling it again, or for a query that read no copy, does
-// nothing.
+// nothing. The relay admits the session's next query only once this query's
+// terminal hooks returned, so the read it ends is this query's own.
 func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	p.endReplicaRead(sess)
 }

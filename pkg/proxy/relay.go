@@ -50,6 +50,14 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
+	// terminalHooksQueryID is the query whose upstream terminal was consumed
+	// and whose terminal hooks (OnQuerySuccess, OnQueryComplete) are still
+	// running; empty otherwise. Until they return its terminal has not
+	// reached the client, so a Query arriving meanwhile is rejected as one
+	// sent before the upstream completed this query, and never enters
+	// OnQuery while the previous query's completion still runs. Guarded by
+	// queryMu.
+	terminalHooksQueryID string
 	// queryOnlyLateMarkerAllowed is set by a local query-only completion. The
 	// client may still deliver this operation's empty external-table marker;
 	// exactly one such marker is drained before the next Query packet, and any
@@ -414,7 +422,29 @@ func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool, r
 func (r *Relay) currentActiveQuery() (string, bool) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
+	if !r.activeQuery && r.terminalHooksQueryID != "" {
+		return r.terminalHooksQueryID, true
+	}
 	return r.activeQueryID, r.activeQuery
+}
+
+// takeActiveQueryTerminal is takeActiveQueryState for the upstream terminal
+// of the active query: it also marks that query's terminal hooks as running
+// until endTerminalHooks, so no next Query is admitted before they return.
+func (r *Relay) takeActiveQueryTerminal() (queryID string, canceled, active bool, rejection *chproto.Exception) {
+	queryID, canceled, active, rejection = r.takeActiveQueryState()
+	if active {
+		r.queryMu.Lock()
+		r.terminalHooksQueryID = queryID
+		r.queryMu.Unlock()
+	}
+	return queryID, canceled, active, rejection
+}
+
+func (r *Relay) endTerminalHooks() {
+	r.queryMu.Lock()
+	r.terminalHooksQueryID = ""
+	r.queryMu.Unlock()
 }
 
 func (r *Relay) cancelActiveQuery() (string, bool) {
@@ -2094,7 +2124,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		if isEndOfStream || isException {
 			r.sess.State().ClearActiveRewrite()
-			queryID, canceled, active, rejection := r.takeActiveQueryState()
+			queryID, canceled, active, rejection := r.takeActiveQueryTerminal()
 			if active && isEndOfStream && !canceled && rejection == nil {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
@@ -2102,6 +2132,9 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 				deferredTerminal.complete(ctx, r.hooks, r.sess)
 			} else if active {
 				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+			if active {
+				r.endTerminalHooks()
 			}
 			if rejection != nil {
 				if rewrittenException != nil {
