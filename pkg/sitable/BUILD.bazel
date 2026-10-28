@@ -4,6 +4,7 @@ go_library(
     name = "sitable",
     srcs = [
         "fake.go",
+        "replica_reads.go",
         "sitable.go",
         "static.go",
     ],
@@ -17,7 +18,10 @@ go_library(
 
 go_test(
     name = "sitable_test",
-    srcs = ["sitable_test.go"],
+    srcs = [
+        "replica_reads_test.go",
+        "sitable_test.go",
+    ],
     embed = [":sitable"],
     deps = [
         "//pkg/lthash",

@@ -158,16 +158,17 @@ func tableRefGuardPhysicalDatabaseWarning(cfg *config.Config) string {
 // A peer-trusted remote() loopback carries SQL already rewritten by its origin;
 // running the rewriter again could double-prefix physical names, so the
 // rewrite bypass is deliberate. sireserved's peer rules refuse every mention
-// of a reserved name there (spec 2026-10-14 §14), but not a name computed by a
-// table-function argument, so network isolation of the internal port remains
-// the corresponding control.
+// of a reserved name there (spec 2026-10-14 §14) and every object-carrier
+// callable with a computed argument (Plan S3-C4 K48), but they are a lexical
+// guard, so network isolation of the internal port remains the corresponding
+// control.
 func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 	if !cfg.StorageIntegrity.IsEnabled() {
 		return ""
 	}
 	var warnings []string
 	if cfg.InternalListen != "" {
-		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the "+reservedDatabaseNames()+" databases and of "+rewriter.DefaultReservedRowIDColumn+" there, string literals included, but not names built by computed table-function arguments, so internal_listen MUST still be reachable only from trusted peer subnets")
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the "+reservedDatabaseNames()+" databases and of "+rewriter.DefaultReservedRowIDColumn+" there, string literals included, and every object-carrier table function called with a computed argument, but it is a lexical guard, so internal_listen MUST still be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
 		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every %s / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
@@ -847,6 +848,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		LocalDialer:      localDialer,
 		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
 	}
+	if siOptions.Enabled {
+		// Spec 2026-10-14 §11: a hello or USE of a database this host serves
+		// from its member's copy stays local.
+		forwardPlug.TableState = siState
+	}
 	queryPlugins = append(queryPlugins, forwardPlug)
 
 	var rewritePlug *rewrite.Plugin
@@ -874,9 +880,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	// sitablestate reads the rewriter's classification and the query's
 	// snapshot, so it runs right after rewrite and before the SI ingress and
-	// commitgate (spec 2026-09-24 §7.1).
+	// commitgate (spec 2026-09-24 §7.1). With the host's replica-read counter
+	// it also admits each read only before the host's fence and checks it
+	// against the current snapshot of the state rewrite took the query's
+	// snapshot from, and ends it when the query completes or its session
+	// closes (spec 2026-10-14 §11).
 	if siOptions.Enabled {
-		queryPlugins = append(queryPlugins, &sitablestate.Plugin{})
+		gate := &sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}
+		queryPlugins = append(queryPlugins, gate)
+		if opts.StorageIntegrityReplicaReads != nil {
+			gate.TableState = siState
+			queryCompletePlugins = append(queryCompletePlugins, gate)
+			closePlugins = append(closePlugins, gate)
+		}
 		log.Infow("storage-integrity table-state gate enabled", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}
 
@@ -1470,6 +1486,15 @@ func buildAgentWithBuilders(
 
 	srv := proxy.NewServerWithObserver(chain, dialer, obs)
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
+	failover, err := buildAgentReplicaFailover(opts, rf)
+	if err != nil {
+		return nil, err
+	}
+	if failover != nil {
+		srv.UpstreamFailover = failover
+		log.Infow("agent replica read failover enabled: a read its owner refuses as quarantined, or a session whose owner cannot be reached, moves to a host serving the owner's copy",
+			"network_state_source", cfg.NetworkState.Source)
+	}
 
 	built := &builtServer{
 		listeners: []serverListener{
@@ -1823,6 +1848,28 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 		}
 		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
 	}, nil
+}
+
+// buildAgentReplicaFailover returns the agent's replica read failover (spec
+// 2026-10-14 §11, Plan S3-C4 K46), or nil. It exists only when the agent
+// discovers its upstreams (no agent.upstream pin) through a network state that
+// answers replica-host discovery, which only the RPC source does: a pinned
+// upstream, a YAML file and a host-injected in-memory state keep every relay
+// exactly as before.
+func buildAgentReplicaFailover(opts Options, rf *redisFactory) (proxy.UpstreamFailover, error) {
+	cfg := opts.Config
+	if cfg.Agent.Upstream != "" || (opts.NetworkState == nil && !cfg.NetworkState.IsRpcSource()) {
+		return nil, nil
+	}
+	reg, err := agentNetworkState(opts, rf)
+	if err != nil {
+		return nil, err
+	}
+	discovery, ok := reg.(registry.StorageIntegrityReplicaDiscovery)
+	if !ok || isNilInterface(discovery) {
+		return nil, nil
+	}
+	return &agent.ReplicaFailover{Discovery: discovery, Databases: reg, Topology: reg}, nil
 }
 
 func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.Codec, error) {

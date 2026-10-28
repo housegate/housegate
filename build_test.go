@@ -199,13 +199,14 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 
 	cfg.InternalListen = "0.0.0.0:9001"
 	got := storageIntegrityInternalListenWarning(cfg)
-	// Spec 2026-10-14 §14: the peer rules refuse every literal mention of a
-	// reserved name, but not one computed by a table-function argument, so the
-	// network control stays.
+	// Spec 2026-10-14 §14 and Plan S3-C4 K48: the peer rules refuse every
+	// literal mention of a reserved name and every object-carrier callable
+	// with a computed argument; they stay a lexical guard, so the network
+	// control stays.
 	for _, want := range []string{
 		"peer-trusted", "internal_listen",
 		"the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id",
-		"computed table-function arguments", "trusted peer subnets",
+		"every object-carrier table function called with a computed argument", "lexical guard", "trusted peer subnets",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("warning = %q, want %q", got, want)
@@ -2603,5 +2604,44 @@ func TestBuildServer_StorageIntegrityPeerGuardWiring(t *testing.T) {
 				t.Fatalf("peer guard index %d before reserved guard %d", guardIndex, reservedIndex)
 			}
 		})
+	}
+}
+
+// TestBuildServer_ForwardTableStateFollowsStorageIntegrity is spec 2026-10-14
+// §11 (Plan S3-C4 Task 43): forward.Plugin gets the host's table state, the
+// one rewrite and sitablestate read, exactly when storage integrity is
+// enabled, so a server without it routes as before replica reads.
+func TestBuildServer_ForwardTableStateFollowsStorageIntegrity(t *testing.T) {
+	forwardOf := func(t *testing.T, bs *builtServer) *forward.Plugin {
+		t.Helper()
+		for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			if typed, ok := candidate.(*forward.Plugin); ok {
+				return typed
+			}
+		}
+		t.Fatal("forward plugin missing from the query chain")
+		return nil
+	}
+
+	plain, err := buildServer(Options{Config: minimalServerCfg(t), NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}}, nil)
+	if err != nil {
+		t.Fatalf("build without SI: %v", err)
+	}
+	if fwd := forwardOf(t, plain); fwd.TableState != nil {
+		t.Fatalf("forward.TableState = %v without storage integrity, want nil", fwd.TableState)
+	}
+	plain.teardown()
+
+	cfg := minimalServerCfg(t)
+	enabled := true
+	cfg.StorageIntegrity.Enabled = &enabled
+	state := sitable.NewFake(sitable.Ordinary, sitable.Table{ID: "rrdb.a", Status: sitable.Replica, CopyTable: "rrdb__a__i3", ReplicaOf: 2})
+	withSI, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: siProbeStubRewriterFactory{}, StorageIntegrityTableState: state}, nil)
+	if err != nil {
+		t.Fatalf("build with SI: %v", err)
+	}
+	defer withSI.teardown()
+	if fwd := forwardOf(t, withSI); fwd.TableState != sitable.TableState(state) {
+		t.Fatalf("forward.TableState = %v, want the injected table state", fwd.TableState)
 	}
 }

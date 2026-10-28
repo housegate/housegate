@@ -2,6 +2,7 @@ package forward
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 // --------------------------------------------------------------------
@@ -596,5 +598,251 @@ func TestForwardPlugin_OnQuery_USELocalAfterPivot_NoLocalDialer_Errors(t *testin
 	}
 	if !strings.Contains(err.Error(), "LocalDialer") {
 		t.Errorf("error should mention LocalDialer; got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------
+// Replica-served routing (spec 2026-10-14 §11)
+// --------------------------------------------------------------------
+
+// replicaServedState is a table state serving rrdb (owned by indexer 200)
+// from a member's copy on this host.
+func replicaServedState() *sitable.Fake {
+	return sitable.NewFake(sitable.Ordinary, sitable.Table{
+		ID: "rrdb.a", Status: sitable.Replica, CopyTable: "rrdb__a__i3", ReplicaOf: 200,
+	})
+}
+
+// replicaRouting is a host (indexer 100) whose table state serves rrdb, owned
+// by indexer 200, plus a database other on indexer 200 that is not served and
+// a local database local_db. Every dial is recorded.
+func replicaRouting(t *testing.T, state sitable.TableState) (*Plugin, *[]string, *[]*chproto.ClientHello) {
+	t.Helper()
+	ns := newFakeNS(t).
+		WithDatabase("rrdb", 200).
+		WithDatabase("other", 200).
+		WithDatabase("local_db", 100).
+		WithIndexer(100, "self", 9000).
+		WithIndexer(200, "owner.internal", 9001)
+	p := newTestForwardPlugin(t, ns, 100)
+	p.TableState = state
+	p.PhysicalDatabase = "phys"
+	var dials []string
+	var localHellos []*chproto.ClientHello
+	p.dialPeer = func(_ context.Context, addr string) (*chproto.Codec, error) {
+		dials = append(dials, addr)
+		c, _ := pipedCodec(t)
+		return c, nil
+	}
+	p.rebindFn = func(_ context.Context, _ chsession.Session, _ *chproto.Codec, _ *chproto.ClientHello) error {
+		return nil
+	}
+	p.LocalDialer = func(_ context.Context) (*chproto.Codec, error) {
+		dials = append(dials, "local")
+		c, _ := pipedCodec(t)
+		return c, nil
+	}
+	p.localRebindFn = func(_ context.Context, sess chsession.Session, _ *chproto.Codec, hello *chproto.ClientHello) error {
+		localHellos = append(localHellos, hello)
+		sess.State().SetForwarding(false)
+		sess.State().SetRouteTarget("")
+		return nil
+	}
+	return p, &dials, &localHellos
+}
+
+func queryOn(sess chsession.Session, sql string) *plugin.QueryContext {
+	return &plugin.QueryContext{Session: sess, OriginalSQL: sql}
+}
+
+const servingEndedMessage = "storage_integrity: database rrdb is no longer served from a copy on this host; reconnect to reach its owner (retryable)"
+
+// TestForward_ReplicaServedHelloStaysLocal: a hello of a database the host
+// serves from its member's copy is not pivoted to the owner; the session is
+// marked. A database of the same owner that is not served still pivots.
+func TestForward_ReplicaServedHelloStaysLocal(t *testing.T) {
+	p, dials, _ := replicaRouting(t, replicaServedState())
+
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	snap := sess.State().Snapshot()
+	if len(*dials) != 0 || snap.IsForwarding || snap.RouteTarget != "" {
+		t.Fatalf("dials=%v forwarding=%v route=%q, want the session kept local", *dials, snap.IsForwarding, snap.RouteTarget)
+	}
+	if snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("ReplicaServedDatabase = %q, want rrdb", snap.ReplicaServedDatabase)
+	}
+
+	other := newTestSession(t)
+	if err := p.OnHello(context.Background(), other, &chproto.ClientHello{Database: "other"}); err != nil {
+		t.Fatalf("OnHello(other): %v", err)
+	}
+	if got := other.State().Snapshot(); strings.Join(*dials, ",") != "owner.internal:9001" || !got.IsForwarding || got.ReplicaServedDatabase != "" {
+		t.Fatalf("dials=%v forwarding=%v mark=%q, want a database that is not served pivoted to its owner unmarked", *dials, got.IsForwarding, got.ReplicaServedDatabase)
+	}
+}
+
+// TestForward_USEOfAReplicaServedDatabaseStaysLocal: on a local session, USE of
+// a served database dials nothing and marks the session; the USE itself then
+// runs locally (rewrite maps it to the physical database).
+func TestForward_USEOfAReplicaServedDatabaseStaysLocal(t *testing.T) {
+	p, dials, _ := replicaRouting(t, replicaServedState())
+	sess := newTestSession(t)
+	if err := p.OnQuery(context.Background(), queryOn(sess, "USE rrdb")); err != nil {
+		t.Fatalf("OnQuery(USE rrdb): %v", err)
+	}
+	snap := sess.State().Snapshot()
+	if len(*dials) != 0 || snap.IsForwarding || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("dials=%v forwarding=%v mark=%q, want no dial and the session marked rrdb", *dials, snap.IsForwarding, snap.ReplicaServedDatabase)
+	}
+}
+
+// TestForward_USEOfAReplicaServedDatabaseRebindsAForwardedSessionToLocal: a
+// session forwarded to a peer comes back to the local ClickHouse through the
+// existing return-home pivot (physical database, mapped credentials) and is
+// marked.
+func TestForward_USEOfAReplicaServedDatabaseRebindsAForwardedSessionToLocal(t *testing.T) {
+	p, dials, localHellos := replicaRouting(t, replicaServedState())
+	sess := newTestSession(t)
+	sess.State().SetForwarding(true)
+	sess.State().SetRouteTarget("owner.internal:9001")
+	sess.State().MappedUser = "ch_admin"
+	sess.State().MappedPassword = "ch_secret"
+	if err := p.OnQuery(context.Background(), queryOn(sess, "USE rrdb")); err != nil {
+		t.Fatalf("OnQuery(USE rrdb): %v", err)
+	}
+	if strings.Join(*dials, ",") != "local" || len(*localHellos) != 1 {
+		t.Fatalf("dials=%v local rebinds=%d, want one rebind to the local ClickHouse", *dials, len(*localHellos))
+	}
+	if hello := (*localHellos)[0]; hello.Database != "phys" || hello.User != "ch_admin" || hello.Password != "ch_secret" {
+		t.Fatalf("local hello = %+v, want the physical database and the mapped credentials", hello)
+	}
+	snap := sess.State().Snapshot()
+	if snap.IsForwarding || snap.RouteTarget != "" || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("forwarding=%v route=%q mark=%q, want a local session marked rrdb", snap.IsForwarding, snap.RouteTarget, snap.ReplicaServedDatabase)
+	}
+}
+
+// TestForward_ServingEndedIsARetryableRefusal: while the database is served, a
+// marked session's statements pass; once the snapshot stops serving it, every
+// statement but a USE is refused with the retryable 733 asking the client to
+// reconnect.
+func TestForward_ServingEndedIsARetryableRefusal(t *testing.T) {
+	state := replicaServedState()
+	p, _, _ := replicaRouting(t, state)
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	if err := p.OnQuery(context.Background(), queryOn(sess, "SELECT count() FROM a")); err != nil {
+		t.Fatalf("a read while rrdb is served: %v", err)
+	}
+	state.Set() // the member revoked the lease: rrdb is no longer served
+	for _, sql := range []string{"SELECT count() FROM a", "SELECT 1", "INSERT INTO a VALUES (1)", "SHOW TABLES"} {
+		err := p.OnQuery(context.Background(), queryOn(sess, sql))
+		var ce *chproto.ClientError
+		if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted || ce.Message != servingEndedMessage {
+			t.Fatalf("OnQuery(%q) = %v, want 733 %q", sql, err, servingEndedMessage)
+		}
+	}
+	state.Set(sitable.Table{ID: "rrdb.a", Status: sitable.Replica, CopyTable: "rrdb__a__i4", ReplicaOf: 200})
+	if err := p.OnQuery(context.Background(), queryOn(sess, "SELECT count() FROM a")); err != nil {
+		t.Fatalf("a read once rrdb is served again: %v", err)
+	}
+}
+
+// TestForward_UseElsewhereClearsTheReplicaMark: a USE of a database hosted
+// elsewhere and not served (pivoted to, or already the session's route
+// target), or a USE of a local database, clears the mark, so the end of
+// serving no longer refuses that session.
+func TestForward_UseElsewhereClearsTheReplicaMark(t *testing.T) {
+	for _, tc := range []struct {
+		name, use, route, dials string
+	}{
+		{name: "pivot to the owner", use: "USE other", dials: "owner.internal:9001"},
+		{name: "already routed to the owner", use: "USE other", route: "owner.internal:9001", dials: ""},
+		{name: "local database", use: "USE local_db", dials: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := replicaServedState()
+			p, dials, _ := replicaRouting(t, state)
+			sess := newTestSession(t)
+			if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+				t.Fatalf("OnHello(rrdb): %v", err)
+			}
+			if tc.route != "" {
+				sess.State().SetRouteTarget(tc.route)
+			}
+			if err := p.OnQuery(context.Background(), queryOn(sess, tc.use)); err != nil {
+				t.Fatalf("OnQuery(%s): %v", tc.use, err)
+			}
+			if got := sess.State().Snapshot().ReplicaServedDatabase; got != "" || strings.Join(*dials, ",") != tc.dials {
+				t.Fatalf("mark=%q dials=%v, want the mark cleared and dials %q", got, *dials, tc.dials)
+			}
+			state.Set()
+			if err := p.OnQuery(context.Background(), queryOn(sess, "SELECT 1")); err != nil {
+				t.Fatalf("an unmarked session must not be refused when serving ends: %v", err)
+			}
+		})
+	}
+}
+
+// TestForward_WithoutTableStateBehavesAsToday: with no table state the plugin
+// pivots a hello and a USE of a remote database exactly as before replica
+// reads, marks nothing, and never refuses a statement.
+func TestForward_WithoutTableStateBehavesAsToday(t *testing.T) {
+	p, dials, _ := replicaRouting(t, nil)
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	snap := sess.State().Snapshot()
+	if strings.Join(*dials, ",") != "owner.internal:9001" || !snap.IsForwarding || snap.ReplicaServedDatabase != "" {
+		t.Fatalf("dials=%v forwarding=%v mark=%q, want today's hello pivot", *dials, snap.IsForwarding, snap.ReplicaServedDatabase)
+	}
+	local := newTestSession(t)
+	if err := p.OnQuery(context.Background(), queryOn(local, "USE rrdb")); err != nil {
+		t.Fatalf("OnQuery(USE rrdb): %v", err)
+	}
+	if strings.Join(*dials, ",") != "owner.internal:9001,owner.internal:9001" || local.State().Snapshot().ReplicaServedDatabase != "" {
+		t.Fatalf("dials=%v, want today's USE pivot and no mark", *dials)
+	}
+	marked := newTestSession(t)
+	marked.State().SetReplicaServedDatabase("rrdb")
+	if err := p.OnQuery(context.Background(), queryOn(marked, "SELECT 1")); err != nil {
+		t.Fatalf("without a table state nothing is refused: %v", err)
+	}
+}
+
+// TestForward_PeerTrustedSessionsIgnoreReplicaServing: a peer-trusted hello
+// keeps its early return, and a session forwarded from a peer keeps today's
+// USE pivot and is never refused: the entry proxy made the routing decision.
+func TestForward_PeerTrustedSessionsIgnoreReplicaServing(t *testing.T) {
+	state := replicaServedState()
+	p, dials, _ := replicaRouting(t, state)
+
+	loopback := newTestSession(t)
+	loopback.State().SetPeerTrust("10.0.0.7:9000")
+	if err := p.OnHello(context.Background(), loopback, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello on a peer-trusted session: %v", err)
+	}
+	if got := loopback.State().Snapshot(); len(*dials) != 0 || got.IsForwarding || got.ReplicaServedDatabase != "" {
+		t.Fatalf("dials=%v forwarding=%v mark=%q, want the peer-trusted hello untouched", *dials, got.IsForwarding, got.ReplicaServedDatabase)
+	}
+
+	forwarded := newTestSession(t)
+	forwarded.State().SetPeerTrustForwarded("10.0.0.7:9000", true)
+	if err := p.OnQuery(context.Background(), queryOn(forwarded, "USE rrdb")); err != nil {
+		t.Fatalf("OnQuery(USE rrdb) on a forwarded-from-peer session: %v", err)
+	}
+	if got := forwarded.State().Snapshot(); strings.Join(*dials, ",") != "owner.internal:9001" || got.ReplicaServedDatabase != "" {
+		t.Fatalf("dials=%v mark=%q, want today's pivot to the owner and no mark", *dials, got.ReplicaServedDatabase)
+	}
+	forwarded.State().SetReplicaServedDatabase("rrdb")
+	state.Set()
+	if err := p.OnQuery(context.Background(), queryOn(forwarded, "SELECT 1")); err != nil {
+		t.Fatalf("a peer-trusted session is never refused by the replica rule: %v", err)
 	}
 }

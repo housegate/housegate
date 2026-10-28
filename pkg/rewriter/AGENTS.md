@@ -10,6 +10,7 @@
 | Per-session rewrite logic | `sentio.go` | Dynamic args, table/database maps, remote upstream credentials. |
 | Test backend | `backend_test.go` | Unit tests should use `fakeBackend`, not a live service. |
 | Native smoke | `native_smoke_test.go` | Skips unless `POLYGLOT_SQL_FFI_PATH` is set. |
+| Replica-table parity | `replica_parity_test.go` | Both engines resolve a Replica table to `hg_replica.<CopyTable>` before its database's remote mapping and accept a localized `USE` (spec 2026-10-14 §11); the engine cases skip unless `POLYGLOT_SQL_FFI_PATH` or `HOUSEGATE_TEST_REWRITER_GRPC_ADDR` is set. |
 | Plugin entry | `../plugins/rewrite/` | Query hook owns one `Rewriter` per connection and applies ordinary versus SI failure policy. |
 | SI contract adapter | `storage_integrity.go`, `sentio.go` | Builds contract-V2 args, validates acknowledgements, and turns SI uncertainty into `RejectedError`. |
 | SI startup conformance | `probe.go` | Bounded eight-case suite: the five original DESCRIBE/catch-all/protected-target/heredoc cases plus the three contract-V2 cases (the per-engine SI `DROP TABLE` fingerprint, the empty-table-map catch-all, and the empty-table-map `hg_safe` read); every concrete or injected SI factory must implement and pass it. |
@@ -18,7 +19,7 @@
 | Exception reverse mapping | `backend.go`, `sentio.go`, `../plugins/rewrite/` | With an active rewrite, `OnException` delegates through the per-connection rewriter to the selected backend's `RewriteErrorMessage`. |
 
 ## CONVENTIONS
-- Do not add general SQL parsing here. The backend supplies `StatementType`, accessed tables, table/database rewrites, and privilege deltas. Shared strict agent/ingress identity parsing is limited to INSERT targets in `pkg/storageintegrity`; the agent additionally parses INSERT columns and calls `ParseUseDatabaseStrict` for post-success state, while `forward.matchUse` delegates to the shared fail-open `ParseUseDatabase` wrapper for session rebind. `sentioRewriter` retains a backend-classified known-physical USE fallback only to mirror state. Enabled ingress separately text-classifies INSERT/UPDATE/DELETE/ALTER/read-like shapes to reject metadata mismatches. None of these paths rewrites SQL locally.
+- Do not add general SQL parsing here. The backend supplies `StatementType`, accessed tables, table/database rewrites, and privilege deltas. Shared strict agent/ingress identity parsing is limited to INSERT targets in `pkg/storageintegrity`; the agent additionally parses INSERT columns and calls `ParseUseDatabaseStrict` for post-success state, while `forward.matchUse` delegates to the shared fail-open `ParseUseDatabase` wrapper for session rebind, and `localizeReplicaServedUse` reads the same wrapper to keep a `USE` of a replica-served database local (spec 2026-10-14 §11). `sentioRewriter` retains a backend-classified known-physical USE fallback only to mirror state. Enabled ingress separately text-classifies INSERT/UPDATE/DELETE/ALTER/read-like shapes to reject metadata mismatches. None of these paths rewrites SQL locally.
 - `Options.Engine == ""` means gRPC. Valid engines are `grpc` and `native`; config validation is mode-independent.
 - Native library resolution order is explicit path, `POLYGLOT_SQL_FFI_PATH`, then default search locations.
 - Native ctx deadlines are advisory because an in-flight FFI call cannot be interrupted.
@@ -26,11 +27,12 @@
 - For non-bypass queries that reach rewrite, ordinary call failures fail open only while storage integrity is disabled. `RejectedError` always fails closed; with `storage_integrity.enabled`, transport/classification failures, missing or wrong contract acknowledgements, and SI-classified non-success responses propagate as QueryPlugin errors and client-visible ClickHouse Exceptions.
 - The enabled agent materializer is built separately and is startup fail-fast, including native-library resolution. After successful startup, individual materialization call errors and non-success outcomes remain fail-open and leave the SQL unchanged.
 - Cross-indexer `remote()` credentials go through `resolveRemoteCredentials`.
+- Replica tables (spec 2026-10-14 §11, Plan S3-C4 Task 43): `buildStorageIntegrityArgs` lists every `Snapshot.Served()` table with `SafeTable` = `UnsafeTable` = `hg_replica.<CopyTable>`, and the database keeps its remote mapping except for a standalone `USE` of it (`localizeReplicaServedUse`). `requireNoReplicaUnderUnsafeLatest` runs right after the first `unsafe_latest` pass, before `requireActiveAccessedIDs`, so a copy is never read twice and never answers `unsafe_latest`. The scrubber maps `hg_replica.<CopyTable>` back to the logical id.
 
 ## ANTI-PATTERNS
 - Do not revive in-repo generated proto packages. Import `github.com/housegate/rewriter-proto/gen/pb`.
 - Do not make rewrite backend unavailability crash startup while storage integrity is disabled, and do not relax the existing SI contract-V2, SI behavioral-probe, or enabled-materializer startup gates. The DESCRIBE fingerprint alone is insufficient because older gRPC builds emit it byte-identically; keep the generic and protected-target probes too.
-- Do not duplicate the shared SI INSERT-target parser; agent and ingress must bind the same structured INSERT identity and reject ambiguity consistently. Keep agent `ParseUseDatabaseStrict`, forward's shared fail-open `ParseUseDatabase` wrapper, the `sentioRewriter` known-physical USE fallback, and the ingress text-shape cross-check in their existing narrow scopes.
+- Do not duplicate the shared SI INSERT-target parser; agent and ingress must bind the same structured INSERT identity and reject ambiguity consistently. Keep agent `ParseUseDatabaseStrict`, forward's shared fail-open `ParseUseDatabase` wrapper (and its reuse in `localizeReplicaServedUse`), the `sentioRewriter` known-physical USE fallback, and the ingress text-shape cross-check in their existing narrow scopes.
 - Use the operator key `rewriter.physical_database`. Dynamic args carry its value through per-logical `database_map` entries and may carry the session's current physical context through optional `upstream_physical_database_in_context`. Both engines build the table identifier as logical plus delimiter-joined extras (when present), then a literal `.` and the original table.
 - Do not reverse-map exception text with local string replacement. When `SessionState.HasActiveRewrite` is set, `rewrite.Plugin.OnException` calls the per-connection `Rewriter.RewriteErrorMessage`, which rebuilds dynamic args from the most recent SQL and effective account before delegating to the selected backend; RPC errors and non-success responses preserve the original message.
 
@@ -38,6 +40,7 @@
 ```bash
 bazel test //pkg/rewriter:rewriter_test
 bazel test //pkg/rewriter:rewriter_test --test_filter=TestNativeEngineSmoke --test_env=POLYGLOT_SQL_FFI_PATH=/path/to/libpolyglot_sql_ffi.dylib
+bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH=/path/to/libpolyglot_sql_ffi.dylib --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551
 bazel test //pkg/plugins/rewrite:rewrite_test
 ```
 

@@ -24,7 +24,7 @@
 - Legacy `OnClientData` observers are fail-open: hook errors are logged and the raw packet continues. `OnClientDataStrict` and `OnQueryInputCompleteStrict` are separate admission hooks whose errors fail closed before the commit boundary.
 - A decoded EndOfStream fires `OnQuerySuccess` for a non-cancelled active query only after any deferred-INSERT sample and terminator preconditions are satisfied, then completes its active/deferred lifecycle. A premature deferred EndOfStream fails closed without success. A decoded Exception fires `OnException`, never success, and calls `OnQueryComplete` only when an active or deferred query owns that terminal. Terminal hooks finish before the terminal packet reaches the client.
 - An ordinary non-chunked result that returns `ErrUnsupportedResultType` may enter the one-way opaque fallback. Its exact-query-id process probe supplies cleanup only, never success, and the connection rejects any later Query because the original EndOfStream was not framed. Commit-gated and chunked paths never use this fallback.
-- Relay allows only one upstream query in flight; a new Query before a framed EndOfStream or Exception is rejected rather than forwarded.
+- Relay allows only one upstream query in flight; a new Query before a framed EndOfStream or Exception is rejected rather than forwarded, including one that arrives while that terminal's hooks still run (before the terminal reaches the client), so a query never enters OnQuery while the previous one's OnQuerySuccess/OnQueryComplete runs.
 
 ## ANTI-PATTERNS
 - Do not add policy decisions directly to relay when a plugin hook is the intended surface.

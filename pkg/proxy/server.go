@@ -43,6 +43,13 @@ type Server struct {
 	// from config.ShutdownTimeout (default 30s).
 	ShutdownTimeout time.Duration
 
+	// UpstreamFailover, if non-nil, lets each session's relay move to a
+	// replica host when its owner refuses a read as quarantined or cannot
+	// be reached (spec 2026-10-14 §11, Plan S3-C4 K46). Only the agent sets
+	// it, and only with an RPC network state; nil keeps every relay exactly
+	// as before.
+	UpstreamFailover UpstreamFailover
+
 	nextID atomic.Int64
 	wg     sync.WaitGroup
 }
@@ -158,6 +165,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	// per-mode dialer signature stable (server / agent / forwarding
 	// each plug their own).
 	r := NewRelay(sess, s.Hooks, s.Observer, UpstreamDialer(s.UpstreamDialer))
+	r.failover = s.UpstreamFailover
 	if err := r.Run(ctx); err != nil {
 		logger.Warne(err, "relay run ended")
 	}

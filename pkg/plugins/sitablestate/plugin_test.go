@@ -3,9 +3,15 @@ package sitablestate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"reflect"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -350,4 +356,484 @@ func TestNoSnapshotFailsClosed(t *testing.T) {
 func TestNoQueryOrSessionIsANoOp(t *testing.T) {
 	check(t, "nil query context", (&Plugin{}).OnQuery(context.Background(), nil), ok)
 	check(t, "nil session", (&Plugin{}).OnQuery(context.Background(), &plugin.QueryContext{TableSnapshot: statusSnapshot(), AccessedTables: accessed("db1.g")}), ok)
+}
+
+// replicaTables serve db2.a and db2.b (owner indexer 0) and db3.c (owner
+// indexer 3) from member copies (spec 2026-10-14 §11); db1.p is Pending and
+// everything else is Ordinary.
+func replicaTables() []sitable.Table {
+	return []sitable.Table{
+		{ID: "db1.p", Status: sitable.Pending},
+		{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 0},
+		{ID: "db2.b", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.b", 1), ReplicaOf: 0},
+		{ID: "db3.c", Status: sitable.Replica, CopyTable: sitable.CopyTable("db3.c", 7), ReplicaOf: 3},
+	}
+}
+
+func replicaSnapshot() sitable.Snapshot {
+	return sitable.NewSnapshot(9, sitable.Ordinary, replicaTables())
+}
+
+// replicaState is the host's table state while it serves replicaTables: the
+// port sitablestate checks a counted replica read against.
+func replicaState() *sitable.Fake {
+	return sitable.NewFake(sitable.Ordinary, replicaTables()...)
+}
+
+// servingReads is the host's counter while it holds the leases of db2 and
+// db3: their fences are open for the next hour, so the snapshot checks alone
+// decide.
+func servingReads() *sitable.ReplicaReads {
+	reads := sitable.NewReplicaReads()
+	until := time.Now().Add(time.Hour)
+	reads.ServeUntil("db2", until)
+	reads.ServeUntil("db3", until)
+	return reads
+}
+
+func replicaQuery(sess chsession.Session, typ sqlmeta.StatementType, sql string, tables []sqlmeta.AccessedTable) *plugin.QueryContext {
+	return &plugin.QueryContext{
+		Session:        sess,
+		OriginalSQL:    sql,
+		Query:          &chproto.Query{Body: sql},
+		StatementType:  typ,
+		AccessedTables: tables,
+		TableSnapshot:  replicaSnapshot(),
+	}
+}
+
+func replicaErr(id string, owner uint64) outcome {
+	return outcome{392, fmt.Sprintf("storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner", id, owner)}
+}
+
+// TestDecide_ReplicaRows is the Replica row of the spec 2026-09-24 §7.2 matrix
+// that spec 2026-10-14 §11 adds: reads and metadata pass, every write, DDL and
+// data-carrying creation is refused 392 naming the owner (indexer 0 is a valid
+// owner), and an unreadable materialized-view header keeps its own refusal.
+func TestDecide_ReplicaRows(t *testing.T) {
+	replica := sitable.Table{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 0}
+	for _, tc := range []struct {
+		name  string
+		class class
+		sev   severity
+		want  outcome
+	}{
+		{"none", classNone, allow, ok},
+		{"read", classRead, allow, ok},
+		{"metadata", classMetadata, allow, ok},
+		{"write", classWrite, nonRetryable, replicaErr("db2.a", 0)},
+		{"create", classCreate, nonRetryable, replicaErr("db2.a", 0)},
+		{"create with data", classCreateData, nonRetryable, replicaErr("db2.a", 0)},
+		{"drop", classDrop, nonRetryable, replicaErr("db2.a", 0)},
+		{"other DDL", classOtherDDL, nonRetryable, replicaErr("db2.a", 0)},
+		{"view target", classViewTarget, nonRetryable, replicaErr("db2.a", 0)},
+		{"unreadable", classUnreadable, nonRetryable, unreadableErr},
+	} {
+		sev, err := decide(replica, tc.class)
+		if sev != tc.sev {
+			t.Errorf("%s: severity %d, want %d", tc.name, sev, tc.sev)
+		}
+		check(t, tc.name, err, tc.want)
+	}
+
+	// The same rows end to end, by statement type. INSERT ... SELECT from a
+	// copy into an ordinary table is a read of the copy.
+	for _, tc := range []struct {
+		name   string
+		typ    sqlmeta.StatementType
+		sql    string
+		tables []sqlmeta.AccessedTable
+		want   outcome
+	}{
+		{"select", sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"), ok},
+		{"join of two copies", sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db3.c USING (k)", accessed("db2.a", "db3.c"), ok},
+		{"describe", sqlmeta.StatementTypeDescribe, "DESCRIBE TABLE db2.a", accessed("db2.a"), ok},
+		{"show create", sqlmeta.StatementTypeShowCreateTable, "SHOW CREATE TABLE db2.a", accessed("db2.a"), ok},
+		{"exists", sqlmeta.StatementTypeExistsTable, "EXISTS TABLE db2.a", accessed("db2.a"), ok},
+		{"insert select into an ordinary table", sqlmeta.StatementTypeInsert, "INSERT INTO db1.o SELECT * FROM db2.a", accessed("db1.o", "db2.a"), ok},
+		{"insert", sqlmeta.StatementTypeInsert, "INSERT INTO db2.a FORMAT Native", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"insert select into a copy", sqlmeta.StatementTypeInsert, "INSERT INTO db3.c SELECT * FROM db1.o", accessed("db3.c", "db1.o"), replicaErr("db3.c", 3)},
+		{"update", sqlmeta.StatementTypeUpdate, "ALTER TABLE db2.a UPDATE x = 1 WHERE 1", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"delete", sqlmeta.StatementTypeDelete, "DELETE FROM db2.a WHERE 1", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"truncate", sqlmeta.StatementTypeTruncateTable, "TRUNCATE TABLE db2.a", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"create same name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db2.a (a UInt8) ENGINE = Memory", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"create as select", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db2.a ENGINE = Memory AS SELECT 1 AS a", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"create as select from a copy", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = Memory AS SELECT * FROM db2.a", accessed("db1.o", "db2.a"), ok},
+		{"drop", sqlmeta.StatementTypeDropTable, "DROP TABLE db2.a", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"alter", sqlmeta.StatementTypeAlterTable, "ALTER TABLE db2.a ADD COLUMN b UInt8", accessed("db2.a"), replicaErr("db2.a", 0)},
+		{"rename", sqlmeta.StatementTypeRenameTable, "RENAME TABLE db2.a TO db2.z", accessed("db2.a", "db2.z"), replicaErr("db2.a", 0)},
+		{"materialized view to a copy", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db2.a AS SELECT a FROM db1.o", accessed("db1.mv", "db2.a", "db1.o"), replicaErr("db2.a", 0)},
+		{"materialized view named like a copy", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db2.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db2.a", "db1.o"), replicaErr("db2.a", 0)},
+		{"materialized view reading a copy", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.o AS SELECT a FROM db2.a", accessed("db1.mv", "db1.o", "db2.a"), ok},
+		{"view over a copy", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db2.a", accessed("db1.v", "db2.a"), ok},
+		{"a copy and a pending table", sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db1.p USING (k)", accessed("db2.a", "db1.p"), pendingErr("db1.p")},
+	} {
+		check(t, tc.name, (&Plugin{}).OnQuery(context.Background(), replicaQuery(newSession(t, 40), tc.typ, tc.sql, tc.tables)), tc.want)
+	}
+}
+
+// TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead is clarification
+// K44 of Plan S3-C4: an allowed query that touches a Replica table counts one
+// in-flight read per database from OnQuery until OnQueryComplete, through the
+// chain as Relay drives it. A refused query, or one that touches no Replica
+// table, counts nothing, and two sessions count separately.
+func TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead(t *testing.T) {
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{gate},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
+		ClosePlugins:         []plugin.ClosePlugin{gate},
+	}
+	ctx := context.Background()
+	sess := newSession(t, 41)
+	if err := chain.OnQuery(ctx, replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db2.b USING (k) JOIN db3.c USING (k) JOIN db1.o USING (k)", accessed("db2.a", "db2.b", "db3.c", "db1.o"))); err != nil {
+		t.Fatalf("a join of copies must be allowed: %v", err)
+	}
+	if got := reads.Counts(); !reflect.DeepEqual(got, map[string]int{"db2": 1, "db3": 1}) {
+		t.Fatalf("in flight = %v, want one read of db2 and one of db3", got)
+	}
+	other := newSession(t, 42)
+	if err := chain.OnQuery(ctx, replicaQuery(other, sqlmeta.StatementTypeDescribe, "DESCRIBE TABLE db2.a", accessed("db2.a"))); err != nil {
+		t.Fatalf("DESCRIBE of a copy must be allowed: %v", err)
+	}
+	if reads.InFlight("db2") != 2 {
+		t.Fatalf("db2 in flight = %d, want 2 (two sessions)", reads.InFlight("db2"))
+	}
+	chain.OnQueryComplete(ctx, sess)
+	chain.OnQueryComplete(ctx, sess) // a second complete ends nothing more
+	if got := reads.Counts(); !reflect.DeepEqual(got, map[string]int{"db2": 1}) {
+		t.Fatalf("after the join completed in flight = %v, want the DESCRIBE's db2 only", got)
+	}
+	chain.OnQueryComplete(ctx, other)
+
+	for _, tc := range []struct {
+		name   string
+		typ    sqlmeta.StatementType
+		sql    string
+		tables []sqlmeta.AccessedTable
+	}{
+		{"no copy", sqlmeta.StatementTypeSelect, "SELECT * FROM db1.o", accessed("db1.o")},
+		{"write to a copy", sqlmeta.StatementTypeInsert, "INSERT INTO db2.a FORMAT Native", accessed("db2.a")},
+		{"copy refused by another table", sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db1.p USING (k)", accessed("db2.a", "db1.p")},
+	} {
+		_ = chain.OnQuery(ctx, replicaQuery(sess, tc.typ, tc.sql, tc.tables))
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("%s: in flight = %v, want nothing counted", tc.name, got)
+		}
+		chain.OnQueryComplete(ctx, sess)
+	}
+
+	// A lost complete never leaves a database counted: the session's next
+	// counted read ends the end it still holds.
+	if err := chain.OnQuery(ctx, replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.OnQuery(ctx, replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))); err != nil {
+		t.Fatal(err)
+	}
+	if got := reads.Counts(); !reflect.DeepEqual(got, map[string]int{"db2": 1}) {
+		t.Fatalf("after a lost complete in flight = %v, want only the session's current read of db2", got)
+	}
+	chain.OnClose(sess)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("after close in flight = %v, want empty", got)
+	}
+
+	// Without a counter the gate decides exactly as before and counts nothing.
+	if err := (&Plugin{}).OnQuery(ctx, replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))); err != nil {
+		t.Fatalf("a read of a copy without a counter: %v", err)
+	}
+	(&Plugin{}).OnQueryComplete(ctx, sess)
+	(&Plugin{}).OnClose(sess)
+}
+
+// TestOnClose_EndsAnInFlightReplicaRead: a client that disconnects mid-query
+// never reaches OnQueryComplete, so the session's close ends its read, and a
+// late complete after the close changes nothing.
+func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
+	sess := newSession(t, 43)
+	if err := gate.OnQuery(context.Background(), replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))); err != nil {
+		t.Fatal(err)
+	}
+	if reads.InFlight("db3") != 1 {
+		t.Fatalf("db3 in flight = %d, want 1", reads.InFlight("db3"))
+	}
+	(&plugin.PluginChain{ClosePlugins: []plugin.ClosePlugin{gate}}).OnClose(sess)
+	if reads.InFlight("db3") != 0 {
+		t.Fatalf("after close db3 in flight = %d, want 0", reads.InFlight("db3"))
+	}
+	gate.OnQueryComplete(context.Background(), sess)
+	gate.OnClose(sess)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v, want empty", got)
+	}
+}
+
+// TestReplicaReadsAreKeptPerSessionAcrossListeners: with internal_listen,
+// the external and the internal proxy.Server share this gate but number their
+// sessions independently, so two sessions can carry the same ID. Each keeps
+// its own read: one session's next read, complete or close never ends the
+// other's.
+func TestReplicaReadsAreKeptPerSessionAcrossListeners(t *testing.T) {
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{gate},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
+		ClosePlugins:         []plugin.ClosePlugin{gate},
+	}
+	ctx := context.Background()
+	external, internal := newSession(t, 1), newSession(t, 1)
+	if err := chain.OnQuery(ctx, replicaQuery(external, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.OnQuery(ctx, replicaQuery(internal, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.b", accessed("db2.b"))); err != nil {
+		t.Fatal(err)
+	}
+	if n := reads.InFlight("db2"); n != 2 {
+		t.Fatalf("db2 in flight = %d, want 2: a session with the same ID must not end the other's read", n)
+	}
+	chain.OnClose(internal)
+	if n := reads.InFlight("db2"); n != 1 {
+		t.Fatalf("after the internal session closed db2 in flight = %d, want the external session's read", n)
+	}
+	chain.OnQueryComplete(ctx, internal)
+	if n := reads.InFlight("db2"); n != 1 {
+		t.Fatalf("after a late complete of the closed session db2 in flight = %d, want 1", n)
+	}
+	chain.OnQueryComplete(ctx, external)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v, want empty", got)
+	}
+}
+
+// TestOnQuery_OperatorSessionsAreNotCounted: maintenance and platform-operator
+// sessions return before the matrix, and peer-trusted and origin-side
+// forwarding sessions skip the gate in the chain, so none of them counts a
+// read of a copy.
+func TestOnQuery_OperatorSessionsAreNotCounted(t *testing.T) {
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{gate},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
+	}
+	for i, setup := range []func(chsession.Session){
+		func(s chsession.Session) { s.State().SetMaintenance(true) },
+		func(s chsession.Session) { s.State().SetPlatformOperator(true) },
+		func(s chsession.Session) { s.State().SetPeerTrust("10.0.0.7:9001") },
+		func(s chsession.Session) { s.State().SetForwarding(true) },
+	} {
+		sess := newSession(t, int64(44+i))
+		setup(sess)
+		if err := chain.OnQuery(context.Background(), replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))); err != nil {
+			t.Fatalf("session %d: %v", i, err)
+		}
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("session %d: in flight = %v, want nothing counted", i, got)
+		}
+		chain.OnQueryComplete(context.Background(), sess)
+	}
+}
+
+// TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused is clarification
+// K44 of Plan S3-C4 with a rewriter blocked across the host's two lease
+// polls: the query took its Replica snapshot in rewrite and waited there
+// while the host published a snapshot without db2's Replica entries and then
+// found no read of db2 in flight, so it released db2's lease and the member
+// may install. When the query reaches the gate it is refused with the
+// retryable 733 before anything reaches ClickHouse, and it is not left
+// counted. A copy re-served under another name, a table served by another
+// owner and a gate without a table state refuse the same way; a query planned
+// on the current snapshot is admitted.
+func TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused(t *testing.T) {
+	ctx := context.Background()
+	state := replicaState()
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: state}
+	sess := newSession(t, 48)
+	stale := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db3.c USING (k)", accessed("db2.a", "db3.c"))
+	stale.TableSnapshot = state.Current()
+	// The host's first poll publishes a snapshot without db2's entries; its
+	// next poll finds no read of db2 in flight and releases the lease.
+	state.Set(replicaTables()[0], replicaTables()[3])
+	if n := reads.InFlight("db2"); n != 0 {
+		t.Fatalf("db2 in flight = %d before the blocked query resumed", n)
+	}
+	refused := outcome{733, "storage_integrity: table db2.a is no longer served from the copy this query was planned against; retry the query (retryable)"}
+	check(t, "stale snapshot", gate.OnQuery(ctx, stale), refused)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v after the refusal, want nothing counted", got)
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	// A query planned on the current snapshot reads db3.c.
+	fresh := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))
+	fresh.TableSnapshot = state.Current()
+	if err := gate.OnQuery(ctx, fresh); err != nil || reads.InFlight("db3") != 1 {
+		t.Fatalf("OnQuery = %v, db3 in flight %d; want an admitted, counted read", err, reads.InFlight("db3"))
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	// db2 is served again, from another incarnation's copy, or by another
+	// owner: the old plan names neither.
+	planned := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
+	for name, a := range map[string]sitable.Table{
+		"another copy":  {ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 5), ReplicaOf: 0},
+		"another owner": {ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2},
+	} {
+		state.Set(a, replicaTables()[3])
+		check(t, name, gate.OnQuery(ctx, planned), refused)
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("%s: in flight = %v, want nothing counted", name, got)
+		}
+		gate.OnQueryComplete(ctx, sess)
+	}
+	check(t, "no table state", (&Plugin{ReplicaReads: reads}).OnQuery(ctx, planned), refused)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("without a table state in flight = %v, want nothing counted", got)
+	}
+}
+
+// TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused is
+// clarification K44 of Plan S3-C4 with the host's table-state refresh blocked
+// (review round 2): the host cannot reach its member, so db2's lease is not
+// renewed and its fence stays at the local deadline minus
+// serve.HostDeadlineMargin, while a refresh blocked in its chain-state read
+// keeps the published snapshot answering db2 Replica past that fence and past
+// the lease's TTL, when the member may install. A fresh query planned on that
+// snapshot is admitted before the fence and refused with the retryable 733
+// from the fence on, counting nothing, although the current snapshot still
+// serves the copy. db3, whose fence is open, still reads, a join of both is
+// refused as a whole, a fence the host closes (a dropped lease) refuses at
+// once, and a renewal that moves the fence admits again.
+func TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused(t *testing.T) {
+	const ttl, margin = 30 * time.Second, 3 * time.Second
+	granted := time.Unix(1_760_000_000, 0)
+	var mu sync.Mutex
+	now := granted
+	at := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = granted.Add(d)
+	}
+	reads := sitable.NewReplicaReadsWithClock(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	})
+	reads.ServeUntil("db2", granted.Add(ttl-margin))
+	reads.ServeUntil("db3", granted.Add(time.Hour))
+	// The published snapshot never changes below: the refresh that would
+	// publish the end of db2's lease is blocked.
+	state := replicaState()
+	gate := &Plugin{ReplicaReads: reads, TableState: state}
+	ctx := context.Background()
+	sess := newSession(t, 49)
+	fresh := func(sql string, ids ...string) *plugin.QueryContext {
+		qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, sql, accessed(ids...))
+		qctx.TableSnapshot = state.Current()
+		return qctx
+	}
+	refused := func(id string) outcome {
+		return outcome{733, fmt.Sprintf("storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", id)}
+	}
+
+	at(ttl - margin - time.Second)
+	check(t, "a fresh read before the fence", gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), ok)
+	if reads.InFlight("db2") != 1 {
+		t.Fatalf("db2 in flight = %d, want the admitted read", reads.InFlight("db2"))
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	for _, d := range []time.Duration{ttl - margin, ttl, ttl + 500*time.Millisecond} {
+		at(d)
+		if got := state.Current().Lookup("db2", "a").Status; got != sitable.Replica {
+			t.Fatalf("%v after the grant the published snapshot answers db2.a %v, want Replica", d, got)
+		}
+		check(t, fmt.Sprintf("a fresh read %v after the grant while the refresh is blocked", d), gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), refused("db2.a"))
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("%v after the grant in flight = %v, want nothing counted", d, got)
+		}
+		gate.OnQueryComplete(ctx, sess)
+	}
+
+	check(t, "db3 under its open fence", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c", "db3.c")), ok)
+	gate.OnQueryComplete(ctx, sess)
+	check(t, "a join of db3 and db2", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c JOIN db2.b USING (k)", "db3.c", "db2.b")), refused("db2.b"))
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("after the refused join in flight = %v, want nothing counted", got)
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	reads.ServeUntil("db3", time.Time{})
+	check(t, "db3 after its fence was closed", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c", "db3.c")), refused("db3.c"))
+	gate.OnQueryComplete(ctx, sess)
+	reads.ServeUntil("db2", granted.Add(2*ttl-margin))
+	check(t, "db2 after a renewal moved its fence", gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), ok)
+	gate.OnQueryComplete(ctx, sess)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v, want empty", got)
+	}
+}
+
+// TestReplicaReadAdmissionNeverOverlapsARelease is clarification K44 under
+// concurrency: sessions plan against the current snapshot, yield, and then
+// reach the gate, while a host stops serving db2, waits until no read of db2
+// is in flight and releases the lease. No read planned on a snapshot that
+// serves db2 is admitted after that release. Each of the host's two signals
+// is raced alone: a host that publishes a snapshot without db2's Replica
+// entries and leaves db2's fence open (a read planned later finds db2
+// Ordinary, which the rewriter sends to its owner), and a host whose refresh
+// is blocked, so its snapshot keeps serving db2, that closes db2's fence
+// (review round 2). Run it with -race.
+func TestReplicaReadAdmissionNeverOverlapsARelease(t *testing.T) {
+	ctx := context.Background()
+	for _, host := range []struct {
+		name string
+		stop func(state *sitable.Fake, reads *sitable.ReplicaReads)
+	}{
+		{"publishes the drop", func(state *sitable.Fake, _ *sitable.ReplicaReads) { state.Set(replicaTables()[0], replicaTables()[3]) }},
+		{"closes the fence", func(_ *sitable.Fake, reads *sitable.ReplicaReads) { reads.ServeUntil("db2", time.Time{}) }},
+	} {
+		for round := range 50 {
+			state := replicaState()
+			reads := servingReads()
+			gate := &Plugin{ReplicaReads: reads, TableState: state}
+			var released atomic.Bool
+			var late atomic.Int64
+			var wg sync.WaitGroup
+			for i := range 8 {
+				sess := newSession(t, int64(1000+round*8+i))
+				wg.Go(func() {
+					for range 20 {
+						qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
+						qctx.TableSnapshot = state.Current()
+						fromCopy := qctx.TableSnapshot.Lookup("db2", "a").Status == sitable.Replica
+						runtime.Gosched()
+						if gate.OnQuery(ctx, qctx) == nil && fromCopy {
+							if released.Load() {
+								late.Add(1)
+							}
+							runtime.Gosched()
+						}
+						gate.OnQueryComplete(ctx, sess)
+					}
+				})
+			}
+			runtime.Gosched()
+			host.stop(state, reads)
+			for reads.InFlight("db2") != 0 {
+				runtime.Gosched()
+			}
+			released.Store(true)
+			wg.Wait()
+			if n := late.Load(); n != 0 {
+				t.Fatalf("%s, round %d: %d reads of db2 admitted after the host released its lease", host.name, round, n)
+			}
+		}
+	}
 }

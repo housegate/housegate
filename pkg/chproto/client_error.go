@@ -106,6 +106,42 @@ func IsIndexerQuarantinedMessage(msg string) bool {
 	return isRefusalMessage(msg, indexerQuarantinedPrefix, indexerQuarantinedSuffix)
 }
 
+// The read side of an indexer quarantine (spec 2026-10-10 §10): the owner's
+// host reports each of its SI tables Refused with the host-synthesized code
+// "indexer_quarantined", and sitablestate refuses every read and write of it
+// with TableRefusedMessage. The agent fails such a read over to a replica
+// host (spec 2026-10-14 §11, Plan S3-C4 K46). The text is never
+// session-preserving: only the arbiter's write-side IndexerQuarantinedMessage
+// keeps a deferred-lane session.
+const (
+	tableRefusedInfix           = " was refused: "
+	indexerQuarantinedReadInfix = tableRefusedInfix + "indexer_quarantined: "
+)
+
+// TableRefusedMessage is the client-facing message of sitablestate's
+// refusal of a Refused table: the arbiter's refused_code and refused_reason,
+// or the host's code "indexer_quarantined" and its reason.
+func TableRefusedMessage(tableID, code, reason string) string {
+	return tableRefusalPrefix + tableID + tableRefusedInfix + code + ": " + reason
+}
+
+// IsIndexerQuarantinedReadMessage reports whether msg, without one trailing
+// SeqUnspentSuffix, is exactly TableRefusedMessage(id, "indexer_quarantined",
+// reason) for a non-empty, whitespace-free table id and a non-empty reason.
+func IsIndexerQuarantinedReadMessage(msg string) bool {
+	msg = TrimSeqUnspentSuffix(msg)
+	if !strings.HasPrefix(msg, tableRefusalPrefix) {
+		return false
+	}
+	rest := msg[len(tableRefusalPrefix):]
+	end := strings.Index(rest, indexerQuarantinedReadInfix)
+	if end <= 0 {
+		return false
+	}
+	id, reason := rest[:end], rest[end+len(indexerQuarantinedReadInfix):]
+	return strings.IndexFunc(id, unicode.IsSpace) < 0 && reason != ""
+}
+
 func isTableRefusalMessage(message, suffix string) bool {
 	return isRefusalMessage(message, tableRefusalPrefix, suffix)
 }

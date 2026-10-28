@@ -192,3 +192,56 @@ func TestIndexerQuarantinedMessage(t *testing.T) {
 		t.Fatal("the indexer-quarantined refusal must not match the other refusals")
 	}
 }
+
+// TestTableRefusedMessageIsTheSitablestateText pins the text sitablestate
+// answers for a Refused table (its plugin_test pins the same bytes from the
+// gate's side), so the agent's read-side matcher and the gate cannot drift.
+func TestTableRefusedMessageIsTheSitablestateText(t *testing.T) {
+	for _, tc := range []struct{ id, code, reason, want string }{
+		{"net1.events", "SCHEMA_INVALID", "bad column", "storage_integrity: table net1.events was refused: SCHEMA_INVALID: bad column"},
+		{"net1.events", "indexer_quarantined", "storage-integrity indexer 1 is quarantined", "storage_integrity: table net1.events was refused: indexer_quarantined: storage-integrity indexer 1 is quarantined"},
+		{"db1.t", "column_type", "column b", "storage_integrity: table db1.t was refused: column_type: column b"},
+	} {
+		if got := TableRefusedMessage(tc.id, tc.code, tc.reason); got != tc.want {
+			t.Fatalf("TableRefusedMessage(%q, %q, %q) = %q, want %q", tc.id, tc.code, tc.reason, got, tc.want)
+		}
+	}
+}
+
+// TestIsIndexerQuarantinedReadMessage: the agent fails a read over only on
+// the exact refusal a quarantined owner's host answers for its tables (spec
+// 2026-10-14 §11, Plan S3-C4 K46), never on another 392, on another refused
+// code or on the arbiter's write-side quarantine refusal.
+func TestIsIndexerQuarantinedReadMessage(t *testing.T) {
+	read := TableRefusedMessage("net1.events", "indexer_quarantined", "storage-integrity indexer 1 is quarantined")
+	for _, msg := range []string{
+		read,
+		read + SeqUnspentSuffix,
+		"  " + read + "  ",
+		TableRefusedMessage("db.t", "indexer_quarantined", "x"),
+	} {
+		if !IsIndexerQuarantinedReadMessage(msg) {
+			t.Fatalf("IsIndexerQuarantinedReadMessage(%q) = false, want true", msg)
+		}
+	}
+	for _, msg := range []string{
+		"",
+		TableRefusedMessage("", "indexer_quarantined", "storage-integrity indexer 1 is quarantined"),
+		TableRefusedMessage("net1 events", "indexer_quarantined", "storage-integrity indexer 1 is quarantined"),
+		TableRefusedMessage("net1.events\t", "indexer_quarantined", "storage-integrity indexer 1 is quarantined"),
+		TableRefusedMessage("net1.events", "indexer_quarantined", ""),
+		TableRefusedMessage("net1.events", "SCHEMA_INVALID", "bad column"),
+		TableRefusedMessage("net1.events", "INDEXER_QUARANTINED", "storage-integrity indexer 1 is quarantined"),
+		IndexerQuarantinedMessage("net1.events"),
+		"storage_integrity: table net1.events was refused: indexer_quarantined",
+		"storage_integrity: table net1.events is pending activation (retryable)",
+		"DB::Exception: storage_integrity: table net1.events was refused: indexer_quarantined: storage-integrity indexer 1 is quarantined",
+	} {
+		if IsIndexerQuarantinedReadMessage(msg) {
+			t.Fatalf("IsIndexerQuarantinedReadMessage(%q) = true, want false", msg)
+		}
+	}
+	if IsIndexerQuarantinedMessage(read) || IsTableActivatingMessage(read) || IsTableNoLongerAcceptsWritesMessage(read) || IsSourceUnavailableMessage(read) {
+		t.Fatal("the read-side quarantine refusal must not match a session-preserving ingress refusal")
+	}
+}

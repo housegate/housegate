@@ -1284,3 +1284,124 @@ func TestPeerScanOptionsDecodeBothEscapeKinds(t *testing.T) {
 		t.Fatal("the strict scan must refuse the measured backslash alias; the peer rules would then refuse a legitimate leg")
 	}
 }
+
+// peerCarrierArgumentForms are peer statements whose object-carrier callable
+// takes a computed argument (Plan S3-C4 K48): with si_gateway granted SELECT
+// ON hg_replica.*, such a call on a peer loopback could name any owner's copy
+// while no reserved name appears in the text. An identifier argument counts
+// as computed: ClickHouse 26.3's analyzer resolves it through the statement's
+// aliases (WITH, SELECT-list, inline and enclosing-query aliases) and d.1 as a
+// tuple element, so every alias form below read hg_replica on ClickHouse
+// 26.3. Every form is refused with 392: by the computed-argument rule, naming
+// the callable as written, or first by the reserved-name rule where a literal
+// spells a reserved name; PeerCarrierArgumentViolation reports the callable
+// for every form.
+var peerCarrierArgumentForms = map[string]struct{ sql, callable string }{
+	"merge of a concatenated database":   {"SELECT * FROM merge(concat('hg_', 'replica'), '.*')", "merge"},
+	"remote of a lowered database":       {"SELECT * FROM remote('x:9000', lower('HG_REPLICA'), 't')", "remote"},
+	"remote of a computed table":         {"SELECT count() FROM remote('x:9000', 'phys', concat('db1', '.t'))", "remote"},
+	"remoteSecure of a computed address": {"SELECT count() FROM remoteSecure(concat('x', ':9440'), 'phys', 'db1.t')", "remoteSecure"},
+	"cluster of the current database":    {"SELECT * FROM cluster('default', currentDatabase(), 't')", "cluster"},
+	"merge of a REGEXP database":         {"SELECT * FROM merge(REGEXP('^hg_'), '.*')", "merge"},
+	"string concatenation operator":      {"SELECT * FROM merge('hg_' || 'replica', '.*')", "merge"},
+	"parenthesised literal":              {"SELECT * FROM merge(('phys'), '.*')", "merge"},
+	"cast of a literal":                  {"SELECT * FROM remote('x:9000', 'phys', 'db1.t'::String)", "remote"},
+	"empty argument":                     {"SELECT * FROM remote('x:9000', , 't')", "remote"},
+	"unterminated call":                  {"SELECT * FROM merge('phys', '.*'", "merge"},
+	"upper-case carrier":                 {"SELECT * FROM MERGE(concat('hg_', 'replica'), '.*')", "MERGE"},
+	"backquoted carrier":                 {"SELECT * FROM `merge`(concat('hg_', 'replica'), '.*')", "merge"},
+	"dictionary of a computed name":      {"SELECT * FROM dictionary(concat('hg_', 'dict'))", "dictionary"},
+	"MergeTree-family carrier":           {"SELECT * FROM mergeTreeIndex(currentDatabase(), 't')", "mergeTreeIndex"},
+	"remote JOIN pushed into the leg":    {"SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` ALL INNER JOIN remote('10.0.0.5:9000', concat('hg_', 'replica'), 'x') AS `__table2` ON `__table1`.`id` = `__table2`.`id`", "remote"},
+	"remote IN operand":                  {"SELECT count() FROM phys.`db1.t` WHERE id IN remote('127.0.0.1:19001', reverse('acilper_gh'), 'x')", "remote"},
+	"second carrier of the statement":    {"SELECT count() FROM remote('h', 'phys', 'db1.t') AS a JOIN merge(lower('HG_REPLICA'), '.*') AS b ON a.id = b.id", "merge"},
+	"WITH alias of a computed database":  {"WITH concat('hg_', 'replica') AS d SELECT * FROM merge(d, '.*')", "merge"},
+	"backquoted WITH alias":              {"WITH concat('hg_', 'replica') AS `d` SELECT * FROM merge(`d`, '.*')", "merge"},
+	"double-quoted WITH alias":           {"WITH concat('hg_', 'replica') AS \"d\" SELECT * FROM merge(\"d\", '.*')", "merge"},
+	"digit-leading WITH alias":           {"WITH concat('hg_', 'replica') AS 1d SELECT * FROM merge(1d, '.*')", "merge"},
+	"SELECT-list alias":                  {"SELECT *, concat('hg_', 'replica') AS d FROM merge(d, '.*')", "merge"},
+	"inline WHERE alias":                 {"SELECT * FROM merge(d, '.*') WHERE (concat('hg_', 'replica') AS d) != ''", "merge"},
+	"WITH alias of an enclosing query":   {"WITH concat('hg_', 'replica') AS d SELECT * FROM (SELECT * FROM merge(d, '.*'))", "merge"},
+	"alias shadowing a database name":    {"WITH concat('hg_', 'replica') AS phys SELECT * FROM remote('127.0.0.1:9000', phys, 'secret')", "remote"},
+	"tuple elements of an alias":         {"WITH tuple(concat('hg_', 'replica'), 'secret') AS d SELECT * FROM remote('127.0.0.1:9000', d.1, d.2)", "remote"},
+	"bare identifier arguments":          {"SELECT count() FROM remote('127.0.0.1:9000', system, tables, 'user', 'pw')", "remote"},
+	"backquoted identifier arguments":    {"SELECT count() FROM remote('10.0.0.5:9000', `phys`, `db1.u`)", "remote"},
+	"qualified identifier argument":      {"SELECT count() FROM remote('10.0.0.5:9000', phys.`db1.u`, 'user', 'pw')", "remote"},
+	"decimal argument":                   {"SELECT count() FROM cluster('default', 'phys', 'db1.t', 1.5)", "cluster"},
+}
+
+// TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused is Plan S3-C4 K48:
+// on a peer loopback, an object-carrier callable with a computed argument is
+// refused with 392, counted under computed_carrier_argument and logged once.
+// The reserved-name rule runs first, so a form whose literals spell a
+// reserved name (lower('HG_REPLICA')) is refused with that rule's 392.
+// Literal arguments (a string or an unsigned integer), aliases that no
+// carrier argument names, and carriers inside literals or comments pass, so
+// the legitimate legs of peerLegForms, whose carriers take string literals
+// only, keep passing (TestOnQuery_PeerLegFormsPass).
+func TestOnQuery_PeerLegWithAComputedCarrierArgumentIsRefused(t *testing.T) {
+	// Every reason is exported from startup, computed_carrier_argument
+	// included, before this test's first refusal could create the series.
+	if got := testutil.CollectAndCount(peerRefusals); got != 4 {
+		t.Fatalf("storage_integrity_peer_reserved_name_refusals_total has %d series before any computed-argument refusal, want every reason exported at 0, computed_carrier_argument included", got)
+	}
+	p := peerGuard()
+	for name, form := range peerCarrierArgumentForms {
+		t.Run(name, func(t *testing.T) {
+			want := "storage_integrity: a peer statement may pass only literal arguments to " + form.callable + "(); a computed database or table name is refused on a peer connection"
+			if reserved, _ := PeerReservedNamespaceViolation(form.sql, sitable.ReservedDatabases(), "_hg_row_id"); reserved != "" {
+				want = peerReservedMessage(reserved)
+			}
+			requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, form.sql, false)), want)
+			if got, err := PeerCarrierArgumentViolation(form.sql); err != nil || got != form.callable {
+				t.Fatalf("PeerCarrierArgumentViolation(%q) = %q, %v; want %q", form.sql, got, err, form.callable)
+			}
+		})
+	}
+	for _, sql := range []string{
+		"SELECT * FROM remote('h', 'other', 'u')",
+		"SELECT count() FROM remote('10.0.0.5:9000', 'phys', 'db1.u', 'user', 'pw')",
+		"WITH 2 AS d SELECT count() FROM remote('10.0.0.5:9000', 'phys', 'db1.u') WHERE id > d",
+		"SELECT count() FROM cluster('default', 'phys', 'db1.t', 1)",
+		"SELECT count() FROM merge($$phys$$, $tag$^db1$tag$)",
+		"SELECT count() FROM numbers(concat('1', '0'))",
+		"SELECT merge FROM `phys`.`db1.t`",
+		"SELECT 'merge(concat(1))' FROM `phys`.`db1.t`",
+		"SELECT 1 /* merge(concat('hg_', 'replica')) */",
+		"SELECT count() FROM merge()",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			if err := runChain(context.Background(), p, peerQuery(t, sql, false)); err != nil {
+				t.Fatalf("literal carrier arguments must pass: %v", err)
+			}
+			if got, err := PeerCarrierArgumentViolation(sql); err != nil || got != "" {
+				t.Fatalf("PeerCarrierArgumentViolation(%q) = %q, %v; want no violation", sql, got, err)
+			}
+		})
+	}
+	for name, sql := range peerLegForms {
+		if got, err := PeerCarrierArgumentViolation(sql); err != nil || got != "" {
+			t.Fatalf("peer leg %q: PeerCarrierArgumentViolation = %q, %v; want no violation", name, got, err)
+		}
+	}
+	// Forwarded-from-peer and operator sessions are out of this rule's scope.
+	if err := runChain(context.Background(), p, peerQuery(t, peerCarrierArgumentForms["merge of a concatenated database"].sql, true)); err != nil {
+		t.Fatalf("a forwarded-from-peer session is not peer-checked: %v", err)
+	}
+	if _, err := PeerCarrierArgumentViolation("SELECT 'x"); err == nil {
+		t.Fatal("PeerCarrierArgumentViolation must return the scan error of an unscannable statement")
+	}
+
+	ctx, buf := captureLogs(t)
+	before := testutil.ToFloat64(peerRefusals.WithLabelValues("computed_carrier_argument"))
+	_ = runChain(ctx, p, peerQuery(t, peerCarrierArgumentForms["merge of a concatenated database"].sql, false))
+	if got := testutil.ToFloat64(peerRefusals.WithLabelValues("computed_carrier_argument")) - before; got != 1 {
+		t.Fatalf("computed_carrier_argument grew by %v, want 1", got)
+	}
+	out := buf.String()
+	for _, want := range []string{"level=WARN", "peer statement refused by storage-integrity reserved-name guard", "plugin=sireserved", "code=392", "reason=computed_carrier_argument", "peer_address=10.0.0.7:9000"} {
+		if strings.Count(out, "\n") != 1 || !strings.Contains(out, want) {
+			t.Fatalf("log = %q, want one line containing %q", out, want)
+		}
+	}
+}

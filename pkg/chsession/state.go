@@ -113,6 +113,24 @@ type SessionState struct {
 	// invariant; do not write IsForwarding from any other goroutine.
 	IsForwarding bool
 
+	// ReplicaServedDatabase is the logical database forward.Plugin kept this
+	// session on this host for, because the host serves it from its member's
+	// copy (spec 2026-10-14 §11); empty for every other session. forward.Plugin
+	// refuses the session's statements once that database is no longer
+	// served. Same concurrency invariant as IsForwarding: written through
+	// SetReplicaServedDatabase by the hello and query hooks on the relay's
+	// client-to-upstream goroutine and read there.
+	ReplicaServedDatabase string
+
+	// ReplicaFailoverEligible is true while an agent session with a replica
+	// failover may still move to a replica host (spec 2026-10-14 §11, Plan
+	// S3-C4 K46): the relay sets it once the handshake completed and clears
+	// it at the first forwarded statement that is not a SELECT, WITH or
+	// standalone USE, or that carries client Data. Same concurrency invariant
+	// as IsForwarding: written and read by the relay's handshake and its
+	// client-to-upstream goroutine only.
+	ReplicaFailoverEligible bool
+
 	LastQueryID    string
 	LastClientInfo *chproto.ClientInfo
 	// LastRewriteArgs is the rewriter.RewriteArgs interface from pkg/proxy,
@@ -233,6 +251,8 @@ type SessionStateSnapshot struct {
 	IsInternalPort      bool
 	IsForwarding        bool
 
+	ReplicaServedDatabase string
+
 	LastQueryID      string
 	LastClientInfo   *chproto.ClientInfo
 	LastRewriteArgs  any
@@ -277,6 +297,7 @@ func (s *SessionState) Snapshot() SessionStateSnapshot {
 		PlatformOperator:    s.platformOperator,
 		IsDriver:            s.isDriver,
 	}
+	snap.ReplicaServedDatabase = s.ReplicaServedDatabase
 	if len(s.Settings) > 0 {
 		snap.Settings = make(map[string]chproto.Setting, len(s.Settings))
 		for k, v := range s.Settings {
@@ -365,6 +386,14 @@ func (s *SessionState) IsRouted() bool {
 func (s *SessionState) SetForwarding(v bool) {
 	s.mu.Lock()
 	s.IsForwarding = v
+	s.mu.Unlock()
+}
+
+// SetReplicaServedDatabase records the replica-served database forward.Plugin
+// kept this session on this host for (spec 2026-10-14 §11); "" clears it.
+func (s *SessionState) SetReplicaServedDatabase(database string) {
+	s.mu.Lock()
+	s.ReplicaServedDatabase = database
 	s.mu.Unlock()
 }
 

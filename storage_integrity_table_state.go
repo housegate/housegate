@@ -19,11 +19,16 @@ import (
 // disabled. When enabled exactly one source is required: the configured
 // storage_integrity.tables (served by sitable.Static, returned as the second
 // value) or the host-injected Options.StorageIntegrityTableState.
+// Options.StorageIntegrityReplicaReads requires the injected state, the only
+// one that answers Replica (spec 2026-10-14 §11).
 func resolveStorageIntegrityTableState(opts Options, reg registry.Registry) (sitable.TableState, *sitable.Static, error) {
 	cfg := opts.Config
 	injected := opts.StorageIntegrityTableState
 	if isNilInterface(injected) {
 		injected = nil
+	}
+	if opts.StorageIntegrityReplicaReads != nil && injected == nil {
+		return nil, nil, errors.New("Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState")
 	}
 	hasTables := len(cfg.StorageIntegrity.Tables) > 0
 	if !cfg.StorageIntegrity.IsEnabled() {

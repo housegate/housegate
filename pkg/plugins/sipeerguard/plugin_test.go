@@ -53,7 +53,7 @@ var governedForms = map[string]string{
 }
 
 func TestGuardRefusesGovernedTablesOnPeerSessions(t *testing.T) {
-	for _, status := range []sitable.Status{sitable.Pending, sitable.Refused, sitable.Active, sitable.Gone} {
+	for _, status := range []sitable.Status{sitable.Pending, sitable.Refused, sitable.Active, sitable.Gone, sitable.Replica} {
 		for name, sql := range governedForms {
 			t.Run(status.String()+"/"+name, func(t *testing.T) {
 				err := newGuard(status).OnQuery(context.Background(), guardQuery(guardSession(t, true, false), sql))
@@ -124,13 +124,15 @@ func TestGuardDecodesEscapedQuotedIdentifiers(t *testing.T) {
 
 // governedDatabaseState mirrors the SI host: an unrecorded table defaults to
 // Pending only inside the governed database devnet101 and is Ordinary
-// elsewhere. It is both the TableState and its one Snapshot.
+// elsewhere. It is both the TableState and its one Snapshot, and serves
+// nothing from a copy.
 type governedDatabaseState map[string]sitable.Status
 
 func (s governedDatabaseState) Current() sitable.Snapshot { return s }
 func (governedDatabaseState) Changed() <-chan struct{}    { return nil }
 func (governedDatabaseState) Version() uint64             { return 1 }
 func (governedDatabaseState) Active() []sitable.Table     { return nil }
+func (governedDatabaseState) Served() []sitable.Table     { return nil }
 func (governedDatabaseState) Schema(string) (sitable.Table, bool) {
 	return sitable.Table{}, false
 }

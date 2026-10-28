@@ -4,6 +4,7 @@ go_library(
     name = "agent",
     srcs = [
         "config.go",
+        "replica_failover.go",
         "signer.go",
         "upstream_select.go",
     ],
@@ -22,6 +23,7 @@ go_library(
 go_test(
     name = "agent_test",
     srcs = [
+        "replica_failover_test.go",
         "signer_test.go",
         "upstream_select_test.go",
     ],
@@ -30,9 +32,13 @@ go_test(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/network",
         "//pkg/plugin",
+        "//pkg/proxy",
         "//pkg/registry",
+        "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus",
         "@org_golang_x_crypto//sha3",
     ],
 )

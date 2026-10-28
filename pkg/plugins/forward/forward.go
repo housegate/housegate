@@ -19,12 +19,22 @@
 //	peer X   → local     rebindToLocal()             (return-home pivot)
 //
 // Complex SQL (non-USE) flows unmodified through the rewriter's remote() path.
+//
+// With a TableState (spec 2026-10-14 §11), a database that this host serves
+// from its member's copy while the owner is quarantined or unreachable is
+// treated as local: a hello or USE of it stays on this host (a forwarded
+// session returns home through rebindToLocal) and the session is marked. Once
+// the snapshot no longer serves that database, every other statement on the
+// marked session is refused with a retryable 733 asking the client to
+// reconnect, which routes it to the owner. The database keeps its remote
+// mapping in the rewriter, so its ordinary tables still go to the owner.
 package forward
 
 import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/housegate/housegate/pkg/log"
@@ -36,6 +46,7 @@ import (
 	"github.com/housegate/housegate/pkg/peer"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 // Plugin pivots a session to a peer's internal-port at handshake time when
@@ -70,6 +81,15 @@ type Plugin struct {
 	// short-circuit (router-only deployments without a configured physical
 	// database).
 	PhysicalDatabase string
+
+	// TableState is the host's storage-integrity table state, the one rewrite
+	// and sitablestate read (spec 2026-10-14 §11). With it, a hello or USE of
+	// a database its current snapshot serves from a member's copy
+	// (sitable.ServedDatabases) stays on this host instead of pivoting to the
+	// owner, and a session kept local that way is refused with a retryable
+	// 733 once the database is no longer served. Peer-trusted sessions ignore
+	// it. Nil keeps the forward decision exactly as before replica reads.
+	TableState sitable.TableState
 
 	// dialPeer / rebindFn / localRebindFn are injectable for tests;
 	// production callers leave them nil and the plugin uses
@@ -111,7 +131,54 @@ func (p *Plugin) OnHello(ctx context.Context, sess chsession.Session, hello *chp
 	if info.IndexerId == p.SelfIndexerID {
 		return nil // serve locally
 	}
+	if p.replicaServed(hello.Database) {
+		// Spec 2026-10-14 §11: the owner is quarantined or unreachable and
+		// this host serves the database from its member's copy.
+		sess.State().SetReplicaServedDatabase(hello.Database)
+		log.Infow("forward: kept a replica-served session local",
+			"db", hello.Database, "owner", info.IndexerId)
+		return nil
+	}
 	return p.pivotToPeer(ctx, sess, hello, info.IndexerId)
+}
+
+// replicaServed reports whether the table state's current snapshot serves
+// database from a member's copy on this host. It is false without a table
+// state.
+func (p *Plugin) replicaServed(database string) bool {
+	if p.TableState == nil || database == "" {
+		return false
+	}
+	return slices.Contains(sitable.ServedDatabases(p.TableState.Current()), database)
+}
+
+// replicaAware reports whether the replica rules apply to the session: a
+// table state is wired and the session is not peer-trusted (a session
+// forwarded from a peer was routed by its entry proxy).
+func (p *Plugin) replicaAware(st *chsession.SessionState) bool {
+	return p.TableState != nil && !st.PeerTrusted()
+}
+
+// refuseEndedReplicaServing refuses a statement on a session that OnHello or a
+// USE kept on this host for a replica-served database, once the current
+// snapshot no longer serves that database. 733 is retryable; reconnecting
+// routes the client to the owner.
+func (p *Plugin) refuseEndedReplicaServing(sess chsession.Session) error {
+	if sess == nil {
+		return nil
+	}
+	st := sess.State()
+	if !p.replicaAware(st) {
+		return nil
+	}
+	db := st.ReplicaServedDatabase
+	if db == "" || p.replicaServed(db) {
+		return nil
+	}
+	return &chproto.ClientError{
+		Code:    chproto.CodeTableIsBeingRestarted,
+		Message: fmt.Sprintf("storage_integrity: database %s is no longer served from a copy on this host; reconnect to reach its owner (retryable)", db),
+	}
 }
 
 // pivotToPeer dials the peer's internal-port and drives RebindToPeer so
@@ -200,11 +267,14 @@ func defaultLocalRebind(ctx context.Context, sess chsession.Session, up *chproto
 // database hosted on a different peer than the session's current RouteTarget,
 // pivots the session via pivotToPeer. Anything other than a bare USE
 // (USE … SETTINGS …, multi-statement, etc.) is a no-op — the rewriter's
-// maybeUpdateLogicalDatabase callback handles complex forms.
+// maybeUpdateLogicalDatabase callback handles complex forms. With a
+// TableState, a USE of a replica-served database stays local and marks the
+// session, and any other statement on a marked session whose database is no
+// longer served is refused (spec 2026-10-14 §11).
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	newDB, ok := matchUse(qctx.OriginalSQL)
 	if !ok {
-		return nil
+		return p.refuseEndedReplicaServing(qctx.Session)
 	}
 	info, found := p.Databases.Get(newDB)
 	if !found {
@@ -213,8 +283,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 
 	sess := qctx.Session
 	st := sess.State()
+	replicaAware := p.replicaAware(st)
 
 	if info.IndexerId == p.SelfIndexerID {
+		if replicaAware {
+			st.SetReplicaServedDatabase("")
+		}
 		// New database is local. If the session is currently forwarded
 		// to a peer, we must rebind back to local CH — otherwise the
 		// USE packet would be sent to the peer's CH which doesn't host
@@ -226,23 +300,43 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return p.rebindToLocal(ctx, sess, newDB)
 	}
 
+	if replicaAware && p.replicaServed(newDB) {
+		// Spec 2026-10-14 §11: served from this host's member copy, so the
+		// database is local for routing; a forwarded session returns home.
+		if st.IsForwarding {
+			if err := p.rebindToLocal(ctx, sess, newDB); err != nil {
+				return err
+			}
+		}
+		st.SetReplicaServedDatabase(newDB)
+		log.Infow("forward: kept a replica-served session local",
+			"db", newDB, "owner", info.IndexerId)
+		return nil
+	}
+
 	peerAddr, ok := p.Topology.ProxyByIndexerId(info.IndexerId)
 	if !ok {
 		return fmt.Errorf("indexer %d not found in topology", info.IndexerId)
 	}
 	newAddr := fmt.Sprintf("%s:%d", peerAddr.Url, peerAddr.HousegatePort)
 
-	if newAddr == st.GetRouteTarget() {
-		return nil // already on the right peer — skip
+	// Already on the right peer: no pivot.
+	if newAddr != st.GetRouteTarget() {
+		if err := p.pivotToPeer(ctx, sess, &chproto.ClientHello{
+			Name:            st.ClientHostname,
+			Major:           st.ClientVersion.Major,
+			Minor:           st.ClientVersion.Minor,
+			ProtocolVersion: st.ClientRevision,
+			Database:        newDB,
+		}, info.IndexerId); err != nil {
+			return err
+		}
 	}
-
-	return p.pivotToPeer(ctx, sess, &chproto.ClientHello{
-		Name:            st.ClientHostname,
-		Major:           st.ClientVersion.Major,
-		Minor:           st.ClientVersion.Minor,
-		ProtocolVersion: st.ClientRevision,
-		Database:        newDB,
-	}, info.IndexerId)
+	// The session now reads a database hosted elsewhere, not a copy here.
+	if replicaAware {
+		st.SetReplicaServedDatabase("")
+	}
+	return nil
 }
 
 // rebindToLocal is the remote→local counterpart of pivotToPeer. Dialed

@@ -131,6 +131,16 @@ type Options struct {
 	// storage_integrity.tables; when nil, an enabled server serves the
 	// configured tables through sitable.Static.
 	StorageIntegrityTableState sitable.TableState
+	// StorageIntegrityReplicaReads is the host-injected in-flight counter of
+	// replica-served reads (spec 2026-10-14 §11). sitablestate counts every
+	// allowed query that accesses a Replica table, once per database, until
+	// the query completes or its session closes, and admits it only while the
+	// host's fence of each such database (ServeUntil: its local lease deadline
+	// minus serve.HostDeadlineMargin) is open; the host releases a database's
+	// serving lease only once none is in flight. It requires
+	// Options.StorageIntegrityTableState, the only source of Replica tables.
+	// Nil counts nothing.
+	StorageIntegrityReplicaReads *sitable.ReplicaReads
 	// StorageIntegrityClientLanes reports whether the arbiter committed client
 	// lanes (spec 2026-10-09 D13); sentio-node reads it from its table-registry
 	// follower. Nil means disabled: the SI ingress refuses laned statement ids.
