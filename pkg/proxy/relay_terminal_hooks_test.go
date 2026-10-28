@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,5 +226,70 @@ func TestReplicaReadStaysCountedUntilItsOwnTerminal(t *testing.T) {
 	}
 	if got := reads.Counts(); len(got) != 0 {
 		t.Fatalf("in flight after the session closed = %v, want empty", got)
+	}
+}
+
+// TestActiveQueryHandoffToTerminalHooksIsAtomic: consuming the active query's
+// terminal and marking its terminal hooks as running is one step. An
+// observer racing the handoff never finds the relay idle while the handoff is
+// under way: idle there would admit the next query into OnQuery before the
+// previous query's completion.
+func TestActiveQueryHandoffToTerminalHooksIsAtomic(t *testing.T) {
+	r := &Relay{}
+	const rounds = 200000
+	var (
+		round   atomic.Int64 // the handoff round under way, 0 when none
+		stop    atomic.Bool
+		idleMid atomic.Int64
+		wg      sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			before := round.Load()
+			_, active := r.currentActiveQuery()
+			if !active && before != 0 && round.Load() == before {
+				idleMid.Add(1)
+			}
+		}
+	}()
+	for i := int64(1); i <= rounds && idleMid.Load() == 0; i++ {
+		if !r.beginActiveQuery("q1") {
+			t.Fatal("beginActiveQuery refused on an idle relay")
+		}
+		round.Store(i)
+		if _, _, active, _ := r.takeActiveQueryTerminal(); !active {
+			t.Fatal("the active query was not taken")
+		}
+		round.Store(0)
+		r.endTerminalHooks()
+	}
+	stop.Store(true)
+	wg.Wait()
+	if n := idleMid.Load(); n != 0 {
+		t.Fatalf("the relay was observed idle %d time(s) during the handoff to the terminal hooks", n)
+	}
+}
+
+// TestBeginActiveQueryRefusesWhileTerminalHooksRun: no query begins while the
+// previous query's terminal hooks still own the session.
+func TestBeginActiveQueryRefusesWhileTerminalHooksRun(t *testing.T) {
+	r := &Relay{}
+	if !r.beginActiveQuery("q1") {
+		t.Fatal("beginActiveQuery refused on an idle relay")
+	}
+	if _, _, active, _ := r.takeActiveQueryTerminal(); !active {
+		t.Fatal("the active query was not taken")
+	}
+	if r.beginActiveQuery("q2") {
+		t.Fatal("q2 began while q1's terminal hooks were running")
+	}
+	if id, active := r.currentActiveQuery(); !active || id != "q1" {
+		t.Fatalf("currentActiveQuery = %q, %v; want q1 while its terminal hooks run", id, active)
+	}
+	r.endTerminalHooks()
+	if !r.beginActiveQuery("q2") {
+		t.Fatal("q2 must begin once q1's terminal hooks returned")
 	}
 }

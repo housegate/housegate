@@ -383,7 +383,7 @@ func (r *Relay) unblockDeferredInputOnServerExit(ctx context.Context) {
 func (r *Relay) beginActiveQuery(queryID string) bool {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
-	if r.activeQuery {
+	if r.activeQuery || r.terminalHooksQueryID != "" {
 		return false
 	}
 	r.activeQuery = true
@@ -404,6 +404,11 @@ func (r *Relay) takeActiveQuery() (string, bool) {
 func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool, rejection *chproto.Exception) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
+	return r.takeActiveQueryStateLocked()
+}
+
+// takeActiveQueryStateLocked is takeActiveQueryState with queryMu held.
+func (r *Relay) takeActiveQueryStateLocked() (queryID string, canceled, active bool, rejection *chproto.Exception) {
 	if !r.activeQuery {
 		return "", false, false, nil
 	}
@@ -429,14 +434,16 @@ func (r *Relay) currentActiveQuery() (string, bool) {
 }
 
 // takeActiveQueryTerminal is takeActiveQueryState for the upstream terminal
-// of the active query: it also marks that query's terminal hooks as running
-// until endTerminalHooks, so no next Query is admitted before they return.
+// of the active query: in the same queryMu critical section it also marks
+// that query's terminal hooks as running until endTerminalHooks, so the
+// session is never observed idle between the two and no next Query is
+// admitted or begun before the hooks return.
 func (r *Relay) takeActiveQueryTerminal() (queryID string, canceled, active bool, rejection *chproto.Exception) {
-	queryID, canceled, active, rejection = r.takeActiveQueryState()
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	queryID, canceled, active, rejection = r.takeActiveQueryStateLocked()
 	if active {
-		r.queryMu.Lock()
 		r.terminalHooksQueryID = queryID
-		r.queryMu.Unlock()
 	}
 	return queryID, canceled, active, rejection
 }
