@@ -249,7 +249,7 @@ func decide(t sitable.Table, c class) (severity, error) {
 	case sitable.Refused:
 		switch c {
 		case classRead, classWrite, classOtherDDL, classViewTarget:
-			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: table %s was refused: %s: %s", t.ID, t.RefusedCode, t.RefusedReason)
+			return nonRetryable, &chproto.ClientError{Code: CodeNonRetryable, Message: chproto.TableRefusedMessage(t.ID, t.RefusedCode, t.RefusedReason)}
 		case classCreateData:
 			// For data-carrying creation a Refused name is governed too
 			// (spec §7.3 rule 2), so it cannot be dropped and refilled by
