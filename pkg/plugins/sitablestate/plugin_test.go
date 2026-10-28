@@ -572,6 +572,44 @@ func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
 	}
 }
 
+// TestReplicaReadsAreKeptPerSessionAcrossListeners: with internal_listen,
+// the external and the internal proxy.Server share this gate but number their
+// sessions independently, so two sessions can carry the same ID. Each keeps
+// its own read: one session's next read, complete or close never ends the
+// other's.
+func TestReplicaReadsAreKeptPerSessionAcrossListeners(t *testing.T) {
+	reads := servingReads()
+	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{gate},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{gate},
+		ClosePlugins:         []plugin.ClosePlugin{gate},
+	}
+	ctx := context.Background()
+	external, internal := newSession(t, 1), newSession(t, 1)
+	if err := chain.OnQuery(ctx, replicaQuery(external, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := chain.OnQuery(ctx, replicaQuery(internal, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.b", accessed("db2.b"))); err != nil {
+		t.Fatal(err)
+	}
+	if n := reads.InFlight("db2"); n != 2 {
+		t.Fatalf("db2 in flight = %d, want 2: a session with the same ID must not end the other's read", n)
+	}
+	chain.OnClose(internal)
+	if n := reads.InFlight("db2"); n != 1 {
+		t.Fatalf("after the internal session closed db2 in flight = %d, want the external session's read", n)
+	}
+	chain.OnQueryComplete(ctx, internal)
+	if n := reads.InFlight("db2"); n != 1 {
+		t.Fatalf("after a late complete of the closed session db2 in flight = %d, want 1", n)
+	}
+	chain.OnQueryComplete(ctx, external)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v, want empty", got)
+	}
+}
+
 // TestOnQuery_OperatorSessionsAreNotCounted: maintenance and platform-operator
 // sessions return before the matrix, and peer-trusted and origin-side
 // forwarding sessions skip the gate in the chain, so none of them counts a

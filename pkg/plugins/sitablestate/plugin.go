@@ -54,8 +54,10 @@ type Plugin struct {
 	// TableState no replica read is admitted.
 	TableState sitable.TableState
 
-	// replicaReadEnds maps sess.ID() (int64) to the end of the session's
-	// in-flight replica read. A session runs one query at a time.
+	// replicaReadEnds maps the session, by its *chsession.SessionState, to
+	// the end of its in-flight replica read. A session runs one query at a
+	// time. It is not keyed by sess.ID(): the external and internal listeners
+	// share this gate and number their sessions independently.
 	replicaReadEnds sync.Map
 }
 
@@ -177,7 +179,7 @@ func (p *Plugin) beginReplicaRead(sess chsession.Session, served []servedAccess)
 		}
 		return notServed(served[0].planned.ID)
 	}
-	if previous, loaded := p.replicaReadEnds.Swap(sess.ID(), end); loaded {
+	if previous, loaded := p.replicaReadEnds.Swap(sess.State(), end); loaded {
 		previous.(func())()
 	}
 	var current sitable.Snapshot
@@ -211,7 +213,7 @@ func (p *Plugin) endReplicaRead(sess chsession.Session) {
 	if sess == nil {
 		return
 	}
-	if end, ok := p.replicaReadEnds.LoadAndDelete(sess.ID()); ok {
+	if end, ok := p.replicaReadEnds.LoadAndDelete(sess.State()); ok {
 		end.(func())()
 	}
 }
