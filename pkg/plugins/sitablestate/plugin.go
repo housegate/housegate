@@ -7,15 +7,21 @@
 // (Pending or Active, and Refused too for creation with data: a CREATE TABLE
 // the header lexer cannot prove schema-only, a materialized view writing TO
 // it, or a materialized view named like it) is refused, as is a materialized
-// view whose header cannot be read. Everything the matrix allows passes
-// through untouched.
+// view whose header cannot be read. A Replica table, another SI indexer's
+// table this host serves read-only from its member's copy (spec 2026-10-14
+// §11), admits reads and metadata only, and with a ReplicaReads counter the
+// plugin counts every allowed query that reads one until it completes.
+// Everything the matrix allows passes through untouched.
 package sitablestate
 
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
@@ -31,7 +37,27 @@ const (
 
 // Plugin is the server-mode table-state QueryPlugin. It is registered only
 // when storage_integrity.enabled.
-type Plugin struct{}
+type Plugin struct {
+	// ReplicaReads, when set, admits and counts every allowed query that
+	// accesses a Replica table, once per database, from OnQuery until
+	// OnQueryComplete or OnClose (spec 2026-10-14 §11), and only while the
+	// host's fence of each such database is open (ReplicaReads.Admit): the
+	// host releases a database's serving lease only once none is in flight,
+	// and no read starts once its lease's local deadline minus
+	// serve.HostDeadlineMargin passed. build.go then also registers the plugin
+	// as a QueryCompletePlugin and a ClosePlugin. Nil counts nothing.
+	ReplicaReads *sitable.ReplicaReads
+	// TableState is the port rewrite took the query's snapshot from. With
+	// ReplicaReads, a read is admitted only once it is counted and
+	// TableState.Current() still serves every Replica table it accesses from
+	// the copy the query was planned against (clarification K44); without a
+	// TableState no replica read is admitted.
+	TableState sitable.TableState
+
+	// replicaReadEnds maps sess.ID() (int64) to the end of the session's
+	// in-flight replica read. A session runs one query at a time.
+	replicaReadEnds sync.Map
+}
 
 type class uint8
 
@@ -65,7 +91,12 @@ type access struct {
 
 // OnQuery refuses the statement when any accessed table refuses it. When
 // several do, an unknown table wins over a non-retryable refusal, which wins
-// over a retryable one; ties keep the first accessed table.
+// over a retryable one; ties keep the first accessed table. With ReplicaReads
+// set, an allowed statement that accesses a Replica table begins one
+// in-flight read of each such database, which OnQueryComplete or OnClose
+// ends, and is admitted only while the host's fence of each such database is
+// open and the current snapshot still serves its Replica tables from the
+// copies it was planned against (733 otherwise).
 //
 // A missing snapshot fails closed. The plugin is registered only when storage
 // integrity is enabled, and rewrite, which runs first under the same chain
@@ -85,13 +116,117 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	sessionDB := qctx.Session.State().LogicalDatabaseName()
 	var worst severity
 	var worstErr error
+	var served []servedAccess
 	for _, a := range accessesOf(qctx, sessionDB) {
-		sev, err := decide(qctx.TableSnapshot.Lookup(a.database, a.table), a.class)
+		t := qctx.TableSnapshot.Lookup(a.database, a.table)
+		sev, err := decide(t, a.class)
 		if sev > worst {
 			worst, worstErr = sev, err
 		}
+		if t.Status == sitable.Replica {
+			served = append(served, servedAccess{database: a.database, table: a.table, planned: t})
+		}
+	}
+	if worstErr == nil && len(served) > 0 && p.ReplicaReads != nil {
+		return p.beginReplicaRead(qctx.Session, served)
 	}
 	return worstErr
+}
+
+// servedAccess is one accessed table that the query's snapshot answers
+// Replica, as that snapshot answers it.
+type servedAccess struct {
+	database, table string
+	planned         sitable.Table
+}
+
+// beginReplicaRead admits the session's query as one in-flight read of each
+// replica-served database it accesses, or refuses it, retryably, before
+// anything reaches ClickHouse (clarification K44). Two checks guard the copy:
+//   - ReplicaReads.Admit counts the read only while the host's fence of each
+//     database is open. The host keeps it at its local lease deadline minus
+//     serve.HostDeadlineMargin and closes it when it stops serving the
+//     database, so no read starts once the member may install on the lease's
+//     expiry, even while a blocked table-state refresh leaves a published
+//     snapshot that still answers the database Replica.
+//   - After that count, the current snapshot must still serve every such
+//     table from the copy and owner the query was planned against. rewrite
+//     took the query's snapshot before this count, so a query that waited
+//     there while the host published a snapshot without the database, found
+//     no read in flight and released the lease could otherwise read the copy
+//     during its member's install.
+//
+// The host reads InFlight only after it closed the fence and published the
+// snapshot that drops the database, so either it sees this read counted and
+// waits, or one of the checks refuses it. A refused read is uncounted at
+// once, and an end the session still holds is ended either way, so a lost
+// complete never leaves a database counted.
+func (p *Plugin) beginReplicaRead(sess chsession.Session, served []servedAccess) error {
+	databases := make([]string, 0, len(served))
+	for _, s := range served {
+		databases = append(databases, s.database)
+	}
+	slices.Sort(databases)
+	end, closed := p.ReplicaReads.Admit(slices.Compact(databases))
+	if end == nil {
+		p.endReplicaRead(sess)
+		for _, s := range served {
+			if s.database == closed {
+				return notServed(s.planned.ID)
+			}
+		}
+		return notServed(served[0].planned.ID)
+	}
+	if previous, loaded := p.replicaReadEnds.Swap(sess.ID(), end); loaded {
+		previous.(func())()
+	}
+	var current sitable.Snapshot
+	if p.TableState != nil {
+		current = p.TableState.Current()
+	}
+	for _, s := range served {
+		if current == nil || !sameCopy(current.Lookup(s.database, s.table), s.planned) {
+			p.endReplicaRead(sess)
+			return notServed(s.planned.ID)
+		}
+	}
+	return nil
+}
+
+// notServed refuses a read of a copy that is no longer served to the query:
+// the host's fence of its database is closed, or the current snapshot no
+// longer serves the copy and owner the query was planned against.
+func notServed(id string) error {
+	return refuse(CodeRetryable, "storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", id)
+}
+
+// sameCopy reports whether now answers a table Replica from the same copy
+// and owner as planned.
+func sameCopy(now, planned sitable.Table) bool {
+	return now.Status == sitable.Replica && now.ID == planned.ID && now.CopyTable == planned.CopyTable && now.ReplicaOf == planned.ReplicaOf
+}
+
+// endReplicaRead ends the session's in-flight replica read, if any.
+func (p *Plugin) endReplicaRead(sess chsession.Session) {
+	if sess == nil {
+		return
+	}
+	if end, ok := p.replicaReadEnds.LoadAndDelete(sess.ID()); ok {
+		end.(func())()
+	}
+}
+
+// OnQueryComplete ends the in-flight replica read OnQuery began for the
+// session's query. Calling it again, or for a query that read no copy, does
+// nothing.
+func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
+	p.endReplicaRead(sess)
+}
+
+// OnClose ends any replica read still in flight when the session closes: a
+// client that disconnects mid-query never reaches OnQueryComplete.
+func (p *Plugin) OnClose(sess chsession.Session) {
+	p.endReplicaRead(sess)
 }
 
 // decide is the §7.2 matrix plus the §7.3 rules for one accessed table.
@@ -132,6 +267,13 @@ func decide(t sitable.Table, c class) (severity, error) {
 			return retryable, refuse(CodeRetryable, "storage_integrity: table %s is still being purged; retry CREATE later (retryable)", t.ID)
 		default:
 			return unknownTable, refuse(CodeUnknownTable, "Table %s does not exist", t.ID)
+		}
+	case sitable.Replica:
+		// Spec 2026-10-14 §11: the copy is another indexer's published data,
+		// so only reads and metadata are answered here.
+		switch c {
+		case classWrite, classCreate, classCreateData, classDrop, classOtherDDL, classViewTarget:
+			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner", t.ID, t.ReplicaOf)
 		}
 	}
 	return allow, nil
@@ -272,7 +414,9 @@ func (*Plugin) RunOnPeerTrust() bool { return false }
 func (*Plugin) RunOnForward() bool { return false }
 
 var (
-	_ plugin.QueryPlugin    = (*Plugin)(nil)
-	_ plugin.PeerTrustAware = (*Plugin)(nil)
-	_ plugin.ForwardAware   = (*Plugin)(nil)
+	_ plugin.QueryPlugin         = (*Plugin)(nil)
+	_ plugin.QueryCompletePlugin = (*Plugin)(nil)
+	_ plugin.ClosePlugin         = (*Plugin)(nil)
+	_ plugin.PeerTrustAware      = (*Plugin)(nil)
+	_ plugin.ForwardAware        = (*Plugin)(nil)
 )
