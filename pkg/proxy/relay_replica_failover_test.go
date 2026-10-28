@@ -852,3 +852,64 @@ func TestAgentTriesTheNextCandidateWhenOneCannotServeTheRead(t *testing.T) {
 		}
 	})
 }
+
+// TestClassifyFailoverStatementReadsTheMainStatementAfterWith: a WITH-led
+// statement is a failover read only when the statement after its WITH list
+// is a SELECT. ClickHouse also takes a WITH list before INSERT, so a WITH-led
+// write, and anything the classifier cannot read, is not a read.
+func TestClassifyFailoverStatementReadsTheMainStatementAfterWith(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want failoverStatement
+	}{
+		{"SELECT 1", failoverRead},
+		{"WITH 1 AS x SELECT x", failoverRead},
+		{"with x as (select 1) select * from x", failoverRead},
+		{"WITH RECURSIVE r AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", failoverRead},
+		{"WITH `a b` AS (SELECT 1), 'x' AS s, CAST(1 AS UInt8) AS c, (SELECT 2) AS d SELECT * FROM `a b`", failoverRead},
+		{"WITH 'a\\'b' AS s SELECT s", failoverRead},
+		{"/* c */ WITH x AS (SELECT 1) -- c\n SELECT * FROM x", failoverRead},
+		{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", failoverOther},
+		{"WITH 1 AS x INSERT INTO t SELECT x", failoverOther},
+		{"WITH x AS (SELECT 1), y AS (SELECT 2) INSERT INTO t SELECT * FROM y", failoverOther},
+		{"WITH x AS (SELECT 1) ALTER TABLE t DELETE WHERE 1", failoverOther},
+		{"WITH x AS (SELECT 1) CREATE TABLE t AS SELECT * FROM x", failoverOther},
+		{"WITH x AS (SELECT 1)", failoverOther},
+		{"WITH x AS (SELECT 1", failoverOther},
+		{"WITH", failoverOther},
+		{"WITH x AS (SELECT 1) (SELECT 2)", failoverOther},
+		{"INSERT INTO t WITH x AS (SELECT 1) SELECT * FROM x", failoverOther},
+		{"USE db2", failoverUse},
+	} {
+		if got, _ := classifyFailoverStatement(tc.sql); got != tc.want {
+			t.Errorf("classifyFailoverStatement(%q) = %d, want %d", tc.sql, got, tc.want)
+		}
+	}
+}
+
+// TestAgentNeverFailsOverAWithLedWrite: WITH ... INSERT is a write. It is not
+// failed over, and it ends the session's eligibility, so a later read on the
+// session is not failed over either.
+func TestAgentNeverFailsOverAWithLedWrite(t *testing.T) {
+	owner := startFakeUpstream(t, func(c *fakeConn) {
+		if !c.hello("owner") {
+			return
+		}
+		for {
+			if _, ok := c.query(); !ok || !c.data() {
+				return
+			}
+			c.exception(chproto.CodeQueryIsProhibited, quarantinedRead)
+		}
+	})
+	replica := startFakeUpstream(t, replicaServes)
+	f := &fakeFailover{candidates: []string{replica.addr}}
+	c := startFailoverRelay(t, owner.addr, f, nil, nil)
+	c.mustHello("owner")
+	c.mustRefuse("w1", "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", quarantinedRead)
+	if c.relay.sess.State().ReplicaFailoverEligible {
+		t.Fatal("a WITH-led INSERT must end the session's failover eligibility")
+	}
+	c.mustRefuse("q1", "SELECT count() FROM t", quarantinedRead)
+	requireNoFailover(t, f)
+}
