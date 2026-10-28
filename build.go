@@ -874,9 +874,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	// sitablestate reads the rewriter's classification and the query's
 	// snapshot, so it runs right after rewrite and before the SI ingress and
-	// commitgate (spec 2026-09-24 §7.1).
+	// commitgate (spec 2026-09-24 §7.1). With the host's replica-read counter
+	// it also admits each read only before the host's fence and checks it
+	// against the current snapshot of the state rewrite took the query's
+	// snapshot from, and ends it when the query completes or its session
+	// closes (spec 2026-10-14 §11).
 	if siOptions.Enabled {
-		queryPlugins = append(queryPlugins, &sitablestate.Plugin{})
+		gate := &sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}
+		queryPlugins = append(queryPlugins, gate)
+		if opts.StorageIntegrityReplicaReads != nil {
+			gate.TableState = siState
+			queryCompletePlugins = append(queryCompletePlugins, gate)
+			closePlugins = append(closePlugins, gate)
+		}
 		log.Infow("storage-integrity table-state gate enabled", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}
 

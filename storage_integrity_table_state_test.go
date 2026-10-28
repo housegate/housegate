@@ -1,10 +1,17 @@
 package housegate
 
 import (
+	"context"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/plugins/commitgate"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
@@ -13,6 +20,7 @@ import (
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sitable"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -360,6 +368,114 @@ func TestBuildServer_ThreadsTheClientLanesPortToTheIngress(t *testing.T) {
 			}
 			if got := ingress.ClientLanesEnabled(); got != tc.want {
 				t.Fatalf("ingress.ClientLanesEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildRefusesReplicaReadsWithoutATableState: only a host-injected table
+// state answers Replica (spec 2026-10-14 §11), so an in-flight counter is
+// refused with the static table set and with storage integrity off.
+func TestBuildRefusesReplicaReadsWithoutATableState(t *testing.T) {
+	const want = "Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState"
+	static := minimalServerCfg(t)
+	static.StorageIntegrity.Tables = []string{"db1.t"}
+	for name, cfg := range map[string]*config.Config{"static tables": static, "disabled": minimalServerCfg(t)} {
+		_, err := buildServer(Options{
+			Config:                       cfg,
+			NetworkState:                 network.NewInMemoryNetworkState(),
+			Rewriter:                     siProbeStubRewriterFactory{},
+			StorageIntegrityReplicaReads: sitable.NewReplicaReads(),
+		}, nil)
+		if err == nil || err.Error() != want {
+			t.Fatalf("%s: err = %v, want %q", name, err, want)
+		}
+	}
+}
+
+// TestBuildWiresReplicaReadsIntoSitablestate is clarification K44 of Plan
+// S3-C4: the host's counter and its table state reach the table-state gate,
+// which then admits a read of a copy whose fence the host opened and the
+// current snapshot still serves, and ends it at query completion and at
+// session close. Without a counter the chain is today's: the gate is a query
+// plugin only.
+func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
+	reads := sitable.NewReplicaReads()
+	for _, tc := range []struct {
+		name  string
+		reads *sitable.ReplicaReads
+		hooks int
+	}{
+		{name: "with a counter", reads: reads, hooks: 1},
+		{name: "without a counter", hooks: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			cfg.StorageIntegrity.Enabled = boolPtr(true)
+			state := sitable.NewFake(sitable.Pending)
+			bs, err := buildServer(Options{
+				Config:                       cfg,
+				NetworkState:                 network.NewInMemoryNetworkState(),
+				Rewriter:                     siProbeStubRewriterFactory{},
+				StorageIntegrityTableState:   state,
+				StorageIntegrityReplicaReads: tc.reads,
+			}, nil)
+			if err != nil {
+				t.Fatalf("build: %v", err)
+			}
+			defer bs.teardown()
+			chain := requireExternalChain(t, bs)
+			var gate *sitablestate.Plugin
+			for _, candidate := range chain.QueryPlugins {
+				if typed, ok := candidate.(*sitablestate.Plugin); ok {
+					gate = typed
+				}
+			}
+			if gate == nil || gate.ReplicaReads != tc.reads {
+				t.Fatalf("sitablestate = %+v, want the plugin with ReplicaReads %p", gate, tc.reads)
+			}
+			wantState := sitable.TableState(nil)
+			if tc.reads != nil {
+				wantState = state
+			}
+			if gate.TableState != wantState {
+				t.Fatalf("sitablestate TableState = %v, want %v (the injected state, with a counter only)", gate.TableState, wantState)
+			}
+			completes, closes := 0, 0
+			for _, candidate := range chain.QueryCompletePlugins {
+				if candidate == plugin.QueryCompletePlugin(gate) {
+					completes++
+				}
+			}
+			for _, candidate := range chain.ClosePlugins {
+				if candidate == plugin.ClosePlugin(gate) {
+					closes++
+				}
+			}
+			if completes != tc.hooks || closes != tc.hooks {
+				t.Fatalf("sitablestate is %d complete and %d close plugins, want %d each", completes, closes, tc.hooks)
+			}
+			if tc.reads == nil {
+				return
+			}
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			sess := chsession.New(77, client)
+			reads.ServeUntil("db2", time.Now().Add(time.Hour)) // the host holds db2's lease
+			state.Set(sitable.Table{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2})
+			snap := state.Current()
+			qctx := &plugin.QueryContext{
+				Session: sess, OriginalSQL: "SELECT * FROM db2.a", Query: &chproto.Query{Body: "SELECT * FROM db2.a"},
+				StatementType: sqlmeta.StatementTypeSelect, TableSnapshot: snap,
+				AccessedTables: []sqlmeta.AccessedTable{{OriginalDatabase: "db2", OriginalTable: "a", LogicalDatabase: "db2"}},
+			}
+			if err := gate.OnQuery(context.Background(), qctx); err != nil || reads.InFlight("db2") != 1 {
+				t.Fatalf("OnQuery = %v, db2 in flight %d; want an allowed, counted read", err, reads.InFlight("db2"))
+			}
+			chain.OnQueryComplete(context.Background(), sess)
+			if reads.InFlight("db2") != 0 {
+				t.Fatalf("after the chain's OnQueryComplete db2 in flight = %d, want 0", reads.InFlight("db2"))
 			}
 		})
 	}
