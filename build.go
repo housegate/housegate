@@ -1486,6 +1486,15 @@ func buildAgentWithBuilders(
 
 	srv := proxy.NewServerWithObserver(chain, dialer, obs)
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
+	failover, err := buildAgentReplicaFailover(opts, rf)
+	if err != nil {
+		return nil, err
+	}
+	if failover != nil {
+		srv.UpstreamFailover = failover
+		log.Infow("agent replica read failover enabled: a read its owner refuses as quarantined, or a session whose owner cannot be reached, moves to a host serving the owner's copy",
+			"network_state_source", cfg.NetworkState.Source)
+	}
 
 	built := &builtServer{
 		listeners: []serverListener{
@@ -1839,6 +1848,28 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 		}
 		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
 	}, nil
+}
+
+// buildAgentReplicaFailover returns the agent's replica read failover (spec
+// 2026-10-14 §11, Plan S3-C4 K46), or nil. It exists only when the agent
+// discovers its upstreams (no agent.upstream pin) through a network state that
+// answers replica-host discovery, which only the RPC source does: a pinned
+// upstream, a YAML file and a host-injected in-memory state keep every relay
+// exactly as before.
+func buildAgentReplicaFailover(opts Options, rf *redisFactory) (proxy.UpstreamFailover, error) {
+	cfg := opts.Config
+	if cfg.Agent.Upstream != "" || (opts.NetworkState == nil && !cfg.NetworkState.IsRpcSource()) {
+		return nil, nil
+	}
+	reg, err := agentNetworkState(opts, rf)
+	if err != nil {
+		return nil, err
+	}
+	discovery, ok := reg.(registry.StorageIntegrityReplicaDiscovery)
+	if !ok || isNilInterface(discovery) {
+		return nil, nil
+	}
+	return &agent.ReplicaFailover{Discovery: discovery, Databases: reg, Topology: reg}, nil
 }
 
 func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.Codec, error) {
