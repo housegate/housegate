@@ -14,7 +14,7 @@ package network
 // hosts the database (registry.TableStatuses, registry.StorageIntegrityDiscovery):
 //
 //   sentio_getStorageIntegrityTableStatus -> StorageIntegrityTableStatus
-//   sentio_getStorageIntegrityInfo        -> StorageIntegrityInfo
+//   sentio_getStorageIntegrityInfo        -> StorageIntegrityInfo, StorageIntegrityReplicaHosts
 //   sentio_isDatabaseWriter               -> StorageIntegrityWriterCheck
 //
 // Methods that have no JSON-RPC counterpart (All, HasPermission)
@@ -31,7 +31,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,12 +43,27 @@ import (
 
 // RpcNetworkState is a read-only registry.Registry backed by a sentio
 // storage-node JSON-RPC endpoint. Concurrency-safe: nextID is atomic;
-// the http client is goroutine-safe; no other state is held between
-// calls.
+// the http client is goroutine-safe; the only state held between calls
+// is the replica-hosts cache, guarded by replicaMu.
 type RpcNetworkState struct {
 	endpoint string
 	client   *http.Client
 	nextID   atomic.Uint64
+
+	// now is the replica-hosts cache's clock; nil means time.Now.
+	now          func() time.Time
+	replicaMu    sync.Mutex
+	replicaHosts map[string]replicaHostsEntry
+}
+
+// DefaultReplicaHostsTTL is how long RpcNetworkState reuses one database's
+// replica_hosts answer (Plan S3-C4 K50).
+const DefaultReplicaHostsTTL = 30 * time.Second
+
+// replicaHostsEntry is a cached successful replica_hosts answer.
+type replicaHostsEntry struct {
+	hosts []uint64
+	until time.Time
 }
 
 // RpcOptions tunes the RpcNetworkState http client. Zero values pick
@@ -190,8 +207,13 @@ func (r *RpcNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 // ProxyByIndexerId calls sentio_getIndexerInfoById. ok=false signals
 // either a network-level error (logged) or a JSON-null result.
 func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
+	return r.ProxyByIndexerIdContext(context.Background(), indexerId)
+}
+
+// ProxyByIndexerIdContext is the caller-context form used by replica failover.
+func (r *RpcNetworkState) ProxyByIndexerIdContext(ctx context.Context, indexerId uint64) (registry.ProxyAddress, bool) {
 	var info IndexerInfo
-	ok, err := r.call(context.Background(), "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
+	ok, err := r.call(ctx, "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getIndexerInfoById id=%v failed", indexerId)
 		return registry.ProxyAddress{}, false
@@ -210,8 +232,13 @@ func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddr
 
 // Get calls sentio_getDatabaseInfoById.
 func (r *RpcNetworkState) Get(database string) (registry.Database, bool) {
+	return r.GetContext(context.Background(), database)
+}
+
+// GetContext is the caller-context form used by replica failover.
+func (r *RpcNetworkState) GetContext(ctx context.Context, database string) (registry.Database, bool) {
 	var info DatabaseInfo
-	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoById", []interface{}{database}, &info)
+	ok, err := r.call(ctx, "sentio_getDatabaseInfoById", []interface{}{database}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getDatabaseInfoById id=%v failed", database)
 		return registry.Database{}, false
@@ -315,15 +342,21 @@ func (r *RpcNetworkState) hostingStorageEndpoint(ctx context.Context, database s
 	if !ok || info.IndexerUrl == "" || info.StorageNodeRpcPort == 0 {
 		return "", false, fmt.Errorf("rpc: indexer %d hosting %s advertises no storage RPC endpoint", db.IndexerId, database)
 	}
+	return r.storageEndpoint(info.IndexerUrl, info.StorageNodeRpcPort), true, nil
+}
+
+// storageEndpoint is the storage-node JSON-RPC endpoint an indexer
+// advertises, with the scheme of the network-state source.
+func (r *RpcNetworkState) storageEndpoint(indexerURL string, port uint16) string {
 	scheme := "http"
 	if u, err := url.Parse(r.endpoint); err == nil && u.Scheme != "" {
 		scheme = u.Scheme
 	}
-	host := info.IndexerUrl
+	host := indexerURL
 	if u, err := url.Parse(host); err == nil && u.Host != "" {
 		host = u.Hostname() // tolerate a full URL in indexerUrl
 	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(info.StorageNodeRpcPort))), true, nil
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
 }
 
 // DatabaseHosting implements registry.DatabaseHosting with the separation
@@ -422,6 +455,97 @@ func (r *RpcNetworkState) StorageIntegrityWriterCheck(ctx context.Context, datab
 }
 
 var _ registry.StorageIntegrityDiscovery = (*RpcNetworkState)(nil)
+
+// StorageIntegrityReplicaHosts implements
+// registry.StorageIntegrityReplicaDiscovery (spec 2026-10-14 §11, Plan S3-C4
+// K50). It returns replica_hosts[database] of the first decoded
+// sentio_getStorageIntegrityInfo answer, an empty list included (an older
+// server answers none), asking the network-state source endpoint first and
+// then, in ascending id, the storage endpoint of every indexer but owner, so
+// an unreachable owner never blocks the lookup; every host computes the same
+// map. A successful answer is reused for DefaultReplicaHostsTTL per database;
+// a failed lookup is not cached.
+func (r *RpcNetworkState) StorageIntegrityReplicaHosts(ctx context.Context, database string, owner uint64) ([]uint64, error) {
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	at := now()
+	r.replicaMu.Lock()
+	if e, ok := r.replicaHosts[database]; ok && at.Before(e.until) {
+		r.replicaMu.Unlock()
+		return append([]uint64(nil), e.hosts...), nil
+	}
+	r.replicaMu.Unlock()
+	hosts, ok := r.replicaHostsAt(ctx, r.endpoint, database)
+	if !ok {
+		hosts, ok = r.replicaHostsFromPeers(ctx, database, owner)
+	}
+	if !ok {
+		return nil, fmt.Errorf("rpc: replica hosts of %s: no indexer answered sentio_getStorageIntegrityInfo", database)
+	}
+	r.replicaMu.Lock()
+	if r.replicaHosts == nil {
+		r.replicaHosts = make(map[string]replicaHostsEntry)
+	}
+	r.replicaHosts[database] = replicaHostsEntry{hosts: hosts, until: at.Add(DefaultReplicaHostsTTL)}
+	r.replicaMu.Unlock()
+	return append([]uint64(nil), hosts...), nil
+}
+
+// replicaHostsAt asks one endpoint; ok=false means it gave no decoded answer.
+func (r *RpcNetworkState) replicaHostsAt(ctx context.Context, endpoint, database string) ([]uint64, bool) {
+	var info registry.StorageIntegrityInfo
+	ok, err := r.callAt(ctx, endpoint, "sentio_getStorageIntegrityInfo", nil, &info)
+	if err != nil || !ok {
+		log.Debugw("rpc: replica-hosts lookup failed at this endpoint", "endpoint", endpoint, "database", database, "err", err)
+		return nil, false
+	}
+	return append([]uint64(nil), info.ReplicaHosts[database]...), true
+}
+
+// replicaHostsFromPeers asks, in ascending id, every indexer but owner that
+// advertises a storage endpoint not asked yet.
+func (r *RpcNetworkState) replicaHostsFromPeers(ctx context.Context, database string, owner uint64) ([]uint64, bool) {
+	// AllIndexers uses a background context for the legacy topology port.
+	// Use the same RPC with the failover caller's context here, so its
+	// candidate lookup deadline also bounds this fallback's topology read.
+	var infos []IndexerInfo
+	ok, err := r.call(ctx, "sentio_getIndexerInfos", nil, &infos)
+	if err != nil || !ok {
+		return nil, false
+	}
+	all := make(map[uint64]registry.ProxyAddress, len(infos))
+	for _, info := range infos {
+		all[info.IndexerId] = registry.ProxyAddress{
+			Url: info.IndexerUrl, HousegatePort: info.ClickhouseProxyPort,
+			StorageRPCPort: info.StorageNodeRpcPort,
+		}
+	}
+	ids := make([]uint64, 0, len(all))
+	for id := range all {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	asked := map[string]bool{r.endpoint: true}
+	for _, id := range ids {
+		addr := all[id]
+		if id == owner || addr.Url == "" || addr.StorageRPCPort == 0 {
+			continue
+		}
+		endpoint := r.storageEndpoint(addr.Url, addr.StorageRPCPort)
+		if asked[endpoint] {
+			continue
+		}
+		asked[endpoint] = true
+		if hosts, ok := r.replicaHostsAt(ctx, endpoint, database); ok {
+			return hosts, true
+		}
+	}
+	return nil, false
+}
+
+var _ registry.StorageIntegrityReplicaDiscovery = (*RpcNetworkState)(nil)
 
 // Compile-time check the rpc backend satisfies registry.Registry.
 var _ registry.Registry = (*RpcNetworkState)(nil)

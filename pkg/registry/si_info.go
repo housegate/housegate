@@ -27,6 +27,14 @@ type StorageIntegrityInfo struct {
 	DefaultReadMode        string `json:"default_read_mode"`
 	RegistryVersion        uint64 `json:"registry_version"`
 	ServerUnixTime         int64  `json:"server_unix_time"`
+	// ReplicaDatabases lists the databases the serving host answers Replica
+	// now, served read-only from its member's copies (spec 2026-10-14 §11).
+	// ReplicaHosts maps each database with a live physical SI incarnation to
+	// the SI indexers holding its copies, in ascending id: until placement,
+	// every enrolled SI indexer but the owner (Plan S3-C4 K50). Every host
+	// computes the same map. An older server omits both; they decode empty.
+	ReplicaDatabases []string            `json:"replica_databases"`
+	ReplicaHosts     map[string][]uint64 `json:"replica_hosts"`
 }
 
 // EffectiveDefaultReadMode maps the empty mode to "safe", as the server does.
@@ -56,6 +64,17 @@ type StorageIntegrityDiscovery interface {
 // way the status and info lookups do; the agent treats it as "unknown" and
 // the server decides.
 var ErrDatabaseNotHosted = errors.New("database is not hosted by any known indexer")
+
+// StorageIntegrityReplicaDiscovery answers which SI indexers can serve a
+// database read-only from their member's copies while its owner is
+// quarantined or unreachable: replica_hosts[database] of
+// sentio_getStorageIntegrityInfo (spec 2026-10-14 §11, Plan S3-C4 K50). It is
+// asked of any host but owner, so an unreachable owner never blocks it.
+// RpcNetworkState implements it; YAML and host-injected registries do not,
+// and the agent then has no replica failover.
+type StorageIntegrityReplicaDiscovery interface {
+	StorageIntegrityReplicaHosts(ctx context.Context, database string, owner uint64) ([]uint64, error)
+}
 
 // DatabaseHosting resolves the indexer hosting a database and that indexer's
 // housegate address, for the agent's upstream switch (spec 2026-10-09 §6.4,

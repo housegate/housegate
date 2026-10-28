@@ -42,3 +42,31 @@ func TestStorageIntegrityInfoDecodesEnrolled(t *testing.T) {
 }
 
 func ptr(v uint64) *uint64 { return &v }
+
+// TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases: the P3 fields of
+// sentio_getStorageIntegrityInfo (spec 2026-10-14 §11, Plan S3-C4 K50)
+// decode, and an older server's answer, which has neither, decodes them as
+// empty.
+func TestStorageIntegrityInfoDecodesReplicaHostsAndDatabases(t *testing.T) {
+	var info StorageIntegrityInfo
+	body := `{"enabled":true,"network_id":"devnet2","replica_databases":["db2"],"replica_hosts":{"db2":[0,7],"db3":[]}}`
+	if err := json.Unmarshal([]byte(body), &info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(info.ReplicaDatabases) != 1 || info.ReplicaDatabases[0] != "db2" {
+		t.Fatalf("ReplicaDatabases = %v, want [db2]", info.ReplicaDatabases)
+	}
+	if got := info.ReplicaHosts["db2"]; len(got) != 2 || got[0] != 0 || got[1] != 7 {
+		t.Fatalf("ReplicaHosts[db2] = %v, want [0 7]", got)
+	}
+	if got, ok := info.ReplicaHosts["db3"]; !ok || len(got) != 0 {
+		t.Fatalf("ReplicaHosts[db3] = %v (present %v), want present and empty", got, ok)
+	}
+	var older StorageIntegrityInfo
+	if err := json.Unmarshal([]byte(`{"enabled":true,"network_id":"devnet2"}`), &older); err != nil {
+		t.Fatalf("decode older answer: %v", err)
+	}
+	if len(older.ReplicaDatabases) != 0 || len(older.ReplicaHosts) != 0 || older.ReplicaHosts["db2"] != nil {
+		t.Fatalf("an older server's answer decoded replica fields %v %v", older.ReplicaDatabases, older.ReplicaHosts)
+	}
+}
