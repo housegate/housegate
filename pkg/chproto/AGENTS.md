@@ -18,6 +18,7 @@
 - `ReadPacket` resets capture at packet boundaries and relies on the 1-byte capture reader to avoid orphaning prefetched bytes.
 - ServerHello must be echoed from `Packet.Raw` through the destination codec's `WriteRawPacket`, not re-encoded from ch-go structs. Newer ClickHouse revisions append fields ch-go does not model.
 - `ReadPacket` is the normal read path for the whole connection in both directions. A negotiated upstream chunk uses ClickHouse's `finishChunk` boundary as the authoritative server-packet boundary, including when a Native value is opaque to Housegate.
+- `EnableChunked` must keep bytes `c.br` prefetched before the switch: a peer may send its addendum and first chunked packet in one segment. They are re-fed beneath the `ChunkedReader`; never enable chunked reads by flipping the reader alone.
 - `NegotiateAddendum` is read-only. Sending the addendum upstream is the caller's job via `SendAddendum`.
 - Cross-leg forwarding must use the destination codec's `WriteRawPacket`, which applies that leg's framing. `Splice` writes directly to an `io.Writer` and is safe only when that destination explicitly expects unframed packet bytes; it is unsafe even on the same connection after chunked sending is enabled because it bypasses the codec's `ChunkedWriter`. It is unused in production and remains only for tests.
 

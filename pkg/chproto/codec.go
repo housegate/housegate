@@ -91,8 +91,22 @@ func (c *Codec) Conn() io.ReadWriter { return c.conn }
 // EnableChunked switches either post-addendum direction to ClickHouse's
 // chunked transport. recv applies to bytes read by this codec; send applies
 // to bytes written by it. The transition is one-way for a connection.
+//
+// The addendum is read through c.br, whose fill may already have pulled the
+// peer's next bytes off the socket while chunked reads were still disabled:
+// a client that writes its addendum and its first chunked packet back to back
+// (the agent's replica failover does; so does an ordinary session over a
+// high-latency link) often lands both in one read. Those prefetched bytes
+// are still chunk-framed, so they are handed back underneath the chunked
+// reader and c.br restarts from it; otherwise the frame header's low byte
+// would be read as the next packet's type.
 func (c *Codec) EnableChunked(recv, send bool) {
-	if recv {
+	if recv && !c.chunkedR.Enabled() {
+		if n := c.br.Buffered(); n > 0 {
+			buffered, _ := c.br.Peek(n)
+			c.chunkedR.prepend(append([]byte(nil), buffered...))
+		}
+		c.br.Reset(c.chunkedR)
 		c.chunkedR.Enable()
 	}
 	if send {
