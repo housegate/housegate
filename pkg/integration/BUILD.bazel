@@ -37,6 +37,7 @@ go_test(
         "storage_backpressure_bounded_test.go",
         "storage_backpressure_session_test.go",
         "storage_backpressure_test.go",
+        "storage_integrity_agent_replica_failover_test.go",
         "storage_integrity_agent_test.go",
         "storage_integrity_formats_test.go",
         "storage_integrity_inline_values_test.go",
