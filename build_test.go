@@ -199,13 +199,14 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 
 	cfg.InternalListen = "0.0.0.0:9001"
 	got := storageIntegrityInternalListenWarning(cfg)
-	// Spec 2026-10-14 §14: the peer rules refuse every literal mention of a
-	// reserved name, but not one computed by a table-function argument, so the
-	// network control stays.
+	// Spec 2026-10-14 §14 and Plan S3-C4 K48: the peer rules refuse every
+	// literal mention of a reserved name and every object-carrier callable
+	// with a computed argument; they stay a lexical guard, so the network
+	// control stays.
 	for _, want := range []string{
 		"peer-trusted", "internal_listen",
 		"the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id",
-		"computed table-function arguments", "trusted peer subnets",
+		"every object-carrier table function called with a computed argument", "lexical guard", "trusted peer subnets",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("warning = %q, want %q", got, want)

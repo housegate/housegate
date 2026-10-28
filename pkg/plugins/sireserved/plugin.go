@@ -33,18 +33,21 @@ const (
 	peerReasonReservedName          = "reserved_name"
 	peerReasonIdentifierPlaceholder = "identifier_placeholder"
 	peerReasonStatementUnscannable  = "statement_unscannable"
+	// peerReasonComputedCarrierArgument is Plan S3-C4 K48: an object-carrier
+	// callable called with a computed argument.
+	peerReasonComputedCarrierArgument = "computed_carrier_argument"
 )
 
 var peerRefusals = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "storage_integrity_peer_reserved_name_refusals_total",
-	Help: "Peer-trusted, non-forwarded statements refused because they mention a storage-integrity reserved database or the reserved row-id column, carry an Identifier placeholder, or cannot be scanned.",
+	Help: "Peer-trusted, non-forwarded statements refused because they mention a storage-integrity reserved database or the reserved row-id column, carry an Identifier placeholder, pass a computed argument to an object-carrier callable, or cannot be scanned.",
 }, []string{"reason"})
 
 func init() {
 	prometheus.MustRegister(peerRefusals)
 	// Export every reason at zero, so "no refusal since start" is a series an
 	// operator can read rather than an absent one.
-	for _, reason := range []string{peerReasonReservedName, peerReasonIdentifierPlaceholder, peerReasonStatementUnscannable} {
+	for _, reason := range []string{peerReasonReservedName, peerReasonIdentifierPlaceholder, peerReasonStatementUnscannable, peerReasonComputedCarrierArgument} {
 		peerRefusals.WithLabelValues(reason)
 	}
 }
@@ -111,8 +114,11 @@ func (p *Plugin) operatorRefusal(sql string) error {
 // {name:Identifier} placeholder, and every mention of a reserved database or
 // of the reserved row-id column outside comments, string literals included,
 // are refused with ClickHouse 392 (not retryable). Object-carrier callables
-// are not refused: a legitimate leg may carry a nested remote() that
-// ClickHouse pushed into it with a JOIN or an IN subquery.
+// pass, because a legitimate leg may carry a nested remote() that ClickHouse
+// pushed into it with a JOIN or an IN subquery, but only with literal
+// arguments: a computed one is refused too (Plan S3-C4 K48), since it could
+// name a member database such as hg_replica, which si_gateway can read,
+// without the name appearing in the text.
 func (p *Plugin) peerRefusal(ctx context.Context, peerAddress, sql string) error {
 	surfaces, err := sqlsurface.ScanWith(sql, PeerScanOptions)
 	if err != nil {
@@ -126,6 +132,10 @@ func (p *Plugin) peerRefusal(ctx context.Context, peerAddress, sql string) error
 	if name := reservedNamespaceViolationOnSurface(surfaces.WithLiterals, p.ReservedDatabases, p.ReservedRowIDColumn); name != "" {
 		return refusePeer(ctx, peerReasonReservedName, name, peerAddress, sql,
 			"storage_integrity: reserved name "+name+" is not addressable on a peer connection; the peer guard refuses any mention, string literals included")
+	}
+	if callable := carrierArgumentViolation(surfaces.Tokens); callable != "" {
+		return refusePeer(ctx, peerReasonComputedCarrierArgument, "", peerAddress, sql,
+			fmt.Sprintf("storage_integrity: a peer statement may pass only literal arguments to %s(); a computed database or table name is refused on a peer connection", callable))
 	}
 	return nil
 }
@@ -172,6 +182,100 @@ func PeerReservedNamespaceViolation(sql string, databases []string, rowIDColumn 
 		return "", err
 	}
 	return reservedNamespaceViolationOnSurface(surfaces.WithLiterals, databases, rowIDColumn), nil
+}
+
+// PeerCarrierArgumentViolation reports, on the peer scan (PeerScanOptions),
+// the first object-carrier callable (IsObjectCarrierName) outside literals
+// and comments, as written, whose arguments are not each exactly one string
+// literal or one unsigned integer literal (Plan S3-C4 K48). ClickHouse
+// constant-folds a computed argument such as concat('hg_', 'replica') into a
+// database or table name, and resolves an identifier argument through the
+// statement's aliases or as a tuple element, so on a peer loopback, where
+// si_gateway may read hg_replica, only literal arguments pass. A call that
+// never closes is a violation too. Scan errors are returned as is.
+func PeerCarrierArgumentViolation(sql string) (string, error) {
+	surfaces, err := sqlsurface.ScanWith(sql, PeerScanOptions)
+	if err != nil {
+		return "", err
+	}
+	return carrierArgumentViolation(surfaces.Tokens), nil
+}
+
+// carrierArgumentViolation is PeerCarrierArgumentViolation on a token stream.
+// A callable is a bare or quoted carrier name directly followed by "(".
+func carrierArgumentViolation(tokens []sqlsurface.Token) string {
+	for i := 0; i+1 < len(tokens); i++ {
+		name := tokens[i]
+		if (name.Kind != sqlsurface.TokenWord && name.Kind != sqlsurface.TokenQuoted) ||
+			!isPunctToken(tokens[i+1], "(") || !IsObjectCarrierName(name.Text) {
+			continue
+		}
+		if !literalCallArguments(tokens[i+2:]) {
+			return name.Text
+		}
+	}
+	return ""
+}
+
+// literalCallArguments reports whether tokens, which follow a call's opening
+// parenthesis, close the call with literal arguments only. An empty call
+// passes; an empty argument, any nested parenthesis or operator, and a call
+// that never closes do not.
+func literalCallArguments(tokens []sqlsurface.Token) bool {
+	start := 0
+	for i, tok := range tokens {
+		if !isPunctToken(tok, ",") && !isPunctToken(tok, ")") {
+			continue
+		}
+		if !(i == 0 && tok.Text == ")") && !literalArgument(tokens[start:i]) {
+			return false
+		}
+		if tok.Text == ")" {
+			return true
+		}
+		start = i + 1
+	}
+	return false
+}
+
+// literalArgument reports whether arg is exactly one string literal (a
+// heredoc included) or one unsigned decimal integer (a word of ASCII digits
+// only). No identifier is a literal here, bare, quoted, digit-leading or
+// qualified: ClickHouse's analyzer resolves an identifier argument of a
+// table function through the statement's aliases before it takes it as a
+// name (WITH concat('hg_', 'replica') AS d ... merge(d, '.*'), a SELECT-list
+// or inline alias, an enclosing query's WITH) and d.1 as a tuple element,
+// so an identifier can carry a computed name. A digits-only word is always
+// that number, because ClickHouse refuses a number as an alias.
+func literalArgument(arg []sqlsurface.Token) bool {
+	if len(arg) != 1 {
+		return false
+	}
+	switch arg[0].Kind {
+	case sqlsurface.TokenString:
+		return true
+	case sqlsurface.TokenWord:
+		return digitsOnly(arg[0].Text)
+	default:
+		return false
+	}
+}
+
+// digitsOnly reports whether word is a non-empty run of ASCII digits.
+func digitsOnly(word string) bool {
+	if word == "" {
+		return false
+	}
+	for i := 0; i < len(word); i++ {
+		if word[i] < '0' || word[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isPunctToken(tok sqlsurface.Token, text string) bool {
+	return tok.Kind == sqlsurface.TokenPunct && tok.Text == text
 }
 
 func reservedNamespaceViolationOnSurface(surface string, databases []string, rowIDColumn string) string {
