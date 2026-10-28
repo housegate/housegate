@@ -351,9 +351,10 @@ func (r *RpcNetworkState) DatabaseHosting(ctx context.Context, database string) 
 }
 
 // StorageIntegrityTableStatus calls sentio_getStorageIntegrityTableStatus
-// (spec 2026-09-24 §10.2). A transport error, a JSON-null result, or an
-// unknown status name is an error: the agent then passes the INSERT through
-// unsigned and counts the failure.
+// (spec 2026-09-24 §10.2; the status replica and its additive fields, spec
+// 2026-10-14 §11). A transport error, a JSON-null result, or an unknown
+// status name is an error: the agent then passes the INSERT through unsigned
+// and counts the failure.
 func (r *RpcNetworkState) StorageIntegrityTableStatus(ctx context.Context, database, table string) (registry.TableStatus, error) {
 	endpoint, err := r.storageEndpointFor(ctx, database)
 	if err != nil {
@@ -369,7 +370,7 @@ func (r *RpcNetworkState) StorageIntegrityTableStatus(ctx context.Context, datab
 	}
 	switch status.Status {
 	case registry.TableStatusOrdinary, registry.TableStatusPending, registry.TableStatusRefused,
-		registry.TableStatusActive, registry.TableStatusGone:
+		registry.TableStatusActive, registry.TableStatusGone, registry.TableStatusReplica:
 		return status, nil
 	default:
 		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s: unknown status %q", database, table, status.Status)

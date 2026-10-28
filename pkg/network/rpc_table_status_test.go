@@ -51,3 +51,44 @@ func TestRpcNetworkState_TableStatusFailures(t *testing.T) {
 		}
 	}
 }
+
+// TestRpcNetworkStateAcceptsReplicaStatus is spec 2026-10-14 §11: a host that
+// serves another indexer's table from its member's copy answers the status
+// replica with the owner's schema and the four additive fields, and the
+// client decodes them instead of refusing an unknown status.
+func TestRpcNetworkStateAcceptsReplicaStatus(t *testing.T) {
+	result := json.RawMessage(`{"status":"replica","refused_code":"","refused_reason":"","schema_json":"{\"table_id\":\"shop.orders\"}","schema_hash":"0xabc","registry_version":42,` +
+		`"replica_of":2,"served_from":"0x5e1f","owner_entry":{"indexer_id":2,"safe_block_seq":812,"applied_promotion_seq":77},"frozen_since":1760500000000}`)
+	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
+		"sentio_getDatabaseInfoById": nullDatabaseInfo,
+		"sentio_getStorageIntegrityTableStatus": func([]interface{}) (interface{}, *rpcErrEnvelope) {
+			return result, nil
+		},
+	})
+	got, err := rpc.StorageIntegrityTableStatus(context.Background(), "shop", "orders")
+	if err != nil {
+		t.Fatalf("a replica answer must decode: %v", err)
+	}
+	if got.Status != registry.TableStatusReplica || got.SchemaJSON != `{"table_id":"shop.orders"}` || got.SchemaHash != "0xabc" || got.RegistryVersion != 42 {
+		t.Fatalf("status = %+v, want replica with the owner's schema", got)
+	}
+	wantEntry := registry.OwnerEntry{IndexerID: 2, SafeBlockSeq: 812, AppliedPromotionSeq: 77}
+	if got.ReplicaOf == nil || *got.ReplicaOf != 2 || got.ServedFrom != "0x5e1f" || got.OwnerEntry == nil || *got.OwnerEntry != wantEntry || got.FrozenSince != 1760500000000 {
+		t.Fatalf("replica fields = of %v from %q entry %v since %d, want 2, 0x5e1f, %+v, 1760500000000", got.ReplicaOf, got.ServedFrom, got.OwnerEntry, got.FrozenSince, wantEntry)
+	}
+}
+
+// TestRpcNetworkStateStillRefusesAnUnknownStatus: accepting replica widens
+// the known names by exactly one; any other name stays the same error.
+func TestRpcNetworkStateStillRefusesAnUnknownStatus(t *testing.T) {
+	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
+		"sentio_getDatabaseInfoById": nullDatabaseInfo,
+		"sentio_getStorageIntegrityTableStatus": func([]interface{}) (interface{}, *rpcErrEnvelope) {
+			return map[string]any{"status": "replicating"}, nil
+		},
+	})
+	_, err := rpc.StorageIntegrityTableStatus(context.Background(), "shop", "orders")
+	if err == nil || err.Error() != `rpc: getStorageIntegrityTableStatus shop.orders: unknown status "replicating"` {
+		t.Fatalf("err = %v, want the unknown-status error", err)
+	}
+}

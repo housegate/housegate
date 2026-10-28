@@ -75,9 +75,11 @@ func newStatusPlugin(t *testing.T, statuses registry.TableStatuses, inline bool,
 }
 
 // TestPlugin_SignsActiveTablesOnly is spec 2026-09-24 §10.1: Active signs,
-// every other status passes through unchanged and unsigned.
+// every other status passes through unchanged and unsigned. That includes
+// replica (spec 2026-10-14 §11): the host refuses the unsigned INSERT 392
+// naming the table's owner.
 func TestPlugin_SignsActiveTablesOnly(t *testing.T) {
-	for _, status := range []string{registry.TableStatusOrdinary, registry.TableStatusPending, registry.TableStatusRefused, registry.TableStatusGone} {
+	for _, status := range []string{registry.TableStatusOrdinary, registry.TableStatusPending, registry.TableStatusRefused, registry.TableStatusGone, registry.TableStatusReplica} {
 		statuses := &scriptedStatuses{status: registry.TableStatus{Status: status, RefusedCode: "column_type"}}
 		p, seq, _ := newStatusPlugin(t, statuses, false, nil)
 		q := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
