@@ -30971,7 +30971,7 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
 | `ARBITER_DIGEST_P4` | `sha256:d0aa91cd1f40bfc8fdd12f5213ed8cfd90120970128874005f4a924ab7df375c` | Task 51 |
 | `SN_COMMIT_P4` | `14df40750fb67f41eb095bc1ab1a9f50047d8f7b` | Task 52 |
 | `SN_DIGEST_P4` | `sha256:dda0411809e224c4153d5486f429a43e6ad74addac9291005331045d7e224c12` | Task 52 |
-| `P4_PR` |  | Task 54 |
+| `P4_PR` | `792` | Task 54 |
 | `INTERSERVER_STEP1_END` |  | Task 55 |
 | `INTERSERVER_STEP2_END` |  | Task 55 |
 | `DEVNET2_FAILURE_DOMAINS` |  | Task 55 |
@@ -30998,6 +30998,6 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
   - housegate stays at `v0.23.1`, not the ledger's `HG_TAG_P3` `v0.23.0`: sentio-node `main` moved to `v0.23.1` after `SN_COMMIT_P3` (#205, the chunked-framing fix), so the base was `a2873b6`, not `SN_COMMIT_P3`, and the plan's prerequisite-drift, signature-loop (`origin/main..HEAD` in place of `SN_COMMIT_P3..HEAD`) and released-pin checks were run with `v0.23.1`; `v0.20.0` requires housegate `v0.23.0`, below it (MVS).
   - Development first ran on a separate temporary pin commit (arbiter-proto PR #22 head pseudo-version, arbiter-core through `go.work` and a Bazel `local_path_override` of Task 50's branch), replaced before the PR by the one pin commit; `MODULE.bazel.lock` did not change with the pin. Branch `urwt/claude/multi-source-s3d` (Claude runtime) in place of the plan's `urwt/codex/...`.
   - The Codex review bot stayed `running` for over 30 minutes without findings and was not waited out; no review thread was opened.
-- P4 PR (Task 54):
+- P4 PR (Task 54): `sentioxyz/production#792` (Plan S3-D Tasks 53 and 54) squash-merged as `4682d01d97f5deffab34dc832a656dc340d0f76b` at 2026-10-29T09:09:18Z UTC; `test_render.py` 229 tests OK (Task 53's count, N0 198 + 31) and `test_safe_source.py` OK; the three `helm lint --strict` profiles passed; the exact D24 source/helper/live-block freeze receipt SHA256 `a58e44d83807c7ab7c48edde97847909810cac5ffd63165263037c98414bd537` (Step 8, re-frozen after the safe-source fix commit); the audited task-local direct-Helm equivalent printed all eight releases `identical` (canonical Helmfile wrapper not executed); Step 7's runbook checks passed (68 and 52 bash blocks, 35 and 26 confirmed) and the helper self-test passed under bash 3.2 and 5; CI `Storage-integrity chart validation` run 40845172159 passed. Decision D41 (housegate#290, the user's decision): devnet2 keeps its shared placement (network source, verifier-1..3 and indexer-b's source on sea-dg-7, indexer-c on sea-dg-3), recorded as `DEVNET2_SHARED_NODE_EXCEPTION`; the hardening runbook reports it as `verdict SHARE D41` and moves nothing. Deviations: branch `urwt/claude/multi-source-s3d` (runtime claude); the safe-source audit fix (Task 53's two new broad readers filtered by `permitted_worktree_names`) found by CI.
 - hardening run (Task 55):
 - settle rollout and owner rebuild run (Task 56):
