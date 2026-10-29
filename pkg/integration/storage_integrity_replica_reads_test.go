@@ -187,40 +187,73 @@ func TestReplicaReads_JoinOfTwoReplicaServedTablesReadsTheCopies(t *testing.T) {
 	}
 }
 
+// replicaReadsWrites is every write and DDL form the replica-read tests send
+// to a served table.
+var replicaReadsWrites = []string{
+	"INSERT INTO a (id, v) VALUES (9, 'x')",
+	"INSERT INTO rrdb.a (id, v) VALUES (9, 'x')",
+	"INSERT INTO a (id, v) SELECT id, toString(w) FROM b",
+	"ALTER TABLE a DELETE WHERE 1",
+	"ALTER TABLE a ADD COLUMN z UInt8",
+	"DELETE FROM a WHERE 1",
+	"TRUNCATE TABLE a",
+	"OPTIMIZE TABLE a FINAL",
+	"RENAME TABLE a TO c",
+	"DROP TABLE a",
+	"CREATE TABLE a (id UInt64) ENGINE = MergeTree ORDER BY id",
+	"CREATE TABLE a ENGINE = MergeTree ORDER BY id AS SELECT 1 AS id",
+	"CREATE MATERIALIZED VIEW rrdb.mv TO a AS SELECT id, toString(w) AS v FROM b",
+}
+
 // TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner: every write and DDL
 // that targets a served table is refused before it reaches ClickHouse, and
-// the copy and the catalog are unchanged. The pinned engines refuse each of
-// these statements themselves (403: a write target that maps to a remote
-// upstream, or a storage-integrity table written outside the signed lane), so
-// sitablestate's Replica row, the 392 naming the owner (Task 42
-// TestDecide_ReplicaRows), is the second layer; a statement an engine passes
-// gets that 392. Each refusal is logged for the PR record.
+// the copy and the catalog are unchanged.
+//
+//   - On a session kept local for rrdb, forward.Plugin sends each statement to
+//     the owner, which is down here, so each is refused with the one 392
+//     naming the owner and saying it cannot be reached; the session keeps
+//     reading the copy.
+//   - On a session of the host's own database, a qualified statement is not
+//     routed by the session: the pinned engines refuse each themselves (403:
+//     a write target that maps to a remote upstream, or a storage-integrity
+//     table written outside the signed lane), and sitablestate's Replica row,
+//     the 392 naming the owner (Task 42 TestDecide_ReplicaRows), is the second
+//     layer for a statement an engine passes.
+//
+// Each refusal is logged for the PR record.
 func TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner(t *testing.T) {
 	seed := seedReplicaReads(t)
 	host := startReplicaReadsHost(t, sitable.NewFake(sitable.Ordinary, replicaReadsServed()...))
-	conn := openConnDB(t, host.Addr, replicaReadsDB)
-	const owner = "storage_integrity: table rrdb.a is served read-only from a copy of indexer 2's published data; write through its owner"
+	served := openConnDB(t, host.Addr, replicaReadsDB)
+	const unreachable = "storage_integrity: database rrdb is served read-only from a copy on this host and its owner, indexer 2, cannot be reached; write through its owner"
+	for _, sql := range replicaReadsWrites {
+		t.Run("served session/"+sql, func(t *testing.T) {
+			err := served.Exec(context.Background(), sql)
+			if err == nil || !strings.Contains(err.Error(), "code: 392") || !strings.Contains(err.Error(), unreachable) {
+				t.Fatalf("%s: err = %v, want the 392 %q", sql, err, unreachable)
+			}
+			t.Logf("%s refused: %v", sql, err)
+		})
+	}
+	if got := queryUint64(t, served, "SELECT count() FROM a"); got != 3 {
+		t.Fatalf("served read after the refused writes = %d, want 3 from the copy", got)
+	}
+
+	own := openConnDB(t, host.Addr, chEnv.Database)
+	const gateRefusal = "storage_integrity: table rrdb.a is served read-only from a copy of indexer 2's published data; write through its owner"
 	for _, sql := range []string{
-		"INSERT INTO a (id, v) VALUES (9, 'x')",
 		"INSERT INTO rrdb.a (id, v) VALUES (9, 'x')",
-		"INSERT INTO a (id, v) SELECT id, toString(w) FROM b",
-		"ALTER TABLE a DELETE WHERE 1",
-		"ALTER TABLE a ADD COLUMN z UInt8",
-		"DELETE FROM a WHERE 1",
-		"TRUNCATE TABLE a",
-		"OPTIMIZE TABLE a FINAL",
-		"RENAME TABLE a TO c",
-		"DROP TABLE a",
-		"CREATE TABLE a (id UInt64) ENGINE = MergeTree ORDER BY id",
-		"CREATE TABLE a ENGINE = MergeTree ORDER BY id AS SELECT 1 AS id",
-		"CREATE MATERIALIZED VIEW rrdb.mv TO a AS SELECT id, toString(w) AS v FROM b",
+		"INSERT INTO rrdb.a (id, v) SELECT id, toString(w) FROM rrdb.b",
+		"ALTER TABLE rrdb.a DELETE WHERE 1",
+		"TRUNCATE TABLE rrdb.a",
+		"DROP TABLE rrdb.a",
 	} {
-		t.Run(sql, func(t *testing.T) {
-			err := conn.Exec(context.Background(), sql)
+		t.Run("own session/"+sql, func(t *testing.T) {
+			err := own.Exec(context.Background(), sql)
 			engine := err != nil && strings.Contains(err.Error(), "code: 403") && strings.Contains(err.Error(), "rewriter rejected SQL")
-			gate := err != nil && strings.Contains(err.Error(), "code: 392") && strings.Contains(err.Error(), owner)
+			gate := err != nil && strings.Contains(err.Error(), "code: 392") && strings.Contains(err.Error(), gateRefusal)
 			if !engine && !gate {
-				t.Fatalf("%s: err = %v, want the engine's 403 refusal or the 392 %q", sql, err, owner)
+				t.Fatalf("%s: err = %v, want the engine's 403 refusal or the 392 %q", sql, err, gateRefusal)
 			}
 			t.Logf("%s refused: %v", sql, err)
 		})
@@ -230,6 +263,90 @@ func TestReplicaReads_WritesAndDDLAreRefusedNamingTheOwner(t *testing.T) {
 	}
 	if got := queryUint64(t, seed, "SELECT count() FROM system.tables WHERE database IN ('"+sitable.ReplicaDatabase+"', '"+replicaReadsPhys+"')"); got != 3 {
 		t.Fatalf("tables in hg_replica and phys_rr = %d, want the two copies and the decoy only", got)
+	}
+}
+
+// startQuarantinedOwnerHost starts rrdb's owner (indexer 2) as an SI host
+// whose SI indexer is quarantined: its table state reports rrdb.a Refused
+// with the host's code indexer_quarantined, as the devnet2 P3 drill's
+// indexer-c did. Auth admits the member host's forwarded __peer__ hello and
+// the client's queries, both signed with authTestKey1, which may write rrdb.
+func startQuarantinedOwnerHost(t *testing.T) *testenv.TestProxy {
+	t.Helper()
+	lib := requireNativeLib(t)
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := sitable.NewFake(sitable.Ordinary, sitable.Table{
+		ID: replicaReadsDB + ".a", Status: sitable.Refused,
+		RefusedCode: "indexer_quarantined", RefusedReason: "storage-integrity indexer 2 is quarantined",
+	})
+	return testenv.StartServerProxy(t, chEnv.Addr,
+		authProxyConfig([]string{signer.Address()}, false),
+		testenv.WithDatabasePermission(signer.Address(), replicaReadsDB, registry.DbAuthWrite),
+		testenv.WithCredentialReplace(),
+		testenv.WithIndexerID(replicaReadsOwner),
+		testenv.WithLogicalDatabaseAt(replicaReadsDB, replicaReadsOwner),
+		testenv.WithStorageIntegrityReadState(&siReadStateStub{parts: map[string][]string{}}),
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			enabled := true
+			cfg.Rewriter.Engine = "native"
+			cfg.Rewriter.NativeLibraryPath = lib
+			cfg.Rewriter.PhysicalDatabase = replicaReadsPhys
+			cfg.Rewriter.FailOpenOnUnavailable = false
+			cfg.StorageIntegrity.Enabled = &enabled
+			cfg.StorageIntegrity.Ingress.Enabled = true
+			cfg.StorageIntegrity.Ingress.NetworkID = "itest-replica-reads-owner"
+			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+		}),
+		func(_ *config.Config, opts *housegate.Options) {
+			opts.StorageIntegrityTableState = state
+			opts.StorageIntegrityAdmissionConsumer = &capturingConsumer{}
+		},
+	)
+}
+
+// TestReplicaReads_AWriteReachesTheQuarantinedOwner reproduces the devnet2 P3
+// drill (Plan S3-C4 Task 48): an INSERT into a quarantined owner's table got
+// the replica host's engine 403 when the client's session landed on a member
+// host, and the owner's 392 when it landed on the owner. A session kept local
+// for rrdb still reads the copy, and its INSERT is sent to the owner, so the
+// client gets exactly the owner's quarantine refusal on either path, and
+// nothing is written.
+func TestReplicaReads_AWriteReachesTheQuarantinedOwner(t *testing.T) {
+	seed := seedReplicaReads(t)
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := startQuarantinedOwnerHost(t)
+	member := startReplicaReadsHost(t, sitable.NewFake(sitable.Ordinary, replicaReadsServed()...),
+		testenv.WithRelayKey(authTestKey1),
+		testenv.WithPeerAt(replicaReadsOwner, owner),
+	)
+	const insert = "INSERT INTO a (id, v) VALUES (9, 'x')"
+	const quarantined = "storage_integrity: table rrdb.a was refused: indexer_quarantined: storage-integrity indexer 2 is quarantined"
+
+	direct := openSignedConnPinnedDB(t, owner.Addr, signer, replicaReadsDB)
+	directErr := direct.Exec(context.Background(), insert)
+	t.Logf("INSERT on the owner: %v", directErr)
+	if directErr == nil || !strings.Contains(directErr.Error(), "code: 392") || !strings.Contains(directErr.Error(), quarantined) {
+		t.Fatalf("INSERT on the owner = %v, want the 392 %q", directErr, quarantined)
+	}
+
+	viaMember := openSignedConnPinnedDB(t, member.Addr, signer, replicaReadsDB)
+	if got := queryUint64(t, viaMember, "SELECT count() FROM a"); got != 3 {
+		t.Fatalf("read on the member host = %d, want 3 from the copy", got)
+	}
+	memberErr := viaMember.Exec(context.Background(), insert)
+	t.Logf("INSERT on the member host: %v", memberErr)
+	if memberErr == nil || memberErr.Error() != directErr.Error() {
+		t.Fatalf("INSERT on the member host = %v, want the owner's refusal %v", memberErr, directErr)
+	}
+
+	if got := queryUint64(t, seed, "SELECT count() FROM "+sitable.ReplicaDatabase+"."+replicaReadsCopyA); got != 3 {
+		t.Fatalf("copy rows = %d, want the 3 installed rows", got)
 	}
 }
 
