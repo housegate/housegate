@@ -30959,8 +30959,8 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
 | Name | Value | Recorded by |
 |---|---|---|
 | `PROTO_TAG_P4` | `v0.14.0` | Task 49 |
-| `CORE_TAG_P4` |  | Task 50 |
-| `P4_MECHANICS` |  | Task 50 |
+| `CORE_TAG_P4` | `v0.20.0` | Task 50 |
+| `P4_MECHANICS` | `2026-10-29` | Task 50 |
 | `ARBITER_TAG_P4` |  | Task 51 |
 | `ARBITER_DIGEST_P4` |  | Task 51 |
 | `SN_COMMIT_P4` |  | Task 52 |
@@ -30982,7 +30982,11 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
   - Step 12: the arbiter scratch copy failed `go build` with `error obtaining VCS status` (the copy lives under a non-matching VCS directory); arbiter and housegate were re-run with `GOFLAGS='-mod=mod -buildvcs=false'` and every named package passed.
   - Local tools: buf 1.71.0 (drafting used 1.74.0) and Go 1.27.1; generators matched `Makefile` pins (protoc-gen-go v1.36.11, protoc-gen-go-grpc 1.5.1).
   - Review: no review comments; the Codex review bot stayed in `running` from 01:41Z for about two hours and was not waited for (merge after CI green and mergeable, as the user authorized).
-- arbiter-core release and the deployed-image mechanics run (Task 50):
+- arbiter-core release and the deployed-image mechanics run (Task 50): `sentioxyz/arbiter-core#57` (`feat(snode): settle answers, owner rebuild library and P4 mechanics (multi-source SI stage 3 P4)`) squash-merged as `c2a5cfce9ccff6e70f2c3419521f2a973e4ffdf6` at 2026-10-29T07:21:50Z with every check green; Cut Release run `40834976189` tagged `v0.20.0` at `c2a5cfce9ccff6e70f2c3419521f2a973e4ffdf6`, its runner printing `mechanics: 19 test(s) passed on clickhouse/clickhouse-server:26.3.37.3` and `rebuild: 9 test(s) passed on clickhouse/clickhouse-server:26.3.37.3`; `v0.20.0`'s `go.mod` requires arbiter-proto `v0.14.0` and housegate `v0.23.0` (`HG_TAG_P3`, moved from `v0.22.0` in `v0.19.0`), `LocalNodeFeatures` and `conformance/` unchanged; M16's refusal on 26.3.37.3: `Incorrect user or password in HTTP basic authentication: si_interserver`; the deployed-image run (`P4_MECHANICS`) on 2026-10-29 on `f7fc579b8a78822258d2bd0ef5ded66966997276`, the released tree: ClickHouse `26.3.12.1`, `mechanics: 19 test(s) passed on us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16`, the SNode and member install restart tests, `objstore: 7 S3 test(s)` and `rebuild: 9 test(s)` passed, M16 refusal `Incorrect user or password in HTTP basic authentication: si_interserver`, S3 backup delete right `lock` (equal to `P1_BACKUP_DELETE`).
+  - The pre-release arbiter-proto pin was developed against Task 49's PR head (pseudo-version) and replaced, before the PR, by one pin commit for arbiter-proto `v0.14.0` and housegate `v0.23.0` (`HG_TAG_P3`, which Task 51 requires `CORE_TAG_P4` to pin; the plan's "housegate stays at CORE_TAG_P3's pin" assumed CORE_TAG_P3 pinned HG_TAG_P3).
+  - Review fix `f7fc579` (Codex P2): the AlreadyRebuilt shortcut now also requires the journaled rebuilt inventory to hold the part names hg_safe holds now (`CheckRebuildJournal` compares names when given parts); new test `TestCheckRebuildJournalComparesTheJournaledNamesWhenGivenParts`, `TestRebuildIsIdempotent` extended; the runner and CI passed again on that head.
+  - The deployed-image run used the locally present image by RepoDigest `sha256:2304b1530b1e87b0f8571d1bdd7d976e12ac2bb1efd82c695f1c988ff59dfb31` (the digest devnet2's pods run) through a scratch copy of the runner whose only change replaces the `docker pull` with a digest assertion, because the registry token had expired; it ran first on `34b05cc` and again on the final head `f7fc579` after the review fix, both exit 0.
+  - Plan block fixes while executing: `|| true` after the pair cleanup under `set -e`; Step 18's commit made by hand (broken line continuation in the plan block); branch names `urwt/claude/...` (Claude runtime) in place of the plan's `urwt/codex/...`.
 - arbiter release (Task 51):
 - sentio-node release (Task 52):
 - P4 PR (Task 54):
