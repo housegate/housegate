@@ -948,3 +948,31 @@ func TestForward_AWriteWhileTheOwnerIsUnreachableIsRefusedNamingTheOwner(t *test
 		t.Fatalf("a read after the refused write: %v", err)
 	}
 }
+
+// TestForward_AWriteAfterServingEndedWhileTheOwnerIsUnreachableAsksToReconnect:
+// once the copy is no longer served, a write the owner cannot take is not
+// told the copy is served here: it gets the same retryable 733 reconnect
+// refusal as a read, with the dial failure kept as the server-side cause.
+func TestForward_AWriteAfterServingEndedWhileTheOwnerIsUnreachableAsksToReconnect(t *testing.T) {
+	state := replicaServedState()
+	p, _, _ := replicaRouting(t, state)
+	p.dialPeer = func(context.Context, string) (*chproto.Codec, error) {
+		return nil, errors.New("connection refused")
+	}
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	state.Set() // the member revoked the lease: rrdb is no longer served
+	err := p.OnQuery(context.Background(), queryOn(sess, "INSERT INTO a (id, v) VALUES (9, 'x')"))
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted || ce.Message != servingEndedMessage {
+		t.Fatalf("OnQuery(INSERT) = %v, want 733 %q", err, servingEndedMessage)
+	}
+	if ce.Err == nil || !strings.Contains(ce.Err.Error(), "connection refused") {
+		t.Fatalf("cause = %v, want the dial failure", ce.Err)
+	}
+	if snap := sess.State().Snapshot(); snap.IsForwarding || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("forwarding=%v mark=%q, want the session local and still marked", snap.IsForwarding, snap.ReplicaServedDatabase)
+	}
+}

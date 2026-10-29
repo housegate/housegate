@@ -179,6 +179,12 @@ func (p *Plugin) refuseEndedReplicaServing(sess chsession.Session) error {
 	if db == "" || p.replicaServed(db) {
 		return nil
 	}
+	return servingEnded(db)
+}
+
+// servingEnded is the retryable 733 refusal of a statement on a session kept
+// local for db once db is no longer served from a copy on this host.
+func servingEnded(db string) *chproto.ClientError {
 	return &chproto.ClientError{
 		Code:    chproto.CodeTableIsBeingRestarted,
 		Message: fmt.Sprintf("storage_integrity: database %s is no longer served from a copy on this host; reconnect to reach its owner (retryable)", db),
@@ -219,7 +225,9 @@ func copyAnswers(sql string) bool {
 // gone without the copy, and the client gets the owner's answer (its
 // quarantine refusal while it is quarantined) whichever host it landed on.
 // The session is the owner's from then on. An owner that cannot be reached
-// is refused 392 naming it; the session then stays local and marked.
+// is refused 392 naming it while the copy is still served, and with the
+// retryable 733 reconnect refusal once it is not; the session then stays
+// local and marked.
 func (p *Plugin) writeThroughOwner(ctx context.Context, sess chsession.Session, db string) error {
 	info, ok := p.Databases.Get(db)
 	if !ok {
@@ -234,6 +242,13 @@ func (p *Plugin) writeThroughOwner(ctx context.Context, sess chsession.Session, 
 		Database:        db,
 	}, info.IndexerId)
 	if err != nil {
+		if !p.replicaServed(db) {
+			// The copy is no longer served either, so the session is only
+			// asked to reconnect, as its reads are.
+			ended := servingEnded(db)
+			ended.Err = err
+			return ended
+		}
 		return &chproto.ClientError{
 			Code:    chproto.CodeQueryIsProhibited,
 			Message: fmt.Sprintf("storage_integrity: database %s is served read-only from a copy on this host and its owner, indexer %d, cannot be reached; write through its owner", db, info.IndexerId),
