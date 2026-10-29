@@ -88,11 +88,35 @@ Wherever Plan S3-D says the three sources run on pairwise distinct nodes, that n
 - `DEVNET2_FAILURE_DOMAINS` is recorded from the actual placement, as `failure-domains.txt` prints it.
 - The `hardening run` record states: "D41: devnet2's failure domains are not independent (indexer-a and indexer-b share node:sea-dg-7 with every verifier ClickHouse), by the user's decision of 2026-10-29".
 
-**Task 55's final domain gate (`p4_domains_check`, Step 20).**
-- The D39 condition `len(set(sources)) != 3 or set(sources) & set(verifiers) or (len(eligible) >= 6 and len(set(verifiers)) != 3)` is judged over the rows that D41 does not excuse. A row is excused when its `(installation, cluster)` is in `DEVNET2_SHARED_NODE_EXCEPTION[node]` and its node is that `node`. The excused sources must sit only on their recorded node, and no unexcused source may share it.
-- A `verdict SHARE D41 <node>: …` line is accepted for each exception node, also with six or more eligible nodes. Every other `SHARE` line keeps the existing rule.
+**Task 55's final domain gate (`p4_domains_check`, Step 20).** Its full six-identity validation (header, exactly the six `(installation, cluster)` rows, distinct pods, eligible nodes, role, PV node) stays as it is.
+
+Its D39 condition `len(set(sources)) != 3 or set(sources) & set(verifiers) or (len(eligible) >= 6 and len(set(verifiers)) != 3)` is replaced by the following, which compares distinct counts with the counts of the rows D41 does not excuse:
+
+```python
+exc = {key: node for node, keys in t.DEVNET2_SHARED_NODE_EXCEPTION.items() for key in keys}
+if any(exc.get((r[0], r[1])) not in (None, r[4]) for r in rows):
+    bad.append("a ClickHouse D41 records is not on its recorded node")
+excused = [r for r in rows if exc.get((r[0], r[1])) == r[4]]
+free = [r for r in rows if r not in excused]
+sources = [r[4] for r in free if r[2] == "source"]
+verifiers = [r[4] for r in free if r[2] == "verifier"]
+shared = set(exc.values())
+if (len(set(sources)) != len(sources) or set(sources) & set(verifiers) or (set(sources) | set(verifiers)) & shared
+        or (len(eligible) >= 6 and len(set(verifiers)) != len(verifiers))):
+    bad.append("placement violates D39 source/verifier failure domains")
+```
+
+Other gate rules:
+- A `verdict SHARE D41 <node>: …` line is accepted for each node of `DEVNET2_SHARED_NODE_EXCEPTION`, also with six or more eligible nodes. Every other `SHARE` line keeps the existing rule.
 - The record check (`DEVNET2_FAILURE_DOMAINS` equal to the source pins at HEAD) is unchanged. It is what makes `0=node:sea-dg-7,1=node:sea-dg-7,<INDEXER_C_ID>=node:sea-dg-3` pass.
 - Its expected output and the `hardening run` record carry the D41 statement above.
+
+Fixtures, checked against this predicate:
+- Positive: the recorded placement (five ClickHouses on sea-dg-7, indexer-c on sea-dg-3) passes.
+- Negative: indexer-c's source on sea-dg-7 fails (an unrecorded source on the exception node).
+- Negative: `verifier-1` on sea-dg-3 fails (a recorded ClickHouse off its recorded node).
+
+Task 55 adds the three fixtures to its `p4_domains_check` test before Step 20 runs.
 
 **Downstream consumers (Plans S3-E4 and S3-F; amend before they run).** Both reject the shared value today:
 - S3-E4's `si_p5_py cmd_params` refuses repeated `failure_domain` values (`len({e["failure_domain"] for e in entries}) != len(entries)`).
