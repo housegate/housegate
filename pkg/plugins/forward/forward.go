@@ -26,8 +26,11 @@
 // session returns home through rebindToLocal) and the session is marked. Once
 // the snapshot no longer serves that database, every other statement on the
 // marked session is refused with a retryable 733 asking the client to
-// reconnect, which routes it to the owner. The database keeps its remote
-// mapping in the rewriter, so its ordinary tables still go to the owner.
+// reconnect, which routes it to the owner. A statement the copy does not
+// answer (a write, DDL, anything but a read, metadata or SET) pivots the
+// marked session to the owner first, so writes reach the owner whichever
+// host the client landed on. The database keeps its remote mapping in the
+// rewriter, so its ordinary tables still go to the owner.
 package forward
 
 import (
@@ -47,6 +50,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/sitable"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // Plugin pivots a session to a peer's internal-port at handshake time when
@@ -175,10 +179,86 @@ func (p *Plugin) refuseEndedReplicaServing(sess chsession.Session) error {
 	if db == "" || p.replicaServed(db) {
 		return nil
 	}
+	return servingEnded(db)
+}
+
+// servingEnded is the retryable 733 refusal of a statement on a session kept
+// local for db once db is no longer served from a copy on this host.
+func servingEnded(db string) *chproto.ClientError {
 	return &chproto.ClientError{
 		Code:    chproto.CodeTableIsBeingRestarted,
 		Message: fmt.Sprintf("storage_integrity: database %s is no longer served from a copy on this host; reconnect to reach its owner (retryable)", db),
 	}
+}
+
+// replicaServedSessionDatabase returns the database a replica-aware session
+// was kept local for, or "" when the replica rules do not apply to it.
+func (p *Plugin) replicaServedSessionDatabase(sess chsession.Session) string {
+	if sess == nil || !p.replicaAware(sess.State()) {
+		return ""
+	}
+	return sess.State().ReplicaServedDatabase
+}
+
+// copyAnswers reports whether a statement is one a member's copy answers on
+// this host: a read (SELECT, or a WITH list leading a SELECT), metadata
+// (SHOW, DESCRIBE, DESC, EXISTS, EXPLAIN) or SET. Anything else, an
+// unreadable statement included, belongs to the owner.
+func copyAnswers(sql string) bool {
+	words, err := sicore.LeadingKeywords(sql, 1)
+	if err != nil || len(words) == 0 {
+		return false
+	}
+	switch words[0] {
+	case "SELECT", "SHOW", "DESCRIBE", "DESC", "EXISTS", "EXPLAIN", "SET":
+		return true
+	case "WITH":
+		return sicore.WithListLeadsASelect(sql)
+	}
+	return false
+}
+
+// writeThroughOwner pivots a session kept local for the replica-served
+// database db to db's owner before a statement a copy does not answer (a
+// write, DDL, or one the classifier cannot read): writes never fail over
+// (spec 2026-10-14 §11), so the statement goes where the hello would have
+// gone without the copy, and the client gets the owner's answer (its
+// quarantine refusal while it is quarantined) whichever host it landed on.
+// The session is the owner's from then on. An owner that cannot be reached
+// is refused 392 naming it while the copy is still served, and with the
+// retryable 733 reconnect refusal once it is not; the session then stays
+// local and marked.
+func (p *Plugin) writeThroughOwner(ctx context.Context, sess chsession.Session, db string) error {
+	info, ok := p.Databases.Get(db)
+	if !ok {
+		return fmt.Errorf("Code: 81. DB::Exception: Database %s doesn't exist", db)
+	}
+	st := sess.State()
+	err := p.pivotToPeer(ctx, sess, &chproto.ClientHello{
+		Name:            st.ClientHostname,
+		Major:           st.ClientVersion.Major,
+		Minor:           st.ClientVersion.Minor,
+		ProtocolVersion: st.ClientRevision,
+		Database:        db,
+	}, info.IndexerId)
+	if err != nil {
+		if !p.replicaServed(db) {
+			// The copy is no longer served either, so the session is only
+			// asked to reconnect, as its reads are.
+			ended := servingEnded(db)
+			ended.Err = err
+			return ended
+		}
+		return &chproto.ClientError{
+			Code:    chproto.CodeQueryIsProhibited,
+			Message: fmt.Sprintf("storage_integrity: database %s is served read-only from a copy on this host and its owner, indexer %d, cannot be reached; write through its owner", db, info.IndexerId),
+			Err:     err,
+		}
+	}
+	st.SetReplicaServedDatabase("")
+	log.Infow("forward: sent a replica-served session's write to the owner",
+		"db", db, "owner", info.IndexerId)
+	return nil
 }
 
 // pivotToPeer dials the peer's internal-port and drives RebindToPeer so
@@ -269,11 +349,15 @@ func defaultLocalRebind(ctx context.Context, sess chsession.Session, up *chproto
 // (USE … SETTINGS …, multi-statement, etc.) is a no-op — the rewriter's
 // maybeUpdateLogicalDatabase callback handles complex forms. With a
 // TableState, a USE of a replica-served database stays local and marks the
-// session, and any other statement on a marked session whose database is no
-// longer served is refused (spec 2026-10-14 §11).
+// session, a statement a copy does not answer on a marked session pivots it
+// to the owner (writeThroughOwner), and any other statement on a marked
+// session whose database is no longer served is refused (spec 2026-10-14 §11).
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	newDB, ok := matchUse(qctx.OriginalSQL)
 	if !ok {
+		if db := p.replicaServedSessionDatabase(qctx.Session); db != "" && !copyAnswers(qctx.OriginalSQL) {
+			return p.writeThroughOwner(ctx, qctx.Session, db)
+		}
 		return p.refuseEndedReplicaServing(qctx.Session)
 	}
 	info, found := p.Databases.Get(newDB)

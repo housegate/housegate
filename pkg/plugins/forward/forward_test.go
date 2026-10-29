@@ -740,7 +740,9 @@ func TestForward_ServingEndedIsARetryableRefusal(t *testing.T) {
 		t.Fatalf("a read while rrdb is served: %v", err)
 	}
 	state.Set() // the member revoked the lease: rrdb is no longer served
-	for _, sql := range []string{"SELECT count() FROM a", "SELECT 1", "INSERT INTO a VALUES (1)", "SHOW TABLES"} {
+	// A write is not refused here: it goes to the owner whether or not the
+	// copy is still served (TestForward_AWriteOnAReplicaServedSessionGoesToTheOwner).
+	for _, sql := range []string{"SELECT count() FROM a", "SELECT 1", "SHOW TABLES"} {
 		err := p.OnQuery(context.Background(), queryOn(sess, sql))
 		var ce *chproto.ClientError
 		if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted || ce.Message != servingEndedMessage {
@@ -844,5 +846,133 @@ func TestForward_PeerTrustedSessionsIgnoreReplicaServing(t *testing.T) {
 	state.Set()
 	if err := p.OnQuery(context.Background(), queryOn(forwarded, "SELECT 1")); err != nil {
 		t.Fatalf("a peer-trusted session is never refused by the replica rule: %v", err)
+	}
+}
+
+// TestForward_AWriteOnAReplicaServedSessionGoesToTheOwner: a copy answers
+// reads, metadata and SET only. Every other statement on a session kept local
+// for a served database (a write, DDL, or anything the classifier cannot
+// read) pivots the session to the owner, exactly as the hello would have
+// without the copy, so the owner's answer (its quarantine refusal, or the
+// write itself once it is released) reaches the client whichever host the
+// client landed on. The mark is cleared: the session is the owner's now.
+func TestForward_AWriteOnAReplicaServedSessionGoesToTheOwner(t *testing.T) {
+	p, dials, _ := replicaRouting(t, replicaServedState())
+	reads := newTestSession(t)
+	if err := p.OnHello(context.Background(), reads, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	for _, sql := range []string{
+		"SELECT count() FROM a",
+		"  /* c */ select * FROM a",
+		"WITH x AS (SELECT id FROM a) SELECT count() FROM x",
+		"WITH 1 AS k SELECT k",
+		"SHOW TABLES",
+		"DESCRIBE TABLE a",
+		"DESC a",
+		"EXISTS TABLE a",
+		"EXPLAIN SELECT 1",
+		"SET max_threads = 1",
+	} {
+		if err := p.OnQuery(context.Background(), queryOn(reads, sql)); err != nil {
+			t.Fatalf("OnQuery(%q): %v", sql, err)
+		}
+	}
+	if snap := reads.State().Snapshot(); len(*dials) != 0 || snap.IsForwarding || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("dials=%v forwarding=%v mark=%q, want reads answered from the copy", *dials, snap.IsForwarding, snap.ReplicaServedDatabase)
+	}
+
+	for _, sql := range []string{
+		"INSERT INTO a (id, v) VALUES (9, 'x')",
+		"insert into rrdb.a SELECT * FROM a",
+		"WITH 1 AS k INSERT INTO a SELECT k",
+		"ALTER TABLE a DELETE WHERE 1",
+		"DELETE FROM a WHERE 1",
+		"TRUNCATE TABLE a",
+		"OPTIMIZE TABLE a FINAL",
+		"RENAME TABLE a TO c",
+		"DROP TABLE a",
+		"CREATE TABLE c (id UInt64) ENGINE = MergeTree ORDER BY id",
+		"/* unterminated",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, dials, _ := replicaRouting(t, replicaServedState())
+			var peerHellos []*chproto.ClientHello
+			p.rebindFn = func(_ context.Context, _ chsession.Session, _ *chproto.Codec, hello *chproto.ClientHello) error {
+				peerHellos = append(peerHellos, hello)
+				return nil
+			}
+			sess := newTestSession(t)
+			if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+				t.Fatalf("OnHello(rrdb): %v", err)
+			}
+			if err := p.OnQuery(context.Background(), queryOn(sess, sql)); err != nil {
+				t.Fatalf("OnQuery(%q): %v", sql, err)
+			}
+			snap := sess.State().Snapshot()
+			if strings.Join(*dials, ",") != "owner.internal:9001" || !snap.IsForwarding || snap.RouteTarget != "owner.internal:9001" {
+				t.Fatalf("dials=%v forwarding=%v route=%q, want the session pivoted to the owner", *dials, snap.IsForwarding, snap.RouteTarget)
+			}
+			if len(peerHellos) != 1 || peerHellos[0].Database != "rrdb" {
+				t.Fatalf("peer hellos = %+v, want one hello on rrdb", peerHellos)
+			}
+			if snap.ReplicaServedDatabase != "" {
+				t.Fatalf("mark = %q, want it cleared once the session is the owner's", snap.ReplicaServedDatabase)
+			}
+		})
+	}
+}
+
+// TestForward_AWriteWhileTheOwnerIsUnreachableIsRefusedNamingTheOwner: when
+// the owner cannot be reached, the write is refused 392 naming the owner and
+// the session stays local and marked, so its reads still answer from the copy.
+func TestForward_AWriteWhileTheOwnerIsUnreachableIsRefusedNamingTheOwner(t *testing.T) {
+	p, _, _ := replicaRouting(t, replicaServedState())
+	p.dialPeer = func(context.Context, string) (*chproto.Codec, error) {
+		return nil, errors.New("connection refused")
+	}
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	err := p.OnQuery(context.Background(), queryOn(sess, "INSERT INTO a (id, v) VALUES (9, 'x')"))
+	const want = "storage_integrity: database rrdb is served read-only from a copy on this host and its owner, indexer 200, cannot be reached; write through its owner"
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != want {
+		t.Fatalf("OnQuery(INSERT) = %v, want 392 %q", err, want)
+	}
+	if snap := sess.State().Snapshot(); snap.IsForwarding || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("forwarding=%v mark=%q, want the session local and still marked", snap.IsForwarding, snap.ReplicaServedDatabase)
+	}
+	if err := p.OnQuery(context.Background(), queryOn(sess, "SELECT count() FROM a")); err != nil {
+		t.Fatalf("a read after the refused write: %v", err)
+	}
+}
+
+// TestForward_AWriteAfterServingEndedWhileTheOwnerIsUnreachableAsksToReconnect:
+// once the copy is no longer served, a write the owner cannot take is not
+// told the copy is served here: it gets the same retryable 733 reconnect
+// refusal as a read, with the dial failure kept as the server-side cause.
+func TestForward_AWriteAfterServingEndedWhileTheOwnerIsUnreachableAsksToReconnect(t *testing.T) {
+	state := replicaServedState()
+	p, _, _ := replicaRouting(t, state)
+	p.dialPeer = func(context.Context, string) (*chproto.Codec, error) {
+		return nil, errors.New("connection refused")
+	}
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, &chproto.ClientHello{Database: "rrdb"}); err != nil {
+		t.Fatalf("OnHello(rrdb): %v", err)
+	}
+	state.Set() // the member revoked the lease: rrdb is no longer served
+	err := p.OnQuery(context.Background(), queryOn(sess, "INSERT INTO a (id, v) VALUES (9, 'x')"))
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted || ce.Message != servingEndedMessage {
+		t.Fatalf("OnQuery(INSERT) = %v, want 733 %q", err, servingEndedMessage)
+	}
+	if ce.Err == nil || !strings.Contains(ce.Err.Error(), "connection refused") {
+		t.Fatalf("cause = %v, want the dial failure", ce.Err)
+	}
+	if snap := sess.State().Snapshot(); snap.IsForwarding || snap.ReplicaServedDatabase != "rrdb" {
+		t.Fatalf("forwarding=%v mark=%q, want the session local and still marked", snap.IsForwarding, snap.ReplicaServedDatabase)
 	}
 }
