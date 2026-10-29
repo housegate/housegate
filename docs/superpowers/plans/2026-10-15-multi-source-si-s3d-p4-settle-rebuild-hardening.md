@@ -30961,8 +30961,8 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
 | `PROTO_TAG_P4` | `v0.14.0` | Task 49 |
 | `CORE_TAG_P4` | `v0.20.0` | Task 50 |
 | `P4_MECHANICS` | `2026-10-29` | Task 50 |
-| `ARBITER_TAG_P4` |  | Task 51 |
-| `ARBITER_DIGEST_P4` |  | Task 51 |
+| `ARBITER_TAG_P4` | `v0.15.0` | Task 51 |
+| `ARBITER_DIGEST_P4` | `sha256:d0aa91cd1f40bfc8fdd12f5213ed8cfd90120970128874005f4a924ab7df375c` | Task 51 |
 | `SN_COMMIT_P4` |  | Task 52 |
 | `SN_DIGEST_P4` |  | Task 52 |
 | `P4_PR` |  | Task 54 |
@@ -30987,7 +30987,7 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
   - Review fix `f7fc579` (Codex P2): the AlreadyRebuilt shortcut now also requires the journaled rebuilt inventory to hold the part names hg_safe holds now (`CheckRebuildJournal` compares names when given parts); new test `TestCheckRebuildJournalComparesTheJournaledNamesWhenGivenParts`, `TestRebuildIsIdempotent` extended; the runner and CI passed again on that head.
   - The deployed-image run used the locally present image by RepoDigest `sha256:2304b1530b1e87b0f8571d1bdd7d976e12ac2bb1efd82c695f1c988ff59dfb31` (the digest devnet2's pods run) through a scratch copy of the runner whose only change replaces the `docker pull` with a digest assertion, because the registry token had expired; it ran first on `34b05cc` and again on the final head `f7fc579` after the review fix, both exit 0.
   - Plan block fixes while executing: `|| true` after the pair cleanup under `set -e`; Step 18's commit made by hand (broken line continuation in the plan block); branch names `urwt/claude/...` (Claude runtime) in place of the plan's `urwt/codex/...`.
-- arbiter release (Task 51):
+- arbiter release (Task 51): `sentioxyz/arbiter#136` squash-merged as `5eca9b7bd2f196e480bd21ae2a11c3c82345d80b` on 2026-10-29 UTC (CI green: test, integration-clickhouse, integration-clickhouse-hardlink, integration-clickhouse-member, anchor-bindings-provenance, anchor-anvil; Codex review no findings); Cut Release run `40837265105` published `v0.15.0`, which contains the merge and pins arbiter-proto `v0.14.0`, arbiter-core `v0.20.0` and housegate `v0.23.0`; `ghcr.io/sentioxyz/arbiter:v0.15.0`, index digest `sha256:d0aa91cd1f40bfc8fdd12f5213ed8cfd90120970128874005f4a924ab7df375c`, revision label `5eca9b7bd2f196e480bd21ae2a11c3c82345d80b`; offline replay (Steps 33 and 36, run on the executing machine, where Plan S3-A's rehearsal histories and Plan S3-B's voter copies were absent, so the inputs were: Plan S2-B's original copy of devnet2 `arbiter-0` after the tracks activation, its pre-activation copies of `arbiter-0..2`, and fresh read-only copies of all three devnet2 voters taken 2026-10-29T02:19-02:25Z at epoch 6, promotion 115; tools rebuilt verbatim from the plans, statedigest `c5168a19…` and v20check `fccc6a87…`): all seven histories replay to identical `statedigest` lines, `snapshot_sha256` included, under `v0.13.0`, the branch and `v0.15.0`, `v0.13.0` reproduces Plan S2-B's recorded digests of those copies, and every build writes the same v20 containers (11,868,827 bytes for the stage-2 copy, 43,139,773 bytes for each fresh voter copy) and restores the others'; Plan S3-A's stage-2 samples were not replayed.
 - sentio-node release (Task 52):
 - P4 PR (Task 54):
 - hardening run (Task 55):
