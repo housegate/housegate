@@ -30958,7 +30958,7 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `PROTO_TAG_P4` |  | Task 49 |
+| `PROTO_TAG_P4` | `v0.14.0` | Task 49 |
 | `CORE_TAG_P4` |  | Task 50 |
 | `P4_MECHANICS` |  | Task 50 |
 | `ARBITER_TAG_P4` |  | Task 51 |
@@ -30975,7 +30975,13 @@ Prepared empty record structure only. No release, mechanics, PR, date, digest, f
 
 ### Run records
 
-- arbiter-proto release (Task 49):
+- arbiter-proto release (Task 49): `sentioxyz/arbiter-proto#22` (`feat(consensus-admin): leader-local track settle (multi-source SI stage 3 P4)`) squash-merged as `f4bf023e4fce309ead3437c7a8f5ef580f3ae423` at 2026-10-29T06:31:03Z with the `proto` job passed (`buf lint`, `buf breaking` against `origin/main`, generated code current, `make test`); before the push `buf breaking --against .git#tag=v0.12.0` (and against `v0.13.0`) printed nothing and these revisions built against the branch through a replace: arbiter-core f870e99, arbiter ee62b7f, sentio-node a2873b6, housegate b3fdfc2; cut-release dry run `40829720674` previewed `v0.14.0` after `v0.13.0` and pushed no tag; cut-release run `40829795255` cut the annotated tag `v0.14.0` at `f4bf023e4fce309ead3437c7a8f5ef580f3ae423` with its GitHub release; between `v0.13.0` and `v0.14.0` nine files changed (between `v0.12.0` and `v0.14.0` the same nine plus `go.mod`/`go.sum` of `v0.13.0`), `proto/arbiter.proto` 7 and `proto/consensus.proto` 46 lines added and none removed, and `conformance/stage3_reads_test.go` only in its `ConsensusAdmin` count literal (14 → 16, decision D25).
+  - Base: arbiter-proto `origin/main` was `f90f20e` = `v0.13.0` (Go 1.26.10 and vulnerable-dependency bump, arbiter-proto#21) on top of `v0.12.0` (`7a73f25`); `v0.12.0..v0.13.0` changes only `go.mod`/`go.sum` (zero files under `proto/`, `gen/`, `conformance/`), so the task proceeded under Step 3's moved-past rule; the dry run and cut report `PREVIOUS: v0.13.0` and the content check used `v0.13.0` as its base.
+  - Runtime `claude`: branch `urwt/claude/multi-source-s3d` (worktree `~/src/remotesrc/claude/arbiter-proto/multi-source-s3d`) instead of `urwt/codex/multi-source-s3d`.
+  - Step 3: sentio-node `origin/main` has one more `pb.UnimplementedPromotionGatewayServer` embed (`standalone/storage_integrity_ch_outage_test.go:172`), which the plan allows; no `Unsafe…` embed and no hand-written client.
+  - Step 12: the arbiter scratch copy failed `go build` with `error obtaining VCS status` (the copy lives under a non-matching VCS directory); arbiter and housegate were re-run with `GOFLAGS='-mod=mod -buildvcs=false'` and every named package passed.
+  - Local tools: buf 1.71.0 (drafting used 1.74.0) and Go 1.27.1; generators matched `Makefile` pins (protoc-gen-go v1.36.11, protoc-gen-go-grpc 1.5.1).
+  - Review: no review comments; the Codex review bot stayed in `running` from 01:41Z for about two hours and was not waited for (merge after CI green and mergeable, as the user authorized).
 - arbiter-core release and the deployed-image mechanics run (Task 50):
 - arbiter release (Task 51):
 - sentio-node release (Task 52):
