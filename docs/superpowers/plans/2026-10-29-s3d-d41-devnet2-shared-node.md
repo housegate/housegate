@@ -75,6 +75,10 @@ Wherever Plan S3-D says the three sources run on pairwise distinct nodes, that n
 - §12.2 has no move to undo.
 - The budget is 18.
 
+**Task 54 Step 7 (the helper self-test `selftest.bash`, local).**
+- Section 7's expected-move count leaves out the keys `DEVNET2_SHARED_NODE_EXCEPTION` records. On the recorded placement it expects 0 `MOVE` lines, `verdict placement ok` and one `verdict SHARE D41 sea-dg-7: ` line.
+- Its negative fixture moves an unrecorded source (indexer-c's) onto another source's node and still expects `verdict STOP two sources share a node`. The old fixture moved indexer-b onto indexer-a's node, which D41 accepts.
+
 **Task 54 (owner-rebuild runbook):** no change. The rebuild target indexer-c stays on its own node, sea-dg-3.
 
 **Task 55 (devnet2 live):**
@@ -83,5 +87,22 @@ Wherever Plan S3-D says the three sources run on pairwise distinct nodes, that n
 - `p4-edit.py` writes pins equal to the read node and refuses a pin of a recorded ClickHouse elsewhere.
 - `DEVNET2_FAILURE_DOMAINS` is recorded from the actual placement, as `failure-domains.txt` prints it.
 - The `hardening run` record states: "D41: devnet2's failure domains are not independent (indexer-a and indexer-b share node:sea-dg-7 with every verifier ClickHouse), by the user's decision of 2026-10-29".
+
+**Task 55's final domain gate (`p4_domains_check`, Step 20).**
+- The D39 condition `len(set(sources)) != 3 or set(sources) & set(verifiers) or (len(eligible) >= 6 and len(set(verifiers)) != 3)` is judged over the rows that D41 does not excuse. A row is excused when its `(installation, cluster)` is in `DEVNET2_SHARED_NODE_EXCEPTION[node]` and its node is that `node`. The excused sources must sit only on their recorded node, and no unexcused source may share it.
+- A `verdict SHARE D41 <node>: …` line is accepted for each exception node, also with six or more eligible nodes. Every other `SHARE` line keeps the existing rule.
+- The record check (`DEVNET2_FAILURE_DOMAINS` equal to the source pins at HEAD) is unchanged. It is what makes `0=node:sea-dg-7,1=node:sea-dg-7,<INDEXER_C_ID>=node:sea-dg-3` pass.
+- Its expected output and the `hardening run` record carry the D41 statement above.
+
+**Downstream consumers (Plans S3-E4 and S3-F; amend before they run).** Both reject the shared value today:
+- S3-E4's `si_p5_py cmd_params` refuses repeated `failure_domain` values (`len({e["failure_domain"] for e in entries}) != len(entries)`).
+- S3-F's `daily_copies` requires three distinct source nodes (`source nodes not three distinct nodes`).
+
+Before either runs on devnet2, its plan is amended with the same bounded rule:
+- A repeated domain is accepted only for exactly the indexers whose sources D41 records on one node (devnet2: indexer-a and indexer-b on `node:sea-dg-7`). Any other repetition is still refused.
+- Copies and `min_safe_copies` are counted per distinct failure domain, never per indexer, so the shared pair counts as one domain and no independent-copy count is inflated.
+- The P5 activation record and the P6 daily-copies report state the D41 non-independence.
+
+The alternative is that the user gives devnet2 dedicated nodes first and lifts D41 by a later amendment. Then the hardening's pins move by that amendment's own procedure, which D41 does not provide. Until one of the two is done, P5 activation and P6 on devnet2 are blocked on this point.
 
 No Appendix C row changes. `s3-ledger.py` is unaffected.
