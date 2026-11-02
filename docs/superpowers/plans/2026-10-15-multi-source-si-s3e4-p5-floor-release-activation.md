@@ -23949,7 +23949,7 @@ Filled in only by the recording tasks through S3-C1 contract §19's `s3-ledger.p
 | `ARBITER_DIGEST_P5` | `sha256:55edc801fb0eec627abe361eab0c9e66c8c00bb9537ff7b3a27fdf229bcd6b5d` | Task 78 |
 | `SN_COMMIT_P5` | `93f522f6dff49c6df4dccd2cd688bce257514bc8` | Task 79 |
 | `SN_DIGEST_P5` | `sha256:8f7710ea011c84f2fbfdd39152e601b860f828290b119d1306cf6f9f1a4c6d69` | Task 79 |
-| `P5_PR` | | Task 81 |
+| `P5_PR` | `814` | Task 81 |
 | `P5_REHEARSAL` | | Task 82 |
 | `ACTIVATION_EPOCH` | | Task 82 |
 | `P5_END` | | Task 82 |
@@ -23968,5 +23968,12 @@ Filled in only by the recording tasks through S3-C1 contract §19's `s3-ledger.p
   - `go.mod` at `93f522f6dff49c6df4dccd2cd688bce257514bc8` requires housegate `v0.24.0`, arbiter-core `v0.21.0` and arbiter-proto `v0.15.0` (`MODULE.bazel` `git_override` housegate `165491e48ac154291b851c4e5157d2915c51ad9e`, arbiter_core `ef051e2c1a0e7ddaf799474064f81af580f374b3`).
   - The image's `/sentio-node storage-integrity --help` lists `member-consent-statement` and `si-member --help` lists `--role` (linux/amd64, pulled by digest).
   - Base was origin/main `14df407` = `SN_COMMIT_P4`, which pinned housegate `v0.23.1` (#205), not `HG_TAG_P3` `v0.23.0`; `MODULE.bazel.lock` did not change with the pin; branch `urwt/claude/multi-source-s3e4` (Claude runtime) in place of the plan's `urwt/codex/...`.
-- P5 PR (Task 81):
+- P5 PR (Task 81): `sentioxyz/production#814` (Plan S3-E4 Tasks 80 and 81, `feat(storage-integrity): devnet2 stage 3 P5 (snapshot v21 activation runbook, monitoring, rehearsal pod)`, reviewed head `be2429eea3a65785b2e3996a30cd5590c7e0e29d`) was squash-merged as `19cdbb0834083310506c65fbfb03334c1b32e063` at 2026-11-02T13:35:36Z UTC. `test_render.py` ran 241 tests OK (229 at the base plus Task 80's 12), and the three `helm lint --strict` profiles passed, plus a fourth with every new value on. `render-inertness.sh origin/main` printed every release `identical` right before the merge, against `d1ed35dc9`. The runbook check passed: 33 headings, 61 bash blocks, 30 confirmed; the chain has 310 functions, 14 of them this runbook's, reaching 61 earlier helpers and none of the 52 that read another runbook's pins. The self-test passed 51 checks under bash 3.2 and 5. The rehearsal source is `$R5/p5rehearsal/p5rehearsal_test.go` (sha256 `8b569d44c9303192b53c5c7415dafba32cc92e506d997dff776ec1db12766c57`). CI `Storage-integrity chart validation` passed on the reviewed head, and Codex review found no major issues on it.
+  - Commits: `5d53a39c4` (Task 80, one commit rather than the plan's four, under the user's one-commit-per-task rule) and `508857415` (Task 81).
+  - Fix commit `4f1a0f87f`: the new scans go through `safe_source`, and the GNU `stat` fallback is fixed.
+  - Fix commit `a3edbe1c3`: the runbook gains a monitoring-off branch (user decision of 2026-11-02, since devnet2's SI monitoring has been off since 2026-10-17); §7.2 is unchanged.
+  - Fix commit `be2429eea`: §9 checks that the monitoring-off read passed and that the rules commit is on `origin/main`.
+  - Task 80 made no registry read in Step 6; it relied on Tasks 78 and 79's records, and runbook §1.1 resolves all four refs live.
+  - Task 80 Step 10: the Task 82 rehearsal could not exercise the stage-3 monitoring state, because devnet2's monitoring is off and the chart guard refuses it. The other forward states passed; 7 of the 10 bites were refused with their named message, and the 3 monitoring bites were refused by the chart guard instead.
+  - Branch `urwt/claude/multi-source-s3e4` (Claude runtime) in place of the plan's `urwt/codex/...`.
 - P5 run and the v21 activation (Task 82):
