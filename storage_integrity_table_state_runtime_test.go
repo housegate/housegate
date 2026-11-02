@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/sitable"
@@ -299,6 +301,80 @@ func TestIndexerQuarantinedReachesTheClientAsANonRetryableRefusal(t *testing.T) 
 	}
 	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
 		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
+	}
+}
+
+// TestVerifiersUnavailableReachesTheClientAsARetryableRefusal is spec
+// 2026-10-14 §7.3: the arbiter refused admission because the eligible ring of
+// the table's group holds fewer than three verifiers. The refusal is the
+// retryable 733, ends only the query, leaves the coordinate unspent, keeps the
+// arbiter's code and reason server-side, is not counted as back-pressure, and
+// the terminal-submit path removed the prepared parts.
+func TestVerifiersUnavailableReachesTheClientAsARetryableRefusal(t *testing.T) {
+	ingress, _, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+	var aborted []sicore.CandidatePart
+	preparer.abortFn = func(parts []sicore.CandidatePart) { aborted = parts }
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject,
+		Reason: "storage-integrity verifiers unavailable for indexer 1: 2 eligible, at least 3 required", AdmissionCode: sicore.AdmissionCodeVerifiersUnavailable}
+	before := testutil.ToFloat64(storageIntegrityBackpressureTotal.WithLabelValues("net1__events"))
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted ||
+		ce.Message != "storage_integrity: the verifiers of table net1.events are not available yet; retry shortly (retryable)" {
+		t.Fatalf("err = %v, want the retryable verifiers-unavailable refusal", err)
+	}
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	if !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
+	}
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_VERIFIERS_UNAVAILABLE: storage-integrity verifiers unavailable for indexer 1: 2 eligible, at least 3 required" {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
+		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
+	}
+	if got := testutil.ToFloat64(storageIntegrityBackpressureTotal.WithLabelValues("net1__events")); got != before {
+		t.Fatalf("backpressure counter = %v, want %v: missing verifiers are not back-pressure", got, before)
+	}
+}
+
+// TestCopiesBackpressureReachesTheClientAsARetryableBackpressure is spec
+// 2026-10-14 §9.3 and plan S3-E1 K59: in strict mode the arbiter refused
+// admission because the copy floor holds the table's cleanup above its
+// uncleaned-parts bound. The refusal is the 252 back-pressure every client
+// already retries, counted in storage_integrity_backpressure_total under the
+// table's physical name like local back-pressure; it ends only the query,
+// leaves the coordinate unspent, keeps the arbiter's code and reason
+// server-side, and the terminal-submit path removed the prepared parts.
+func TestCopiesBackpressureReachesTheClientAsARetryableBackpressure(t *testing.T) {
+	const reason = "storage-integrity copy floor: net1.events holds 20001 uncleaned promoted parts (max_uncleaned_parts_per_table 20000) whose cleanup waits for member checkpoints (strict_copies); retry later"
+	ingress, _, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+	var aborted []sicore.CandidatePart
+	preparer.abortFn = func(parts []sicore.CandidatePart) { aborted = parts }
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: reason, AdmissionCode: sicore.AdmissionCodeCopiesBackpressure}
+	before := testutil.ToFloat64(storageIntegrityBackpressureTotal.WithLabelValues("net1__events"))
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeTooManyParts ||
+		ce.Message != "storage_integrity: back-pressure: table net1.events waits for its replica copies to catch up; retry later (retryable)" {
+		t.Fatalf("err = %v, want the copies back-pressure refusal", err)
+	}
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	if !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
+	}
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_COPIES_BACKPRESSURE: "+reason {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
+		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
+	}
+	if got := testutil.ToFloat64(storageIntegrityBackpressureTotal.WithLabelValues("net1__events")); got != before+1 {
+		t.Fatalf("backpressure counter = %v, want %v", got, before+1)
 	}
 }
 

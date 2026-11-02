@@ -2363,11 +2363,15 @@ func markUnspentIfSigned(q *chproto.Query, err error) error {
 // of a KeepSession ClientError. The ClickHouse Exception frame has no metadata
 // bit for this property, so the contract is deliberately narrower than the
 // codes alone: only Housegate's storage-integrity ingress refusals qualify —
-// code 252 with the back-pressure prefix, code 733 with the exact
-// table-activation message (a newly Active table whose merge latch is not
-// asserted yet) or the exact source-unavailable message (the arbiter's
-// SOURCE_UNAVAILABLE: the table's owning indexer has no registered, Active
-// SNode yet, spec 2026-10-10 §6.4), and code 392 with the exact spec §9.6 "no longer accepts
+// code 252 with the back-pressure prefix (local part pressure, and the
+// arbiter's strict-mode COPIES_BACKPRESSURE: the copy floor holds the table's
+// cleanup, spec 2026-10-14 §9.3), code 733 with the exact table-activation
+// message (a newly Active table whose merge latch is not asserted yet), the
+// exact source-unavailable message (the arbiter's SOURCE_UNAVAILABLE: the
+// table's owning indexer has no registered, Active SNode yet, spec 2026-10-10
+// §6.4) or the exact verifiers-unavailable message (the arbiter's
+// VERIFIERS_UNAVAILABLE: the eligible ring of the table's group holds fewer
+// than three verifiers, spec 2026-10-14 §7.3), and code 392 with the exact spec §9.6 "no longer accepts
 // writes" message (the table retired before the arbiter sequenced the
 // statement) or the exact indexer-quarantined message (the arbiter's
 // INDEXER_QUARANTINED: the table's owning SI indexer is quarantined, spec
@@ -2386,7 +2390,8 @@ func isSessionPreservingIngressException(decoded any) bool {
 	case chproto.CodeTooManyParts:
 		return strings.HasPrefix(message, "storage_integrity: back-pressure:")
 	case chproto.CodeTableIsBeingRestarted:
-		return chproto.IsTableActivatingMessage(message) || chproto.IsSourceUnavailableMessage(message)
+		return chproto.IsTableActivatingMessage(message) || chproto.IsSourceUnavailableMessage(message) ||
+			chproto.IsVerifiersUnavailableMessage(message)
 	case chproto.CodeQueryIsProhibited:
 		return chproto.IsTableNoLongerAcceptsWritesMessage(message) || chproto.IsIndexerQuarantinedMessage(message)
 	default:
