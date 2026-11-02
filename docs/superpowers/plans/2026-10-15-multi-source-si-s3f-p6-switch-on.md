@@ -3973,22 +3973,35 @@ def verify(root,step):
 def rings(root,mode,step):
     blocks=[root/f'block-{n}.json' for n in (root/f'blocks-step{step}.list').read_text().splitlines()]
     require(blocks,'no captured acceptance blocks')
-    groups=[g for g in lines(root/'groups.jsonl') if 'owner'in g]
-    # Decision D45: a block's ring is the pool plus the ready members of its own groups; under D41 an
-    # owner's groups can hold different single members, so compare per group, not per owner.
-    current={}
-    for g in groups:
-        current.setdefault(g['owner'],[]).append(frozenset(m['node_id'] for m in g['members'] if int(m['ready_generation'])>=int(m['joined_generation']) and int(m['ready_generation'])>0))
+    groups={(str(g['owner']),g['database']):g for g in lines(root/'groups.jsonl') if 'owner'in g}
     for p in blocks:
         b=load(p)
         if not b['verifier_set']:
             continue
         pool={'verifier-1','verifier-2','verifier-3'}
-        options=[pool|s for s in current.get(str(b['owner']),[])] if mode=='ready' else [pool]
-        want=set(b['eligible_ring'] or [])
-        require(want in options,'unexpected ring; inspect only blocks marked after this readiness change')
+        # Decision D45: the ring of a block is the pool plus the ready members of its own groups (its served
+        # group_databases); under D41 an owner's groups can hold different single members.
+        want=pool|block_ready_members(b,groups) if mode=='ready' else pool
+        require(set(b['eligible_ring'] or [])==want,'unexpected ring; inspect only blocks marked after this readiness change')
         require(len(b['verifier_set'])==3 and set(b['verifier_set']).issubset(want),'invalid verify set')
         print(json.dumps(b))
+
+
+def block_ready_members(b,groups):
+    # A block's groups are its served group_databases of its owner; one seal key means one ready set,
+    # which the served group_members must equal. Ready: ready_generation at the group's generation.
+    owner=str(b['owner']); refs=b.get('group_databases') or []
+    names=[r['database_id'] for r in refs]
+    require(names and len(set(names))==len(names),f"block {b['block_seq']}: no or duplicate group_databases")
+    sets=set()
+    for name in names:
+        g=groups.get((owner,name))
+        require(g is not None,f"block {b['block_seq']}: database {name} has no group of owner {owner}")
+        sets.add(frozenset(m['node_id'] for m in g['members'] if int(m['ready_generation'])>=int(g['generation'])>0))
+    require(len(sets)==1,f"block {b['block_seq']}: its databases' groups differ in ready members")
+    ready=set(next(iter(sets)))
+    require(sorted(b.get('group_members') or [])==sorted(ready),f"block {b['block_seq']}: served group_members differ from its groups' ready members")
+    return ready
 
 
 def ddl_grants(path):
@@ -5666,7 +5679,7 @@ si_p6_py rings "$si_backup" ready 6 > "$si_backup/rings-after-all.jsonl"
 for x in b c a; do cp "$si_backup/rings-after-$x-groups.jsonl" "$si_backup/rings-after-$x.jsonl"; done
 ```
 
-Inspect the block marked after the final MemberReady for each owner: eligible_ring is verifier-1..3 plus the ready member of the block's groups (four sorted ids under decision D41, decision D45), never its own member. The saved groups document supplies the member ids and readiness for each intermediate hour without assuming blocks were produced in that hour; do not manufacture promotions to produce evidence.
+Inspect the block marked after the final MemberReady for each owner: eligible_ring is verifier-1..3 plus the ready member of the block's own groups, the groups of its served `group_databases`, whose served `group_members` must equal that member (four sorted ids under decision D41; owner c's databases may be split between member-a and member-b, so a block is never compared with another group of its owner; decision D45), never its own member. The saved groups document supplies the member ids and readiness for each intermediate hour without assuming blocks were produced in that hour; do not manufacture promotions to produce evidence.
 
 ### 8.5 Keeper re-measure
 
@@ -6382,6 +6395,20 @@ for side in ('before','after'):
         (S/f'member-{x}.txt').write_text(''.join(f'sentio_node_si_member_checkpoints_total{{owner="{o}",result="{r}"}} 1\n' for o in ('0','1','2') if o!=host for r in ('accepted','switch_off','refused'))
             +''.join(f'sentio_node_si_member_checkpoint_seq{{owner="{o}"}} 3\n' for o in ('0','1','2') if o!=host))
 case('checkpoint pair ignores non-group pairs',lambda:space['checkpoint_pair'](D/'before',D/'after',D))
+# Rings under D41 with owner c's databases split between member-a and member-b: each block is checked
+# against its own groups (served group_databases), never another group of the same owner.
+R2=F/'d41-rings';R2.mkdir()
+(R2/'groups.jsonl').write_text(''.join(json.dumps({'owner':'2','database':d,'generation':'1','members':[{'node_id':m,'ready_generation':'1','joined_generation':'1'}]})+'\n' for d,m in (('z1','member-a'),('z2','member-b'))))
+pool6=['verifier-1','verifier-2','verifier-3']
+def dblock(n,dbs,member):
+    (R2/f'block-{n}.json').write_text(json.dumps({'block_seq':n,'owner':'2','group_databases':[{'database_id':d,'group_generation':'1'} for d in dbs],'group_members':[member],'eligible_ring':sorted(pool6+[member]),'verifier_set':['verifier-1','verifier-2',member]}))
+dblock(1,['z1'],'member-a');dblock(2,['z2'],'member-b')
+(R2/'blocks-step6.list').write_text('1\n2\n')
+case('rings split owner c: each block against its own group',lambda:space['rings'](R2,'ready','6'))
+dblock(3,['z1'],'member-b');(R2/'blocks-step6.list').write_text('1\n2\n3\n')
+case('ring of another group of the same owner refused',lambda:space['rings'](R2,'ready','6'),False)
+dblock(3,['z1','z2'],'member-a')
+case('block over groups with different ready members refused',lambda:space['rings'](R2,'ready','6'),False)
 # si_antiaffinity under D41, with test_render.py's constants stood in.
 real_constants=space['constants']
 def dconstants(c_node='sea-dg-3',v1_node='sea-dg-7'):
@@ -6518,7 +6545,7 @@ shellcheck -S warning scripts/storage-integrity/make-member-keys.sh scripts/stor
 git diff --check
 ```
 
-Expected: runbook checker PASS (17 sections; Bash/fish block counts are printed, nine ordered held updates); 64 local fixture checks PASS (52 before decision D45, which adds twelve; not re-run since); full render suite OK (record the actual count); every lint 0 charts failed; render-inertness prints `<release> identical` for every pre-existing release. The runbook adds no rendered object; anchor 131-daily-checks is now checked by the exit-alert test. A failing prior-task hunk or current-main drift is fixed in its owning task and replayed here; no weakened assertion is accepted.
+Expected: runbook checker PASS (17 sections; Bash/fish block counts are printed, nine ordered held updates); 67 local fixture checks PASS (52 before decision D45, which adds fifteen; not re-run since); full render suite OK (record the actual count); every lint 0 charts failed; render-inertness prints `<release> identical` for every pre-existing release. The runbook adds no rendered object; anchor 131-daily-checks is now checked by the exit-alert test. A failing prior-task hunk or current-main drift is fixed in its owning task and replayed here; no weakened assertion is accepted.
 
 Write `$W.runbook-restart-selftest.py` with this complete additional local-only synthetic boundary test. It does not execute a marker or prove actual deployment labels, approval or restart health.
 
@@ -6759,7 +6786,7 @@ branch="$(jq -er '.branch | select(type=="string" and startswith("urwt/codex/"))
 si_read_84_3236_1="$(git -C "$W" branch --show-current)" || exit 1
 [ "${si_read_84_3236_1}" = "$branch" ] || { echo 'Task83 worktree branch differs from retained creator JSON; stop'; exit 1; }
 body="$W.pr-body.md"
-printf '%s\n'   'P6 adds inert member consensus/reconciler values, per-container keys and DDL-password mounts, the si_member_ddl user with its const merge profile and exact grant probe, user-side key/login scripts and the bounded held-cleanup exit alert.'   ''   'The complete P6 runbook stages one-way switches, member registration, placement, the shared-Keeper user gate, one-host replica rollout, checkpoints, narrowed drain and k=2 followed by seven days. Every live action is separately confirmed; forward fixes preserve irreversible state. No live deployment or switch changes on merge.'   ''   'Validation: full storage-integrity render suite; three strict Helm profiles; all release renders identical to origin/main; runbook shell/fish/order/confirmation checker; 64 local CRC-budget, Keeper, field-diff, grants, copy-floor, fixed raw-window coverage and soak-budget fixtures.'   ''   'Execution gates: P5_END and P4_END recorded; clickhouse-extra owner agrees K86 thresholds; the remaining promotion budget must fit the seven-day soak or the user decides voter sizing first.'   ''   '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$body"
+printf '%s\n'   'P6 adds inert member consensus/reconciler values, per-container keys and DDL-password mounts, the si_member_ddl user with its const merge profile and exact grant probe, user-side key/login scripts and the bounded held-cleanup exit alert.'   ''   'The complete P6 runbook stages one-way switches, member registration, placement, the shared-Keeper user gate, one-host replica rollout, checkpoints, narrowed drain and k=2 followed by seven days. Every live action is separately confirmed; forward fixes preserve irreversible state. No live deployment or switch changes on merge.'   ''   'Validation: full storage-integrity render suite; three strict Helm profiles; all release renders identical to origin/main; runbook shell/fish/order/confirmation checker; 67 local CRC-budget, Keeper, field-diff, grants, copy-floor, fixed raw-window coverage and soak-budget fixtures.'   ''   'Execution gates: P5_END and P4_END recorded; clickhouse-extra owner agrees K86 thresholds; the remaining promotion budget must fit the seven-day soak or the user decides voter sizing first.'   ''   '🤖 Generated with [Claude Code](https://claude.com/claude-code)' > "$body"
 (cd "$W" && gh pr create --repo sentioxyz/production --base main --head "$branch" --title 'storage-integrity: multi-source SI stage 3 P6 (member consensus values, si_member_ddl, exit alert, switch-on runbook)' --body-file "$body") | tee "$W.pr-url"
 gh pr view "$(cat "$W.pr-url")" --repo sentioxyz/production --json number --jq .number > "$W.pr-number"
 ```
@@ -6854,7 +6881,7 @@ pr="$(jq -er .number "$W.pr-merged.json")"
 python3 -I - "$W.pr-merged.json" "$L/record-84.md" <<'EOF'
 import json,sys
 x=json.load(open(sys.argv[1])); assert x['state']=='MERGED' and x['mergeCommit']['oid'] and x['mergedAt']
-open(sys.argv[2],'w').write(f"{x['url']} merged as {x['mergeCommit']['oid']} at {x['mergedAt']}; Tasks 83 and 84, inert member consensus/reconciler and si_member_ddl values, exit alert and complete P6 runbook. Full render suite, strict Helm profiles, release inertness, runbook checker and 64 local fixtures passed. No live rollout performed; K86 and the soak budget remain execution gates.\n")
+open(sys.argv[2],'w').write(f"{x['url']} merged as {x['mergeCommit']['oid']} at {x['mergedAt']}; Tasks 83 and 84, inert member consensus/reconciler and si_member_ddl values, exit alert and complete P6 runbook. Full render suite, strict Helm profiles, release inertness, runbook checker and 67 local fixtures passed. No live rollout performed; K86 and the soak budget remain execution gates.\n")
 EOF
 git -C "$h" fetch -q origin
 ref="$(python3 -I "$L/s3-ledger.py" ref "$h" s3f)"
@@ -9225,19 +9252,28 @@ def rings():
     ids,members=context(); preaccept(); seqs=(R/'blocks-step6.list').read_text().splitlines()
     need(seqs and all(x.isdigit() for x in seqs),'no acceptance block list')
     seen=set()
+    # Decision D45: every block is checked against its own groups (its served group_databases), and each
+    # owner needs a marked block of its selected acceptance database; under D41 an owner's databases
+    # can be split between members.
+    acceptance=dict(row.split('\t',1) for row in (R/'acceptance-databases.tsv').read_text().splitlines() if row)
+    groups=groups_for('groups.jsonl')
     for seq in sorted(set(seqs),key=int):
         block=load('block-'+seq+'.json')
         if not block['verifier_set']:
             continue
         owner=str(block['owner']); need(owner in ids.values(),'unexpected owner')
-        # Decision D45: the pool plus the ready member of the owner's acceptance-database group (D41: four ids).
-        acceptance=dict(row.split('\t',1) for row in (R/'acceptance-databases.tsv').read_text().splitlines() if row)
-        g=groups_for('groups.jsonl')[(owner,acceptance[owner])]
-        want=sorted({'verifier-1','verifier-2','verifier-3'}|{m['node_id'] for m in g['members'] if int(m['ready_generation'])==int(g['generation'])})
+        names=[r['database_id'] for r in block.get('group_databases') or []]
+        need(names and len(set(names))==len(names) and all((owner,n) in groups for n in names),'block group_databases missing, duplicated or without a current group')
+        sets={frozenset(m['node_id'] for m in groups[(owner,n)]['members'] if int(m['ready_generation'])>=int(groups[(owner,n)]['generation'])>0) for n in names}
+        need(len(sets)==1,'block databases differ in ready members')
+        ready=sorted(next(iter(sets)))
+        need(sorted(block.get('group_members') or [])==ready,'served group_members differ from the groups')
+        want=sorted({'verifier-1','verifier-2','verifier-3'}|set(ready))
         need(block['eligible_ring']==want,'not exact sorted pool+group ring')
         need(len(block['verifier_set'])==len(set(block['verifier_set']))==3 and set(block['verifier_set'])<=set(want),'not a distinct subset verify set')
-        seen.add(owner)
-    need(seen==set(ids.values()),'no actually marked step6 block for each owner')
+        if acceptance.get(owner) in names:
+            seen.add(owner)
+    need(seen==set(ids.values()),'no actually marked step6 block of each owner acceptance database')
     for x in 'abc':
         need((R/f'user-8.4-accept-{x}.done').is_file(),'missing acceptance completion')
         need((R/f'accept-step6-{x}.txt').read_text().strip(),'missing acceptance output')
@@ -9971,7 +10007,7 @@ bash "$HOME/.cache/s3f-task87/run.sh" 8.4-rings 8707-rings
 python3 -I "$HOME/.cache/s3f-task87/verify.py" rings
 ```
 
-Expected a nonempty actually marked acceptance block for each owner with eligible_ring exactly its acceptance group's ready member plus verifier1..3 (four sorted unique ids under decision D41, decision D45), its verify set three distinct ids from that ring, and its own member excluded. An empty set/transition block alone does not prove selection; wait/read the original status until marked or stop, never INSERT again. Intermediate rings-after-x files are the preserved group/readiness captures, not claims that a new marked block existed in a quiet hour. No reselection or checkpoint switch is enabled here.
+Expected every captured block's eligible_ring to be exactly the ready member of its own groups (its served `group_databases`, `group_members` equal to it) plus verifier1..3, and a nonempty actually marked block of each owner's selected acceptance database (four sorted unique ids under decision D41, decision D45), its verify set three distinct ids from that ring, and its own member excluded. An empty set/transition block alone does not prove selection; wait/read the original status until marked or stop, never INSERT again. Intermediate rings-after-x files are the preserved group/readiness captures, not claims that a new marked block existed in a quiet hour. No reselection or checkpoint switch is enabled here.
 
 - [ ] **Step 8: Actual Keeper re-measure at the full replica count (owner + pool + group members: 5 under decision D41) and completion receipt**
 
@@ -10680,13 +10716,20 @@ def convergence():
         if not b['verifier_set']:
             continue
         owner = str(b['owner'])
-        # Decision D45: the pool plus the ready member of one of the owner's groups (D41: four ids).
-        options = [pool | {m['node_id'] for m in g['members']} for g in groups if str(g['owner']) == owner]
-        want = set(b['eligible_ring'])
-        need(want in options and len(b['verifier_set']) == 3 and len(set(b['verifier_set'])) == 3 and set(b['verifier_set']) <= want, 'wrong ready-member eligible ring/set')
+        # Decision D45: the pool plus the ready members of the block's own groups (its served group_databases).
+        by_key = {(str(g['owner']), g['database']): g for g in groups}
+        names = [r['database_id'] for r in b.get('group_databases') or []]
+        need(names and len(set(names)) == len(names) and all((owner, n) in by_key for n in names), 'block group_databases missing, duplicated or without a current group')
+        sets = {frozenset(m['node_id'] for m in by_key[(owner, n)]['members'] if int(m['ready_generation']) >= int(by_key[(owner, n)]['generation']) > 0) for n in names}
+        need(len(sets) == 1, 'block databases differ in ready members')
+        ready = next(iter(sets))
+        need(sorted(b.get('group_members') or []) == sorted(ready), 'served group_members differ from the groups')
+        want = pool | ready
+        need(set(b['eligible_ring']) == want and len(b['verifier_set']) == 3 and len(set(b['verifier_set'])) == 3 and set(b['verifier_set']) <= want, 'wrong ready-member eligible ring/set')
         need(b['group_key'] and b['quorum'] is True, 'acceptance block not keyed/quorum latched')
-        seen.add(owner)
-    need(set(hosts.values()) <= seen, 'owner has no actually marked acceptance block')
+        if dict(targets)[owner] in names:
+            seen.add(owner)
+    need(set(hosts.values()) <= seen, 'owner has no actually marked block of its acceptance database')
     print('every group member/owner pair: counters and published sequences advanced; CaughtUp/latest;6801–6803 safe/keyed;unsafe cleanup; k1 age0')
 
 if __name__ == '__main__':
