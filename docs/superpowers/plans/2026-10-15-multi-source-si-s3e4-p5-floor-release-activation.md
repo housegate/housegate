@@ -4,6 +4,8 @@
 
 **Goal:** Finish the P5 code layer of stage 3 and activate it on devnet2. The arbiter enforces the copy floor of spec §9.3 in Apply and in the leader's WorkSet through one predicate, with the purge and pressure escapes, strict mode and its retryable `COPIES_BACKPRESSURE` refusal, the `under_replicated` signals, the release of a Leaving member (§6.4) and the precondition for raising k; it narrows the drain gate to the tracks an update touches, with floor-held unsafe parts excluded (§10.1), and `arbiter-admin` defaults to an issuance hold only when the leader's committed `narrowed_drain` switch is on and the update touches no track, otherwise to drain; an explicit `--hold` wins. The whole stage-3 arbiter branch (Tasks 64–78) is proven in an integration harness with three SNodes, real members in consensus mode and the network pool, pinned against a frozen pre-stage-3 history, replayed offline against copies of the devnet2 logs and released once as `ARBITER_TAG_P5`. sentio-node ships the `stage3_v1` hosts, the member consent statement and the inert member key configuration (`SN_COMMIT_P5`). production adds the stage-3 alert rules and the plain-body writer value. devnet2 then runs an offline replay and a rehearsal on copies of the live state, rolls every component while it still writes v20, and commits the irreversible v21 activation with every switch off; the plan ends when every voter writes v21.
 
+**Amendment D45 (decision of 2026-11-02): devnet2's shared failure domain (D41) and census rule (D44) in this plan.** Plan S3-D's decision D41 records indexer-a's and indexer-b's sources (and verifier-1..3) on sea-dg-7, so `DEVNET2_FAILURE_DOMAINS` is `0=node:sea-dg-7,1=node:sea-dg-7,<INDEXER_C_ID>=node:sea-dg-3` and devnet2's failure domains are not independent. `si_p5_py params` accepts exactly that repetition (indexers 0 and 1 on `node:sea-dg-7`, a literal cross-checked against `test_render.py`'s `DEVNET2_SHARED_NODE_EXCEPTION` in §1.1) and refuses every other one, prints a `D41:` line and leaves every copy count per distinct failure domain; the activation record states the non-independence in D41's words; after placement each devnet2 group has one member, so `replica_hosts` list one host per database. No step of this plan introduces or tightens a network policy (D44). The binding text is `2026-11-02-s3e4-s3f-d45-devnet2-d41-d44.md` (this directory), which Tasks 79, 81 and 82 follow where it differs from the text below.
+
 **Architecture:**
 - Task 76 (arbiter): new `fsm/floor.go` with `floorLocked(pp)`, the one copy-floor predicate. `applyScheduleUnsafeCleanup` (Apply) and the WorkSet's `PublishedUncleaned` both call it, so the leader never proposes a cleanup Apply refuses. Strict mode turns the pressure bypass into admission code 13. The raise-k precondition sits in the Apply-only half of `applyUpdateConsensusParams`. The Leaving release is evaluated after every command that can satisfy it and is recorded once. Replicated gauges come through `MetricsSnapshot`; the leader-local `under_replicated` counter and held-cleanup age come through a new orchestrator `FloorMetrics`. Everything is inert until the `checkpoints` switch.
 - Task 77 (arbiter): new `fsm/drain_narrowed.go` with `TouchedTracks`, the narrowed gate and the floor-only exclusion. `DrainViewFor(draft)` answers exactly what Apply's drain gate will answer for that draft, while S3-A's `DrainView()` keeps the stage-2 answer. A consensus hold keeps its normalized draft and judges readiness on it. `arbiter-admin consensus update` picks issuance or drain when `--hold` is not given (K79).
@@ -49,12 +51,13 @@ devnet2 expected when Task 82 starts, as the exit records of S3-B (`E_END`), S3-
 - **ClickHouse:** every SI ClickHouse in posture C, with `table_engines_require_grant`, `si_member` and `/sentio/<shard>/unsafe_inc` from P2.
 - **Members:** si-members `member-a`, `member-b`, `member-c` (`MEMBER_IDS`) in P2/P3 mode, unregistered, on the member image the P4 exit record names.
 - **Earlier phases:** the P1 backups and the P3 replica-read flag as their exit records leave them.
-- **P4 hardening:** interserver step 2, the CNPs and the Keeper allowlist enforced, node pins, `DEVNET2_FAILURE_DOMAINS` recorded. The node pins are six pairwise-distinct nodes or, where devnet2 lacks them, the fallback of decision D39: verifiers share nodes only with each other, never with a source ClickHouse. The P5 rolls change images only and keep every pin.
+- **P4 hardening:** interserver step 2, the CNPs and the Keeper allowlist enforced, node pins, `DEVNET2_FAILURE_DOMAINS` recorded. The node pins are each ClickHouse's read node: decision D39, except as Plan S3-D decision D41 records for devnet2 (indexer-a's and indexer-b's sources and verifier-1..3 share sea-dg-7, indexer-c's source is on sea-dg-3; devnet2's failure domains are not independent). The P5 rolls change images only and keep every pin.
 - **Monitoring:** live with the P0–P4 rule groups.
 
 ## Global Constraints
 
-- **Earlier plans apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies, and through them those of S1-A, S1-B, S2-A and S2-B. So do the cross-plan conventions and the Global Constraints of S3-C1 … S3-E3 (strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions). So do the cross-plan decisions D25–D40, which continue S3-B's D1–D24. This plan cites by number those that touch it: D25–D27, D30, D31, D33, D34, D36, D37, D39 and D40.
+- **Earlier plans apply.** Every Global Constraint and clarification of Plans S3-A and S3-B applies, and through them those of S1-A, S1-B, S2-A and S2-B. So do the cross-plan conventions and the Global Constraints of S3-C1 … S3-E3 (strict decoder, request-only signatures, signed claims, tracks, quarantine, golden files, worktrees, commits, remote actions). So do the cross-plan decisions D25–D40, which continue S3-B's D1–D24. This plan cites by number those that touch it: D25–D27, D30, D31, D33, D34, D36, D37, D39 and D40, and Plan S3-D's D41 and D44 as decision D45 applies them.
+- **Network policies (decision D44, as D45 applies it).** No step of this plan introduces or tightens a network policy or the Keeper allowlist: the P5 rolls change images, rules and values, and the rehearsal Pod carries no `clickhouse.altinity.com/chi` label, so no SI CiliumNetworkPolicy selects it. Should a step add one, it needs a census that covers every client's period (the daily `si-backup` CronJobs, restores, the operator's reconciles) or a fresh user decision; D42's one-hour window and D44's acceptance are never reused.
 - **Activation model.** Tasks 76–79 add behaviour only behind committed state: the `checkpoints` switch (Task 76's floor, metrics and admission refusal), `strict_copies` and a raised `min_safe_copies` (Task 76), `narrowed_drain` (Task 77) and the default-off `storage_integrity.member.consensus` keys (Task 79). With `stage3` unset or every switch off, every Apply answer, WorkSet, drain refusal and hold readiness is byte-identical to the P4 base, and the P5 binary writes v20 until `stage3` commits (S3-E2 contract §46). This plan adds no proto number, Raft tag, field or `ConsensusAdmin` method; every number it uses is S3-E1 contract §39's. Those numbers sit on the `PROTO_TAG_P4` base that S3-D produces unconditionally, where `RebalanceGroup` is `ConsensusAdmin` method 16 and `MarkMemberLagging` 17, of 18 (decision D26).
 - **Ordering.** Tasks 76 → 77 → 78 continue `urwt/codex/multi-source-s3e` after Task 75, and no arbiter release is cut from `main` between Task 64's pin and Task 78's cut (K65). Task 79 may start once `CORE_TAG_P5` and `HG_TAG_P5` exist and `SN_COMMIT_P4` is recorded (its branch starts from sentio-node `origin/main` at or after `SN_COMMIT_P4`, keeping the sentio-node release order). Task 80's branch starts from `origin/main` after `P4_PR` merged. Task 82 starts only once `P4_END` is on the ledger copy and `P5_PR` has merged. On devnet2 the order is replay and rehearsal first, then verifiers, hosts (b, c, a) with their si-members, voters (followers first, leader last), re-registration and the activation (K81).
 - **One irreversible step.** The activation update of runbook §7.2 is the only consensus change of this plan and cannot be undone: from it on the voters write v21, which `ARBITER_TAG_P4` refuses, every later update carries `stage3`, and no component may run an image older than this plan's again. Before it, every component can return to its P4 image. After it, the only lever is the plain-body writer value (runbook §11).
@@ -123,7 +126,7 @@ The spec and the earlier plans leave these details open; each is resolved here a
 | `PROTO_TAG_P5`, `HG_TAG_P5`, `CORE_TAG_P5` | the S3-E1 releases: every v21 number, codes 12 and 13 at the ingress, canonical types, wire tags 38–42, member consensus mode, `stage3_v1` in `LocalNodeFeatures` | Plan S3-E1, Appendix C |
 | `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4` | the arbiter release on every arbiter pod at `P4_END`; the replay's `old` build, the rollback image and the base of branch `urwt/codex/multi-source-s3e` | Plan S3-D, Appendix C |
 | `SN_COMMIT_P4` / `SN_DIGEST_P4` | the sentio-node release on every host at `P4_END`; the hosts' rollback image | Plan S3-D, Appendix C |
-| `DEVNET2_FAILURE_DOMAINS` | each enrolled indexer's `node:<hostname>`; the activation's `indexer_failure_domains` | Plan S3-D, Appendix C |
+| `DEVNET2_FAILURE_DOMAINS` | each enrolled indexer's `node:<hostname>`; the activation's `indexer_failure_domains`; on devnet2 `0=node:sea-dg-7,1=node:sea-dg-7,<INDEXER_C_ID>=node:sea-dg-3` (D41, not independent; D45) | Plan S3-D, Appendix C |
 | `P4_END` | the end of P4 on devnet2; Task 82 starts only after it | Plan S3-D, Appendix C |
 | `MEMBER_IDS` | `member-a`, `member-b`, `member-c`; none may be registered at the activation (K82) | Plan S3-C3, Appendix C |
 | `INDEXER_C_ID`, `ENROLMENT_EPOCH` | indexer-c's id (restated in the domains) and the epoch the activation expects | Plan S3-B, Appendix C |
@@ -162,7 +165,7 @@ Task 82 writes its values only once all three exist. Every value is read afterwa
 5. **Member keys and the consent statement on a host.**
    - Expected for keys: an inline seed or `replica_signer` key in YAML is refused at load, a key file readable by group or others is refused at start, and the consensus keys are off by default, so nothing registers in P5.
    - Expected for the consent command: it binds exactly the member's public values to the host's network, genesis and indexer id; it refuses the host's own SNode id and malformed values; it verifies its JWS before printing and writes only the JWS to stdout. A consent file that does not bind the member's keys is refused.
-   - Expected for `replica_hosts`: it keeps S3-C4's static list until the registry holds a group. From then on it lists every current member's host through its served `host_indexer_id` (decision D27), never through a node-id-to-host mapping of its own, and never filters by `MemberReady`: that attests the `hg_member_unsafe` replicas of P6 step 6, which reads never use, so filtering by it would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. Whether a listed host serves a read stays that host's own manifest-gated decision (spec §11, S3-C4 K50). On devnet2 the lists after placement equal the static ones, and neither placement nor `MemberReady` changes them.
+   - Expected for `replica_hosts`: it keeps S3-C4's static list until the registry holds a group. From then on it lists every current member's host through its served `host_indexer_id` (decision D27), never through a node-id-to-host mapping of its own, and never filters by `MemberReady`: that attests the `hg_member_unsafe` replicas of P6 step 6, which reads never use, so filtering by it would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. Whether a listed host serves a read stays that host's own manifest-gated decision (spec §11, S3-C4 K50). On devnet2 each group holds one member under decision D41 (owners a and b `member-c`, owner c `member-a` or `member-b`), so from placement on each database's list is that member's one host instead of S3-C4's two (decision D45), and `MemberReady` changes no list.
    - Tests: Task 79 `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation`, `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys`, `TestMemberConsentStatementPrintsOnlyTheJWS`, `TestMemberConsentStatementBindsTheMembersPublicValues`, `TestMemberConsentStatementRefusesTheHostsSNodeNodeID`, `TestReplicaHostsKeepTheStaticListBeforePlacement`, `TestReplicaHostsFollowTheDatabaseGroupOncePlaced`, `TestReplicaHostsListEveryCurrentMemberWhateverItsReadiness`.
 
 ## Task order and dependencies
@@ -241,7 +244,7 @@ Line anchors in the tasks refer to the base revisions of the header.
 | §9.3 E and \|E\| over distinct failure domains, eviction and delisting leave E in the same Apply | 76 |
 | §9.3 strict mode: k − 1 domains, Lagging in E, backpressure (K59 code 13) | 76 |
 | §9.3 raising k precondition | 76; execution: Plan S3-F |
-| §9.3 failure independence, `safe_copies` per distinct node | 76 (`arbiter_safe_copies_min`); the P4 anti-affinity proof, with the D39 fallback (verifiers share nodes only with each other, never with a source ClickHouse): Plan S3-D; kept by every P5 roll: 82; re-check: Plan S3-F |
+| §9.3 failure independence, `safe_copies` per distinct node | 76 (`arbiter_safe_copies_min`); the P4 anti-affinity proof, with the D39 fallback (verifiers share nodes only with each other, never with a source ClickHouse), except as decision D41 records for devnet2 (indexers 0 and 1 share `node:sea-dg-7`; `safe_copies` and `min_safe_copies` count distinct domains, never indexers, Task 76; D45): Plan S3-D; kept by every P5 roll: 82; re-check: Plan S3-F |
 | §6.4 Leaving release (strict and non-strict, recorded once) | 76 (evaluation); record shape: Plan S3-E3 |
 | §10.1 narrowed drain gate, touched tracks, floor-held parts not in flight | 77 |
 | §10.1 issuance hold with an exact `expected_promotion_seq` | 77 (readiness on the draft, default, K79); hold: Plan S3-A |
@@ -12397,7 +12400,7 @@ Notes:
   - **Its own loader.** It shares the si-member's ConfigMap file, but `LoadSIMemberConfig`'s `Validate` requires the member's own environment (both restore variables when `restore` is set, the status token when `serve.enabled` is on), which a process holding `si_member_ddl` must not receive. `LoadSIMemberReconcilerConfig` runs the same refusals and strict decode and then `ValidateReconciler`, which checks only what the reconciler uses.
   - **Its own metrics listener.** Contract §56 says the reconciler serves its two series on `metrics_listen`, but it runs as a second container of the si-member's pod (K30), where the member already binds `metrics_listen` (S3-C3's 9095) and `serve.listen` (9096). It listens on `storage_integrity.member.reconciler.metrics_listen` (default `:9097`, `DefaultSIMemberReconcilerMetricsListen`), refused when its port equals either of the member's. Plan S3-F's chart names the port (cross-plan note).
 - **Metrics (group 5).** `role.ConsensusMetrics()` is nil without `member.Config.Consensus`, so a P5 member exports exactly its S3-C2/S3-C4 series; with the mode, arbiter-core's own collectors are registered on the process's registry beside them. The keeper findings ride `storageIntegrityReconcilerCollector`, which already reads `TableSetStats()` at scrape time: one gauge per reason, counting the last audit's findings, both reasons always exported (zeros included) and a reason a later arbiter-core adds exported rather than dropped, as the collector does for states. Only the owner SNode audits (Task 61), so the series is the host's own; runbook §5 (Task 81) stops on any non-zero value.
-- **`replica_hosts` (group 6, decision D27, fix 249-2).** `ReplicaHostsFromGroups` reads the served `host_indexer_id` of every current member of G(owner, database) and nothing else: no `verifiers` entry, no consensus parameter, no node-id mapping, and never `GroupMember.Ready()`. `MemberReady` attests the member's `hg_member_unsafe` replicas, which only verification uses and which exist only from P6 step 6, while a failed-over read is served from the member's manifest-gated `hg_replica` copy, which the host's own table state serves only while its member serves the database under a lease (spec §11, S3-C4 K50). Filtering by readiness would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. `followerSource.View` maps each group into `Registry.Groups` (owner, database, member hosts), so `tablestate.ReplicaHosts`, which the info method already calls, keeps K50's static list for a database until every owner of its live incarnations has a group, and then lists the union of those groups' member hosts (one owner per database on devnet2). `arbitercore.go` stays the only file that maps registry types into the model; `replica_hosts.go` is the second file that reads `wire` types. A delisted member (served without a host) is skipped and indexer 0 is kept, because `HostIndexerID` is `*uint64` in Task 60's `wire.GroupMember` (Appendix A's consumed-names contract preserves the same pointer presence semantics). On devnet2 every group holds the other two hosts' members, so the lists after placement equal the static ones, and neither the placement switch nor any `MemberReady` changes them.
+- **`replica_hosts` (group 6, decision D27, fix 249-2).** `ReplicaHostsFromGroups` reads the served `host_indexer_id` of every current member of G(owner, database) and nothing else: no `verifiers` entry, no consensus parameter, no node-id mapping, and never `GroupMember.Ready()`. `MemberReady` attests the member's `hg_member_unsafe` replicas, which only verification uses and which exist only from P6 step 6, while a failed-over read is served from the member's manifest-gated `hg_replica` copy, which the host's own table state serves only while its member serves the database under a lease (spec §11, S3-C4 K50). Filtering by readiness would empty every list from the placement switch until step 6 ends and remove read failover for at least Plan S3-F's 24-hour Keeper gate. `followerSource.View` maps each group into `Registry.Groups` (owner, database, member hosts), so `tablestate.ReplicaHosts`, which the info method already calls, keeps K50's static list for a database until every owner of its live incarnations has a group, and then lists the union of those groups' member hosts (one owner per database on devnet2). `arbitercore.go` stays the only file that maps registry types into the model; `replica_hosts.go` is the second file that reads `wire` types. A delisted member (served without a host) is skipped and indexer 0 is kept, because `HostIndexerID` is `*uint64` in Task 60's `wire.GroupMember` (Appendix A's consumed-names contract preserves the same pointer presence semantics). On devnet2 each group holds one member under decision D41 (owners a and b `member-c`, owner c `member-a` or `member-b`, PlaceGroup skipping the shared-domain peer as `failure_domain`), so the placement switch shrinks each database's list from S3-C4's two hosts to its group's one host (decision D45), and no `MemberReady` changes it.
 - **Order and rollback.** `SN_COMMIT_P5` needs `HG_TAG_P5`, `CORE_TAG_P5` and `PROTO_TAG_P5` recorded and sentio-node `main` at or after `SN_COMMIT_P4` (contract §57's release order). Merging runs only CI's `docker-push` (`latest` and `sha-<SN_COMMIT_P5>`); this task never dispatches `Release Devnet` or `Release Testnet` (Step 16). Task 80 allowlists the image as `DEVNET2_STAGE3_P5_SOURCE_IMAGE` and Task 82 rolls it, hosts b, c, a and their si-members in P2/P3 mode, before the activation. Until the v21 activation commits, a host or si-member on `SN_DIGEST_P5` can return to `SN_DIGEST_P4` (the new keys are absent from every P5 config, and `SN_DIGEST_P4`'s strict member decoder would refuse them); after it, no SNode or si-member may run an image older than `SN_COMMIT_P5`, because the arbiter refuses a data-plane registration without `stage3_v1` (Plan S3-E2 contract §45).
 - **Verification while drafting** (Appendix B): every hunk below was applied with a hunk-applying script, from this text, to a scratch sentio-node tree (`git archive origin/main`, `0828f21`) after Plan S3-C1 Task 25's, Plan S3-C2 Task 35's, Plan S3-C4 Task 46's (its review-round-2 text with the admission fence) and Plan S3-D Task 52's hunks, applied the same way from their current texts, with `replace` lines to scratch upstream modules built from the producing tasks' own code: housegate `ed24705` with Plan S3-C1 Task 22 and Plan S3-C4 Tasks 42–44 (`HG_TAG_P3`), then Plan S3-E1 Task 58 (`HG_TAG_P5`); arbiter-proto `7a73f25` with Plan S3-D Task 49 (`PROTO_TAG_P4`), then Task 57 regenerated with `protoc` (`PROTO_TAG_P5`); arbiter-core `cfd4f42` with Plans S3-C1 Tasks 23–24, S3-C2 Tasks 29–34, S3-C4 Task 45 and S3-D Task 50 (`CORE_TAG_P4`), then Plan S3-E1 Tasks 59–63 (`CORE_TAG_P5`). No upstream symbol was hand-stubbed. Run step by step with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` (Go 1.27.1): Step 2's failure was observed against the `P4` modules exactly as written; the pin of Step 3 is emulated by switching the three `replace` lines to the `P5` modules, after which the base tree (Tasks 25–52 alone) still builds, vets and passes its 283 tests unchanged (the pin is additive); every later "Expected: FAIL" appeared as written and every package passed after each implementation step; `gofmt -l` and `go vet ./...` were clean, `go test ./...` passed and `go test -race` of `config`, `simember`, `commands`, `standalone` and `storageintegrityadapter/...` passed. Sixteen mutations each failed a test of this task (a `Ready()` filter in `groupMemberHosts`; the static list kept after placement; the consent gate removed from `run`; the mode mask narrowed to others only; the reconciler logging in with the `si_member` password; the keeper-findings zero series or an unknown reason dropped; the consensus series not registered; the consent statement's host id or SNode-id refusal dropped; the inline-seed refusal disabled; `register` without files accepted; the reconciler without `register` accepted; the reconciler's purge reader reporting a purge; a member outside `Members` listed; `--role` defaulting to `reconciler`). Step 15's built-binary block ran as written and printed exactly its expected lines and no `LEAK:` line. Step 1's ledger block and Step 17's R1, R2 (to a scratch bare origin holding stand-in Appendix C sections on `urwt/claude/ms-si-stage3-plans-cf`) and R4 ran with the fixed `s3-ledger.py` of Plan S3-C1 contract §19 (R1 with a stand-in `urwt-create.sh` that runs `git worktree add` and prints the same JSON) and printed what their Expected says, the record commit authored `poetry <chen@sentio.xyz>`. Every bash block passes `bash -n`, `/bin/bash -n` (3.2), `zsh -n` and `shellcheck -S warning` with its `<…>` values filled in. Not run: Bazel and gazelle (they need the registries and the `git_override` fetches of tags that do not exist yet; the `BUILD.bazel` hunks are what gazelle writes for these files and imports), the ClickHouse-gated suites (this task adds none), and everything remote (fetches, `go get`, the PR, CI, the image and the ledger push to the real origin).
 
@@ -18922,6 +18925,12 @@ ORDER = ["group_size", "network_fill_default", "min_safe_copies", "strict_copies
          "max_lag_publications", "lag_low", "evidence_timeout_l2_blocks", "max_uncleaned_parts_per_partition",
          "max_uncleaned_parts_per_table", "exclude_quarantined_hosts"] + SWITCHES
 NODE = re.compile(r"node:[a-z0-9]([-a-z0-9.]*[a-z0-9])?")
+# Plan S3-D decision D41 (user, 2026-10-29): on devnet2 indexer-a's (0) and indexer-b's (1)
+# sources share sea-dg-7. The only repetition accepted (decision D45); a later amendment lifts it,
+# no edit widens it. Runbook §1.1 checks it against test_render.py's DEVNET2_SHARED_NODE_EXCEPTION.
+D41_SHARED_DOMAINS = {"node:sea-dg-7": frozenset({0, 1})}
+D41_TEXT = ("D41: devnet2's failure domains are not independent (indexer-a and indexer-b share node:sea-dg-7 "
+            "with every verifier ClickHouse), by the user's decision of 2026-10-29")
 
 
 def die(msg):
@@ -18964,8 +18973,12 @@ def cmd_params(domains, c_id, out):
     ids = [e["indexer_id"] for e in entries]
     if ids != sorted(set(ids)) or set(ids) != {0, 1, c}:
         die(f"DEVNET2_FAILURE_DOMAINS names indexers {ids}, not 0, 1 and {c} in ascending order")
-    if len({e["failure_domain"] for e in entries}) != len(entries):
-        die("two indexers share a failure domain in DEVNET2_FAILURE_DOMAINS: the P4 node pins put every source on its own node; stop")
+    by_domain = {}
+    for e in entries:
+        by_domain.setdefault(e["failure_domain"], set()).add(e["indexer_id"])
+    for dom, ids_in in sorted(by_domain.items()):
+        if len(ids_in) > 1 and D41_SHARED_DOMAINS.get(dom) != ids_in:
+            die(f"indexers {sorted(ids_in)} share failure domain {dom} in DEVNET2_FAILURE_DOMAINS, which decision D41 does not record; stop")
     params = dict(FIXED)
     params["indexer_failure_domains"] = entries
     for s in SWITCHES:
@@ -18975,6 +18988,9 @@ def cmd_params(domains, c_id, out):
         f.write(json.dumps(params, indent=2) + "\n")
     for e in entries:
         print(f"indexer {e['indexer_id']} failure domain {e['failure_domain']}")
+    for dom, ids_in in sorted(by_domain.items()):
+        if len(ids_in) > 1:
+            print(f"{D41_TEXT}: indexers {sorted(ids_in)} share {dom}; copies and min_safe_copies count {len(by_domain)} distinct failure domains")
     print(f"{out}: group_size 3, network_fill_default true, min_safe_copies 1, strict_copies false, max_lag_publications 64, lag_low 16, evidence_timeout_l2_blocks 300, max_uncleaned_parts_per_partition 2000, max_uncleaned_parts_per_table 20000, exclude_quarantined_hosts false, every switch off")
 
 
@@ -19282,7 +19298,13 @@ assert t.DEVNET2_ARBITER_DIGEST == arbiter_p4, "the live arbiter pin is not ARBI
 assert t.INDEXER_B_SOURCE_IMAGE == p4 and t.INDEXER_C_SOURCE_IMAGE == p4 and t.FRESH_SOURCE_IMAGE == p4, "a host pin is not the P4 image"
 assert t.DEVNET2_SNAPSHOT_BODY is None and t.DEVNET2_STAGE3_CONSENSUS_MONITORING is False, "the snapshot body or the stage-3 monitoring is set already"
 assert t.P5_REHEARSAL_POD == "docs/examples/storage-integrity-p5-rehearsal-pod.yaml" and t.DEVNET2_STATE_LIMIT_BYTES == 536870912
+# Decision D45: si_p5_py's D41_SHARED_DOMAINS ({"node:sea-dg-7": {0, 1}}) must be the sources Plan S3-D Task 53 recorded.
+d41_record = {"sea-dg-7": frozenset({("storage-integrity-si-v2", "source"), ("storage-integrity-si-v2", "verifier-1"),
+    ("storage-integrity-si-v2", "verifier-2"), ("storage-integrity-si-v2", "verifier-3"), ("storage-integrity-si-v2-indexer-b", "source")})}
+assert t.DEVNET2_SHARED_NODE_EXCEPTION == d41_record, "DEVNET2_SHARED_NODE_EXCEPTION is not D41's record: %r" % (t.DEVNET2_SHARED_NODE_EXCEPTION,)
+# Its sources are indexer-a's (0) and indexer-b's (1): exactly D41_SHARED_DOMAINS.
 print("test_render.py reviews the P5 images; the live pins are P4; snapshot body unset; stage-3 monitoring off; L = 536870912")
+print("test_render.py DEVNET2_SHARED_NODE_EXCEPTION: sources of indexers [0, 1] on sea-dg-7, as si_p5_py D41_SHARED_DOMAINS (D41)")
 EOF
 python3 -B charts/storage-integrity/tests/test_render.py 2>&1 | tail -3
 mkdir -m 700 "$si_backup"
@@ -19292,7 +19314,7 @@ cat "$si_backup/ledger-values.txt"
 echo "pins resolve"
 ```
 
-Expected: `s3-ledger: P5_REHEARSAL ACTIVATION_EPOCH P5_END not recorded yet in <ref>`, `test_render.py reviews the P5 images; the live pins are P4; snapshot body unset; stage-3 monitoring off; L = 536870912`, `Ran <N> tests` and `OK`, the seventeen `NAME=value` lines and `pins resolve`. `$si_backup/pins` holds the eight pins in the order above (`si_p5_image` reads lines 3 and 4), `$si_backup/ledger-values.txt` every value the ledger gave (`si_p5_value` reads it). A `stop` from the ledger tool: stop and ask, never type a value in.
+Expected: `s3-ledger: P5_REHEARSAL ACTIVATION_EPOCH P5_END not recorded yet in <ref>`, `test_render.py reviews the P5 images; the live pins are P4; snapshot body unset; stage-3 monitoring off; L = 536870912`, `test_render.py DEVNET2_SHARED_NODE_EXCEPTION: sources of indexers [0, 1] on sea-dg-7, as si_p5_py D41_SHARED_DOMAINS (D41)` (decision D45; any other record stops), `Ran <N> tests` and `OK`, the seventeen `NAME=value` lines and `pins resolve`. `$si_backup/pins` holds the eight pins in the order above (`si_p5_image` reads lines 3 and 4), `$si_backup/ledger-values.txt` every value the ledger gave (`si_p5_value` reads it). A `stop` from the ledger tool: stop and ask, never type a value in.
 
 ### 1.2 Identities and the stage-3 parameters
 
@@ -19306,9 +19328,9 @@ Unchanged since the indexer-c runbook and the P2 runbook:
 | Voters | `storage-integrity-si-v2-arbiter-0`, `-1`, `-2` |
 | si-members | `member-a` (host 0), `member-b` (host 1), `member-c` (host `<INDEXER_C_ID>`), in P2/P3 mode and unregistered; none may be registered at the activation (K82) |
 | Authority | `0x9Ef3A259D1D87C864431CAb5Ed5F6578Ad5Ad705`; key in `storage-integrity-devnet2-si-v2-authority`, present in every voter and in the rehearsal Pod as `ARBITER_AUTHORITY_PRIVATE_KEY_HEX`; it signs the rehearsal's activation and the activation |
-| Failure domains | `<DEVNET2_FAILURE_DOMAINS>` (Plan S3-D, one `node:<hostname>` per enrolled indexer, the node its source ClickHouse is pinned to) |
+| Failure domains | `<DEVNET2_FAILURE_DOMAINS>` (Plan S3-D, one `node:<hostname>` per enrolled indexer, the node its source ClickHouse is pinned to; 0 and 1 share `node:sea-dg-7` by decision D41) |
 
-The activation's stage-3 parameters (Plan S3-E4 contract §57), every field at its spec default except where a value is given: `group_size` 3, `network_fill_default` true, `min_safe_copies` 1, `strict_copies` false, `exclude_quarantined_hosts` false, every switch false (`purge`, `eviction_voiding`, `owner_aware_selection`, `placement`, `reselection`, `checkpoints`, `narrowed_drain`); `indexer_failure_domains` from `DEVNET2_FAILURE_DOMAINS` for indexers 0, 1 and `<INDEXER_C_ID>`; `max_lag_publications` 64 and `lag_low` 16; `evidence_timeout_l2_blocks` 300, about 10 advances of the registry cursor at `cursorAdvanceInterval: 1m`; `max_uncleaned_parts_per_partition` 2000, below the hosts' `softPartsPerPartition` 2400; `max_uncleaned_parts_per_table` 20000. The rehearsal (§3) and the activation (§7.2) both read them from `$si_backup/stage3-params.json`, which this block writes once, in the JSON of the arbiter's `Stage3Params` (proto field names, numbers as numbers), the file `p5rehearsal -rehearsal.params` decodes (local only):
+The activation's stage-3 parameters (Plan S3-E4 contract §57), every field at its spec default except where a value is given: `group_size` 3, `network_fill_default` true, `min_safe_copies` 1, `strict_copies` false, `exclude_quarantined_hosts` false, every switch false (`purge`, `eviction_voiding`, `owner_aware_selection`, `placement`, `reselection`, `checkpoints`, `narrowed_drain`); `indexer_failure_domains` from `DEVNET2_FAILURE_DOMAINS` for indexers 0, 1 and `<INDEXER_C_ID>` (on devnet2 0 and 1 share `node:sea-dg-7`, D41; every copy count is per distinct failure domain, D45); `max_lag_publications` 64 and `lag_low` 16; `evidence_timeout_l2_blocks` 300, about 10 advances of the registry cursor at `cursorAdvanceInterval: 1m`; `max_uncleaned_parts_per_partition` 2000, below the hosts' `softPartsPerPartition` 2400; `max_uncleaned_parts_per_table` 20000. The rehearsal (§3) and the activation (§7.2) both read them from `$si_backup/stage3-params.json`, which this block writes once, in the JSON of the arbiter's `Stage3Params` (proto field names, numbers as numbers), the file `p5rehearsal -rehearsal.params` decodes (local only):
 
 ```bash
 [ ! -e "$si_backup/stage3-params.json" ] || { echo "stage3-params.json exists already: it is written once"; cat "$si_backup/stage3-params.json"; exit 1; }
@@ -19316,7 +19338,7 @@ si_p5_py params "$(si_p5_value DEVNET2_FAILURE_DOMAINS)" "$(si_p5_owner c)" "$si
 jq -c . "$si_backup/stage3-params.json"
 ```
 
-Expected: three `indexer <id> failure domain node:<hostname>` lines (0, 1 and `<INDEXER_C_ID>`, three different nodes), the summary line and the parameters as one JSON line with `"indexer_failure_domains":[{"indexer_id":0,…},{"indexer_id":1,…},{"indexer_id":<INDEXER_C_ID>,…}]`. Two indexers on one node: stop (Plan S3-D's node pins put every source on its own node).
+Expected: three `indexer <id> failure domain node:<hostname>` lines (0 and 1 on `node:sea-dg-7`, `<INDEXER_C_ID>` on `node:sea-dg-3`, as decision D41 records), one line `D41: devnet2's failure domains are not independent (indexer-a and indexer-b share node:sea-dg-7 with every verifier ClickHouse), by the user's decision of 2026-10-29: indexers [0, 1] share node:sea-dg-7; copies and min_safe_copies count 2 distinct failure domains`, the summary line and the parameters as one JSON line with `"indexer_failure_domains":[{"indexer_id":0,…},{"indexer_id":1,…},{"indexer_id":<INDEXER_C_ID>,…}]`. Any other shared domain: stop (D41 is never widened; decision D45).
 
 The indexer and database ids, read-only:
 
@@ -20381,7 +20403,8 @@ sys.path.insert(0, "charts/storage-integrity/tests")
 import test_render as t
 names = ["DEVNET2_STAGE3_P5_ARBITER_DIGEST", "DEVNET2_STAGE3_P5_SOURCE_IMAGE", "STAGE3_P5_HOST_IMAGES", "WRITER_AUTHORIZATION_IMAGES",
          "STAGE3_HOST_IMAGES", "MEMBER_IMAGES", "DEVNET2_ARBITER_DIGEST", "INDEXER_B_SOURCE_IMAGE", "INDEXER_C_SOURCE_IMAGE",
-         "FRESH_SOURCE_IMAGE", "DEVNET2_SNAPSHOT_BODY", "DEVNET2_STAGE3_CONSENSUS_MONITORING", "P5_REHEARSAL_POD", "DEVNET2_STATE_LIMIT_BYTES"]
+         "FRESH_SOURCE_IMAGE", "DEVNET2_SNAPSHOT_BODY", "DEVNET2_STAGE3_CONSENSUS_MONITORING", "P5_REHEARSAL_POD", "DEVNET2_STATE_LIMIT_BYTES",
+         "DEVNET2_SHARED_NODE_EXCEPTION"]
 with open(sys.argv[1], "w") as f:
     f.write("# The constants of this checkout's test_render.py that runbook §1.1 reads (self-test copy).\n")
     for n in names:
@@ -20441,6 +20464,9 @@ cp charts/storage-integrity/tests/test_render.py "$FX/test_render.orig"
 sed -i '' 's/^MEMBER_IMAGES = .*/MEMBER_IMAGES = frozenset()/' charts/storage-integrity/tests/test_render.py
 expect_fail "§1.1 python with the P5 image not in MEMBER_IMAGES" python3 -I -B "$py11" "$(v ARBITER_DIGEST_P5)" "$(v SN_COMMIT_P5)" "$(v SN_DIGEST_P5)" "$(v ARBITER_DIGEST_P4)" "$(v SN_COMMIT_P4)" "$(v SN_DIGEST_P4)"
 cp "$FX/test_render.orig" charts/storage-integrity/tests/test_render.py
+sed -i '' 's/^DEVNET2_SHARED_NODE_EXCEPTION = .*/DEVNET2_SHARED_NODE_EXCEPTION = {}/' charts/storage-integrity/tests/test_render.py
+expect_fail "§1.1 python without D41's shared-node record" python3 -I -B "$py11" "$(v ARBITER_DIGEST_P5)" "$(v SN_COMMIT_P5)" "$(v SN_DIGEST_P5)" "$(v ARBITER_DIGEST_P4)" "$(v SN_COMMIT_P4)" "$(v SN_DIGEST_P4)"
+cp "$FX/test_render.orig" charts/storage-integrity/tests/test_render.py
 ok "§1.1's test_render check"
 
 # §1.2: the parameters.
@@ -20455,7 +20481,15 @@ assert p["max_lag_publications"] == 64 and p["lag_low"] == 16 and p["group_size"
 assert p["network_fill_default"] is True and not any(p[k] for k in ("strict_copies", "exclude_quarantined_hosts", "purge", "eviction_voiding", "owner_aware_selection", "placement", "reselection", "checkpoints", "narrowed_drain"))
 assert len(p) == 18
 EOF
-expect_fail "params with two indexers on one node" si_p5_py params "0=node:sea-g-5,1=node:sea-g-5,2=node:sea-g-7" 2 "$FX/p.json"
+expect_fail "params with two indexers on a node D41 does not record" si_p5_py params "0=node:sea-g-5,1=node:sea-g-5,2=node:sea-g-7" 2 "$FX/p.json"
+# Decision D45: D41's repetition (indexers 0 and 1 on node:sea-dg-7) is accepted, every other one refused.
+si_p5_py params "0=node:sea-dg-7,1=node:sea-dg-7,2=node:sea-dg-3" 2 "$FX/d41.json" > "$FX/d41.txt" || die "D41 params"
+grep -q '^D41: .*indexers \[0, 1\] share node:sea-dg-7; copies and min_safe_copies count 2 distinct failure domains$' "$FX/d41.txt" || die "D41 line"
+python3 -I -c 'import json,sys; p=json.load(open(sys.argv[1])); assert [e["failure_domain"] for e in p["indexer_failure_domains"]]==["node:sea-dg-7","node:sea-dg-7","node:sea-dg-3"]' "$FX/d41.json" || die "D41 json"
+ok "params accept exactly D41's shared domain and print the D41 line"
+expect_fail "params with indexer-c on the D41 node" si_p5_py params "0=node:sea-dg-7,1=node:sea-dg-7,2=node:sea-dg-7" 2 "$FX/p.json"
+expect_fail "params with indexers 1 and c sharing" si_p5_py params "0=node:sea-dg-7,1=node:sea-dg-3,2=node:sea-dg-3" 2 "$FX/p.json"
+expect_fail "params with indexers 0 and c sharing the D41 node" si_p5_py params "0=node:sea-dg-7,1=node:sea-dg-3,2=node:sea-dg-7" 2 "$FX/p.json"
 expect_fail "params without indexer-c" si_p5_py params "0=node:sea-g-5,1=node:sea-g-6" 2 "$FX/p.json"
 expect_fail "params out of order" si_p5_py params "1=node:sea-g-6,0=node:sea-g-5,2=node:sea-g-7" 2 "$FX/p.json"
 expect_fail "params with a domain that is not node:<hostname>" si_p5_py params "0=sea-g-5,1=node:sea-g-6,2=node:sea-g-7" 2 "$FX/p.json"
@@ -20708,7 +20742,7 @@ bash scripts/storage-integrity/render-inertness.sh origin/main
 git -C "$W" status --porcelain
 ```
 
-Expected: `constants copied: 14` and `fixtures in <T>/fx`; `self-test passed: 46 checks under bash 5.<x>` and `self-test passed: 46 checks under bash 3.2.57(1)-release`; `shellcheck: 59 blocks clean` with no finding printed (SC2154 is excluded: the names are defined along the chain); `Ran <N> tests` and `OK` with Step 1's `<N>` (this task changes no test); `1 chart(s) linted, 0 chart(s) failed` three times; `<release> identical` for every release the script lists; and `git status` showing exactly ` M docs/storage-integrity-devnet2-multi-source-tracks.md` and `?? docs/storage-integrity-devnet2-stage3-p5-v21.md`. A `FAIL` line of the self-test names the check; fix the runbook (Step 3's text) and run Steps 4 to 6 again, never the test.
+Expected: `constants copied: 15` and `fixtures in <T>/fx`; `self-test passed: 51 checks under bash 5.<x>` and `self-test passed: 51 checks under bash 3.2.57(1)-release` (46 before decision D45, which adds five; not re-run since); `shellcheck: 59 blocks clean` with no finding printed (SC2154 is excluded: the names are defined along the chain); `Ran <N> tests` and `OK` with Step 1's `<N>` (this task changes no test); `1 chart(s) linted, 0 chart(s) failed` three times; `<release> identical` for every release the script lists; and `git status` showing exactly ` M docs/storage-integrity-devnet2-multi-source-tracks.md` and `?? docs/storage-integrity-devnet2-stage3-p5-v21.md`. A `FAIL` line of the self-test names the check; fix the runbook (Step 3's text) and run Steps 4 to 6 again, never the test.
 
 - [ ] **Step 7: Commit**
 
@@ -22094,6 +22128,27 @@ def facts(backup, ledger_path, record_path):
     return {"r": r, "commits": commits, "restored": restored[0], "peak": peak, "act": act[0], "order": order, "shown": shown}
 
 
+# Plan S3-D decision D41 (user, 2026-10-29), applied by decision D45: the one shared failure domain on devnet2.
+D41_SHARED_DOMAINS = {"node:sea-dg-7": frozenset({0, 1})}
+D41_TEXT = ("D41: devnet2's failure domains are not independent (indexer-a and indexer-b share node:sea-dg-7 "
+            "with every verifier ClickHouse), by the user's decision of 2026-10-29")
+
+
+def d41_sentence(domains):
+    """The D41 statement when DEVNET2_FAILURE_DOMAINS repeats a domain; any repetition D41 does not record fails."""
+    by = {}
+    for item in domains.split(","):
+        key, _, dom = item.partition("=")
+        by.setdefault(dom, set()).add(int(key))
+    shared = {dom: ids for dom, ids in by.items() if len(ids) > 1}
+    if any(D41_SHARED_DOMAINS.get(dom) != ids for dom, ids in shared.items()):
+        fail("DEVNET2_FAILURE_DOMAINS repeats a failure domain that decision D41 does not record")
+    if not shared:
+        return ""
+    return (f" {D41_TEXT}; `indexer_failure_domains` repeats node:sea-dg-7 for indexers 0 and 1, and every copy count "
+            "(E, `min_safe_copies`, `arbiter_safe_copies_min`) is per distinct failure domain.")
+
+
 def body(f):
     r = f["r"]
     return (
@@ -22108,6 +22163,7 @@ def body(f):
         f"stage3_v1, the v21 activation committed at epoch {r['ACTIVATION_EPOCH']} on {r['ACTIVATION_UTC']} under a drain hold "
         f"(activation block {f['act'][1]}, promotion {f['act'][2]}), every stage-3 switch off. Every voter had written an interned v21 "
         f"snapshot without a fallback by {r['V21_UTC']}; P5 ended on {r['P5_END']}."
+        + d41_sentence(r["DEVNET2_FAILURE_DOMAINS"])
     )
 
 
@@ -22147,7 +22203,9 @@ def ledger_record(args):
         f"(arbiter-core {r['CORE_TAG_P5']}, arbiter-proto {r['PROTO_TAG_P5']}, housegate {r['HG_TAG_P5']}); every voter writes snapshot v21 "
         "with the interned body, `arbiter.raft.snapshotBody` unset (auto); `ARBITER_TAG_P4` and older are no way back.",
         f"Consensus: epoch {r['ACTIVATION_EPOCH']}; `stage3` committed with `group_size` 3, `network_fill_default` true, `min_safe_copies` 1, "
-        f"`strict_copies` false, `indexer_failure_domains` `{domains}`, `max_lag_publications` 64, `lag_low` 16, "
+        f"`strict_copies` false, `indexer_failure_domains` `{domains}`"
+        + (" (0 and 1 share `node:sea-dg-7` by D41; 2 distinct failure domains)" if d41_sentence(domains) else "")
+        + ", `max_lag_publications` 64, `lag_low` 16, "
         "`evidence_timeout_l2_blocks` 300, `max_uncleaned_parts_per_partition` 2000, `max_uncleaned_parts_per_table` 20000, "
         "`exclude_quarantined_hosts` false and every switch off; every later update carries `stage3`; every track unquarantined.",
         f"Hosts and members: indexer-a, indexer-b and indexer-c and the si-members member-a, member-b and member-c on `{p5_image}`; "
@@ -22369,14 +22427,14 @@ Expected: `MERGED <40 hex>`, the `live checkout at origin/main …` line, `the r
 python3 -I "$HOME/.cache/s3e4-task82/p5-runbook.py" block 1.1 1 'echo "pins resolve"' read-only pins --replace 'housegate_repo=/path/to/housegate' 'housegate_repo=/Users/uranuswch/Dev/projects/sentio-network/housegate'
 ```
 
-Expected as the runbook says: `s3-ledger: P5_REHEARSAL ACTIVATION_EPOCH P5_END not recorded yet in <ref>…`, `test_render.py reviews the P5 images; the live pins are P4; snapshot body unset; stage-3 monitoring off; L = 536870912`, `Ran <N> tests` and `OK`, the seventeen `NAME=value` lines and `pins resolve`. Then §1.2's two blocks (local, then cluster reads only):
+Expected as the runbook says: `s3-ledger: P5_REHEARSAL ACTIVATION_EPOCH P5_END not recorded yet in <ref>…`, `test_render.py reviews the P5 images; the live pins are P4; snapshot body unset; stage-3 monitoring off; L = 536870912`, the `test_render.py DEVNET2_SHARED_NODE_EXCEPTION: … (D41)` line (decision D45), `Ran <N> tests` and `OK`, the seventeen `NAME=value` lines and `pins resolve`. Then §1.2's two blocks (local, then cluster reads only):
 
 ```bash
 python3 -I "$HOME/.cache/s3e4-task82/p5-runbook.py" block 1.2 1 'si_p5_py params' read-only stage3-params
 python3 -I "$HOME/.cache/s3e4-task82/p5-runbook.py" block 1.2 2 'sentio_getIndexerInfoById' read-only identities
 ```
 
-Run them in order. Expected as the runbook says: three `indexer <id> failure domain node:<hostname>` lines on three different nodes, the summary line and the parameters as one JSON line; three identity lines with `indexerId` 0, 1 and `<INDEXER_C_ID>`. Then §1.3's two blocks (cluster reads only; the budget copies the leader's newest finished snapshot to the local disk):
+Run them in order. Expected as the runbook says: three `indexer <id> failure domain node:<hostname>` lines, 0 and 1 on `node:sea-dg-7` and `<INDEXER_C_ID>` on `node:sea-dg-3` (D41), the `D41: … indexers [0, 1] share node:sea-dg-7; copies and min_safe_copies count 2 distinct failure domains` line (decision D45), the summary line and the parameters as one JSON line; three identity lines with `indexerId` 0, 1 and `<INDEXER_C_ID>`. Then §1.3's two blocks (cluster reads only; the budget copies the leader's newest finished snapshot to the local disk):
 
 ```bash
 python3 -I "$HOME/.cache/s3e4-task82/p5-runbook.py" block 1.3 1 'baseline-p5.txt' read-only preconditions
@@ -23226,7 +23284,7 @@ Plan S3-A's §0–§6, Plan S3-B's §7–§15 and the contracts of S3-C1 (§16�
 - S3-C2 §23–§24: the grant lists `SI_MEMBER_GRANTS` and `SI_MEMBER_DDL_GRANTS` (§23.2). On `hg_rstage.*` they grant the explicit `SELECT, INSERT, ALTER, CREATE TABLE, DROP TABLE, TRUNCATE, OPTIMIZE`, never `ALL` (decision D36). Also the sentio-node si-member config `config.SIMemberConfig` loaded by `config.LoadSIMemberConfig` (YAML block `storage_integrity.member`, Go `config.StorageIntegrityMemberConfig`), `sentio-node si-member --config-path` (`commands.NewSIMemberCommand`, package `simember` with `simember.Run` and the collector `siMemberCollector`), arbiter-core `member.Role`, `member.Config`.
 - S3-C3 §26–§27: the `charts/sentio-node` value block `siMember` with its own image pin `siMember.image`, rendering StatefulSet `<fullname>-si-member`; ledger `MEMBER_IDS` (`member-a:0,member-b:1,member-c:<INDEXER_C_ID>`, K29); runbook `docs/storage-integrity-devnet2-stage3-p2-members.md`.
 - S3-C4 §31: sentio-node `rpc.StorageIntegrityInfo` field `ReplicaHosts` (`replica_hosts`), `tablestate.ReplicaHosts` and the static replica-host list (K50); arbiter-core `member/serve` (`serve.ServingView`).
-- S3-D §34–§37: `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4`, `SN_COMMIT_P4` / `SN_DIGEST_P4`, `DEVNET2_FAILURE_DOMAINS` (`<indexer id>=node:<hostname>` per enrolled indexer, comma-separated, ascending ids, K55), `P4_END`.
+- S3-D §34–§37: `ARBITER_TAG_P4` / `ARBITER_DIGEST_P4`, `SN_COMMIT_P4` / `SN_DIGEST_P4`, `DEVNET2_FAILURE_DOMAINS` (`<indexer id>=node:<hostname>` per enrolled indexer, comma-separated, ascending ids, K55; a domain may repeat only as decision D41 records, D45), `P4_END`.
 - S3-E1 §39–§43:
   - **Proto:** `Stage3Params` fields 1–18 (`group_size` … `narrowed_drain`), `stage3` = 14 on `ConsensusParamsUpdate` and 9 on `ConsensusMutableParams`, `ConsensusParamsState.stage3_state` = 9, `ADMISSION_CODE_VERIFIERS_UNAVAILABLE = 12`, `ADMISSION_CODE_COPIES_BACKPRESSURE = 13`, `TableRegistrySnapshot.groups = 10`, `stage3 = 12`.
   - **Canonical Go types:** `arbiter.Stage3Params{GroupSize, NetworkFillDefault, MinSafeCopies, StrictCopies, IndexerFailureDomains, MaxLagPublications, LagLow, EvidenceTimeoutL2Blocks, MaxUncleanedPartsPerPartition, MaxUncleanedPartsPerTable, ExcludeQuarantinedHosts, Purge, EvictionVoiding, OwnerAwareSelection, Placement, Reselection, Checkpoints, NarrowedDrain}`, `arbiter.IndexerFailureDomain{IndexerID, FailureDomain}`, `arbiter.VerifierEntry{NodeID, Ed25519Pubkey, HostIndexerID *uint64, ReplicaSigner, ConsentJWS, Weight, FailureDomain, Verify, Replicate, Counts, SharedRMT}`, `arbiter.ExcludedTable`, `arbiter.AdmissionCodeVerifiersUnavailable`, `arbiter.AdmissionCodeCopiesBackpressure`, `arbiter.Stage3Feature = "stage3_v1"`.
@@ -23496,8 +23554,8 @@ A promoted unsafe part is floor-held, and so not in flight, exactly when it belo
   - **Function:** `func ReplicaHostsFromGroups(snap wire.TableRegistrySnapshot, owner uint64, database string) (hosts []uint64, placed bool)` in `storageintegrityadapter/tablestate/replica_hosts.go`, new.
   - **Before placement:** `placed` is false when the snapshot has no group for (owner, database), and S3-C4's static list (K50) is served.
   - **After placement:** the sorted, distinct `HostIndexerID` values of all the group's current `Members`, whatever their `ready_generation`, class or checkpoint; S3-E1's `wire.GroupMember.Ready` is never consulted. Each is the member's served `host_indexer_id` (decision D27), read from the registry snapshot itself; a member served without one (delisted) is skipped. Nothing maps node ids to hosts through `verifiers` entries or the consensus parameters. `Leaving` records are never candidates.
-  - **Why not `Ready()`:** `MemberReady` attests the member's `hg_member_unsafe` replicas (spec §6.4), which only verification uses and which exist only from P6 step 6 (spec §10.4). A failed-over read is served from the member's manifest-gated `hg_replica` copy, which P2 installs and P3 serves. Whether a host serves it is that host's own decision under spec §11's conditions: its table state answers `Replica` only while its member serves the database under a lease, fails closed otherwise, and advertises the result in `replica_databases` (S3-C4 K50). This plan reads spec §11's "each host's advertised readiness" beside the registry's `DatabaseGroup` as that serving state (a reading the spec does not spell out; recorded for a spec clarification), which already gates every read, so the list is not filtered by it. Filtering by `Ready()` would empty every list from `PLACEMENT_EPOCH` until each member's step-6 `MemberReady`, at least the 24 hours of Plan S3-F's Keeper gate. That would remove read failover for that time and fail Plan S3-F's step-5 check that the lists stay unchanged.
-  - **On devnet2:** every group holds the other two hosts' members, so the lists after placement equal S3-C4's static ones until a `RebalanceGroup` changes a group, and neither the placement switch nor any `MemberReady` changes them.
+  - **Why not `Ready()`:** `MemberReady` attests the member's `hg_member_unsafe` replicas (spec §6.4), which only verification uses and which exist only from P6 step 6 (spec §10.4). A failed-over read is served from the member's manifest-gated `hg_replica` copy, which P2 installs and P3 serves. Whether a host serves it is that host's own decision under spec §11's conditions: its table state answers `Replica` only while its member serves the database under a lease, fails closed otherwise, and advertises the result in `replica_databases` (S3-C4 K50). This plan reads spec §11's "each host's advertised readiness" beside the registry's `DatabaseGroup` as that serving state (a reading the spec does not spell out; recorded for a spec clarification), which already gates every read, so the list is not filtered by it. Filtering by `Ready()` would empty every list from `PLACEMENT_EPOCH` until each member's step-6 `MemberReady`, at least the 24 hours of Plan S3-F's Keeper gate. That would remove read failover for that time and fail Plan S3-F's step-5 check that the lists equal the placed groups' member hosts (decision D45).
+  - **On devnet2:** each group holds one member under decision D41 (owners a and b `member-c`, owner c `member-a` or `member-b`), so the placement switch shrinks each database's list from S3-C4's two hosts to its group's one host (decision D45); no `MemberReady` changes it, and no `RebalanceGroup` can add the shared-domain peer.
 - **Named tests:** `TestLoadSIMemberConfigRefusesAnInlineMemberKey`, `TestStorageIntegrityMemberConsensusValidation`, `TestMemberConsensusModeIsOffByDefault`, `TestMemberKeyFilesMustNotBeGroupOrWorldReadable`, `TestMemberConsentFileMustBindTheMembersKeys`, `TestMemberConsentStatementPrintsOnlyTheJWS`, `TestMemberConsentStatementBindsTheMembersPublicValues`, `TestMemberConsentStatementRefusesTheHostsSNodeNodeID`, `TestMemberConsentStatementRefusesMalformedPublicValues`, `TestPinnedArbiterCoreAdvertisesStage3V1`, `TestEmbeddedIngressAnswersStage3AdmissionCodesRetryably`, `TestReplicaHostsKeepTheStaticListBeforePlacement`, `TestReplicaHostsFollowTheDatabaseGroupOncePlaced`, `TestReplicaHostsListEveryCurrentMemberWhateverItsReadiness` (a member with `ready_generation` 0, one ready only at an earlier generation and a ready one are all listed; a member served without `host_indexer_id` is skipped; a Leaving record is never listed), `TestSIMemberReconcilerRoleRunsTheUnsafeReconcilerAsItsOwnUser`, `TestSIMemberReconcilerRoleRefusals`, `TestSIMemberRegistersTheConsensusMetrics`, `TestKeeperFindingsAreExportedWithEveryReason`.
 - **Release:**
   - **Branch:** use Task79 Step1's retained URWT JSON `path` through `session.sh`, preserving its absolute symlink spelling rather than assuming a template path; branch `urwt/codex/multi-source-s3e4`, PR title `feat(storage-integrity): multi-source SI stage 3 P5 host side (stage3_v1, member consent, member keys)`.
@@ -23571,7 +23629,7 @@ A promoted unsafe part is floor-held, and so not in flight, exactly when it belo
 
 **Stage-3 parameters of the activation** (binding, restated in §1.2 and in `$si_backup/stage3-params.json`). Every field keeps its spec default except where a value is given:
 - `group_size` 3, `network_fill_default` true, `min_safe_copies` 1, `strict_copies` false, `exclude_quarantined_hosts` false, every switch false;
-- `indexer_failure_domains` from `DEVNET2_FAILURE_DOMAINS` for indexers 0, 1 and `INDEXER_C_ID`;
+- `indexer_failure_domains` from `DEVNET2_FAILURE_DOMAINS` for indexers 0, 1 and `INDEXER_C_ID`, verbatim (K55), including D41's repetition of `node:sea-dg-7` for 0 and 1, which `cmd_params` accepts, and no other repetition (decision D45);
 - `max_lag_publications` 64, `lag_low` 16;
 - `evidence_timeout_l2_blocks` 300 (about 10 advances of the registry cursor at `cursorAdvanceInterval: 1m`, `charts/storage-integrity/values.yaml:156`);
 - `max_uncleaned_parts_per_partition` 2000, below the hosts' `softPartsPerPartition` 2400 (`housegate:pkg/config/storage_integrity_config.go:241-242`);
