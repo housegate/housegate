@@ -78,9 +78,56 @@ func TestIndexerQuarantinedIsATerminalRejectWithItsCode(t *testing.T) {
 	if !got.Category.RequiresAbort() {
 		t.Fatal("an indexer-quarantined refusal must remove the prepared parts through the terminal-submit path")
 	}
-	// Only code 11 joins the coded terminal rejects: a code this binary does not
+	// Only codes 11-13 join the coded terminal rejects: a code this binary does not
 	// know still converges through the status probe, as before.
-	if unknown := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode(12), Message: "future"}); unknown.Category != OutcomeUnknown || unknown.AdmissionCode != "" {
+	if unknown := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode(14), Message: "future"}); unknown.Category != OutcomeUnknown || unknown.AdmissionCode != "" {
 		t.Fatalf("unknown code outcome = %+v, want OutcomeUnknown without a code", unknown)
+	}
+}
+
+// TestVerifiersUnavailableIsATerminalRejectWithItsCode pins spec 2026-10-14
+// §7.3: the arbiter answers ADMISSION_CODE_VERIFIERS_UNAVAILABLE, with its
+// state unchanged, when the eligible ring of the statement's group holds
+// fewer than three verifiers, so the outcome is a coded terminal reject. Its
+// category removes the prepared parts through the terminal-submit path, and
+// its code tells the ingress which client refusal to send.
+func TestVerifiersUnavailableIsATerminalRejectWithItsCode(t *testing.T) {
+	const reason = "storage-integrity verifiers unavailable for indexer 1: 2 eligible, at least 3 required"
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE, Message: reason})
+	if got.Category != OutcomeTerminalReject || got.AdmissionCode != AdmissionCodeVerifiersUnavailable ||
+		got.AdmissionCode != "ADMISSION_CODE_VERIFIERS_UNAVAILABLE" || got.Reason != reason {
+		t.Fatalf("outcome = %+v", got)
+	}
+	if !got.Category.RequiresAbort() {
+		t.Fatal("a verifiers-unavailable refusal must remove the prepared parts through the terminal-submit path")
+	}
+	if pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE != 12 {
+		t.Fatalf("ADMISSION_CODE_VERIFIERS_UNAVAILABLE = %d, want 12 (plan S3-E1 contract §39)", pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE)
+	}
+}
+
+// TestCopiesBackpressureIsATerminalRejectWithItsCode pins spec 2026-10-14
+// §9.3 and plan S3-E1 K59: with strict_copies on, the arbiter answers
+// ADMISSION_CODE_COPIES_BACKPRESSURE, with its state unchanged, while the
+// copy floor holds the table's cleanup above its uncleaned-parts bound, so
+// the outcome is a coded terminal reject. Its category removes the prepared
+// parts through the terminal-submit path, and its code tells the ingress to
+// answer back-pressure.
+func TestCopiesBackpressureIsATerminalRejectWithItsCode(t *testing.T) {
+	const reason = "storage-integrity copy floor: net1.events holds 20001 uncleaned promoted parts (max_uncleaned_parts_per_table 20000) whose cleanup waits for member checkpoints (strict_copies); retry later"
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE, Message: reason})
+	if got.Category != OutcomeTerminalReject || got.AdmissionCode != AdmissionCodeCopiesBackpressure ||
+		got.AdmissionCode != "ADMISSION_CODE_COPIES_BACKPRESSURE" || got.Reason != reason {
+		t.Fatalf("outcome = %+v", got)
+	}
+	if !got.Category.RequiresAbort() {
+		t.Fatal("a copies-backpressure refusal must remove the prepared parts through the terminal-submit path")
+	}
+	if pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE != 13 {
+		t.Fatalf("ADMISSION_CODE_COPIES_BACKPRESSURE = %d, want 13 (plan S3-E1 contract §39)", pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE)
+	}
+	// Without a message the code names the reason, as for every coded reject.
+	if bare := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE}); bare.Reason != AdmissionCodeCopiesBackpressure {
+		t.Fatalf("reason without a message = %q, want %q", bare.Reason, AdmissionCodeCopiesBackpressure)
 	}
 }

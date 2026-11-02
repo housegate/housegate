@@ -72,6 +72,8 @@ func TestSessionPreservingIngressException_AcceptsMarker(t *testing.T) {
 		{Code: proto.Error(chproto.CodeQueryIsProhibited), Message: chproto.TableNoLongerAcceptsWritesMessage("db1.t") + chproto.SeqUnspentSuffix},
 		{Code: proto.Error(chproto.CodeTableIsBeingRestarted), Message: chproto.SourceUnavailableMessage("db1.t") + chproto.SeqUnspentSuffix},
 		{Code: proto.Error(chproto.CodeQueryIsProhibited), Message: chproto.IndexerQuarantinedMessage("db1.t") + chproto.SeqUnspentSuffix},
+		{Code: proto.Error(chproto.CodeTableIsBeingRestarted), Message: chproto.VerifiersUnavailableMessage("db1.t") + chproto.SeqUnspentSuffix},
+		{Code: proto.Error(chproto.CodeTooManyParts), Message: chproto.CopiesBackpressureMessage("db1.t") + chproto.SeqUnspentSuffix},
 	} {
 		if !isSessionPreservingIngressException(exc) {
 			t.Errorf("marked %d %q must stay session-preserving", exc.Code, exc.Message)

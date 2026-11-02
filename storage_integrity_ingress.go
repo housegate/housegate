@@ -864,6 +864,38 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				KeepSession: true,
 				SeqUnspent:  true}
 		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeVerifiersUnavailable {
+			// The eligible ring of the table's group holds fewer than three
+			// verifiers (spec 2026-10-14 §7.3; the arbiter checks it right after
+			// the source). The arbiter changed nothing, so the coordinate is
+			// unspent, and the terminal-submit path has already removed the
+			// prepared parts. The refusal is retryable and ends only the query;
+			// the relay recognises the exact message on the wire.
+			log.Warnw("storage_integrity statement refused: the table's verifiers are not available",
+				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+				Message:     chproto.VerifiersUnavailableMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeCopiesBackpressure {
+			// Strict mode holds the table's cleanup at the copy floor while it
+			// is above its uncleaned-parts bound (spec 2026-10-14 §9.3, plan
+			// S3-E1 K59). The arbiter changed nothing, so the coordinate is
+			// unspent, and the terminal-submit path has already removed the
+			// prepared parts. The client gets the 252 back-pressure it already
+			// retries, counted like local back-pressure; it ends only the
+			// query, and the relay accepts the back-pressure prefix on the wire.
+			storageIntegrityBackpressureTotal.WithLabelValues(sicore.PhysicalTableName(rec.TableID)).Inc()
+			log.Warnw("storage_integrity statement refused: the table's replica copies hold its cleanup",
+				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeTooManyParts,
+				Message:     chproto.CopiesBackpressureMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
 		// Spec 2026-10-09 §6.6: a coded terminal reject other than
 		// DUPLICATE_CLIENT_SEQ left the coordinate unspent; name the code so the
 		// agent can act on it. A code-less terminal reject (a gRPC status) or

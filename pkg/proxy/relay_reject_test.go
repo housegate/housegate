@@ -179,6 +179,19 @@ func TestRelay_StagedIndexerQuarantinedRejection_KeepsSessionAndServesNextQuery(
 	testStagedSessionPreservingRejection(t, chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage("db1.t"))
 }
 
+// Spec 2026-10-14 §7.3: a statement whose table's group has fewer than three
+// eligible verifiers is refused retryably with 733, and the session survives.
+func TestRelay_StagedVerifiersUnavailableRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeTableIsBeingRestarted, chproto.VerifiersUnavailableMessage("db1.t"))
+}
+
+// Spec 2026-10-14 §9.3 (plan S3-E1 K59): a strict-mode statement whose table's
+// cleanup waits for its replica copies is refused with 252 back-pressure, and
+// the session survives.
+func TestRelay_StagedCopiesBackpressureRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeTooManyParts, chproto.CopiesBackpressureMessage("db1.t"))
+}
+
 func testStagedSessionPreservingRejection(t *testing.T, code int32, message string) {
 	t.Helper()
 	hooks := &stagedRejectHooks{rejectOne: true, rejectErr: &chproto.ClientError{
@@ -429,6 +442,29 @@ func TestRelay_DeferredUpstreamIndexerQuarantined_KeepsSessionAndServesNextQuery
 	})
 }
 
+// The server-mode Housegate answers a statement whose table's group has fewer
+// than three eligible verifiers with the session-preserving 733 after it
+// consumed the complete staged input; the agent must keep its session too.
+func TestRelay_DeferredUpstreamVerifiersUnavailable_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeTableIsBeingRestarted),
+		Name:    "DB::Exception",
+		Message: chproto.VerifiersUnavailableMessage("db1.t"),
+	})
+}
+
+// The server-mode Housegate answers a strict-mode statement whose table's
+// cleanup waits for its replica copies with 252 back-pressure; its message
+// starts with the back-pressure prefix, so the unchanged 252 rule keeps the
+// agent's session.
+func TestRelay_DeferredUpstreamCopiesBackpressure_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeTooManyParts),
+		Name:    "DB::Exception",
+		Message: chproto.CopiesBackpressureMessage("db1.t"),
+	})
+}
+
 func testDeferredUpstreamSessionPreservingRejection(t *testing.T, rejection *chproto.Exception) {
 	t.Helper()
 	baseHooks := &deferredInsertHooks{}
@@ -538,6 +574,14 @@ func TestSessionPreservingIngressException(t *testing.T) {
 		{"indexer quarantined under 252", chproto.CodeTooManyParts, chproto.IndexerQuarantinedMessage("net1.events"), false},
 		{"indexer quarantined without a table id", chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage(""), false},
 		{"indexer quarantined id with whitespace", chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage("net1 events"), false},
+		{"verifiers unavailable", chproto.CodeTableIsBeingRestarted, chproto.VerifiersUnavailableMessage("net1.events"), true},
+		{"verifiers unavailable under 392", chproto.CodeQueryIsProhibited, chproto.VerifiersUnavailableMessage("net1.events"), false},
+		{"verifiers unavailable under 252", chproto.CodeTooManyParts, chproto.VerifiersUnavailableMessage("net1.events"), false},
+		{"verifiers unavailable without a table id", chproto.CodeTableIsBeingRestarted, chproto.VerifiersUnavailableMessage(""), false},
+		{"verifiers unavailable id with whitespace", chproto.CodeTableIsBeingRestarted, chproto.VerifiersUnavailableMessage("net1 events"), false},
+		{"copies back-pressure", chproto.CodeTooManyParts, chproto.CopiesBackpressureMessage("net1.events"), true},
+		{"copies back-pressure under 733", chproto.CodeTableIsBeingRestarted, chproto.CopiesBackpressureMessage("net1.events"), false},
+		{"copies back-pressure under 392", chproto.CodeQueryIsProhibited, chproto.CopiesBackpressureMessage("net1.events"), false},
 		{"peer guard refusal", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and must be read through its host indexer; connect with --database net1 or USE net1", false},
 		{"quarantined host refused table", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: indexer_quarantined: storage-integrity indexer 1 is quarantined", false},
 		{"refused", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: SCHEMA_INVALID: bad column", false},
