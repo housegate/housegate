@@ -534,13 +534,13 @@ if err := p.Run(ctx); err != nil { return err }
 - 测试场景需要 `:0` 端口的 proxy，搭配自定义的 `Validator` / `NetworkState` / `Rewriter` fake。
 - indexer id 不是静态的（运行时链上注册）— 把 `GetIndexerId` 接到 registry 上。
 
-生命周期与所有权细节见 [docs/superpowers/specs/2026-04-26-cmd-library-mode-design.md](docs/superpowers/specs/2026-04-26-cmd-library-mode-design.md)。
+生命周期与所有权细节见 `2026-04-26-cmd-library-mode-design` (internal design doc)。
 
 ---
 
 # Part 3 — 多 Proxy 路由原理
 
-线上部署里通常会有多个 server-mode housegate 并排跑，每个 indexer 一个。Agent 上的 `clickhouse-client` 可能会发出 `USE tenantB`，但 `tenantB` 实际并不在当前 agent 正在通信的那个 server-mode proxy 上，而在另一个 proxy 上。整个 proxy 网络要透明地解决这个问题。完整设计见 [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md)。
+线上部署里通常会有多个 server-mode housegate 并排跑，每个 indexer 一个。Agent 上的 `clickhouse-client` 可能会发出 `USE tenantB`，但 `tenantB` 实际并不在当前 agent 正在通信的那个 server-mode proxy 上，而在另一个 proxy 上。整个 proxy 网络要透明地解决这个问题。完整设计见 `2026-04-28-two-port-server-mode` (internal design doc)。
 
 ## 拓扑总览
 

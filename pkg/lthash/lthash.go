@@ -1,6 +1,6 @@
 // Package lthash implements the lattice-hash content commitment used by the
 // storage-network data-integrity verification layer (see
-// docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md §5).
+// internal design doc 2026-06-10-multi-replica-trust-design §5).
 //
 // Configuration follows Solana SIMD-0215: each element is expanded with
 // BLAKE3-XOF to 2048 bytes interpreted as 1024 little-endian u16 lanes;

@@ -1,6 +1,6 @@
 // Package lthashplugin is the MVP wire-side LtHash commitment pipeline
 // from the storage-network data-integrity design
-// (docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md).
+// (internal design doc 2026-06-10-multi-replica-trust-design).
 //
 // Scope: for every INSERT flowing through the proxy it decodes the client
 // Data blocks, hashes each row into an LtHash accumulator (raw row values

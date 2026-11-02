@@ -20,7 +20,7 @@ import (
 // UpstreamDialer is mode-specific (server / agent) and supplied at
 // construction time. Hooks is the composed plugin chain.
 //
-// Design: docs/superpowers/specs/2026-04-21-clickhouse-tcp-conn-interface-design.md
+// Design: internal design doc 2026-04-21-clickhouse-tcp-conn-interface-design
 type Server struct {
 	Hooks          plugin.Hooks
 	UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error)

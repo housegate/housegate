@@ -1,43 +1,24 @@
 # SUPERPOWERS DOCS GUIDE
 
 ## OVERVIEW
-`docs/superpowers` holds design specs and implementation plans. These docs often preserve historical decisions, so edit them as source-controlled design artifacts, not casual notes.
+Design specs and implementation plans moved to the maintainers' internal design-docs repository (see the root `CLAUDE.md`, "Design docs"). `docs/superpowers/` now holds only the multi-source storage-integrity **stage-3 plan set**, temporarily: Plans S3-A … S3-F are also the `s3-ledger.py` release ledger (each plan's Appendix C), and the ledger reads them from `origin/main` here. The set moves to the internal repository once Plan S3-F lands.
 
 ## STRUCTURE
 ```
 docs/superpowers/
-|-- specs/   # design specs, sometimes bilingual English + zh-CN
-`-- plans/   # implementation plans and historical execution notes
+|-- specs/   # 2026-10-14 stage-3 database-groups design (English + zh-CN)
+`-- plans/   # Plans S3-A … S3-F (ledger files), s3cf scoping/status/names index, stage-3 handoff, decisions (s3c3 member image, D41+)
 ```
 
-## WHERE TO LOOK
-| Task | Location | Notes |
-|------|----------|-------|
-| Current storage integrity design | `specs/2026-06-22-storage-integrity-design.md` | Promotion shadow table and `REPLACE PARTITION` direction. |
-| Multi-replica trust design | `specs/2026-06-10-multi-replica-trust-design.md` | Replay-first semantics, `_hg_row_id`, safe/unsafe boundary. |
-| Peer trust and routing | `specs/2026-04-28-peer-trust-design.md`, `specs/2026-04-28-two-port-server-mode.md` | `__route__`, `__peer__`, internal listener posture. |
-| ClickHouse packet architecture | `specs/2026-04-21-clickhouse-tcp-conn-interface-design.md` | Codec/relay invariants and legacy migration context. |
-| Deprecated docs | `../deprecated/` | Historical context only; do not treat as current behavior. |
-
 ## CONVENTIONS
-- English is the source of truth for bilingual specs.
-- For Chinese updates, regenerate from the English technical meaning instead of patching independently.
-- Keep protocol identifiers in English when translation would reduce precision: `statement_id`, `statement_seq`, `_hg_row_id`, `payload_hash`, `state_root`.
+- New stage-3 plans, decisions and amendments keep going here until the set moves; anything else goes to the internal design-docs repository, never here.
+- These files were deliberately left byte-for-byte unchanged by the docs move (the ledger and running executions depend on them), so their links to documents that already moved now dangle: look the target up by file name in the internal repository. They are rewritten when the set moves.
+- A ledger row is filled only by the record procedure of the plan that defines it (`s3-ledger.py set`), never by hand.
+- English is the source of truth for bilingual specs; regenerate the Chinese side from the English meaning instead of patching it independently.
+- Keep protocol identifiers in English: `statement_id`, `statement_seq`, `_hg_row_id`, `payload_hash`, `state_root`.
 - Use one paragraph per line. Do not hard-wrap new English or CJK prose.
-- Design claims should match current code or explicitly say they are north-star / future-state.
-
-## ANTI-PATTERNS
-- Do not explain safe/unsafe routing as Keeper labels or `_part` filtering inside one mixed table when the intended boundary is physical isolation.
-- Do not patch only the Chinese side of a bilingual spec when English semantics changed.
-- Do not import plan text into current docs without checking whether the plan was superseded by code.
-- Do not turn design-candidate object names into current-code facts unless the repo has adopted them.
 
 ## COMMANDS
 ```bash
 git diff --check -- docs/superpowers
-rg -n 'statement_id|statement_seq|_hg_row_id|payload_hash|state_root|REPLACE PARTITION|promotion shadow' docs/superpowers/specs
 ```
-
-## NOTES
-- Specs before June 2026 may contain line-wrapped paragraphs; do not imitate that style in new edits.
-- The canonical public north-star architecture is in the external `housegate/docs` repo; this repo's `CLAUDE.md` describes the current implementation.

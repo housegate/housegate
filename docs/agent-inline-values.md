@@ -70,4 +70,4 @@ The agent exports `clickhouse_proxy_agent_inline_values_total{result="synthesize
 
 The code is agent-only and default-off, with no new wire or signed-contract field. Upgrade the agent, verify the normal signing key, optional owner and driver settings, selected-upstream or NetworkState configuration, schema source, materializer backend and receiving server auth/ingress configuration, then enable `inline_values.enabled`. Roll back by disabling the flag. Repository acceptance does not by itself establish production deployment or live production acceptance.
 
-Design: [signed inline VALUES design](superpowers/specs/2026-09-23-signed-inline-values-design.md).
+Design: signed inline VALUES design (internal design doc `2026-09-23-signed-inline-values-design`).

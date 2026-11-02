@@ -39,7 +39,7 @@ type PacketObserver interface {
 // Relay drives the bidirectional packet loop between a client and its
 // bound upstream. It is constructed once per session and never shared.
 //
-// Design: docs/superpowers/specs/2026-04-21-clickhouse-tcp-conn-interface-design.md
+// Design: internal design doc 2026-04-21-clickhouse-tcp-conn-interface-design
 type Relay struct {
 	sess   chsession.Session
 	hooks  plugin.Hooks
