@@ -23947,8 +23947,8 @@ Filled in only by the recording tasks through S3-C1 contract §19's `s3-ledger.p
 |---|---|---|
 | `ARBITER_TAG_P5` | | Task 78 |
 | `ARBITER_DIGEST_P5` | | Task 78 |
-| `SN_COMMIT_P5` | | Task 79 |
-| `SN_DIGEST_P5` | | Task 79 |
+| `SN_COMMIT_P5` | `93f522f6dff49c6df4dccd2cd688bce257514bc8` | Task 79 |
+| `SN_DIGEST_P5` | `sha256:8f7710ea011c84f2fbfdd39152e601b860f828290b119d1306cf6f9f1a4c6d69` | Task 79 |
 | `P5_PR` | | Task 81 |
 | `P5_REHEARSAL` | | Task 82 |
 | `ACTIVATION_EPOCH` | | Task 82 |
@@ -23957,6 +23957,12 @@ Filled in only by the recording tasks through S3-C1 contract §19's `s3-ledger.p
 ### Run records
 
 - arbiter P5 release (Task 78):
-- sentio-node P5 release (Task 79):
+- sentio-node P5 release (Task 79): `sentioxyz/sentio-node#208` (`feat(storage-integrity): multi-source SI stage 3 P5 host side (stage3_v1, member consent, member keys)`, reviewed head `24c7c6fdd27197c06b28097f2ca8fa795e96c392`, PR CI run `41429134793` with `build` and `integration-clickhouse` green, Codex review completed without findings) was squash-merged; the merged tree equals the reviewed head's tree and `SN_COMMIT_P4` (`14df40750fb67f41eb095bc1ab1a9f50047d8f7b`) is its ancestor. `docker buildx imagetools inspect` printed an OCI image index whose digest is the recorded `SN_DIGEST_P5` and whose `org.opencontainers.image.revision` is the merge commit; the image's binary lists the new consent command and the `--role` flag.
+  - `sentioxyz/sentio-node#208` squash-merged as `93f522f6dff49c6df4dccd2cd688bce257514bc8` on 2026-11-02T10:31:33Z UTC.
+  - `CI Build` run `41429500988` on `main` at `93f522f6dff49c6df4dccd2cd688bce257514bc8`: `build`, `integration-clickhouse` and `docker-push` `success`. `Release Devnet` and `Release Testnet` were not dispatched.
+  - `ghcr.io/sentioxyz/sentio-node:sha-93f522f6dff49c6df4dccd2cd688bce257514bc8`, index digest `sha256:8f7710ea011c84f2fbfdd39152e601b860f828290b119d1306cf6f9f1a4c6d69`, revision label `93f522f6dff49c6df4dccd2cd688bce257514bc8`.
+  - `go.mod` at `93f522f6dff49c6df4dccd2cd688bce257514bc8` requires housegate `v0.24.0`, arbiter-core `v0.21.0` and arbiter-proto `v0.15.0` (`MODULE.bazel` `git_override` housegate `165491e48ac154291b851c4e5157d2915c51ad9e`, arbiter_core `ef051e2c1a0e7ddaf799474064f81af580f374b3`).
+  - The image's `/sentio-node storage-integrity --help` lists `member-consent-statement` and `si-member --help` lists `--role` (linux/amd64, pulled by digest).
+  - Base was origin/main `14df407` = `SN_COMMIT_P4`, which pinned housegate `v0.23.1` (#205), not `HG_TAG_P3` `v0.23.0`; `MODULE.bazel.lock` did not change with the pin; branch `urwt/claude/multi-source-s3e4` (Claude runtime) in place of the plan's `urwt/codex/...`.
 - P5 PR (Task 81):
 - P5 run and the v21 activation (Task 82):
