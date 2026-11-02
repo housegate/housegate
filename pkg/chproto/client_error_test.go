@@ -245,3 +245,76 @@ func TestIsIndexerQuarantinedReadMessage(t *testing.T) {
 		t.Fatal("the read-side quarantine refusal must not match a session-preserving ingress refusal")
 	}
 }
+
+// TestVerifiersUnavailableMessage pins the exact spec 2026-10-14 §7.3 text
+// (plan S3-E1 contract §40); the relay's deferred-lane classifier depends on
+// it, and 733 also carries other refusals, so only this exact message may keep
+// a session.
+func TestVerifiersUnavailableMessage(t *testing.T) {
+	if got := VerifiersUnavailableMessage("net1.events"); got != "storage_integrity: the verifiers of table net1.events are not available yet; retry shortly (retryable)" {
+		t.Fatalf("VerifiersUnavailableMessage = %q", got)
+	}
+	if !IsVerifiersUnavailableMessage(VerifiersUnavailableMessage("net1.events")) {
+		t.Fatal("IsVerifiersUnavailableMessage rejected its own message")
+	}
+	if !IsVerifiersUnavailableMessage(VerifiersUnavailableMessage("net1.events") + SeqUnspentSuffix) {
+		t.Fatal("IsVerifiersUnavailableMessage must accept the marker suffix")
+	}
+	for _, msg := range []string{
+		"",
+		VerifiersUnavailableMessage(""),
+		VerifiersUnavailableMessage("net1 events"),
+		VerifiersUnavailableMessage("net1.events\t"),
+		SourceUnavailableMessage("net1.events"),
+		TableActivatingMessage("net1.events"),
+		CopiesBackpressureMessage("net1.events"),
+		"storage_integrity: the verifiers of table net1.events are not available yet",
+		"DB::Exception: " + VerifiersUnavailableMessage("net1.events"),
+	} {
+		if IsVerifiersUnavailableMessage(msg) {
+			t.Fatalf("IsVerifiersUnavailableMessage(%q) = true, want false", msg)
+		}
+	}
+	unavailable := VerifiersUnavailableMessage("net1.events")
+	if IsSourceUnavailableMessage(unavailable) || IsTableActivatingMessage(unavailable) || IsTableNoLongerAcceptsWritesMessage(unavailable) ||
+		IsIndexerQuarantinedMessage(unavailable) || IsCopiesBackpressureMessage(unavailable) {
+		t.Fatal("the verifiers-unavailable refusal must not match the other refusals")
+	}
+}
+
+// TestCopiesBackpressureMessage pins the exact spec 2026-10-14 §9.3 text (plan
+// S3-E1 K59, contract §40). It starts with the back-pressure prefix, so the
+// relay's 252 rule keeps the session without a matcher of its own; the
+// matcher still tells it apart from local part back-pressure.
+func TestCopiesBackpressureMessage(t *testing.T) {
+	const want = "storage_integrity: back-pressure: table net1.events waits for its replica copies to catch up; retry later (retryable)"
+	if got := CopiesBackpressureMessage("net1.events"); got != want {
+		t.Fatalf("CopiesBackpressureMessage = %q, want %q", got, want)
+	}
+	if !IsCopiesBackpressureMessage(CopiesBackpressureMessage("net1.events")) {
+		t.Fatal("IsCopiesBackpressureMessage rejected its own message")
+	}
+	if !IsCopiesBackpressureMessage(CopiesBackpressureMessage("net1.events") + SeqUnspentSuffix) {
+		t.Fatal("IsCopiesBackpressureMessage must accept the marker suffix")
+	}
+	for _, msg := range []string{
+		"",
+		CopiesBackpressureMessage(""),
+		CopiesBackpressureMessage("net1 events"),
+		CopiesBackpressureMessage("net1.events\t"),
+		"storage_integrity: back-pressure: retry later",
+		"storage_integrity: back-pressure: hg_unsafe.net1__events partition p_us has 2400 active parts (soft limit 2400); retry later",
+		"storage_integrity: back-pressure: table net1.events waits for its replica copies to catch up",
+		VerifiersUnavailableMessage("net1.events"),
+		SourceUnavailableMessage("net1.events"),
+	} {
+		if IsCopiesBackpressureMessage(msg) {
+			t.Fatalf("IsCopiesBackpressureMessage(%q) = true, want false", msg)
+		}
+	}
+	backpressure := CopiesBackpressureMessage("net1.events")
+	if IsVerifiersUnavailableMessage(backpressure) || IsSourceUnavailableMessage(backpressure) || IsTableActivatingMessage(backpressure) ||
+		IsTableNoLongerAcceptsWritesMessage(backpressure) || IsIndexerQuarantinedMessage(backpressure) {
+		t.Fatal("the copies back-pressure refusal must not match the other refusals")
+	}
+}

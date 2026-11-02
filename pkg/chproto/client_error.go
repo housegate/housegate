@@ -46,6 +46,14 @@ const (
 //     non-retryably with CodeQueryIsProhibited until an authority releases
 //     the indexer. Other refusals share 392, so only this exact message keeps
 //     a session on the deferred lane.
+//   - Verifiers unavailable (spec 2026-10-14 §7.3): the arbiter refused the
+//     statement because the eligible ring of its table's group holds fewer
+//     than three verifiers; refused retryably with CodeTableIsBeingRestarted.
+//   - Copies back-pressure (spec 2026-10-14 §9.3, plan S3-E1 K59): in strict
+//     mode the arbiter refused the statement because the copy floor holds its
+//     table's cleanup above the uncleaned-parts bound; refused with
+//     CodeTooManyParts, and the message starts with the back-pressure prefix
+//     the relay accepts under 252.
 const (
 	tableRefusalPrefix         = "storage_integrity: table "
 	tableActivatingSuffix      = " is being activated; retry shortly (retryable)"
@@ -54,6 +62,10 @@ const (
 	sourceUnavailableSuffix    = " is not active yet; retry shortly (retryable)"
 	indexerQuarantinedPrefix   = "storage_integrity: the indexer that owns table "
 	indexerQuarantinedSuffix   = " is quarantined; writes to it are refused until the indexer is released (not retryable)"
+	verifiersUnavailablePrefix = "storage_integrity: the verifiers of table "
+	verifiersUnavailableSuffix = " are not available yet; retry shortly (retryable)"
+	copiesBackpressurePrefix   = "storage_integrity: back-pressure: table "
+	copiesBackpressureSuffix   = " waits for its replica copies to catch up; retry later (retryable)"
 )
 
 // TableActivatingMessage is the client-facing message of the retryable
@@ -140,6 +152,33 @@ func IsIndexerQuarantinedReadMessage(msg string) bool {
 	}
 	id, reason := rest[:end], rest[end+len(indexerQuarantinedReadInfix):]
 	return strings.IndexFunc(id, unicode.IsSpace) < 0 && reason != ""
+}
+
+// VerifiersUnavailableMessage is the client-facing message of the retryable
+// refusal of a statement whose table's group has fewer than three eligible
+// verifiers (the arbiter's VERIFIERS_UNAVAILABLE, spec 2026-10-14 §7.3).
+func VerifiersUnavailableMessage(tableID string) string {
+	return verifiersUnavailablePrefix + tableID + verifiersUnavailableSuffix
+}
+
+// IsVerifiersUnavailableMessage reports whether message is exactly a
+// verifiers-unavailable refusal for a non-empty, whitespace-free table id.
+func IsVerifiersUnavailableMessage(message string) bool {
+	return isRefusalMessage(message, verifiersUnavailablePrefix, verifiersUnavailableSuffix)
+}
+
+// CopiesBackpressureMessage is the client-facing message of the strict-mode
+// back-pressure refusal of a statement whose table's cleanup waits for its
+// replica copies (the arbiter's COPIES_BACKPRESSURE, spec 2026-10-14 §9.3,
+// plan S3-E1 K59).
+func CopiesBackpressureMessage(tableID string) string {
+	return copiesBackpressurePrefix + tableID + copiesBackpressureSuffix
+}
+
+// IsCopiesBackpressureMessage reports whether message is exactly a
+// copies back-pressure refusal for a non-empty, whitespace-free table id.
+func IsCopiesBackpressureMessage(message string) bool {
+	return isRefusalMessage(message, copiesBackpressurePrefix, copiesBackpressureSuffix)
 }
 
 func isTableRefusalMessage(message, suffix string) bool {
