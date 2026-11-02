@@ -399,6 +399,24 @@ var AdmissionCodeSourceUnavailable = pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAV
 // session-preserving refusal until an authority releases the indexer.
 var AdmissionCodeIndexerQuarantined = pb.AdmissionCode_ADMISSION_CODE_INDEXER_QUARANTINED.String()
 
+// AdmissionCodeVerifiersUnavailable is the arbiter's refusal of a statement
+// whose group's eligible ring, computed with MarkReplaying's filter, holds
+// fewer than three verifiers (spec 2026-10-14 §7.3; returned only with
+// stage3.owner_aware_selection on). The FSM changed nothing, so the
+// coordinate is unspent; the ingress removes the prepared parts through the
+// terminal-submit path and answers the client with a retryable,
+// session-preserving refusal.
+var AdmissionCodeVerifiersUnavailable = pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE.String()
+
+// AdmissionCodeCopiesBackpressure is the arbiter's strict-mode refusal of a
+// statement whose table's cleanup the copy floor holds above its
+// uncleaned-parts bound (spec 2026-10-14 §9.3, plan S3-E1 K59; returned only
+// with stage3.strict_copies on). The FSM changed nothing, so the coordinate
+// is unspent; the ingress removes the prepared parts through the
+// terminal-submit path and answers the client with session-preserving
+// back-pressure.
+var AdmissionCodeCopiesBackpressure = pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -421,7 +439,9 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED,
 		pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED,
 		pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAVAILABLE,
-		pb.AdmissionCode_ADMISSION_CODE_INDEXER_QUARANTINED:
+		pb.AdmissionCode_ADMISSION_CODE_INDEXER_QUARANTINED,
+		pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE,
+		pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE:
 		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String()), AdmissionCode: ack.GetCode().String()}
 	default:
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: firstNonEmpty(reason, ack.GetCode().String())}
