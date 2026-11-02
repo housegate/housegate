@@ -26025,12 +26025,14 @@ Synchronized Appendix A §39's BlockReselection protobuf comment and Task60's mi
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `PROTO_TAG_P5` |  | Task 57 |
+| `PROTO_TAG_P5` | `v0.15.0` | Task 57 |
 | `HG_TAG_P5` |  | Task 58 |
 | `CORE_TAG_P5` |  | Task 63 |
 
 ### Run records
 
-- arbiter-proto release (Task 57):
+- arbiter-proto release (Task 57): `sentioxyz/arbiter-proto#23` (`feat(proto): stage-3 P5 wire contract (v21 fields, Raft tags 38-42, admission codes 12-13)`) squash-merged as `8cb1d19a1a16a9673c839d92ba6d7169ccefa33b` at 2026-11-02T01:43:25Z with the `proto` job passed (`buf lint`, `buf breaking` against `origin/main`, generated code current, `make test`); before the push `buf breaking --against .git#tag=v0.14.0` printed nothing and these revisions built and vetted against the branch through a replace, their tests failing only on the mirrors of the new fields that Tasks 59-60 and Plan S3-E2 Task 64 map: arbiter-core c2a5cfc, arbiter 5eca9b7, sentio-node 14df407, housegate c852997; cut-release dry run `41373982669` previewed `v0.15.0` after `v0.14.0` and pushed no tag; cut-release run `41374078077` cut the annotated tag `v0.15.0` at `8cb1d19a1a16a9673c839d92ba6d7169ccefa33b` with its GitHub release; between `v0.14.0` and `v0.15.0` nineteen files changed, `proto/arbiter.proto` 60, `proto/consensus.proto` 105, `proto/raftlog.proto` 9 and `proto/table_registry.proto` 200 lines added and none removed, and `conformance/stage3_reads_test.go` only in its six exact approved edits (decision D25).
+  - Step 14 at those revisions also failed arbiter-core `wire` `TestBlockVerificationFromPBReadsEveryField` (`arbiter.BlockVerification.eligible_ring has no case`), a mirror test added by arbiter-core #54 after the plan was drafted (Appendix B lists four): it passes on arbiter-core `main` at `v0.14.0` and fails only on an appended §39 field, so the controller accepted it as the same approved new-field class (fifth mirror failure); Task 59 teaches it the `BlockVerification` 14–22 fields.
+  - Step 13 ran without `make tools` (installed generators equal the `Makefile` pins; PR CI's generated-code check passed); Step 14 used `GOFLAGS="-mod=mod -buildvcs=false"`; executed by the Claude runtime (URWT branch `urwt/claude/multi-source-s3e1`).
 - housegate release (Task 58):
 - arbiter-core release (Task 63):
