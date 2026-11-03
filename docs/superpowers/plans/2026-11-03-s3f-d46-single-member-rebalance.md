@@ -67,6 +67,12 @@ The main session put the finding to the user in chat:
 
 The user chose 「接受并写进计划」: accept it and write it into the plan as D46.
 
+The main session then put the pre-switch consequence to the user. No Leaving release is evaluated before the `checkpoints` switch: `releaseLeavingMembersLocked` is gated on `floorActiveLocked` (`fsm/floor.go:462`). So a Keeper-abort rebalance during steps 6–7 frees nothing until step 8. The user answered 「接受，写清楚」 (2026-11-03): accept it and state it plainly.
+
+The controller ruled on two further points the same day:
+- the K87 reading below is accepted as written;
+- §59.7's P6 file and delimiter-body hashes are historical drafting values, not gates (see "The pins" under Follow-ups).
+
 ## Decision D46
 
 **D46: a single-member group's rebalance on devnet2.**
@@ -75,6 +81,13 @@ The user chose 「接受并写进计划」: accept it and write it into the plan
   - At k = 1 that is the expected release: the owner's copy is all that k = 1 asks.
   - At k = 2 the database falls at once to the owner's single copy. `under_replicated` is raised (`arbiter_under_replicated_groups`, the owner's `arbiter_safe_copies_min` = 1, `domains_below_k` cleanups) until a replacement member is caught up with a current checkpoint.
   - Before the `checkpoints` switch, the removed member stays Leaving with its replicas, until step 8's switch-on releases it.
+- **K87 at k = 2, stated plainly.** A sole-member rebalance holds nothing: with |E| = 0, min(k − 1, |E|) = 0 asks for no reflecting copy, so K87 (a)'s held-cleanup age does not move. It shows instead as `domains_below_k` under-replicated events, which the day's review explains (§13.1). It is a K87 (b) breach, which restarts the 7 days, only if a daily check sees `safe_copies` 1.
+- **Keeper abort during steps 6–7 (second user decision).** Before step 8's `checkpoints` switch is committed, a Keeper abort's immediate action is to stop at the current host and start no next host.
+  - Reconcilers already started keep running.
+  - A §15.4 rebalance there only records Leaving, and frees nothing until step 8 is committed.
+  - If the Keeper must shed load sooner, stop and obtain a separately reviewed decision.
+  - The load is bounded meanwhile: reconcilers start one host at a time, every group holds one member, and no SI table exceeds 5 replicas (its owner, the three pool verifiers and its group's member).
+  - S3-F proceeds on that basis.
 - **Each such rebalance is confirmed on its own.** The confirmation request states the consequence for that group at the current k, in the words of runbook §15.4.
 - **During the exit soak:**
   - its `domains_below_k` cleanups are under-replicated events that the day's review must explain (§13.1);
@@ -85,7 +98,7 @@ The user chose 「接受并写进计划」: accept it and write it into the plan
 
 ## What changes in Plan S3-F
 
-All changes are in `2026-10-15-multi-source-si-s3f-p6-switch-on.md`. Line numbers are those of this commit.
+All changes are in `2026-10-15-multi-source-si-s3f-p6-switch-on.md`. Line numbers are those of the first D46 commit.
 
 - **Header** (line 11): the D46 amendment paragraph, after D45's.
 - **Review Focus 3** (line 87): the Keeper-abort forward fix's release is not evaluated before the `checkpoints` switch. During step 6 its first evaluation is step 8's switch-on, and the member keeps its replicas until then.
@@ -109,6 +122,7 @@ All changes are in `2026-10-15-multi-source-si-s3f-p6-switch-on.md`. Line number
     - `release_recorded` false before the switch, and true in the rebalance's own Apply after it;
     - at k = 1: `arbiter_under_replicated_groups` 0;
     - at k = 2: `arbiter_under_replicated_groups` ≥ 1, the owner's `arbiter_safe_copies_min` 1, and `domains_below_k` rising until the replacement is caught up.
+- **Runbook §8.3 and §8.5 Expected, §15.4's first paragraph, Review Focus 3 and Task 87's abort text** (second user decision, a later commit): the steps 6–7 Keeper-abort wording above.
 - **Runbook §16.2** (line 6152): the playbook's "generation-checked RebalanceGroup if needed" carries the same consequence and §15.4's confirmation.
 - **Task 87 abort text** (line 10039): the k1/k2 sentence now states the checkpoints gate and the immediate release, in place of "at k2/strict it can need other reflecting copies".
 - **Appendix B** (line 13242): a D46 entry with the code facts above.
@@ -132,5 +146,5 @@ No other statement in the plan assumes that a rebalance keeps the removed member
 
 - **S3-E4 Task 76 M3.** No test covers a one-member group's held state before Lagging, which is the shape every devnet2 group has. Add one with any work on this rule.
 - **If devnet2 ever needs the copy kept through a rebalance**, that is a fresh user and spec decision: strict mode for the window, or a hold-until-ready option on `RebalanceGroup` (new arbiter code and its own release).
-- **The pre-switch window.** A Keeper-abort forward repair during step 6 removes no replica before step 8's `checkpoints` switch-on, because no release is evaluated until then. If load must actually leave the shared Keeper during step 6, the runbook has no repair that achieves it. That is a question for the user, recorded with this decision but not decided by it.
-- **The pins.** The pins of Appendices A and B that D45 marked as pre-D45 are re-derived after this decision; the re-derivation is recorded with them.
+- **The pre-switch window.** A repair that actually sheds Keeper load during steps 6–7 does not exist. Decided by the user on 2026-11-03 (see above): such a repair needs a separately reviewed decision if the Keeper ever requires one.
+- **The pins.** The pins of Appendices A and B that D45 marked as pre-D45 are re-derived after this decision, and the re-derivation is recorded with them (S3-F Appendix B, "Pins re-derived after D45 and D46"). The runbook pins are the reproducible runbook-fence hashes. §59.7's P6 file `f6f2698f…` and delimiter body `0424122e…` have no reproducible definition: by the controller's ruling of 2026-11-03 they are historical drafting values, not gates.
