@@ -47,7 +47,7 @@ Here `need` is `floorNeed(k)` = k − 1 (`fsm/floor.go:64-69`). With `FrozenEDom
 - the owner's `arbiter_safe_copies_min` is 1;
 - every cleanup that Apply allows for it is recorded as `domains_below_k` (`fsm/floor.go:30`, and the README's "Copy floor" paragraph at that tag), with the hint-only `under_replicated` event.
 
-This lasts until a replacement member is caught up with a current checkpoint. Cleanups are not held, because min(k − 1, |E|) = 0 asks for no reflecting copy. So the held-cleanup age of K87 (a) is not what reveals this. `safe_copies` of K87 (b) is.
+This lasts until a replacement member (for owners a and b the only possible replacement is member-c re-added) is caught up with a current checkpoint. Cleanups are not held, because min(k − 1, |E|) = 0 asks for no reflecting copy. So the held-cleanup age of K87 (a) is not what reveals this. `safe_copies` of K87 (b) is.
 
 **This is the spec's rule.** It is spec §6.4's non-strict release rule, min(k − 1, frozen |E|). Strict mode would instead ask for k − 1 domains of the group as E is now. The P5 code is correct. P5 runs with every switch off and k = 1, so this is not a P5 blocker.
 
@@ -79,7 +79,7 @@ The controller ruled on two further points the same day:
 
 - **Accepted as specified.** On devnet2, from the `checkpoints` switch on, a `RebalanceGroup` that removes or replaces a group's one member releases that member in its own Apply.
   - At k = 1 that is the expected release: the owner's copy is all that k = 1 asks.
-  - At k = 2 the database falls at once to the owner's single copy. `under_replicated` is raised (`arbiter_under_replicated_groups`, the owner's `arbiter_safe_copies_min` = 1, `domains_below_k` cleanups) until a replacement member is caught up with a current checkpoint.
+  - At k = 2 the database falls at once to the owner's single copy. `under_replicated` is raised (`arbiter_under_replicated_groups`, the owner's `arbiter_safe_copies_min` = 1, `domains_below_k` cleanups) until a replacement member (for owners a and b the only possible replacement is member-c re-added) is caught up with a current checkpoint.
   - Before the `checkpoints` switch, the removed member stays Leaving with its replicas, until step 8's switch-on releases it.
 - **K87 at k = 2, stated plainly.** A sole-member rebalance holds nothing: with |E| = 0, min(k − 1, |E|) = 0 asks for no reflecting copy, so K87 (a)'s held-cleanup age does not move. It shows instead as `domains_below_k` under-replicated events, which the day's review explains (§13.1). It is a K87 (b) breach, which restarts the 7 days, only if a daily check sees `safe_copies` 1.
 - **Keeper abort during steps 6–7 (second user decision).** Before step 8's `checkpoints` switch is committed, a Keeper abort's immediate action is to stop at the current host and start no next host.
@@ -92,7 +92,7 @@ The controller ruled on two further points the same day:
 - **During the exit soak:**
   - its `domains_below_k` cleanups are under-replicated events that the day's review must explain (§13.1);
   - a daily check that still finds `safe_copies` 1 is a K87 (b) breach, and the 7 days restart.
-- **No add-then-remove repair on devnet2.** Owner c's group may swap member-a and member-b in one command, with the same immediate release.
+- **No add-then-remove repair on devnet2.** The FSM permits owner c's group only a one-command swap of member-a and member-b, with the same immediate release; for owners a and b the only possible replacement is member-c re-added. This describes what the FSM allows and grants no authority: each such command is a separately confirmed §15.4 forward repair.
 - **No change elsewhere.** No arbiter, arbiter-core, sentio-node or housegate code change. No spec change. Strict mode stays off. A RebalanceGroup is never automatic, and a release is never forced.
 - **Bounds.** D46 is limited to devnet2 under D41 and D45. It lapses with them when D41 is lifted, for example by dedicated nodes: with two members per group, the frozen E of a removed member is no longer empty.
 
@@ -121,8 +121,9 @@ All changes are in `2026-10-15-multi-source-si-s3f-p6-switch-on.md`. Line number
   - The Expected names:
     - `release_recorded` false before the switch, and true in the rebalance's own Apply after it;
     - at k = 1: `arbiter_under_replicated_groups` 0;
-    - at k = 2: `arbiter_under_replicated_groups` ≥ 1, the owner's `arbiter_safe_copies_min` 1, and `domains_below_k` rising until the replacement is caught up.
+    - at k = 2: `arbiter_under_replicated_groups` ≥ 1, the owner's `arbiter_safe_copies_min` 1, and `domains_below_k` rising until the replacement (for owners a and b the only possible replacement is member-c re-added) is caught up.
 - **Runbook §8.3 and §8.5 Expected, §15.4's first paragraph, Review Focus 3 and Task 87's abort text** (second user decision, a later commit): the steps 6–7 Keeper-abort wording above.
+  - §15.4's load-removal repair now reads "From step 8's `checkpoints` switch on"; during steps 6–7 it only records Leaving, and waiting for `release_recorded` then ends only at step 8, which runs after the user lifts the abort (review fixes).
 - **Runbook §16.2** (line 6152): the playbook's "generation-checked RebalanceGroup if needed" carries the same consequence and §15.4's confirmation.
 - **Task 87 abort text** (line 10039): the k1/k2 sentence now states the checkpoints gate and the immediate release, in place of "at k2/strict it can need other reflecting copies".
 - **Appendix B** (line 13242): a D46 entry with the code facts above.
