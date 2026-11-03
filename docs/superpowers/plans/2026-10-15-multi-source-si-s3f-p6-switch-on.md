@@ -13284,7 +13284,7 @@ Not re-derived, because this repository does not reproduce their definition:
 
 | Name | Value | Recorded by |
 | --- | --- | --- |
-| `P6_PR` |  | Task 84 |
+| `P6_PR` | `816` | Task 84 |
 | `PURGE_EPOCH` |  | Task 85 |
 | `VOIDING_EPOCH` |  | Task 85 |
 | `SELECTION_EPOCH` |  | Task 85 |
@@ -13301,7 +13301,7 @@ Not re-derived, because this repository does not reproduce their definition:
 
 Run records
 
-- P6 PR (Task 84):
+- P6 PR (Task 84): https://github.com/sentioxyz/production/pull/816 merged as 4619fb8ca873a5ef9968641deb02f953be32c244 at 2026-11-03T08:05:18Z; Tasks 83 and 84, inert member consensus/reconciler and si_member_ddl values, exit alert and complete P6 runbook. Full render suite, strict Helm profiles, release inertness, runbook checker and 67 local fixtures passed. No live rollout performed; K86 and the soak budget remain execution gates.
 - Steps 1–3 run (Task 85):
 - Steps 4–5 run (Task 86):
 - Keeper headroom gate and step 6 run (Task 87):
