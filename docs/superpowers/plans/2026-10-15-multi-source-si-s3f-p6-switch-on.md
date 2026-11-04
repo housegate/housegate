@@ -13285,9 +13285,9 @@ Not re-derived, because this repository does not reproduce their definition:
 | Name | Value | Recorded by |
 | --- | --- | --- |
 | `P6_PR` | `816` | Task 84 |
-| `PURGE_EPOCH` |  | Task 85 |
-| `VOIDING_EPOCH` |  | Task 85 |
-| `SELECTION_EPOCH` |  | Task 85 |
+| `PURGE_EPOCH` | `8` | Task 85 |
+| `VOIDING_EPOCH` | `9` | Task 85 |
+| `SELECTION_EPOCH` | `10` | Task 85 |
 | `MEMBERS_EPOCH` |  | Task 86 |
 | `PLACEMENT_EPOCH` |  | Task 86 |
 | `PLACEMENT_CUTOVER_BLOCK` |  | Task 86 |
@@ -13302,7 +13302,7 @@ Not re-derived, because this repository does not reproduce their definition:
 Run records
 
 - P6 PR (Task 84): https://github.com/sentioxyz/production/pull/816 merged as 4619fb8ca873a5ef9968641deb02f953be32c244 at 2026-11-03T08:05:18Z; Tasks 83 and 84, inert member consensus/reconciler and si_member_ddl values, exit alert and complete P6 runbook. Full render suite, strict Helm profiles, release inertness, runbook checker and 67 local fixtures passed. No live rollout performed; K86 and the soak budget remain execution gates.
-- Steps 1–3 run (Task 85):
+- Steps 1–3 run (Task 85): PURGE_EPOCH=8; VOIDING_EPOCH=9; SELECTION_EPOCH=10; each expected-epoch update used drain; exact one-field diffs passed; scoped acceptance CREATEs and 6101–6103 safe; unchanged old scoping and owner/pool paths proved; 6301–6303 safe with pool-only stored rings on all owners; no members registered; P5 image, feature and promotion-budget preconditions passed (devnet2 SI monitoring stays off by user decision, so no monitoring precondition or exit alert); owner a acceptance database devuser3 (devnet101 is not in the devuser1 owner map; user decision), acceptance INSERTs ran with agent stdin from /dev/null (local clickhouse-client 26.7 async-insert stdin refusal), each retried keyed block proven not submitted first; evidence at $HOME/si-devnet2-stage3-p6; no recovered unknown CLI outcome.
 - Steps 4–5 run (Task 86):
 - Keeper headroom gate and step 6 run (Task 87):
 - Steps 7–9 run (Task 88):
