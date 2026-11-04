@@ -13288,9 +13288,9 @@ Not re-derived, because this repository does not reproduce their definition:
 | `PURGE_EPOCH` | `8` | Task 85 |
 | `VOIDING_EPOCH` | `9` | Task 85 |
 | `SELECTION_EPOCH` | `10` | Task 85 |
-| `MEMBERS_EPOCH` |  | Task 86 |
-| `PLACEMENT_EPOCH` |  | Task 86 |
-| `PLACEMENT_CUTOVER_BLOCK` |  | Task 86 |
+| `MEMBERS_EPOCH` | `11` | Task 86 |
+| `PLACEMENT_EPOCH` | `12` | Task 86 |
+| `PLACEMENT_CUTOVER_BLOCK` | `173` | Task 86 |
 | `KEEPER_HEADROOM` |  | Task 87 |
 | `STEP6_END` |  | Task 87 |
 | `RESELECTION_EPOCH` |  | Task 88 |
@@ -13303,7 +13303,7 @@ Run records
 
 - P6 PR (Task 84): https://github.com/sentioxyz/production/pull/816 merged as 4619fb8ca873a5ef9968641deb02f953be32c244 at 2026-11-03T08:05:18Z; Tasks 83 and 84, inert member consensus/reconciler and si_member_ddl values, exit alert and complete P6 runbook. Full render suite, strict Helm profiles, release inertness, runbook checker and 67 local fixtures passed. No live rollout performed; K86 and the soak budget remain execution gates.
 - Steps 1–3 run (Task 85): PURGE_EPOCH=8; VOIDING_EPOCH=9; SELECTION_EPOCH=10; each expected-epoch update used drain; exact one-field diffs passed; scoped acceptance CREATEs and 6101–6103 safe; unchanged old scoping and owner/pool paths proved; 6301–6303 safe with pool-only stored rings on all owners; no members registered; P5 image, feature and promotion-budget preconditions passed (devnet2 SI monitoring stays off by user decision, so no monitoring precondition or exit alert); owner a acceptance database devuser3 (devnet101 is not in the devuser1 owner map; user decision), acceptance INSERTs ran with agent stdin from /dev/null (local clickhouse-client 26.7 async-insert stdin refusal), each retried keyed block proven not submitted first; evidence at $HOME/si-devnet2-stage3-p6; no recovered unknown CLI outcome.
-- Steps 4–5 run (Task 86):
+- Steps 4–5 run (Task 86): MEMBERS_EPOCH=11; PLACEMENT_EPOCH=12; PLACEMENT_CUTOVER_BLOCK=173; step4 individually confirmed and step5 run under the user standing authorization, both under drain with exact one-field diffs; unchanged pool and three host-bound consent/key/domain bindings checked; consensus rollouts serial b,c,a (signed commits b:4dcf752e9946b19ff5d4bc182d482f836e4c7ecd, c:4581dad0d9a5461a1aa5a5c52a63d6c1969dc5b9, a:bc88c43c5faefae7c26067e612ac89433c371ddd); host state unchanged, member UID replaced, registered Active VERIFIER/stage3_v1, no member unsafe replica or pre-placement ring; physical/genesis database preview matches placement, Legacy/Refused-only absent; served host0 preserved and replica_hosts equal to the group member hosts before readiness (one host per database under D41); cutover header unkeyed, later headers keyed; 6501–6503 safe with marked pool-only acceptance blocks; no quarantined track; unrelated production main commits adopted by a fast-forward-only custody receipt that refuses SI paths; owner a acceptance key devuser3, agent stdin from /dev/null; evidence $HOME/si-devnet2-stage3-p6.
 - Keeper headroom gate and step 6 run (Task 87):
 - Steps 7–9 run (Task 88):
 - Step 10 and the exit soak (Task 89):
