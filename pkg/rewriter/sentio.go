@@ -572,8 +572,9 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 		return message, fmt.Errorf("RewriteErrorMessage: %w", err)
 	}
 	if resp.Code != pb.RewriteCode_Success {
-		log.Debugw("RewriteErrorMessage non-success", "code", resp.Code, "message", resp.Message)
-		return message, nil
+		// The message names what the rewritten statement touched; without
+		// the inversion it cannot go back to the client as is.
+		return message, fmt.Errorf("RewriteErrorMessage: %s: %s", resp.Code, resp.Message)
 	}
 	return resp.ErrorAfterRewrite, nil
 }
