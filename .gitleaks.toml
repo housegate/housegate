@@ -30,7 +30,6 @@ description = "Test code with obvious-fake keys"
 # eth-private-key shape.
 paths = [
     '''^proxy_test\.go$''',
-    '''^docs/superpowers/.*\.md$''',
 ]
 regexes = [
     '''0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',

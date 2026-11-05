@@ -1,5 +1,4 @@
 AGENTS.md
-docs/superpowers/AGENTS.md
 pkg/chproto/AGENTS.md
 pkg/integration/AGENTS.md
 pkg/plugins/AGENTS.md

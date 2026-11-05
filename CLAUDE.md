@@ -246,7 +246,6 @@ Design specs, implementation plans, rollout plans and reports for this project a
 - Do not add specs or plans under `docs/` (no `docs/superpowers/specs`, `docs/superpowers/plans`, `docs/specs`, `docs/plans`). When a workflow skill (brainstorming, writing-plans, …) would save a spec or plan into this repo, save it to the internal design-docs location instead.
 - Cite a design in code comments, docs and commit messages by its name or date (`internal design doc 2026-04-28-two-port-server-mode`, `spec 2026-09-26 §5`), never by a file path.
 - What stays here: user / operator docs that describe current behavior and are linked from the README (`docs/secrets.md`, `docs/agent-inline-values.md`, `docs/rewriter-fail-closed.md`, `docs/table-reference-hardening.md`).
-- Temporary exception: the multi-source stage-3 plan set (`docs/superpowers/plans/*-multi-source-si-s3*`, the stage-3 design under `docs/superpowers/specs/`, decisions `*-s3d-d4*`) stays here until Plan S3-F lands, because the `s3-ledger.py` release ledger reads it from `origin/main`. Keep adding stage-3 material there until then; see `docs/superpowers/AGENTS.md`.
 
 ## Conventions
 
