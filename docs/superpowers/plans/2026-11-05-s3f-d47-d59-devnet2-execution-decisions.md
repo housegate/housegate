@@ -22,7 +22,7 @@ The ledger records already cite D47–D59 by number. This document is their bind
 - Ruling: D47 also covers §8.5's final Keeper check, which is step 6's own. The 1 h sample-freshness rule of the gate block was kept.
 
 **D48 (2026-11-04T06:45:26Z): accept the operator's software restarts on the DDL-user CHI applies.** The first `si_member_ddl` apply (D-b, indexer-b) made the Altinity operator decide "Config change(s) require host restart" and software-restart the source ClickHouse (about 20 s, same pod UID, container restart count +1). The plan permits no ClickHouse restart there, and the operator's restart policy names no rule for users or that profile, so the exact trigger was not found. The user answered 「接受，继续 c」.
-- The restarts are accepted for the three DDL-user applies (D-b, D-c, D-a). D-a, on the network CHI, restarted its four hosts (source and verifier-1/2/3) once each.
+- The restarts are accepted for the three DDL-user applies (D-b, D-c, D-a). D-b and D-c each software-restarted their single source host once; D-a, on the network CHI, restarted its four hosts (source and verifier-1/2/3) once each. Every pod kept its UID.
 - §8.2's before/after CHI comparison is replaced by: the same pod UID, a restart explained by the operator's `hostSoftwareRestart` in the apply window, ClickHouse answering, and no quarantined track.
 - All other read checks are unchanged: exact grants, merge setting 0, CHI Completed, no `si_cnp_drops`. Each host's probe then passed.
 
