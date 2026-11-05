@@ -287,9 +287,18 @@ func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error) {
 	return "", false, nil
 }
 
+// WithheldExceptionMessage replaces an Exception message that could not be
+// reverse-mapped. The upstream text was produced for the rewritten statement
+// and can name physical databases, tables and remote hosts, so it is never
+// forwarded raw.
+const WithheldExceptionMessage = "Query failed. The error details were withheld: the rewriter could not map them back to the original query."
+
 // OnException reverse-maps any rewritten table/database names in the
 // exception message back to what the client used. No-op if no
-// rewrite was active for this session.
+// rewrite was active for this session. When the reverse-map fails (a
+// transport error, a timeout, a non-success answer) the message is replaced
+// with WithheldExceptionMessage: the exception code and name still reach the
+// client.
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {
 	// Scrubbing is independent of the general reverse-map gate: a ClickHouse
 	// Exception can expose the physical SI namespace even when this session did
@@ -307,7 +316,8 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 	rewritten, err := rw.RewriteErrorMessage(ctx, exc.Message)
 	if err != nil {
 		_, logger := log.FromContext(ctx)
-		logger.Warne(err, "rewriter: error reverse-map failed, forwarding original message")
+		logger.Warne(err, "rewriter: error reverse-map failed, withholding the message")
+		exc.Message = WithheldExceptionMessage
 		return nil
 	}
 	if rewritten != exc.Message {

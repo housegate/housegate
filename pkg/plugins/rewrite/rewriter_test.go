@@ -80,6 +80,8 @@ type fakeRewriter struct {
 	err                             error
 	rewriteCalls                    int
 	errMsgCalls                     int
+	errMsgOut                       *string
+	errMsgErr                       error
 	lastCtx                         context.Context
 	lastEffectiveAccount            string
 	storageIntegrityContractVersion pb.StorageIntegrityContractVersion
@@ -97,6 +99,12 @@ func (f *fakeRewriter) Rewrite(ctx context.Context, _, effectiveAccount string) 
 
 func (f *fakeRewriter) RewriteErrorMessage(_ context.Context, message string) (string, error) {
 	f.errMsgCalls++
+	if f.errMsgErr != nil {
+		return message, f.errMsgErr
+	}
+	if f.errMsgOut != nil {
+		return *f.errMsgOut, nil
+	}
 	return message, nil
 }
 
@@ -520,5 +528,49 @@ func TestOnException_ScrubsWithTheSessionsQuerySnapshot(t *testing.T) {
 	}
 	if exc.Message != "Table <storage-integrity>.db1__t does not exist" {
 		t.Fatalf("after close the current snapshot applies and still redacts the database, got %q", exc.Message)
+	}
+}
+
+// TestOnException_WithholdsWhenReverseMapFails pins the fail-closed rule: the
+// upstream text names the rewritten statement's physical objects, so a failed
+// reverse-map replaces it instead of forwarding it.
+func TestOnException_WithholdsWhenReverseMapFails(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1", errMsgErr: errors.New("rewriter timeout")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 53)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT * FROM tenant1.events", Query: &chproto.Query{Body: "SELECT * FROM tenant1.events"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	exc := &chproto.Exception{Code: 60, Name: "DB::Exception", Message: "Table physical_db_1.tenant1_events does not exist"}
+	if err := p.OnException(context.Background(), sess, exc); err != nil {
+		t.Fatalf("OnException: %v", err)
+	}
+	if rw.errMsgCalls != 1 {
+		t.Fatalf("RewriteErrorMessage calls = %d, want 1", rw.errMsgCalls)
+	}
+	if exc.Message != WithheldExceptionMessage {
+		t.Fatalf("message = %q, want the withheld text", exc.Message)
+	}
+	if exc.Code != 60 || exc.Name != "DB::Exception" {
+		t.Fatalf("code/name changed: %d %q", exc.Code, exc.Name)
+	}
+}
+
+func TestOnException_UsesTheReverseMappedMessage(t *testing.T) {
+	mapped := "Table tenant1.events does not exist"
+	rw := &fakeRewriter{out: "SELECT 1", errMsgOut: &mapped}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 54)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT * FROM tenant1.events", Query: &chproto.Query{Body: "SELECT * FROM tenant1.events"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	exc := &chproto.Exception{Message: "Table physical_db_1.tenant1_events does not exist"}
+	if err := p.OnException(context.Background(), sess, exc); err != nil {
+		t.Fatalf("OnException: %v", err)
+	}
+	if exc.Message != mapped {
+		t.Fatalf("message = %q, want %q", exc.Message, mapped)
 	}
 }

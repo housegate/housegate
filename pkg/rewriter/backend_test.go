@@ -20,6 +20,7 @@ type fakeBackend struct {
 	err        error
 	lastReq    *pb.RewriteSQLRequest
 	lastErrReq *pb.RewriteErrorMessageRequest
+	errMsgResp *pb.RewriteErrorMessageResponse
 
 	matResp    *pb.MaterializeSQLResponse
 	matErr     error
@@ -44,6 +45,9 @@ func (f *fakeBackend) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb
 
 func (f *fakeBackend) RewriteErrorMessage(_ context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error) {
 	f.lastErrReq = req
+	if f.errMsgResp != nil {
+		return f.errMsgResp, nil
+	}
 	return &pb.RewriteErrorMessageResponse{Code: pb.RewriteCode_Success, ErrorAfterRewrite: "inverted"}, nil
 }
 
@@ -437,6 +441,27 @@ func TestSentioRewriter_RewriteErrorMessage(t *testing.T) {
 	}
 	if be.lastErrReq.GetSql() != "SELECT 1" {
 		t.Errorf("request sql = %q, want the stashed last SQL", be.lastErrReq.GetSql())
+	}
+}
+
+// TestSentioRewriter_RewriteErrorMessageNonSuccessIsAnError: a non-success
+// answer carries no inversion, so it surfaces as an error (OnException then
+// withholds the text) instead of handing back the physical message.
+func TestSentioRewriter_RewriteErrorMessageNonSuccessIsAnError(t *testing.T) {
+	be := &fakeBackend{
+		resp: &pb.RewriteSQLResponse{
+			Code:            pb.RewriteCode_Success,
+			SqlAfterRewrite: "SELECT 1",
+			StatementType:   pb.StatementType_STATEMENT_TYPE_SELECT,
+		},
+		errMsgResp: &pb.RewriteErrorMessageResponse{Code: pb.RewriteCode_SyntaxError, Message: "Syntax error"},
+	}
+	rw := newFakeFactory(be).NewRewriter(&fakeSession{})
+	if _, err := rw.Rewrite(context.Background(), "SELECT 1", "acct"); err != nil {
+		t.Fatalf("Rewrite: %v", err)
+	}
+	if _, err := rw.RewriteErrorMessage(context.Background(), "Table phys.x does not exist"); err == nil {
+		t.Fatal("a non-success RewriteErrorMessage answer must be an error")
 	}
 }
 
