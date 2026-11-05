@@ -1,5 +1,5 @@
 // Package payloadexec is the MVP "pinned executor" for the replay verifier
-// (see docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md
+// (see internal design doc 2026-06-10-multi-replica-trust-design
 // Appendix C.3). It is deliberately payload-local and in-process: it decodes a
 // CSV INSERT payload, injects the per-row _hg_row_id described in §5.2, computes
 // per-row LtHash content commitments via pkg/lthash, and folds them into the

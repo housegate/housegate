@@ -1,6 +1,6 @@
 # Table-reference hardening: operator note
 
-Spec: [superpowers/specs/2026-09-26-table-reference-hardening-design.md](superpowers/specs/2026-09-26-table-reference-hardening-design.md) (§9 is the HouseGate half, §14 the execution record). Fail-closed rewriting and `rewriter.fail_open_on_unavailable` are described in [rewriter-fail-closed.md](rewriter-fail-closed.md).
+Spec: `2026-09-26-table-reference-hardening-design` (internal design doc) (§9 is the HouseGate half, §14 the execution record). Fail-closed rewriting and `rewriter.fail_open_on_unavailable` are described in [rewriter-fail-closed.md](rewriter-fail-closed.md).
 
 The SQL rewriter engines enforce the table-reference policy: a tenant statement may only reach its own logical databases, never the physical database, the protocol-owned `hg_safe` / `hg_unsafe` / `hg_promote`, a `system` table outside the allowlist, a refused table function or engine, or an `Identifier` query parameter in a table position. HouseGate proves the engine at startup, sends it the protected namespace on every request, and adds two checks of its own in front of it: a lexical guard and a Query-packet settings check.
 

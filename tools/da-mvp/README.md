@@ -1,7 +1,7 @@
 # DA-Layer Data Sync MVP
 
 A two-week measurement prototype for the DA-layer reliability path. See
-[`../../docs/superpowers/specs/2026-05-25-da-mvp-design.md`](../../docs/superpowers/specs/2026-05-25-da-mvp-design.md)
+`2026-05-25-da-mvp-design` (internal design doc)
 for the design.
 
 ## Runtime dependencies

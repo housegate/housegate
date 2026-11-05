@@ -2,7 +2,7 @@
 //
 // Standalone operators run cmd/housegate; integrators import this
 // package and call New(opts).Run(ctx). See the design spec at
-// docs/superpowers/specs/2026-04-26-cmd-library-mode-design.md
+// internal design doc 2026-04-26-cmd-library-mode-design
 // for lifecycle and ownership rules.
 package housegate
 

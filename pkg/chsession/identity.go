@@ -1,7 +1,7 @@
 // Package chsession holds per-connection ClickHouse proxy state and the
 // Session interface that carries it alongside client and upstream codecs.
 //
-// Design: docs/superpowers/specs/2026-04-21-clickhouse-tcp-conn-interface-design.md
+// Design: internal design doc 2026-04-21-clickhouse-tcp-conn-interface-design
 package chsession
 
 // IdentityClaims is the subset of JWS/JWT claims the rest of the proxy

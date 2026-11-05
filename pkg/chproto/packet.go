@@ -3,7 +3,7 @@
 // ReadPacket, zero-copy Splice for Data/Progress/etc., addendum (chunked)
 // negotiation, and a few ClientCode constants ch-go does not expose.
 //
-// Design: docs/superpowers/specs/2026-04-21-clickhouse-tcp-conn-interface-design.md
+// Design: internal design doc 2026-04-21-clickhouse-tcp-conn-interface-design
 package chproto
 
 import (

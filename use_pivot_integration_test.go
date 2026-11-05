@@ -2,7 +2,7 @@ package housegate
 
 // use_pivot_integration_test.go — end-to-end test for mid-session USE pivot.
 //
-// Origin: docs/superpowers/specs/2026-04-28-two-port-server-mode.md
+// Origin: internal design doc 2026-04-28-two-port-server-mode
 //
 // Confirms that the forward plugin's OnQuery USE-rebind works end-to-end.
 //

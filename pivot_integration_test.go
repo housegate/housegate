@@ -2,7 +2,7 @@ package housegate
 
 // pivot_integration_test.go — end-to-end test for ClientHello-time peer pivot.
 //
-// Origin: docs/superpowers/specs/2026-04-28-two-port-server-mode.md
+// Origin: internal design doc 2026-04-28-two-port-server-mode
 //
 // Confirms that the forward plugin pivots a session to a peer proxy at
 // ClientHello time when the requested database is hosted on a different

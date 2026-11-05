@@ -20,7 +20,7 @@ var ErrNoNetworkState = errors.New("agent selector: no network state")
 //     the user has something to query there.
 //  2. Bootstrap tier — any bound indexer at all. Used only when tier 1
 //     is empty (a brand-new account with no DB perms yet, per
-//     §8.1 of docs/superpowers/specs/2026-04-28-two-port-server-mode.md).
+//     §8.1 of internal design doc 2026-04-28-two-port-server-mode).
 //     The caller is expected to log + meter these picks so operators
 //     can spot accounts that should not be in the bootstrap path.
 //
