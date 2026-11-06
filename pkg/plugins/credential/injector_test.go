@@ -73,6 +73,31 @@ func TestOnHello_PeerEnvelope_AudienceMismatch(t *testing.T) {
 	}
 }
 
+// TestOnHello_PeerEnvelope_EmptyAllowlistRejectsUnknownSigner: a server whose
+// auth allowlist is empty (SQL path open to every account) must refuse a
+// peer-relay envelope self-signed by an arbitrary key, and must not mark the
+// session peer-trusted.
+func TestOnHello_PeerEnvelope_EmptyAllowlistRejectsUnknownSigner(t *testing.T) {
+	stranger, _ := auth.NewRelaySigner(signerKeyHex)
+	validator := auth.NewEthValidator(nil, time.Hour, true, false, "", nil)
+
+	user, password, _ := peer.SignPeerHello(stranger, time.Minute, 7, nil)
+
+	p := &Plugin{
+		PeerValidator:    validator,
+		GetSelfIndexerID: func() uint64 { return 7 },
+	}
+
+	hello := &chproto.ClientHello{User: user, Password: password}
+	sess := newTestSession(t)
+	if err := p.OnHello(context.Background(), sess, hello); err == nil {
+		t.Fatal("peer envelope from an unknown signer was accepted")
+	}
+	if sess.State().IsPeerTrusted {
+		t.Error("session marked peer-trusted after a refused peer envelope")
+	}
+}
+
 func newTestSession(t *testing.T) chsession.Session {
 	t.Helper()
 	c1, c2 := net.Pipe()

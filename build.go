@@ -74,6 +74,16 @@ var _ materialize.Observer = (*proxy.MetricsObserver)(nil)
 // (sentio-node) must construct it themselves and inject via
 // Options.NetworkState. Specifying a Redis source through cfg returns
 // an error directing operators to the injection path.
+// peerSignersFor returns reg's view of the registered indexer signers, or nil
+// when reg does not expose one.
+func peerSignersFor(reg registry.Registry) auth.IndexerSignerSet {
+	signers, ok := reg.(registry.IndexerSigners)
+	if !ok || isNilInterface(signers) {
+		return nil
+	}
+	return signers
+}
+
 func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, error) {
 	if cfg.NetworkState.IsYAMLSource() {
 		yamlState, err := network.LoadNetworkStateFromYAML(cfg.NetworkState.Source)
@@ -454,6 +464,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 	}
 	log.Infow("network state loaded", "source", cfg.NetworkState.Source)
+	// A peer-relay login makes this proxy skip its own auth and rewrite, so
+	// the validator has to tell a peer from a stranger. A configured
+	// allowlist decides that by itself. Without one, only the registry's
+	// indexer signers can, and a registry that does not expose them leaves
+	// every peer login refused. An injected Options.Validator is the
+	// embedder's and is used as-is.
+	if ev, ok := validator.(*auth.EthValidator); ok && opts.Validator == nil {
+		ev.PeerSigners = peerSignersFor(reg)
+		if len(cfg.Auth.AllowedAddresses) == 0 && ev.PeerSigners == nil {
+			log.Warnw("peer-relay logins are refused: auth.allowed_addresses is empty and the network state does not implement registry.IndexerSigners")
+		}
+	}
 	// InMemoryNetworkState (YAML fixtures, dev mode) carries enough
 	// state for the in-memory commitgate observer to mutate as DDL
 	// passes through. Other Registry implementations (RPC backend,

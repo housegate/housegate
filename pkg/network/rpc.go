@@ -204,6 +204,31 @@ func (r *RpcNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	return out
 }
 
+// IsIndexerSigner implements registry.IndexerSigners over
+// sentio_getIndexerInfos. A failed call reports false, so peer logins are
+// refused while the endpoint is unreachable.
+func (r *RpcNetworkState) IsIndexerSigner(address string) bool {
+	address, ok := normalizeSignerAddress(address)
+	if !ok {
+		return false
+	}
+	var infos []IndexerInfo
+	found, err := r.call(context.Background(), "sentio_getIndexerInfos", nil, &infos)
+	if err != nil {
+		log.Warnfe(err, "rpc: getIndexerInfos failed")
+		return false
+	}
+	if !found {
+		return false
+	}
+	for _, info := range infos {
+		if signer, ok := normalizeSignerAddress(info.Signer); ok && signer == address {
+			return true
+		}
+	}
+	return false
+}
+
 // ProxyByIndexerId calls sentio_getIndexerInfoById. ok=false signals
 // either a network-level error (logged) or a JSON-null result.
 func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
@@ -549,3 +574,4 @@ var _ registry.StorageIntegrityReplicaDiscovery = (*RpcNetworkState)(nil)
 
 // Compile-time check the rpc backend satisfies registry.Registry.
 var _ registry.Registry = (*RpcNetworkState)(nil)
+var _ registry.IndexerSigners = (*RpcNetworkState)(nil)

@@ -45,6 +45,11 @@ type EthValidator struct {
 	// platform-operator bypass entirely — every request carrying the
 	// setting is rejected.
 	PlatformOperatorAddresses map[string]bool
+	// PeerSigners names the indexer signers ValidatePeerLogin trusts when
+	// AllowedAddresses is empty. It is not consulted while an allowlist is
+	// configured. Nil together with an empty allowlist refuses every peer
+	// login.
+	PeerSigners IndexerSignerSet
 }
 
 // NewEthValidator constructs an EthValidator from the supplied options.
@@ -403,6 +408,28 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 	return strings.ToLower(recoveredAddr), nil
 }
 
+// checkPeerSigner decides whether addr may log in as a peer. A peer login
+// makes the receiving proxy skip its own auth and rewrite for the session, so
+// it needs a positive trust decision. A configured allowlist is that decision.
+// An empty allowlist opens the SQL-binding path to every account and names no
+// peer, so there the signer must be a registered indexer signer; with no
+// registry to ask, every peer login is refused.
+func (v *EthValidator) checkPeerSigner(addr string) error {
+	if len(v.AllowedAddresses) > 0 {
+		if !v.AllowedAddresses[strings.ToLower(addr)] {
+			return fmt.Errorf("peer address %s not in allowlist", addr)
+		}
+		return nil
+	}
+	if v.PeerSigners == nil {
+		return fmt.Errorf("peer address %s refused: auth.allowed_addresses is empty and no indexer signer registry is available", addr)
+	}
+	if !v.PeerSigners.IsIndexerSigner(addr) {
+		return fmt.Errorf("peer address %s is not a registered indexer signer", addr)
+	}
+	return nil
+}
+
 // ValidatePeerLogin verifies a peer-relay JWS (produced by
 // RelaySigner.SignPeerLogin) and returns the recovered signer address.
 // expectedAudience must match the token's `aud` claim — pass the
@@ -415,8 +442,9 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 //     query-binding JWS)
 //   - aud claim equals expectedAudience
 //   - now is within [iat-skew, exp+skew]
-//   - recovered signer address is in AllowedAddresses (or allowlist
-//     is empty, which means "any authenticated signer is accepted")
+//   - recovered signer address is a trusted peer (checkPeerSigner): in
+//     AllowedAddresses when an allowlist is configured, otherwise a
+//     registered indexer signer according to PeerSigners
 //
 // Validates only the compact serialization — peer login tokens are
 // always single-signer and short-lived; the JSON / multi-sig form is
@@ -471,8 +499,8 @@ func (v *EthValidator) ValidatePeerLogin(token, expectedAudience string) (string
 	if err != nil {
 		return "", fmt.Errorf("peer signature recovery failed: %w", err)
 	}
-	if len(v.AllowedAddresses) > 0 && !v.AllowedAddresses[strings.ToLower(recoveredAddr)] {
-		return "", fmt.Errorf("peer address %s not in allowlist", recoveredAddr)
+	if err := v.checkPeerSigner(recoveredAddr); err != nil {
+		return "", err
 	}
 	log.Debugw("peer-relay login validated",
 		"source", "eth_validator",

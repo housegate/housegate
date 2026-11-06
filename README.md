@@ -147,7 +147,7 @@ replication_proxy:
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `relay_private_key_hex` | string | No | `` | Ethereum private key used to sign proxy-to-proxy (`__route__`) JWS tokens. All relays in a cluster should share this key, and its address must be in `auth.allowed_addresses`. |
+| `relay_private_key_hex` | string | No | `` | Ethereum private key used to sign proxy-to-proxy (`__route__`) JWS tokens. All relays in a cluster should share this key. Its peers must trust its address: listed in their `auth.allowed_addresses`, or, where that list is empty, registered as an indexer signer. |
 | `ckh_manager_config_path` | string | Yes (relay) | `` | Legacy ClickHouseManager config path; the SQL rewriter needs it to resolve table mappings |
 | `credential_replace_enabled` | bool | No | `true` | Replace client-supplied ClickHouse credentials with operator-managed ones before forwarding upstream |
 | `redis_default_addr` | string | No | `` | Fallback Redis address used whenever a feature section leaves its own `redis_addr` blank |
@@ -157,7 +157,7 @@ replication_proxy:
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `auth.enabled` | bool | No | `false` | Enable JWS verification on every query |
-| `auth.allowed_addresses` | []string | No | `[]` | Lowercase `0x…` addresses whose signatures are accepted. Empty = any authenticated signer allowed |
+| `auth.allowed_addresses` | []string | No | `[]` | Lowercase `0x…` addresses whose signatures are accepted, for queries and for proxy-to-proxy (`__peer__`) logins alike. Empty = any authenticated signer may query; a proxy-to-proxy login is then accepted only from a registered indexer signer, and refused when the network state cannot name them |
 | `auth.max_token_age` | duration | No | `1m` | Maximum age of the JWS `iat` claim |
 | `auth.allow_no_auth` | bool | No | `false` | Let unsigned queries through (for soft rollouts) |
 | `auth.writer_predicate` | string | No | `contract` | How INSERT/CREATE/DROP and the other Write-bit statements are authorized: `contract` uses the host's `isDatabaseWriter` (no address(0) Write wildcard; the indexer signer counts); `bitmap` keeps the stored bitmap with the address(0) union. Startup refuses `contract` on a registry without `WriterAccess`. |

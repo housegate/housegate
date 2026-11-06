@@ -40,8 +40,9 @@ var _ Signer = (*RelaySigner)(nil)
 // stringified) and ttl bounds the token's validity window.
 type PeerSigner interface {
 	// Address returns the lowercase 0x-prefixed Ethereum address of
-	// this signer; the verifier on the receiving side must have it in
-	// AllowedAddresses.
+	// this signer; the verifier on the receiving side must trust it as a
+	// peer: in AllowedAddresses when it configures an allowlist, otherwise
+	// as a registered indexer signer.
 	Address() string
 	// SignPeerLogin returns a JWS compact-serialized token whose
 	// payload binds (audience, iat, exp, purpose=peer-relay).
@@ -54,6 +55,16 @@ type PeerSigner interface {
 // does not match.
 type PeerValidator interface {
 	ValidatePeerLogin(token, expectedAudience string) (string, error)
+}
+
+// IndexerSignerSet tells whether an address is the registered signer of an
+// indexer in the network. EthValidator consults it for peer logins when no
+// allowlist is configured; a registry that implements
+// registry.IndexerSigners satisfies it.
+type IndexerSignerSet interface {
+	// IsIndexerSigner reports whether address (0x-prefixed, any case) is
+	// the registered signer of a known indexer.
+	IsIndexerSigner(address string) bool
 }
 
 // Compile-time guards.

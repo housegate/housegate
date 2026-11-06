@@ -115,7 +115,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
-| `relay_private_key_hex` | string | 否 | `` | 用于签 proxy-to-proxy（`__route__`）JWS token 的以太坊私钥。集群内所有 relay 应共用，且其地址必须出现在 `auth.allowed_addresses` 中。 |
+| `relay_private_key_hex` | string | 否 | `` | 用于签 proxy-to-proxy（`__route__`）JWS token 的以太坊私钥。集群内所有 relay 应共用。对端必须信任它的地址：出现在对端的 `auth.allowed_addresses` 中，或者在该列表为空时是已注册的 indexer signer。 |
 | `ckh_manager_config_path` | string | 是（relay） | `` | 旧版 ClickHouseManager 配置路径；SQL rewriter 解析 table mapping 时需要 |
 | `credential_replace_enabled` | bool | 否 | `true` | 转发到 upstream 前用运维管理的凭证替换客户端 ClickHouse 凭证 |
 | `redis_default_addr` | string | 否 | `` | 当某个特性 section 自己的 `redis_addr` 留空时使用的 Redis 兜底地址 |
@@ -125,7 +125,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
 | `auth.enabled` | bool | 否 | `false` | 对每条 query 启用 JWS 校验 |
-| `auth.allowed_addresses` | []string | 否 | `[]` | 允许的小写 `0x…` 地址。空 = 任意通过签名校验的签名者都允许 |
+| `auth.allowed_addresses` | []string | 否 | `[]` | 允许的小写 `0x…` 地址，查询和 proxy-to-proxy（`__peer__`）登录共用。空 = 任意通过签名校验的签名者都可以查询；此时 proxy-to-proxy 登录只接受已注册的 indexer signer，network state 给不出 indexer signer 时一律拒绝 |
 | `auth.max_token_age` | duration | 否 | `1m` | JWS `iat` claim 的最大年龄 |
 | `auth.allow_no_auth` | bool | 否 | `false` | 放行未签名的 query（用于灰度切换） |
 | `auth.writer_predicate` | string | 否 | `contract` | INSERT/CREATE/DROP 及其他 Write 位语句如何鉴权：`contract` 使用宿主的 `isDatabaseWriter`（没有 address(0) 的 Write 通配；indexer signer 算 writer）；`bitmap` 保留存储的 bitmap 检查，并带 address(0) 并集。对不支持 `WriterAccess` 的 registry，启动时会拒绝 `contract`。 |

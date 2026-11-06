@@ -51,3 +51,15 @@ type Topology interface {
 	// mutate; implementations must return a fresh copy.
 	AllIndexers() map[uint64]ProxyAddress
 }
+
+// IndexerSigners is implemented by a registry that knows the registered signer
+// address of each indexer. It is optional: a server with an empty
+// auth.allowed_addresses needs it to accept peer-relay logins, because there
+// the signer of a peer login must be a registered indexer signer. A registry
+// without it leaves such a server refusing every peer login.
+type IndexerSigners interface {
+	// IsIndexerSigner reports whether address (0x-prefixed, any case) is
+	// the registered signer of a known indexer. An empty or all-zeros
+	// address is never one. A lookup that fails reports false.
+	IsIndexerSigner(address string) bool
+}

@@ -8,11 +8,78 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
+	housegate "github.com/housegate/housegate"
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/peer"
 )
+
+// TestPeerEnvelope_EmptyAllowlistAdmitsOnlyRegisteredIndexerSigners is the
+// open-network shape: auth.allowed_addresses is empty so that every account
+// may sign queries. A peer login skips auth and commitgate, so it must stay
+// closed to accounts: the server admits it only from the registered signer of
+// an indexer in its network state.
+//
+// The server has auth on and no rewriter, the fail-closed posture in which the
+// permission observer rejects every ordinary statement. A SELECT that returns
+// therefore ran peer-trusted, and a stranger's envelope must not get that far.
+func TestPeerEnvelope_EmptyAllowlistAdmitsOnlyRegisteredIndexerSigners(t *testing.T) {
+	indexerSigner, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	stranger, err := auth.NewRelaySigner(authTestKey2)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+
+	const (
+		serverIndexer uint64 = 42
+		peerIndexer   uint64 = 7
+	)
+	server := testenv.StartServerProxy(t, chEnv.Addr,
+		authProxyConfig(nil, false),
+		testenv.WithCredentialReplace(),
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.IndexerID = serverIndexer
+		}),
+		func(_ *config.Config, opts *housegate.Options) {
+			ns := opts.NetworkState.(*network.InMemoryNetworkState)
+			ns.IndexerInfos[peerIndexer] = network.IndexerInfo{IndexerId: peerIndexer, Signer: indexerSigner.Address()}
+		},
+	)
+
+	selectAsPeer := func(signer *auth.RelaySigner) error {
+		token, err := signer.SignPeerLogin(strconv.FormatUint(serverIndexer, 10), 30*time.Second)
+		if err != nil {
+			t.Fatalf("SignPeerLogin: %v", err)
+		}
+		conn, err := clickhouse.Open(&clickhouse.Options{
+			Addr: []string{server.Addr},
+			Auth: clickhouse.Auth{
+				Database: chEnv.Database,
+				Username: peer.FormatUser(signer.Address()),
+				Password: token,
+			},
+			Protocol: clickhouse.Native,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close() }()
+		var v uint8
+		return conn.QueryRow(context.Background(), "SELECT 1").Scan(&v)
+	}
+
+	if err := selectAsPeer(indexerSigner); err != nil {
+		t.Fatalf("peer login from a registered indexer signer: %v", err)
+	}
+	if err := selectAsPeer(stranger); err == nil {
+		t.Fatal("peer login from an unregistered signer ran a statement")
+	}
+}
 
 // TestPeerEnvelope_BypassesAuthAndCommitgate pins the inbound side of
 // the __peer__|<addr> envelope contract: when a connecting client
