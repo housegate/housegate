@@ -212,6 +212,32 @@ func (s *InMemoryNetworkState) IsDatabaseWriter(database, account string) (bool,
 	return bits&(registry.DbAuthOwner|registry.DbAuthWrite) != 0, nil
 }
 
+// IsIndexerSigner implements registry.IndexerSigners over IndexerInfos.
+func (s *InMemoryNetworkState) IsIndexerSigner(address string) bool {
+	address, ok := normalizeSignerAddress(address)
+	if !ok {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, info := range s.IndexerInfos {
+		if signer, ok := normalizeSignerAddress(info.Signer); ok && signer == address {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeSignerAddress lowercases and trims address. ok is false for an
+// empty address and for the all-zeros wildcard, neither of which is a signer.
+func normalizeSignerAddress(address string) (normalized string, ok bool) {
+	normalized = strings.ToLower(strings.TrimSpace(address))
+	if normalized == "" || AccountAddress(normalized) == WildcardAddress {
+		return "", false
+	}
+	return normalized, true
+}
+
 // --- registry.TableSchemas
 
 func (s *InMemoryNetworkState) TableSchema(databaseId, tableId string, version uint32) (registry.TableSchema, bool) {
@@ -339,3 +365,4 @@ func convertTableSchema(info TableSchemaInfo) registry.TableSchema {
 var _ registry.Registry = (*InMemoryNetworkState)(nil)
 var _ registry.TableSchemas = (*InMemoryNetworkState)(nil)
 var _ registry.WriterAccess = (*InMemoryNetworkState)(nil)
+var _ registry.IndexerSigners = (*InMemoryNetworkState)(nil)
