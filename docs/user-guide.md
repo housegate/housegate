@@ -44,14 +44,28 @@ docker pull ghcr.io/housegate/housegate:latest
 ## 2. Create a key
 
 Any Ethereum private key works. Keep it in a file only you can read and pass it to the agent through
-the environment, never as a command-line flag (flags are visible in process listings).
+the environment, never as a command-line argument: arguments, including a `$(cat key)` expansion,
+are visible in process listings.
 
 ```bash
 mkdir -p ~/.config/housegate && chmod 700 ~/.config/housegate
-cast wallet new --json | jq -r '.[0].private_key' > ~/.config/housegate/agent.key
-chmod 600 ~/.config/housegate/agent.key
-cast wallet address --private-key "$(cat ~/.config/housegate/agent.key)"   # your account address
+umask 077
+cast wallet new --json > ~/.config/housegate/new-wallet.json
+jq -r '.[0].private_key' ~/.config/housegate/new-wallet.json > ~/.config/housegate/agent.key
+jq -r '.[0].address' ~/.config/housegate/new-wallet.json > ~/.config/housegate/agent.address
+rm ~/.config/housegate/new-wallet.json
+cat ~/.config/housegate/agent.address        # your account address
 ```
+
+The on-chain transactions below (§3, §8) are optional. To send them, import the same key once into
+foundry's encrypted keystore (paste the key at the prompt, then choose a password) and sign with
+`--account housegate`:
+
+```bash
+cast wallet import housegate --interactive
+```
+
+<a id="funding-an-account"></a>
 
 ## 3. Funding an account
 
@@ -77,13 +91,13 @@ If you hold ST yourself, deposit it directly (`amount` in wei, and `--value` mus
 rpc=https://sentio-devnet.test-rpc.sentio.xyz
 billing=0x29308290173F324b7Fdb0596A94665144Df17C9b
 cast send $billing 'deposit(uint256)' 10000000000000000 --value 10000000000000000 \
-  --rpc-url $rpc --private-key "$(cat ~/.config/housegate/agent.key)"
+  --rpc-url $rpc --account housegate
 ```
 
 Check the balance (wei) at any time:
 
 ```bash
-cast call $billing 'balances(address)(uint256)' <your address> --rpc-url $rpc
+cast call $billing 'balances(address)(uint256)' "$(cat ~/.config/housegate/agent.address)" --rpc-url $rpc
 ```
 
 `depositTo(account, amount)` funds another account the same way, and `withdraw(amount)` returns
@@ -189,6 +203,8 @@ a replica, which answers `safe` only and refuses `unsafe_latest`.
 `SELECT *` and `DESCRIBE` hide the internal `_hg_row_id` column. `SHOW CREATE TABLE`, `EXPLAIN`,
 session `SET`, `FINAL` and `PREWHERE` are refused on SI tables.
 
+<a id="operator-keys"></a>
+
 ## 8. Operator keys
 
 An account can let other keys act and pay on its behalf. This keeps the owning key offline and
@@ -201,7 +217,7 @@ gives each service its own key.
    ab=0xb7e9E56DFC27bcfA63698F2F5890e186426A0123
    perms=$(cast call $ab 'getAddress(string)(address)' permissions --rpc-url $rpc)
    cast send $perms 'addOperator(address)' <operator address> \
-     --rpc-url $rpc --private-key "$(cat ~/.config/housegate/agent.key)"
+     --rpc-url $rpc --account housegate
    cast call $perms 'getOperators(address)(address[])' <owner address> --rpc-url $rpc
    ```
 
