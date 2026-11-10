@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "billing",
@@ -8,4 +8,10 @@ go_library(
     ],
     importpath = "github.com/housegate/housegate/pkg/billing",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "billing_test",
+    srcs = ["usage_client_test.go"],
+    embed = [":billing"],
 )
