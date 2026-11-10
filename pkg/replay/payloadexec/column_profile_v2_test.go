@@ -77,9 +77,6 @@ func TestParseValueV2(t *testing.T) {
 		{"Int128", "-170141183460469231731687303715884105728", new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))},
 		{"UInt256", maxU256.String(), maxU256},
 		{"LowCardinality(String)", "eu", "eu"},
-		{"Nullable(UInt64)", `\N`, nil},
-		{"Nullable(UInt64)", "7", uint64(7)},
-		{"Nullable(String)", `\N`, nil},
 	} {
 		got, err := parseValue(tc.typ, tc.raw)
 		if err != nil {
@@ -101,6 +98,11 @@ func TestParseValueV2(t *testing.T) {
 		{"UInt256", new(big.Int).Lsh(big.NewInt(1), 256).String()},
 		{"Int256", "1e3"},
 		{"UInt64", `\N`},
+		// The legacy CSV lane cannot tell an unquoted \N (NULL) from a
+		// quoted "\N" (the string), so it refuses Nullable columns outright.
+		{"Nullable(UInt64)", `\N`},
+		{"Nullable(UInt64)", "7"},
+		{"Nullable(String)", "x"},
 	} {
 		if v, err := parseValue(tc.typ, tc.raw); err == nil {
 			t.Fatalf("parseValue(%s, %q) = %#v, want an error", tc.typ, tc.raw, v)

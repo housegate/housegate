@@ -262,3 +262,18 @@ func TestNativeDecoderDecodesV2Types(t *testing.T) {
 		})
 	}
 }
+
+// TestNativeDecoderRefusesNoncanonicalNullMapBytes: ClickHouse reads any
+// non-zero null-map byte as NULL, ch-go only 1, so a byte other than 0 or 1
+// would commit a value where ClickHouse stores NULL; the decoder refuses it.
+func TestNativeDecoderRefusesNoncanonicalNullMapBytes(t *testing.T) {
+	schema := payloadexec.TableSchema{TableID: "tenant.nulls", Columns: []lthash.Column{{Name: "c", Type: "Nullable(UInt64)"}}}
+	for _, b := range []uint8{2, 0xff} {
+		c := new(proto.ColUInt64).Nullable()
+		c.Append(proto.NewNullable[uint64](42))
+		c.Nulls[0] = b
+		if rows, err := Decode(schema, nativePayloadTestRevision, encodeNativePayload(t, proto.Input{{Name: "c", Data: c}})); err == nil {
+			t.Fatalf("null-map byte %d decoded to %#v, want a refusal", b, rows[0].Values)
+		}
+	}
+}

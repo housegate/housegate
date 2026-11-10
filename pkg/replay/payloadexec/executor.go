@@ -390,8 +390,13 @@ func parseValue(typeName, raw string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if profile.Nullable && raw == csvNull {
-		return nil, nil
+	if profile.Nullable {
+		// encoding/csv drops whether a field was quoted, and ClickHouse reads
+		// an unquoted \N as NULL but a quoted "\N" as the string, so this
+		// lane cannot tell them apart. Nullable columns replay from Native
+		// payloads only (the production lane); the legacy CSV lane refuses
+		// them rather than guess.
+		return nil, fmt.Errorf("payloadexec: the legacy CSV lane does not replay Nullable column type %q; use a Native payload", typeName)
 	}
 	switch profile.Family {
 	case FamilyString:
@@ -477,9 +482,6 @@ func parseIntValue(profile ColumnProfile, raw string) (any, error) {
 		return nil, unsupportedColumnTypeError(profile.Canonical)
 	}
 }
-
-// csvNull is ClickHouse's CSV rendering of NULL (format_csv_null_representation).
-const csvNull = `\N`
 
 // parseUUIDValue accepts only ClickHouse's own rendering: 36 characters,
 // lowercase hex in 8-4-4-4-12 groups. uuid.Parse alone would also accept

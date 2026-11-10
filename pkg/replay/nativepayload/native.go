@@ -324,13 +324,29 @@ func nativeColumnValue(col proto.ColResult, i int) (any, uint64, error) {
 // decodes is decodable under Nullable without a case of its own. A NULL is
 // the untyped nil and counts one logical byte (its null-map byte); a
 // non-NULL value counts that byte plus the inner value's.
+//
+// The null-map byte must be exactly 0 or 1. ClickHouse reads any non-zero
+// byte as NULL while ch-go's IsElemNull recognizes only 1, so a payload with
+// another byte would commit a value where ClickHouse stores NULL; it is
+// refused instead.
 func nullableColumnValue(col proto.ColResult, nullable interface{ IsElemNull(int) bool }, i int) (any, uint64, error) {
-	if nullable.IsElemNull(i) {
-		return nil, 1, nil
-	}
 	holder := reflect.ValueOf(col)
 	if holder.Kind() != reflect.Pointer || holder.IsNil() || holder.Elem().Kind() != reflect.Struct {
 		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	nulls, ok := holder.Elem().FieldByName("Nulls").Interface().(proto.ColUInt8)
+	if !ok || i >= len(nulls) {
+		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	switch nulls[i] {
+	case 0:
+	case 1:
+		if !nullable.IsElemNull(i) {
+			return nil, 0, fmt.Errorf("nullable column %T disagrees with its null map", col)
+		}
+		return nil, 1, nil
+	default:
+		return nil, 0, fmt.Errorf("nullable null-map byte %d at row %d is neither 0 nor 1", nulls[i], i)
 	}
 	field := holder.Elem().FieldByName("Values")
 	if !field.IsValid() || !field.CanInterface() {
