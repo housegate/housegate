@@ -420,6 +420,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if replicaAware {
 		st.SetReplicaServedDatabase("")
 	}
+	// A forwarded session skips the rewrite plugin here, whose USE
+	// observation would otherwise move the logical database, so record it:
+	// querysettings compares a client's database Query-packet setting (which
+	// clickhouse-client 26.8 sends on every query and moves on each USE)
+	// with it.
+	st.SetLogicalDatabase(newDB)
 	return nil
 }
 
