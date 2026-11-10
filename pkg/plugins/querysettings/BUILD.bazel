@@ -21,6 +21,7 @@ go_library(
     importpath = "github.com/housegate/housegate/pkg/plugins/querysettings",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/chproto",
         "//pkg/log",
         "//pkg/plugin",
         "@com_github_prometheus_client_golang//prometheus",
