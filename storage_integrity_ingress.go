@@ -737,7 +737,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err))
+			err = fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
+			if errors.Is(err, sicore.ErrBackpressure) {
+				// The payload store refused the put before storing it
+				// (capacity or per-indexer write quota): retryable.
+				err = backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
+			}
+			return markUnspentBeforePrepare(requiresPrepare, err)
 		}
 		if put.PayloadRef == "" {
 			if !reusedTrackedReservation {

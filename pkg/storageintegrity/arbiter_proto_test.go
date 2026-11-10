@@ -527,6 +527,9 @@ type recordingPayloadStoreClient struct {
 	limitsErr error
 	inlineErr error
 	streamErr error
+
+	inlineCtx context.Context
+	streamCtx context.Context
 }
 
 func (c *recordingPayloadStoreClient) GetStoreLimits(context.Context, *pb.GetStoreLimitsRequest, ...grpc.CallOption) (*pb.StoreLimits, error) {
@@ -534,12 +537,14 @@ func (c *recordingPayloadStoreClient) GetStoreLimits(context.Context, *pb.GetSto
 	return c.limits, c.limitsErr
 }
 
-func (c *recordingPayloadStoreClient) PutPayloadInline(_ context.Context, in *pb.PutPayloadInlineRequest, _ ...grpc.CallOption) (*pb.PutPayloadResult, error) {
+func (c *recordingPayloadStoreClient) PutPayloadInline(ctx context.Context, in *pb.PutPayloadInlineRequest, _ ...grpc.CallOption) (*pb.PutPayloadResult, error) {
+	c.inlineCtx = ctx
 	c.inlineReq = in
 	return c.putResult, c.inlineErr
 }
 
-func (c *recordingPayloadStoreClient) PutPayload(context.Context, ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PutPayloadFrame, pb.PutPayloadResult], error) {
+func (c *recordingPayloadStoreClient) PutPayload(ctx context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[pb.PutPayloadFrame, pb.PutPayloadResult], error) {
+	c.streamCtx = ctx
 	if c.stream == nil {
 		c.stream = &recordingPutPayloadStream{result: c.putResult}
 	}

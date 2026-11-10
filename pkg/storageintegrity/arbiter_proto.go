@@ -2,7 +2,9 @@ package storageintegrity
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -131,16 +133,55 @@ func (q *ArbiterIntakeStatusQuerier) statementStatus(ctx context.Context, statem
 // payload commitment before any RPC, fetches deployment limits once, then uses
 // the unary inline put or chunked client stream according to those limits.
 type ArbiterPayloadStoreWriter struct {
-	client pb.PayloadStoreClient
+	client    pb.PayloadStoreClient
+	authorize PayloadPutAuthorizer
 
 	mu     sync.Mutex
 	limits *pb.StoreLimits
 }
 
+// PayloadPutAuthorizer attaches the write authorisation of one put to ctx,
+// typically a put token in gRPC metadata signed by the host indexer's key.
+// The payload store uses it to attribute and rate-limit puts. HouseGate
+// holds no indexer key, so the embedding host supplies it.
+type PayloadPutAuthorizer func(ctx context.Context, payloadHash string, payloadLength uint64) (context.Context, error)
+
 // NewArbiterPayloadStoreWriter constructs a PayloadWriter over an arbiter-proto
 // PayloadStore client. The caller owns the underlying gRPC connection.
 func NewArbiterPayloadStoreWriter(client pb.PayloadStoreClient) *ArbiterPayloadStoreWriter {
 	return &ArbiterPayloadStoreWriter{client: client}
+}
+
+// NewAuthorizedArbiterPayloadStoreWriter is NewArbiterPayloadStoreWriter with
+// a put authorizer applied to every put. A nil authorizer sends puts without
+// authorisation, as NewArbiterPayloadStoreWriter does.
+func NewAuthorizedArbiterPayloadStoreWriter(client pb.PayloadStoreClient, authorize PayloadPutAuthorizer) *ArbiterPayloadStoreWriter {
+	return &ArbiterPayloadStoreWriter{client: client, authorize: authorize}
+}
+
+// payloadStoreBackpressureMessages are the payload store's own
+// RESOURCE_EXHAUSTED refusals: its put concurrency cap and its per-indexer
+// write quota. Both refuse before storing anything and clear with time.
+var payloadStoreBackpressureMessages = []string{
+	"put concurrency limit exceeded",
+	"write quota exceeded",
+}
+
+// payloadStoreRPCError classifies a payload-store put RPC failure. Only the
+// store's own capacity and quota refusals unwrap to ErrBackpressure. Every
+// other RESOURCE_EXHAUSTED, gRPC's message-size limits among them, is
+// deterministic and stays a plain error, because retrying cannot fix it.
+func payloadStoreRPCError(err error) error {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.ResourceExhausted {
+		return err
+	}
+	for _, message := range payloadStoreBackpressureMessages {
+		if strings.HasPrefix(st.Message(), message) {
+			return fmt.Errorf("%w: payload store: %w", ErrBackpressure, err)
+		}
+	}
+	return err
 }
 
 // PutPayload stores payload bytes durably in DA before SubmitStatement can
@@ -178,41 +219,54 @@ func (w *ArbiterPayloadStoreWriter) PutPayload(ctx context.Context, payload []by
 		PayloadHash:   payloadHash,
 		PayloadLength: payloadLength,
 	}
+	if w.authorize != nil {
+		ctx, err = w.authorize(ctx, payloadHash, payloadLength)
+		if err != nil {
+			return PayloadPutResult{}, fmt.Errorf("storageintegrity: authorize payload put: %w", err)
+		}
+	}
 	if payloadLength <= limits.GetMaxInlineBytes() {
 		res, err := w.client.PutPayloadInline(ctx, &pb.PutPayloadInlineRequest{
 			Header:  header,
 			Payload: payload,
 		})
 		if err != nil {
-			return PayloadPutResult{}, err
+			return PayloadPutResult{}, payloadStoreRPCError(err)
 		}
 		return PayloadPutResultFromProto(res)
 	}
 
 	stream, err := w.client.PutPayload(ctx)
 	if err != nil {
-		return PayloadPutResult{}, err
+		return PayloadPutResult{}, payloadStoreRPCError(err)
 	}
+	// Send returns io.EOF once the server has ended the stream (a refusal or
+	// an early result); the outcome is then read from CloseAndRecv.
 	if err := stream.Send(&pb.PutPayloadFrame{
 		Frame: &pb.PutPayloadFrame_Header{Header: header},
-	}); err != nil {
+	}); err != nil && !errors.Is(err, io.EOF) {
 		return PayloadPutResult{}, err
-	}
-	maxChunk := int(limits.GetMaxChunkBytes())
-	for offset := 0; offset < len(payload); offset += maxChunk {
-		end := offset + maxChunk
-		if end > len(payload) {
-			end = len(payload)
-		}
-		if err := stream.Send(&pb.PutPayloadFrame{
-			Frame: &pb.PutPayloadFrame_Chunk{Chunk: payload[offset:end]},
-		}); err != nil {
-			return PayloadPutResult{}, err
+	} else if err == nil {
+		maxChunk := int(limits.GetMaxChunkBytes())
+		for offset := 0; offset < len(payload); offset += maxChunk {
+			end := offset + maxChunk
+			if end > len(payload) {
+				end = len(payload)
+			}
+			err := stream.Send(&pb.PutPayloadFrame{
+				Frame: &pb.PutPayloadFrame_Chunk{Chunk: payload[offset:end]},
+			})
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return PayloadPutResult{}, err
+			}
 		}
 	}
 	res, err := stream.CloseAndRecv()
 	if err != nil {
-		return PayloadPutResult{}, err
+		return PayloadPutResult{}, payloadStoreRPCError(err)
 	}
 	return PayloadPutResultFromProto(res)
 }
