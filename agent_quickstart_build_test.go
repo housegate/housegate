@@ -826,7 +826,7 @@ func TestBuildAgent_PinnedQuickstartSignsThroughPresetRPC(t *testing.T) {
 
 	const preset = "devnet2"
 	prev := config.AgentNetworkPresets[preset]
-	config.AgentNetworkPresets[preset] = rpc.URL
+	config.AgentNetworkPresets[preset] = config.AgentNetworkPreset{Source: rpc.URL}
 	t.Cleanup(func() { config.AgentNetworkPresets[preset] = prev })
 
 	cfg := config.Default()

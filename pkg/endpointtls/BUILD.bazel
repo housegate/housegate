@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "endpointtls",
+    srcs = ["endpointtls.go"],
+    importpath = "github.com/housegate/housegate/pkg/endpointtls",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "endpointtls_test",
+    srcs = ["endpointtls_test.go"],
+    deps = [
+        ":endpointtls",
+        "//pkg/endpointtls/endpointtlstest",
+    ],
+)

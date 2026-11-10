@@ -20,9 +20,18 @@ const (
 	DefaultAgentListen  = "127.0.0.1:9000"
 )
 
-// AgentNetworkPresets maps -network names to their bootstrap storage RPC.
-var AgentNetworkPresets = map[string]string{
-	"devnet2": "http://64.38.144.158:32003",
+// AgentNetworkPreset is what joining a named network sets.
+type AgentNetworkPreset struct {
+	// Source is the bootstrap storage RPC (network_state.source).
+	Source string
+	// EndpointTLS is the network's network_state.endpoint_tls: whether the
+	// housegate and storage RPC endpoints its indexers advertise speak TLS.
+	EndpointTLS bool
+}
+
+// AgentNetworkPresets maps -network names to their presets.
+var AgentNetworkPresets = map[string]AgentNetworkPreset{
+	"devnet2": {Source: "http://64.38.144.158:32003"},
 }
 
 // AgentQuickstart carries the agent-UX flags and env values of spec
@@ -77,10 +86,17 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 		// still supplies the table status lookups and network-id discovery
 		// that -si auto signs with (the dialer stays pinned, so the preset is
 		// never used to choose an upstream).
+		preset := AgentNetworkPresets[name]
 		switch {
 		case cfg.NetworkState.Source == "":
-			cfg.NetworkState.Source = AgentNetworkPresets[name]
-		case q.Network != "" && cfg.NetworkState.Source != AgentNetworkPresets[name]:
+			cfg.NetworkState.Source = preset.Source
+			// An explicitly configured endpoint_tls wins; otherwise the
+			// preset says whether the network's endpoints speak TLS.
+			if cfg.NetworkState.EndpointTLS == nil {
+				tlsOn := preset.EndpointTLS
+				cfg.NetworkState.EndpointTLS = &tlsOn
+			}
+		case q.Network != "" && cfg.NetworkState.Source != preset.Source:
 			// Final review M7: an explicitly given network that loses is
 			// reported rather than dropped silently.
 			log.Warnw(fmt.Sprintf("agent: -network %s is ignored because network_state.source is set (config file, -state or env); remove it to join the preset", name),

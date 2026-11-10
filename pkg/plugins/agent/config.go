@@ -18,6 +18,12 @@ type Config struct {
 	// Upstream is the remote server-side proxy address.
 	Upstream string `json:"upstream" yaml:"upstream"`
 
+	// UpstreamTLS dials the pinned Upstream over TLS, verifying its
+	// certificate for the Upstream host (against network_state.tls_ca_file
+	// when set, else the system roots). It applies only to a pinned
+	// Upstream; discovered upstreams follow network_state.endpoint_tls.
+	UpstreamTLS bool `json:"upstream_tls" yaml:"upstream_tls"`
+
 	// PrivateKeyHex is the agent's Ethereum private key (with or
 	// without 0x prefix) used to sign every query's JWS.
 	//

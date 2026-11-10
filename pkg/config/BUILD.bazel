@@ -36,6 +36,7 @@ go_test(
     srcs = [
         "agent_quickstart_test.go",
         "config_test.go",
+        "endpoint_tls_test.go",
         "observability_config_test.go",
         "replication_proxy_config_test.go",
         "replication_proxy_config_yaml_test.go",
