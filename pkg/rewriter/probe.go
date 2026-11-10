@@ -373,8 +373,10 @@ var tableReferenceProbes = []buildProbe{
 		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
 	// What a ClickHouse 26.8 backend honours (spec 2026-09-26 §16): a setting
 	// whose SQL text the server wraps around the query, a deployment-identity
-	// function and the _database virtual column. rewriter-go before v0.22.0
-	// and rewriter-grpc before v0.19.0 answer Success for all three, so a
+	// function and the _database virtual column, measured 2026-11-10 against
+	// rewriter-go v0.22.0 (native FFI, library v0.22.0) and rewriter-grpc
+	// v0.19.0's tree. rewriter-go before v0.22.0 and rewriter-grpc before
+	// v0.19.0 answer Success for all three, so a
 	// HouseGate whose Query-packet check refuses the 26.8 settings cannot
 	// start against an engine that does not.
 	rejectedProbe("ch268-setting-refused", "SELECT a FROM db1.o SETTINGS filter = 'a = 1'",

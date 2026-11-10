@@ -202,7 +202,7 @@ func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := supported.Materialize
-	if !supported.StorageIntegrity.Agent.InlineValues.Enabled || !m.Enabled || m.Engine != "native" || m.NativeLibraryRelease != "v0.17.0" || !m.Optional || !m.Implicit {
+	if !supported.StorageIntegrity.Agent.InlineValues.Enabled || !m.Enabled || m.Engine != "native" || m.NativeLibraryRelease != "v0.22.0" || !m.Optional || !m.Implicit {
 		t.Fatalf("inline=%v materialize=%+v; want the optional native default", supported.StorageIntegrity.Agent.InlineValues.Enabled, m)
 	}
 	if err := supported.Validate(); err != nil {

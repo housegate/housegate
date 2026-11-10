@@ -163,8 +163,8 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.17.0 h1:GxN7+eCsfScCa3Gjlu2J5vZs3p/v2xS7WbpuiIpOsO4=
-github.com/housegate/rewriter-go v0.17.0/go.mod h1:5GbuyQvYjawWN1hLx4LeJoIFM/lylNgjR5yjbZaLCoI=
+github.com/housegate/rewriter-go v0.22.0 h1:c2AoGUT33s2Ah7WSjoFwPSOHHDheJh6LNxHE/5uGGZk=
+github.com/housegate/rewriter-go v0.22.0/go.mod h1:xeG4nzzhkGgePEQdk9fn4u4UjmoMDdVvJsyXwhSUHeo=
 github.com/housegate/rewriter-proto v0.4.0 h1:6ENKNqYtZUMqST10E/7JlYH0OE+0F+AkVNZZfA0fQEA=
 github.com/housegate/rewriter-proto v0.4.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
@@ -320,8 +320,8 @@ github.com/tklauser/go-sysconf v0.4.0 h1:7H0uAN+7RkwWRaxhYXDLqa5V3LPrJeV8wmD9dRU
 github.com/tklauser/go-sysconf v0.4.0/go.mod h1:8mTNWyog7H+MpKijp4VmKJAd2bbYQ2zuUwkYRbUArPI=
 github.com/tklauser/numcpus v0.12.0 h1:NR85qdvHA9pFse3x3weVZ0r0ST8R6l5RHbZrlRaqob4=
 github.com/tklauser/numcpus v0.12.0/go.mod h1:ABHeXzJnr/qqwguhClkZKT1/8VABcYrsyUiUGobwWJg=
-github.com/tobilg/polyglot/packages/go v0.13.0 h1:zRv4RpeZniUDzM7+LbJc/BOuCpuNtK6EER2yEzEevb0=
-github.com/tobilg/polyglot/packages/go v0.13.0/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
+github.com/tobilg/polyglot/packages/go v0.13.5 h1:myC5AxQdeopif58AsllZ/V4d0rdKDSzScgy8/A+YaZw=
+github.com/tobilg/polyglot/packages/go v0.13.5/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
 github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/urfave/cli/v2 v2.27.5 h1:WoHEJLdsXr6dDWoJgMq/CboDmyY/8HMMH1fTECbih+w=
