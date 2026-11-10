@@ -159,19 +159,29 @@ func NewAuthorizedArbiterPayloadStoreWriter(client pb.PayloadStoreClient, author
 	return &ArbiterPayloadStoreWriter{client: client, authorize: authorize}
 }
 
-// payloadStoreRPCError classifies a payload-store put RPC failure. The store
-// refuses a put it has no capacity or quota for with RESOURCE_EXHAUSTED
-// before storing anything; that is retryable back-pressure, so it unwraps to
-// ErrBackpressure. gRPC's own refusals share the code but are deterministic
-// (message size, before or after decompression), so they are left as plain
-// errors; grpc-go prefixes every message it generates with "grpc: ", which
-// the store's refusals never carry.
+// payloadStoreBackpressureMessages are the payload store's own
+// RESOURCE_EXHAUSTED refusals: its put concurrency cap and its per-indexer
+// write quota. Both refuse before storing anything and clear with time.
+var payloadStoreBackpressureMessages = []string{
+	"put concurrency limit exceeded",
+	"write quota exceeded",
+}
+
+// payloadStoreRPCError classifies a payload-store put RPC failure. Only the
+// store's own capacity and quota refusals unwrap to ErrBackpressure. Every
+// other RESOURCE_EXHAUSTED, gRPC's message-size limits among them, is
+// deterministic and stays a plain error, because retrying cannot fix it.
 func payloadStoreRPCError(err error) error {
 	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.ResourceExhausted || strings.HasPrefix(st.Message(), "grpc: ") {
+	if !ok || st.Code() != codes.ResourceExhausted {
 		return err
 	}
-	return fmt.Errorf("%w: payload store: %w", ErrBackpressure, err)
+	for _, message := range payloadStoreBackpressureMessages {
+		if strings.HasPrefix(st.Message(), message) {
+			return fmt.Errorf("%w: payload store: %w", ErrBackpressure, err)
+		}
+	}
+	return err
 }
 
 // PutPayload stores payload bytes durably in DA before SubmitStatement can

@@ -118,7 +118,8 @@ func TestPayloadStoreRefusalIsBackpressure(t *testing.T) {
 		"permission denied":             status.Error(codes.PermissionDenied, "not allowlisted"),
 		"message too large":             status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5 vs. 4)"),
 		"too large after decompression": status.Error(codes.ResourceExhausted, "grpc: received message after decompression larger than max 4194304"),
-		"send too large":                status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max (5 vs. 4)"),
+		"other exhaustion":              status.Error(codes.ResourceExhausted, "some other resource"),
+		"send too large":                status.Error(codes.ResourceExhausted, "trying to send message larger than max (5 vs. 4)"),
 	} {
 		client := &recordingPayloadStoreClient{
 			limits:    &pb.StoreLimits{MaxInlineBytes: 32, MaxChunkBytes: 8, MaxPayloadBytes: 64},
