@@ -175,7 +175,9 @@ type StorageIntegrityIngressConfig struct {
 
 // StorageIntegrityAccountQuotaConfig is the ingress's per-account write
 // budget: two token buckets per principal (the validated owner, else the
-// signer), one of statements and one of payload bytes. Counters are local to
+// signer), one of statements and one of payload bytes. Admission reserves
+// max_payload_bytes, settled to the real length once input is complete, so
+// concurrent statements cannot share a balance. Counters are local to
 // this ingress and reset on restart. Mode is off (default), dry_run (count
 // would-be refusals in storage_integrity_ingress_account_quota_total, admit
 // everything) or enforce (refuse with 201 QUOTA_EXCEEDED, retryable, before

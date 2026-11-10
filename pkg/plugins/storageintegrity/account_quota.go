@@ -86,12 +86,16 @@ type AccountQuotaConfig struct {
 // statement's principal (the validated owner, else the signer). It is a soft
 // limit: counters are not shared with other ingresses and reset on restart.
 //
-// A statement takes one statement token when it is admitted and is charged
-// its payload bytes once its input is complete. The byte bucket may go into
-// debt, so a statement whose payload has already been read is never wasted;
-// the account's next statement is refused until the debt is repaid. Sustained
-// throughput is therefore bounded by the rates, and a burst by the bucket
-// capacities plus one maximum payload.
+// A statement is admitted only while its account's byte bucket is not in
+// debt. Admission takes one statement token and reserves the largest payload
+// the statement may carry from the byte bucket, possibly into debt; once its
+// input is complete the reservation is settled to the payload's real length,
+// and a statement that ends before that releases it. Because every admitted,
+// unfinished statement holds its reservation, concurrent sessions of one
+// account cannot all pass on the same balance: what an account submits is
+// bounded by the rates over time and, at any instant, by the byte burst plus
+// one maximum payload. The reservation also bounds an account's statements in
+// flight at once to about byte_burst / max_payload_bytes + 1.
 type AccountQuota struct {
 	cfg AccountQuotaConfig
 	now func() time.Time
@@ -149,12 +153,14 @@ func (q *AccountQuota) Mode() AccountQuotaMode {
 	return q.cfg.Mode
 }
 
-// Admit decides one statement of account. A statement within budget takes a
-// statement token and returns (nil, true). A statement over budget takes
-// nothing and returns its refusal with admitted false, in both modes, so a
-// dry run counts what enforce mode would charge; the caller decides whether
-// to refuse it. A nil quota admits everything without tracking it.
-func (q *AccountQuota) Admit(account string) (refusal *QuotaRefusal, admitted bool) {
+// Admit decides one statement of account that may carry up to reserve payload
+// bytes. A statement within budget takes a statement token, reserves reserve
+// bytes and returns (nil, true); the caller must later Settle that
+// reservation exactly once. A statement over budget takes nothing and returns
+// its refusal with admitted false, in both modes, so a dry run counts what
+// enforce mode would charge; the caller decides whether to refuse it. A nil
+// quota admits everything without tracking it.
+func (q *AccountQuota) Admit(account string, reserve uint64) (refusal *QuotaRefusal, admitted bool) {
 	if q == nil {
 		return nil, false
 	}
@@ -173,6 +179,7 @@ func (q *AccountQuota) Admit(account string) (refusal *QuotaRefusal, admitted bo
 			RetryAfter: secondsUntil(-b.bytes, q.cfg.BytesPerSecond)}
 	default:
 		b.statements--
+		b.bytes -= float64(reserve)
 		return nil, true
 	}
 	decision := quotaDecisionRefused
@@ -183,17 +190,19 @@ func (q *AccountQuota) Admit(account string) (refusal *QuotaRefusal, admitted bo
 	return refusal, false
 }
 
-// ChargeBytes debits n payload bytes from account's byte bucket, possibly into
-// debt. Callers charge only statements Admit admitted.
-func (q *AccountQuota) ChargeBytes(account string, n uint64) {
-	if q == nil || n == 0 {
+// Settle replaces a reservation Admit took with the statement's real payload
+// length: used is charged and reserved is returned, so used 0 releases the
+// reservation of a statement that ended before its input completed. Used may
+// exceed reserved only through a caller defect; it is charged in full.
+func (q *AccountQuota) Settle(account string, reserved, used uint64) {
+	if q == nil || reserved == used {
 		return
 	}
 	account = strings.ToLower(strings.TrimSpace(account))
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	b := q.bucketLocked(account, q.now())
-	b.bytes -= float64(n)
+	b.bytes = math.Min(q.cfg.ByteBurst, b.bytes+float64(reserved)-float64(used))
 }
 
 // bucketLocked returns account's bucket refilled to now, creating a full one.
@@ -220,7 +229,8 @@ func (q *AccountQuota) refill(b *accountBucket, now time.Time) {
 }
 
 // sweepLocked drops buckets that have refilled completely: a new bucket starts
-// full, so dropping one changes no decision and only bounds memory.
+// full, so dropping one changes no decision and only bounds memory. A bucket
+// with an outstanding reservation is below its burst and is kept.
 func (q *AccountQuota) sweepLocked(now time.Time) {
 	if now.Sub(q.lastSweep) < accountQuotaSweepInterval {
 		return

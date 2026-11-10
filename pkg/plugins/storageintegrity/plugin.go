@@ -162,9 +162,12 @@ type admissionState struct {
 	// consumer (spec 2026-10-09 §6.2).
 	payer    string
 	database string
-	// quotaAdmitted marks a statement the account quota admitted, so its
-	// payload bytes are charged once its input is complete.
-	quotaAdmitted bool
+	// quotaReserved is the payload reservation the account quota took for
+	// this statement (quotaHeld while it is outstanding). It is settled to the
+	// captured length once input is complete and released if the statement
+	// ends before that.
+	quotaReserved uint64
+	quotaHeld     bool
 }
 
 type purposeValidator interface {
@@ -365,10 +368,6 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			"result", result, "err", err)
 		return err
 	}
-	quotaAdmitted, err := p.admitQuota(ctx, stmtID, authz.principal)
-	if err != nil {
-		return err
-	}
 	if (!snapshotPath && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
@@ -404,7 +403,6 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		tableSchema:     tableSchema,
 		payer:           payer,
 		database:        target.database,
-		quotaAdmitted:   quotaAdmitted,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -418,6 +416,13 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if existing := p.pending[id]; existing != nil {
 		return fmt.Errorf("storage_integrity pending admission %s for session %d has not been consumed", existing.admission.StatementID, id)
 	}
+	// The quota is the last refusal: a statement refused by any earlier check
+	// spends nothing of its account's budget.
+	held, err := p.admitQuota(ctx, stmtID, authz.principal)
+	if err != nil {
+		return err
+	}
+	state.quotaReserved, state.quotaHeld = p.maxPayload, held
 	p.active[id] = state
 	if p.admissionConsumer != nil {
 		// A configured consumer means storage-integrity owns this INSERT's
@@ -435,7 +440,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 // retryable 201 before its payload is read; in dry_run it is only counted.
 // The result reports whether the quota admitted (and so tracks) it.
 func (p *Plugin) admitQuota(ctx context.Context, stmtID, principal string) (bool, error) {
-	refusal, admitted := p.quota.Admit(principal)
+	refusal, admitted := p.quota.Admit(principal, p.maxPayload)
 	if refusal == nil {
 		return admitted, nil
 	}
@@ -452,13 +457,19 @@ func (p *Plugin) admitQuota(ctx context.Context, stmtID, principal string) (bool
 	return false, refusal.clientError()
 }
 
-// chargeQuota charges a completed statement's payload to its principal.
-func (p *Plugin) chargeQuota(state *admissionState) {
-	if state == nil || !state.quotaAdmitted {
+// settleQuota settles a statement's outstanding reservation to used bytes:
+// the captured payload once input is complete, 0 when the statement ends
+// before that. It runs at most once per statement.
+func (p *Plugin) settleQuota(state *admissionState, used uint64) {
+	if state == nil || !state.quotaHeld {
 		return
 	}
-	p.quota.ChargeBytes(state.admission.Principal, uint64(state.payload.Len()))
+	state.quotaHeld = false
+	p.quota.Settle(state.admission.Principal, state.quotaReserved, used)
 }
+
+// releaseQuota returns the reservation of a statement that ended unfinished.
+func (p *Plugin) releaseQuota(state *admissionState) { p.settleQuota(state, 0) }
 
 func accessesStorageIntegrity(tables []sqlmeta.AccessedTable) bool {
 	for _, table := range tables {
@@ -487,6 +498,7 @@ func (p *Plugin) OnClientDataStrict(ctx context.Context, qctx *plugin.QueryConte
 	nextLen := uint64(state.payload.Len()) + uint64(len(raw))
 	if p.maxPayload > 0 && nextLen > p.maxPayload {
 		delete(p.active, id)
+		p.releaseQuota(state)
 		return fmt.Errorf("storage_integrity payload exceeds max_payload_bytes (%d > %d)", nextLen, p.maxPayload)
 	}
 	_, _ = state.payload.Write(raw)
@@ -545,7 +557,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	state.complete = true
 	delete(p.active, id)
 	p.mu.Unlock()
-	p.chargeQuota(state)
+	p.settleQuota(state, uint64(state.payload.Len()))
 
 	admission, err := p.admissionFromState(ctx, state)
 	if err != nil {
@@ -584,7 +596,7 @@ func (p *Plugin) OnQueryInputComplete(ctx context.Context, qctx *plugin.QueryCon
 	}
 	state.complete = true
 	delete(p.active, id)
-	p.chargeQuota(state)
+	p.settleQuota(state, uint64(state.payload.Len()))
 	if p.pending[id] == nil {
 		p.pending[id] = state
 	}
@@ -602,6 +614,7 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 		return
 	}
 	p.mu.Lock()
+	p.releaseQuota(p.active[sess.ID()])
 	delete(p.active, sess.ID())
 	delete(p.pending, sess.ID())
 	p.mu.Unlock()
@@ -613,6 +626,7 @@ func (p *Plugin) abortQuery(qctx *plugin.QueryContext) {
 	p.mu.Lock()
 	if state := p.active[sessionID]; state != nil && state.admission.StatementID == statementID {
 		delete(p.active, sessionID)
+		p.releaseQuota(state)
 	}
 	if state := p.pending[sessionID]; state != nil && state.admission.StatementID == statementID {
 		delete(p.pending, sessionID)
