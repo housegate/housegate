@@ -9,6 +9,7 @@
 - [前置依赖](#前置依赖)
 - [快速开始](#快速开始)
 - [构建](#构建)
+- [用户指南（agent 用户）](docs/user-guide.md)
 - **Part 1 — 配置**
   - [配置文件](#配置文件)
   - [完整参数参考](#完整参数参考)
@@ -393,6 +394,8 @@ Shard 感知（每副本连接池 + 路由）：
 ### 1.2 Agent 模式
 
 #### 快速开始（用户 agent）
+
+新用户请先看 [用户指南](docs/user-guide.md)（英文）：从新建私钥到 safe 读的完整流程，包括安装、给账户的 Billing 余额充值、允许的列类型、读模式和 operator 私钥。
 
 ```bash
 export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY

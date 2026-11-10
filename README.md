@@ -9,6 +9,7 @@ A lightweight ClickHouse native TCP protocol proxy. Sits transparently between c
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Build](#build)
+- [User guide (agent users)](docs/user-guide.md)
 - **Part 1 — Configuration**
   - [Config File](#config-file)
   - [Full Parameter Reference](#full-parameter-reference)
@@ -479,6 +480,8 @@ Shard-aware (per-replica pool + routing):
 ### 1.2 Agent Mode
 
 #### Quick start (user agent)
+
+New users: the [user guide](docs/user-guide.md) walks from a fresh key to a safe read, including installation, funding the account's Billing balance, admitted column types, read modes and operator keys.
 
 ```bash
 export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY
