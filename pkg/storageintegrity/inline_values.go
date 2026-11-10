@@ -220,7 +220,7 @@ func trimTrailingStatement(rows string) (string, error) {
 // function-call rule. Every other non-call word is refused as a bare
 // identifier, so this set buys clearer errors, not coverage.
 var refusedValuesKeywords = map[string]bool{
-	"select": true, "from": true, "with": true, "in": true, "null": true, "default": true,
+	"select": true, "from": true, "with": true, "in": true, "default": true,
 	"cast": true, "as": true, "interval": true, "and": true, "or": true, "not": true,
 }
 
@@ -235,13 +235,14 @@ var refusedValuesKeywords = map[string]bool{
 //
 //	rows     := tuple (space* ',' space* tuple)*
 //	tuple    := '(' token+ ')'                 ; nested parentheses balance
-//	token    := space | number | string | boolean | call | punct | operator
+//	token    := space | number | string | boolean | null | call | punct | operator
 //	space    := ' ' | '\t' | '\n' | '\r' | '\f'
 //	number   := '0' ('x'|'X') hex+ | digit+ ('.' digit*)? exponent?
 //	exponent := ('e'|'E') ('+'|'-')? digit+
 //	string   := "'" ( "''" | escape | not("'" or '\\') )* "'"
 //	escape   := '\\' ("'" | '\\' | 'n' | 't') | '\\' 'x' hex hex
 //	boolean  := "true" | "false"              ; case-insensitive
+//	null     := "null"                        ; case-insensitive, never a call
 //	call     := word '('                       ; '(' immediately follows word
 //	word     := [A-Za-z_] [A-Za-z0-9_]*
 //	punct    := '(' | ')' | ','
@@ -251,7 +252,7 @@ var refusedValuesKeywords = map[string]bool{
 // '/*' and '//', which ClickHouse also reads as a line comment), quoted
 // identifiers ('`' and '"'), heredocs ('$'), query parameters ('{'), any byte
 // >= 0x80 outside a string literal, every name in refusedValuesKeywords, a word
-// not immediately followed by '(' that is neither true nor false, a call whose
+// not immediately followed by '(' that is neither true, false nor null, a call whose
 // lowercased name IsKnownNondeterministicName or IsServerStateFunctionName
 // accepts, and any other byte, including ';', '[', ']', '?', '@' and ':'.
 //
@@ -341,6 +342,9 @@ func ValuesClosure(rows string) error {
 				return closureErr(fmt.Sprintf("keyword %q is not accepted", word), start)
 			}
 			if i < len(rows) && rows[i] == '(' {
+				if lower == "null" {
+					return closureErr(fmt.Sprintf("keyword %q is not accepted", word), start)
+				}
 				if IsKnownNondeterministicName(lower) {
 					return closureErr(fmt.Sprintf("nondeterministic function %q is not accepted", word), start)
 				}
@@ -350,7 +354,11 @@ func ValuesClosure(rows string) error {
 				tupleHasValue = true
 				continue // the '(' is consumed by the next iteration
 			}
-			if lower != "true" && lower != "false" {
+			// NULL is a constant: admission rules v2 admits Nullable columns,
+			// and ClickHouse's VALUES table function refuses NULL for a
+			// non-Nullable declared type ("Cannot convert NULL to ..."), so
+			// it never reaches a signed row as a coerced default.
+			if lower != "true" && lower != "false" && lower != "null" {
 				return closureErr(fmt.Sprintf("bare identifier %q is not accepted", word), start)
 			}
 			tupleHasValue = true
