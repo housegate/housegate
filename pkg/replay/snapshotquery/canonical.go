@@ -8,14 +8,26 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"os"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
+
+// wideIntBytes is the fixed record width of a wide integer column.
+func wideIntBytes(p payloadexec.ColumnProfile) uint64 {
+	inner := strings.TrimSuffix(strings.TrimPrefix(p.Canonical, "Nullable("), ")")
+	if strings.HasSuffix(inner, "128") {
+		return 16
+	}
+	return 32
+}
 
 // CanonicalOutput owns a complete, fsynced local output and its independent
 // readers (at most two open at once; closing one releases its slot). Close
@@ -70,11 +82,18 @@ func rowLayout(schema payloadexec.TableSchema, values []any) (keySize, typedSize
 			return 0, 0, 0, e
 		}
 		v := values[i]
-		if reflect.TypeOf(v) != p.GoType {
+		if !p.AcceptsValue(v) {
 			return 0, 0, 0, fmt.Errorf("column %q has %T, want %s", c.Name, v, p.GoType)
 		}
 		n := uint64(p.GoType.Size())
 		switch x := v.(type) {
+		case nil:
+			n = 0 // EncodeRow writes the KindNull tag alone
+		case *big.Int:
+			if x == nil {
+				return 0, 0, 0, fmt.Errorf("column %q has a nil *big.Int", c.Name)
+			}
+			n = wideIntBytes(p)
 		case string:
 			n = uint64(len(x))
 		case []byte:
@@ -94,6 +113,9 @@ func rowLayout(schema payloadexec.TableSchema, values []any) (keySize, typedSize
 		}
 		if _, ok := v.(time.Time); ok {
 			n = 16
+		}
+		if p.Nullable {
+			n++ // the typed record's presence byte
 		}
 		typedSize, e = checkedAdd(typedSize, 8+n)
 		if e != nil {
@@ -129,6 +151,10 @@ func NormalizeRow(schema payloadexec.TableSchema, values []any) ([]any, error) {
 			return nil, err
 		}
 		switch x := v.(type) {
+		case nil:
+			out[i] = nil
+		case *big.Int:
+			out[i] = new(big.Int).Set(x)
 		case string:
 			out[i] = strings.Clone(x)
 		case []byte:
@@ -149,7 +175,7 @@ func NormalizeRow(schema payloadexec.TableSchema, values []any) ([]any, error) {
 			out[i] = x
 		case time.Time:
 			switch p.Family {
-			case payloadexec.FamilyDate:
+			case payloadexec.FamilyDate, payloadexec.FamilyDate32:
 				x = time.Unix((x.Unix()/86400)*86400, 0).UTC()
 			case payloadexec.FamilyDateTime:
 				x = time.Unix(x.Unix(), 0).UTC()
@@ -177,11 +203,24 @@ func NormalizeRow(schema payloadexec.TableSchema, values []any) ([]any, error) {
 
 // Typed records are schema-ordered [uint64 length, bytes] fields. No interface
 // codec, dynamic type names, or SQL parser participates in their reconstruction.
-func encodeTyped(values []any, size uint64) []byte {
+// A Nullable column's field starts with a presence byte (0 NULL, 1 value), so a
+// NULL never shares a record with an empty or zero value; every other column's
+// field is exactly as before the Nullable columns existed. A UUID is its 16
+// bytes and a wide integer its fixed-width little-endian two's complement.
+func encodeTyped(schema payloadexec.TableSchema, values []any, size uint64) []byte {
 	out := make([]byte, 0, int(size))
-	for _, v := range values {
+	for i, v := range values {
 		start := len(out)
 		out = append(out, make([]byte, 8)...)
+		p, err := payloadexec.ResolveColumnProfile(schema.Columns[i].Type)
+		if err == nil && p.Nullable {
+			if v == nil {
+				out = append(out, 0)
+				binary.LittleEndian.PutUint64(out[start:start+8], uint64(len(out)-start-8))
+				continue
+			}
+			out = append(out, 1)
+		}
 		switch x := v.(type) {
 		case string:
 			out = append(out, x...)
@@ -200,6 +239,18 @@ func encodeTyped(values []any, size uint64) []byte {
 		case time.Time:
 			out = binary.LittleEndian.AppendUint64(out, uint64(x.Unix()))
 			out = binary.LittleEndian.AppendUint64(out, uint64(x.Nanosecond()))
+		case uuid.UUID:
+			out = append(out, x[:]...)
+		case *big.Int:
+			width := int(wideIntBytes(p))
+			twos := new(big.Int).Set(x)
+			if twos.Sign() < 0 {
+				twos.Add(twos, new(big.Int).Lsh(big.NewInt(1), uint(8*width)))
+			}
+			be := twos.FillBytes(make([]byte, width))
+			for j := width - 1; j >= 0; j-- {
+				out = append(out, be[j])
+			}
 		default:
 			r := reflect.ValueOf(v)
 			var n uint64
@@ -233,6 +284,19 @@ func decodeTyped(schema payloadexec.TableSchema, data []byte) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		if p.Nullable {
+			if len(b) == 0 || b[0] > 1 {
+				return nil, fmt.Errorf("invalid nullable record")
+			}
+			if b[0] == 0 {
+				if len(b) != 1 {
+					return nil, fmt.Errorf("invalid null record")
+				}
+				values[i] = nil
+				continue
+			}
+			b = b[1:]
+		}
 		switch p.Family {
 		case payloadexec.FamilyString:
 			values[i] = string(b)
@@ -241,11 +305,29 @@ func decodeTyped(schema payloadexec.TableSchema, data []byte) ([]any, error) {
 				return nil, fmt.Errorf("invalid fixed string record")
 			}
 			values[i] = bytes.Clone(b)
-		case payloadexec.FamilyDate, payloadexec.FamilyDateTime, payloadexec.FamilyDateTime64:
+		case payloadexec.FamilyDate, payloadexec.FamilyDate32, payloadexec.FamilyDateTime, payloadexec.FamilyDateTime64:
 			if len(b) != 16 || binary.LittleEndian.Uint64(b[8:]) >= 1e9 {
 				return nil, fmt.Errorf("invalid time record")
 			}
 			values[i] = time.Unix(int64(binary.LittleEndian.Uint64(b)), int64(binary.LittleEndian.Uint64(b[8:]))).UTC()
+		case payloadexec.FamilyUUID:
+			if len(b) != 16 {
+				return nil, fmt.Errorf("invalid uuid record")
+			}
+			values[i] = uuid.UUID(b)
+		case payloadexec.FamilyWideInt, payloadexec.FamilyWideUInt:
+			if uint64(len(b)) != wideIntBytes(p) {
+				return nil, fmt.Errorf("invalid wide integer record width")
+			}
+			be := make([]byte, len(b))
+			for j := range b {
+				be[len(b)-1-j] = b[j]
+			}
+			x := new(big.Int).SetBytes(be)
+			if p.Family == payloadexec.FamilyWideInt && b[len(b)-1]&0x80 != 0 {
+				x.Sub(x, new(big.Int).Lsh(big.NewInt(1), uint(8*len(b))))
+			}
+			values[i] = x
 		default:
 			if len(b) != int(p.GoType.Size()) {
 				return nil, fmt.Errorf("invalid scalar record width")

@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"reflect"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -283,7 +285,98 @@ func nativeColumnValue(col proto.ColResult, i int) (any, uint64, error) {
 		return c.Row(i).UTC(), 4, nil
 	case *proto.ColDateTime64:
 		return c.Row(i).UTC(), 8, nil
+	// Admission rules v2 (Spec Q Phase 2 revision).
+	case *proto.ColDate32:
+		// ColDate32 values are always UTC midnight (ch-go's Date32.Time).
+		return c.Row(i).UTC(), 4, nil
+	case *proto.ColUUID:
+		return c.Row(i), 16, nil
+	case *proto.ColInt128:
+		v := c.Row(i)
+		return wideInt([]uint64{v.Low, v.High}, true), 16, nil
+	case *proto.ColUInt128:
+		v := c.Row(i)
+		return wideInt([]uint64{v.Low, v.High}, false), 16, nil
+	case *proto.ColInt256:
+		v := c.Row(i)
+		return wideInt([]uint64{v.Low.Low, v.Low.High, v.High.Low, v.High.High}, true), 32, nil
+	case *proto.ColUInt256:
+		v := c.Row(i)
+		return wideInt([]uint64{v.Low.Low, v.Low.High, v.High.Low, v.High.High}, false), 32, nil
+	case *proto.ColLowCardinality[string]:
+		// The dictionary is a wire encoding only: the value and its logical
+		// byte count are those of the String it stands for.
+		row := c.Row(i)
+		return row, uint64(len(row)), nil
 	default:
+		if nullable, ok := col.(interface{ IsElemNull(int) bool }); ok {
+			return nullableColumnValue(col, nullable, i)
+		}
 		return nil, 0, fmt.Errorf("unsupported column type %T", col)
 	}
+}
+
+// nullableColumnValue decodes one row of a ch-go ColNullable[T] through a
+// generic seam rather than a per-instantiation type switch (Spec Q Q-D6):
+// IsElemNull answers NULL, and the exported Values field — reached by one
+// reflection lookup, since ColNullable has no non-generic accessor for it —
+// recurses into nativeColumnValue, so every inner type the switch above
+// decodes is decodable under Nullable without a case of its own. A NULL is
+// the untyped nil and counts one logical byte (its null-map byte); a
+// non-NULL value counts that byte plus the inner value's.
+//
+// The null-map byte must be exactly 0 or 1. ClickHouse reads any non-zero
+// byte as NULL while ch-go's IsElemNull recognizes only 1, so a payload with
+// another byte would commit a value where ClickHouse stores NULL; it is
+// refused instead.
+func nullableColumnValue(col proto.ColResult, nullable interface{ IsElemNull(int) bool }, i int) (any, uint64, error) {
+	holder := reflect.ValueOf(col)
+	if holder.Kind() != reflect.Pointer || holder.IsNil() || holder.Elem().Kind() != reflect.Struct {
+		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	nulls, ok := holder.Elem().FieldByName("Nulls").Interface().(proto.ColUInt8)
+	if !ok || i >= len(nulls) {
+		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	switch nulls[i] {
+	case 0:
+	case 1:
+		if !nullable.IsElemNull(i) {
+			return nil, 0, fmt.Errorf("nullable column %T disagrees with its null map", col)
+		}
+		return nil, 1, nil
+	default:
+		return nil, 0, fmt.Errorf("nullable null-map byte %d at row %d is neither 0 nor 1", nulls[i], i)
+	}
+	field := holder.Elem().FieldByName("Values")
+	if !field.IsValid() || !field.CanInterface() {
+		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	inner, ok := field.Interface().(proto.ColResult)
+	if !ok {
+		return nil, 0, fmt.Errorf("unsupported nullable column type %T", col)
+	}
+	if _, nested := inner.(interface{ IsElemNull(int) bool }); nested {
+		return nil, 0, fmt.Errorf("unsupported nested nullable column type %T", col)
+	}
+	v, n, err := nativeColumnValue(inner, i)
+	if err != nil {
+		return nil, 0, err
+	}
+	return v, n + 1, nil
+}
+
+// wideInt converts little-endian 64-bit limbs to a *big.Int, as two's
+// complement when signed.
+func wideInt(limbs []uint64, signed bool) *big.Int {
+	n := new(big.Int)
+	for j := len(limbs) - 1; j >= 0; j-- {
+		n.Lsh(n, 64)
+		n.Or(n, new(big.Int).SetUint64(limbs[j]))
+	}
+	bits := uint(64 * len(limbs))
+	if signed && limbs[len(limbs)-1]>>63 == 1 {
+		n.Sub(n, new(big.Int).Lsh(big.NewInt(1), bits))
+	}
+	return n
 }

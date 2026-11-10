@@ -4,9 +4,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // canonicalDomain versions the MVP row-encoding profile. It deliberately
@@ -32,6 +35,13 @@ const (
 	KindString
 	KindBool
 	KindTime
+	// KindNull is the whole value field of a NULL in a Nullable(T) column. A
+	// non-NULL value of that column encodes exactly as T would.
+	KindNull
+	// KindUUID precedes the 16 bytes of a UUID in RFC 4122 byte order (the
+	// order uuid.UUID holds and ClickHouse's toString renders). It is distinct
+	// from KindString so a UUID never shares an encoding with a 16-byte string.
+	KindUUID
 )
 
 // Unexported aliases kept so this file reads as it always has. The exported
@@ -45,6 +55,8 @@ const (
 	kindString = KindString
 	kindBool   = KindBool
 	kindTime   = KindTime
+	kindNull   = KindNull
+	kindUUID   = KindUUID
 )
 
 // EncodeRow produces the canonical element bytes for one row under the MVP
@@ -93,11 +105,34 @@ func appendFramed(dst, field []byte) []byte {
 	return append(dst, field...)
 }
 
+// nullablePrefix opens a Nullable(T) declaration.
+const nullablePrefix = "Nullable("
+
+// valueType is the declared type a value encodes under: T for Nullable(T),
+// the declaration itself otherwise. Every type-dependent branch below reads
+// it, so a non-NULL value of Nullable(T) encodes exactly as T.
+func valueType(declared string) (string, bool) {
+	if strings.HasPrefix(declared, nullablePrefix) && strings.HasSuffix(declared, ")") {
+		return declared[len(nullablePrefix) : len(declared)-1], true
+	}
+	return declared, false
+}
+
 // encodeValue canonicalizes one value: a 1-byte kind tag followed by a
 // fixed-width or framed payload. Integers carry their declared width via
 // the byte length; floats canonicalize NaN to one pattern and -0.0 to
 // +0.0; times canonicalize to the absolute instant.
 func encodeValue(col Column, v any) ([]byte, error) {
+	inner, nullable := valueType(col.Type)
+	if v == nil {
+		// Only a Nullable(T) column may carry NULL; a nil anywhere else is a
+		// materializer bug and must not hash as a value.
+		if !nullable {
+			return nil, fmt.Errorf("lthash: NULL value for non-Nullable column %q (%s)", col.Name, col.Type)
+		}
+		return []byte{kindNull}, nil
+	}
+	col = Column{Name: col.Name, Type: inner}
 	switch x := v.(type) {
 	case int8:
 		return appendInt(kindInt, uint64(uint8(x)), 1), nil
@@ -130,9 +165,57 @@ func encodeValue(col Column, v any) ([]byte, error) {
 		return []byte{kindBool, 0}, nil
 	case time.Time:
 		return encodeTime(col, x), nil
+	case uuid.UUID:
+		return append([]byte{kindUUID}, x[:]...), nil
+	case *big.Int:
+		return encodeWideInt(col, x)
 	default:
 		return nil, fmt.Errorf("lthash: unsupported value type %T for column %q (%s)", v, col.Name, col.Type)
 	}
+}
+
+// wideIntWidths maps the wide integer declarations to their byte width and
+// signedness. They encode under kindInt/kindUint like the narrow integers,
+// as fixed-width little-endian two's complement; the 16- and 32-byte widths
+// cannot collide with the 1-8 byte ones.
+var wideIntWidths = map[string]struct {
+	width  int
+	signed bool
+}{
+	"Int128": {16, true}, "Int256": {32, true},
+	"UInt128": {16, false}, "UInt256": {32, false},
+}
+
+func encodeWideInt(col Column, x *big.Int) ([]byte, error) {
+	if x == nil {
+		return nil, fmt.Errorf("lthash: nil *big.Int for column %q (%s)", col.Name, col.Type)
+	}
+	w, ok := wideIntWidths[col.Type]
+	if !ok {
+		return nil, fmt.Errorf("lthash: *big.Int value for column %q of non-wide type %s", col.Name, col.Type)
+	}
+	bits := uint(8 * w.width)
+	kind := kindUint
+	if w.signed {
+		kind = kindInt
+		limit := new(big.Int).Lsh(big.NewInt(1), bits-1)
+		if x.Cmp(new(big.Int).Neg(limit)) < 0 || x.Cmp(limit) >= 0 {
+			return nil, fmt.Errorf("lthash: value out of range for column %q (%s)", col.Name, col.Type)
+		}
+	} else if x.Sign() < 0 || x.BitLen() > int(bits) {
+		return nil, fmt.Errorf("lthash: value out of range for column %q (%s)", col.Name, col.Type)
+	}
+	twos := new(big.Int).Set(x)
+	if twos.Sign() < 0 {
+		twos.Add(twos, new(big.Int).Lsh(big.NewInt(1), bits))
+	}
+	be := twos.FillBytes(make([]byte, w.width))
+	out := make([]byte, 1, 1+w.width)
+	out[0] = kind
+	for i := len(be) - 1; i >= 0; i-- {
+		out = append(out, be[i])
+	}
+	return out, nil
 }
 
 func appendInt(kind byte, bits uint64, width int) []byte {

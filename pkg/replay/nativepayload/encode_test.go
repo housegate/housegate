@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
-	"github.com/google/uuid"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -127,8 +126,6 @@ func TestEncodeClientDataPacket_RoundTripsEveryAdmittedType(t *testing.T) {
 }
 
 func TestEncodeClientDataPacket_RefusesUnencodableInput(t *testing.T) {
-	uuidCol := &proto.ColUUID{}
-	uuidCol.Append(uuid.UUID{})
 	for _, tc := range []struct {
 		name string
 		rev  int
@@ -147,7 +144,7 @@ func TestEncodeClientDataPacket_RefusesUnencodableInput(t *testing.T) {
 		{"reserved column", encodeTestRevision, []proto.InputColumn{{Name: "_hg_row_id", Data: strCol("x")}}, "reserved _hg_row_id"},
 		{"duplicate column", encodeTestRevision, []proto.InputColumn{{Name: "c", Data: strCol("x")}, {Name: "c", Data: strCol("y")}}, "duplicate column"},
 		{"ragged rows", encodeTestRevision, []proto.InputColumn{{Name: "a", Data: strCol("x", "y")}, {Name: "b", Data: strCol("z")}}, "has 1 rows, first column has 2"},
-		{"unsupported type", encodeTestRevision, []proto.InputColumn{{Name: "c", Data: uuidCol}}, "unsupported"},
+		{"unsupported type", encodeTestRevision, []proto.InputColumn{{Name: "c", Data: &proto.ColDecimal64{12345}}}, "unsupported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := EncodeClientDataPacket(tc.rev, tc.cols)

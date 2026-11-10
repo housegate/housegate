@@ -127,12 +127,20 @@ The database is created on the indexer your session lands on and registered on c
 its Owner. A new table starts *pending*: writes to it are refused with the retryable code 733
 `... is pending activation (retryable)` until it turns active, usually within a minute.
 
-**Admitted column types.** `String`, `FixedString(32)`, `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`,
-`Float32`, `Float64`, `Date`, `DateTime`, `DateTime('UTC')`, and `DateTime64(0..9)` with an optional
-`'UTC'`. Nothing else: no `Nullable`, `Decimal`, `Array`, `UUID`, `LowCardinality` or `Map`. A
-`PARTITION BY`, if any, must be a single `String` column. The type check runs after the table is
-created: a table with another type is created and then refused, every read and write of it answers
-code 392 `... was refused: ...`, and the only way out is `DROP TABLE` and creating it again.
+**Admitted column types.** Which types a table may declare is decided by the network's table
+admission rules version, a consensus parameter.
+
+- Admission rules v1: `String`, `FixedString(32)`, `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`,
+  `Float32`, `Float64`, `Date`, `DateTime`, `DateTime('UTC')`, and `DateTime64(0..9)` with an
+  optional `'UTC'`.
+- Admission rules v2, once the network has activated it, adds `Date32`, `UUID`, `Int128`,
+  `Int256`, `UInt128`, `UInt256`, `LowCardinality(String)`, and `Nullable(T)` for every type above
+  except `LowCardinality(String)`.
+
+Nothing else under either version: no `Decimal`, `Array`, `Map`, `Tuple`, `Enum`, no other
+`LowCardinality` and no nested `Nullable`. A `PARTITION BY`, if any, must be a single `String`
+column. A `CREATE TABLE` with another type is refused before anything is created (code 392
+`... refused by table admission rules ...: column_type: ...; nothing was created`).
 
 **Append-only.** SI tables accept `INSERT` only. `UPDATE`, `DELETE`, `ALTER`, `TRUNCATE` and
 `RENAME` are refused; to change a schema, drop the table and create it again.

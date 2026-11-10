@@ -76,6 +76,23 @@ jobs:
     needs: build
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 15
+    # Every ClickHouse server version a deployment may run: the replay lanes,
+    # the canonical type spellings and the client matrix must agree on each.
+    # 25.8 runs the whole suite. 26.8 runs the column-type, replay and
+    # signed-format tests only: the whole suite does not pass on 26.8 yet
+    # (TestMergeGuard_ReleasesOutdatedPartCleanupWithoutMerging) and exceeds
+    # the target's timeout there.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ch_image: "clickhouse/clickhouse-server:25.8"
+            test_filter: ""
+          - ch_image: "clickhouse/clickhouse-server:26.8"
+            test_filter: "TestColumnProfile|TestReplayCHExecutor|TestClickHouseSortsNullsLast|TestCLI_V2Types|TestCLI_LowCardinality|TestCLI_SignableInsertFormats|TestStorageIntegrity_InlineValues"
+    env:
+      HOUSEGATE_CH_IMAGE: ${{ matrix.ch_image }}
+      HOUSEGATE_TEST_FILTER: ${{ matrix.test_filter }}
 
     steps:
       - name: Checkout Repo
@@ -88,7 +105,7 @@ jobs:
       # by testcontainers for cleanup is small (~10MB) and pulled
       # automatically on first run.
       - name: Pre-pull ClickHouse image
-        run: docker pull clickhouse/clickhouse-server:25.8
+        run: docker pull "$HOUSEGATE_CH_IMAGE"
 
       # Install the clickhouse fat binary for CLI integration tests.
       # ClickHouseCLI(t) probes tests/bin/clickhouse and t.Skip's when
@@ -119,10 +136,13 @@ jobs:
       # adding new docker-bound integration targets.
       - name: Integration Tests
         run: |
-          bazel test \
+          filter=()
+          if [ -n "$HOUSEGATE_TEST_FILTER" ]; then filter=(--test_filter="$HOUSEGATE_TEST_FILTER"); fi
+          bazel test "${filter[@]}" \
             --config=ci \
             //pkg/integration:integration_test \
             //pkg/integration/testenv:testenv_test \
             //pkg/integration/sipressurescale:sipressurescale_test \
             --test_env=POLYGLOT_SQL_FFI_PATH \
+            --test_env=HOUSEGATE_CH_IMAGE \
             --test_output=errors

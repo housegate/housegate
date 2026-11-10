@@ -2,11 +2,14 @@ package chexec
 
 import (
 	"encoding/binary"
+	"math/big"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
+	"github.com/google/uuid"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/nativepayload"
@@ -87,11 +90,102 @@ var sampleColumns = map[string]func() (proto.ColInput, any){
 		c.Append(authorityTestInstant)
 		return c, authorityTestInstant.Truncate(time.Millisecond)
 	},
+	// Admission rules v2 (Spec Q Phase 2 revision).
+	"Date32": func() (proto.ColInput, any) {
+		c := new(proto.ColDate32)
+		c.Append(time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC))
+		return c, time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
+	},
+	"UUID": func() (proto.ColInput, any) {
+		id := uuid.MustParse("61f0c404-5cb3-11e7-907b-a6006ad3dba0")
+		c := new(proto.ColUUID)
+		c.Append(id)
+		return c, id
+	},
+	"Int128": func() (proto.ColInput, any) {
+		return &proto.ColInt128{{Low: ^uint64(0), High: ^uint64(0)}}, big.NewInt(-1)
+	},
+	"Int256": func() (proto.ColInput, any) {
+		return &proto.ColInt256{{Low: proto.UInt128{Low: 300}}}, big.NewInt(300)
+	},
+	"UInt128": func() (proto.ColInput, any) {
+		return &proto.ColUInt128{{High: 1}}, new(big.Int).Lsh(big.NewInt(1), 64)
+	},
+	"UInt256": func() (proto.ColInput, any) {
+		return &proto.ColUInt256{{High: proto.UInt128{High: 1 << 63}}}, new(big.Int).Lsh(big.NewInt(1), 255)
+	},
+	"LowCardinality(String)": func() (proto.ColInput, any) {
+		c := proto.NewLowCardinality(new(proto.ColStr))
+		c.Append("eu")
+		return c, "eu"
+	},
+}
+
+// nullableSample derives the Nullable(T) sample from T's: the same inner
+// column wrapped by ch-go's own Nullable(), with its single row flagged NULL or
+// not. The inner value is present on the wire either way, exactly as a client
+// writes a NULL.
+func nullableSample(t *testing.T, declared string, null bool) (proto.ColInput, any, bool) {
+	t.Helper()
+	inner, ok := strings.CutPrefix(declared, "Nullable(")
+	if !ok {
+		return nil, nil, false
+	}
+	sample, ok := sampleColumns[strings.TrimSuffix(inner, ")")]
+	if !ok {
+		return nil, nil, false
+	}
+	column, want := sample()
+	method := reflect.ValueOf(column).MethodByName("Nullable")
+	if !method.IsValid() {
+		t.Fatalf("%s: inner sample %T has no Nullable()", declared, column)
+	}
+	wrapped := method.Call(nil)[0]
+	flag := uint8(0)
+	if null {
+		flag, want = 1, nil
+	}
+	wrapped.Elem().FieldByName("Nulls").Set(reflect.ValueOf(proto.ColUInt8{flag}))
+	return wrapped.Interface().(proto.ColInput), want, true
+}
+
+// sampleFor returns the sample column of an admitted vector, deriving
+// Nullable(T) ones from T's.
+func sampleFor(t *testing.T, declared string, null bool) (proto.ColInput, any, bool) {
+	t.Helper()
+	if sample, ok := sampleColumns[declared]; ok {
+		column, want := sample()
+		return column, want, true
+	}
+	return nullableSample(t, declared, null)
+}
+
+// fillScanDest stores a Native-lane value into a read-back destination the
+// way clickhouse-go would: through the extra pointer of a Nullable column, and
+// as a string for Nullable(FixedString).
+func fillScanDest(profile payloadexec.ColumnProfile, dest any, value any) {
+	elem := reflect.ValueOf(dest).Elem()
+	if !profile.Nullable || profile.GoType.Kind() == reflect.Pointer {
+		if value != nil {
+			elem.Set(reflect.ValueOf(value))
+		}
+		return
+	}
+	if value == nil {
+		return
+	}
+	inner := reflect.New(elem.Type().Elem())
+	if profile.Family == payloadexec.FamilyFixedString {
+		inner.Elem().SetString(string(value.([]byte)))
+	} else {
+		inner.Elem().Set(reflect.ValueOf(value))
+	}
+	elem.Set(inner)
 }
 
 func TestColumnProfileHasASampleForEveryAdmittedType(t *testing.T) {
 	for _, declared := range payloadexec.AdmittedColumnTypeVectors() {
-		if _, ok := sampleColumns[declared]; !ok {
+		if _, _, ok := sampleFor(t, declared, false); !ok {
 			t.Errorf("admitted type %q has no sample column: add one, or remove it from the profile", declared)
 		}
 	}
@@ -114,72 +208,87 @@ func TestColumnProfileHasASampleForEveryAdmittedType(t *testing.T) {
 // is what makes the drift Spec Q §1a and §1e describe unrepeatable.
 func TestColumnProfileAgreesAcrossAllFourComponents(t *testing.T) {
 	for _, declared := range payloadexec.AdmittedColumnTypeVectors() {
-		t.Run(declared, func(t *testing.T) {
-			profile, err := payloadexec.ResolveColumnProfile(declared)
-			if err != nil {
-				t.Fatalf("ResolveColumnProfile(%q): %v", declared, err)
+		nulls := []bool{false}
+		if strings.HasPrefix(declared, "Nullable(") {
+			nulls = append(nulls, true)
+		}
+		for _, null := range nulls {
+			name := declared
+			if null {
+				name += "/NULL"
 			}
-			sample, ok := sampleColumns[declared]
-			if !ok {
-				t.Fatalf("no sample column for %q", declared)
-			}
-			column, wantValue := sample()
+			t.Run(name, func(t *testing.T) { checkAuthorityAgreement(t, declared, null) })
+		}
+	}
+}
 
-			// 1. Native decode.
-			schema := payloadexec.TableSchema{
-				TableID: "tenant.authority",
-				Columns: []lthash.Column{{Name: "c", Type: declared}},
-			}
-			rows, err := nativepayload.Decode(schema, authorityTestRevision, encodeOneColumnNativePacket(t, "c", column))
-			if err != nil {
-				t.Fatalf("nativepayload.Decode(%q): %v", declared, err)
-			}
-			if len(rows) != 1 {
-				t.Fatalf("nativepayload.Decode(%q) returned %d rows, want 1", declared, len(rows))
-			}
-			decoded := rows[0].Values[0]
-			if got := reflect.TypeOf(decoded); got != profile.GoType {
-				t.Fatalf("Native decode of %q yields %s, profile GoType %s", declared, got, profile.GoType)
-			}
-			assertSameValue(t, "Native decode", declared, decoded, wantValue)
+func checkAuthorityAgreement(t *testing.T, declared string, null bool) {
+	profile, err := payloadexec.ResolveColumnProfile(declared)
+	if err != nil {
+		t.Fatalf("ResolveColumnProfile(%q): %v", declared, err)
+	}
+	column, wantValue, ok := sampleFor(t, declared, null)
+	if !ok {
+		t.Fatalf("no sample column for %q", declared)
+	}
 
-			// 2. chexec DDL admission and read-back destination.
-			if !supportedColumnType(declared) {
-				t.Fatalf("supportedColumnType(%q) = false, authority admits it", declared)
-			}
-			dest, err := newScanDest(declared)
-			if err != nil {
-				t.Fatalf("newScanDest(%q): %v", declared, err)
-			}
-			if got := reflect.TypeOf(dest).Elem(); got != profile.GoType {
-				t.Fatalf("newScanDest(%q) -> *%s, profile GoType %s", declared, got, profile.GoType)
-			}
+	// 1. Native decode.
+	schema := payloadexec.TableSchema{
+		TableID: "tenant.authority",
+		Columns: []lthash.Column{{Name: "c", Type: declared}},
+	}
+	rows, err := nativepayload.Decode(schema, authorityTestRevision, encodeOneColumnNativePacket(t, "c", column))
+	if err != nil {
+		t.Fatalf("nativepayload.Decode(%q): %v", declared, err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("nativepayload.Decode(%q) returned %d rows, want 1", declared, len(rows))
+	}
+	decoded := rows[0].Values[0]
+	if !profile.AcceptsValue(decoded) {
+		t.Fatalf("Native decode of %q yields %T, profile GoType %s", declared, decoded, profile.GoType)
+	}
+	assertSameValue(t, "Native decode", declared, decoded, wantValue)
 
-			// 3. chexec read-back normalization. Feeding it the Native lane's own
-			// value is the point: the two lanes must be interchangeable.
-			reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(decoded))
-			scanned, err := derefScan(declared, dest)
-			if err != nil {
-				t.Fatalf("derefScan(%q): %v", declared, err)
-			}
-			if got := reflect.TypeOf(scanned); got != profile.GoType {
-				t.Fatalf("derefScan(%q) -> %s, profile GoType %s", declared, got, profile.GoType)
-			}
-			assertSameValue(t, "chexec read-back", declared, scanned, wantValue)
+	// 2. chexec DDL admission and read-back destination.
+	if !supportedColumnType(declared) {
+		t.Fatalf("supportedColumnType(%q) = false, authority admits it", declared)
+	}
+	dest, err := newScanDest(declared)
+	if err != nil {
+		t.Fatalf("newScanDest(%q): %v", declared, err)
+	}
+	if got := reflect.TypeOf(dest).Elem(); got != scanType(profile) {
+		t.Fatalf("newScanDest(%q) -> *%s, want *%s", declared, got, scanType(profile))
+	}
 
-			// 4. lthash acceptance and kind tag.
-			encoded, err := lthash.EncodeRow(schema.TableID, schema.Columns, []any{decoded})
-			if err != nil {
-				t.Fatalf("lthash.EncodeRow(%q): %v", declared, err)
-			}
-			value := singleColumnValueField(t, encoded)
-			if len(value) == 0 {
-				t.Fatalf("lthash encoded an empty value field for %q", declared)
-			}
-			if value[0] != profile.KindTag {
-				t.Fatalf("lthash tagged %q with kind %d, profile KindTag %d", declared, value[0], profile.KindTag)
-			}
-		})
+	// 3. chexec read-back normalization. Feeding it the Native lane's own
+	// value is the point: the two lanes must be interchangeable.
+	fillScanDest(profile, dest, decoded)
+	scanned, err := derefScan(declared, dest)
+	if err != nil {
+		t.Fatalf("derefScan(%q): %v", declared, err)
+	}
+	if !profile.AcceptsValue(scanned) {
+		t.Fatalf("derefScan(%q) -> %T, profile GoType %s", declared, scanned, profile.GoType)
+	}
+	assertSameValue(t, "chexec read-back", declared, scanned, wantValue)
+
+	// 4. lthash acceptance and kind tag.
+	encoded, err := lthash.EncodeRow(schema.TableID, schema.Columns, []any{decoded})
+	if err != nil {
+		t.Fatalf("lthash.EncodeRow(%q): %v", declared, err)
+	}
+	value := singleColumnValueField(t, encoded)
+	if len(value) == 0 {
+		t.Fatalf("lthash encoded an empty value field for %q", declared)
+	}
+	wantTag := profile.KindTag
+	if null {
+		wantTag = lthash.KindNull
+	}
+	if value[0] != wantTag {
+		t.Fatalf("lthash tagged %q with kind %d, want %d", declared, value[0], wantTag)
 	}
 }
 

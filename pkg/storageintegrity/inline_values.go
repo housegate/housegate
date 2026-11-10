@@ -220,7 +220,7 @@ func trimTrailingStatement(rows string) (string, error) {
 // function-call rule. Every other non-call word is refused as a bare
 // identifier, so this set buys clearer errors, not coverage.
 var refusedValuesKeywords = map[string]bool{
-	"select": true, "from": true, "with": true, "in": true, "null": true, "default": true,
+	"select": true, "from": true, "with": true, "in": true, "default": true,
 	"cast": true, "as": true, "interval": true, "and": true, "or": true, "not": true,
 }
 
@@ -235,13 +235,14 @@ var refusedValuesKeywords = map[string]bool{
 //
 //	rows     := tuple (space* ',' space* tuple)*
 //	tuple    := '(' token+ ')'                 ; nested parentheses balance
-//	token    := space | number | string | boolean | call | punct | operator
+//	token    := space | number | string | boolean | null | call | punct | operator
 //	space    := ' ' | '\t' | '\n' | '\r' | '\f'
 //	number   := '0' ('x'|'X') hex+ | digit+ ('.' digit*)? exponent?
 //	exponent := ('e'|'E') ('+'|'-')? digit+
 //	string   := "'" ( "''" | escape | not("'" or '\\') )* "'"
 //	escape   := '\\' ("'" | '\\' | 'n' | 't') | '\\' 'x' hex hex
 //	boolean  := "true" | "false"              ; case-insensitive
+//	null     := "null"                        ; case-insensitive, never a call
 //	call     := word '('                       ; '(' immediately follows word
 //	word     := [A-Za-z_] [A-Za-z0-9_]*
 //	punct    := '(' | ')' | ','
@@ -251,7 +252,7 @@ var refusedValuesKeywords = map[string]bool{
 // '/*' and '//', which ClickHouse also reads as a line comment), quoted
 // identifiers ('`' and '"'), heredocs ('$'), query parameters ('{'), any byte
 // >= 0x80 outside a string literal, every name in refusedValuesKeywords, a word
-// not immediately followed by '(' that is neither true nor false, a call whose
+// not immediately followed by '(' that is neither true, false nor null, a call whose
 // lowercased name IsKnownNondeterministicName or IsServerStateFunctionName
 // accepts, and any other byte, including ';', '[', ']', '?', '@' and ':'.
 //
@@ -341,6 +342,9 @@ func ValuesClosure(rows string) error {
 				return closureErr(fmt.Sprintf("keyword %q is not accepted", word), start)
 			}
 			if i < len(rows) && rows[i] == '(' {
+				if lower == "null" {
+					return closureErr(fmt.Sprintf("keyword %q is not accepted", word), start)
+				}
 				if IsKnownNondeterministicName(lower) {
 					return closureErr(fmt.Sprintf("nondeterministic function %q is not accepted", word), start)
 				}
@@ -350,7 +354,11 @@ func ValuesClosure(rows string) error {
 				tupleHasValue = true
 				continue // the '(' is consumed by the next iteration
 			}
-			if lower != "true" && lower != "false" {
+			// NULL is a constant: admission rules v2 admits Nullable columns,
+			// and ClickHouse's VALUES table function refuses NULL for a
+			// non-Nullable declared type ("Cannot convert NULL to ..."), so
+			// it never reaches a signed row as a coerced default.
+			if lower != "true" && lower != "false" && lower != "null" {
 				return closureErr(fmt.Sprintf("bare identifier %q is not accepted", word), start)
 			}
 			tupleHasValue = true
@@ -438,10 +446,14 @@ func scanClosureNumber(rows string, start int) (int, error) {
 		if i < len(rows) && (isStorageIdentPart(rows[i]) || rows[i] == '.') {
 			return 0, closureErr("numeric literal is not delimited", i)
 		}
+		if len(strings.TrimLeft(rows[start+2:i], "0")) > 16 {
+			return 0, closureErr(wideLiteralRefusal, start)
+		}
 		return i, nil
 	}
 
 	i := scanClosureDigits(rows, start)
+	integerEnd := i
 	if i < len(rows) && rows[i] == '.' {
 		i = scanClosureDigits(rows, i+1)
 	}
@@ -459,7 +471,25 @@ func scanClosureNumber(rows string, start int) (int, error) {
 	if i < len(rows) && (isStorageIdentPart(rows[i]) || rows[i] == '.') {
 		return 0, closureErr("numeric literal is not delimited", i)
 	}
+	if i == integerEnd && exceedsUInt64(rows[start:i]) {
+		return 0, closureErr(wideLiteralRefusal, start)
+	}
 	return i, nil
+}
+
+// wideLiteralRefusal names the integer literals ClickHouse cannot keep exact.
+// ClickHouse types an unquoted integer literal above UInt64 (decimal above
+// 18446744073709551615, or more than 16 significant hex digits) as Float64,
+// measured on 25.8 and 26.8, so a 128- or 256-bit value would be rounded
+// before it reached its column. A quoted string converts exactly.
+const wideLiteralRefusal = "integer literal exceeds UInt64 and ClickHouse would round it through Float64; quote it as a string ('…') to keep it exact"
+
+// exceedsUInt64 reports whether a run of decimal digits is above
+// 18446744073709551615.
+func exceedsUInt64(digits string) bool {
+	const max = "18446744073709551615"
+	digits = strings.TrimLeft(digits, "0")
+	return len(digits) > len(max) || (len(digits) == len(max) && digits > max)
 }
 
 func scanClosureDigits(rows string, i int) int {
