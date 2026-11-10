@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -529,5 +530,77 @@ func agentConfigForStorageIntegrityTest() agent.Config {
 		Mode:          true,
 		Upstream:      "proxy:9001",
 		PrivateKeyHex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+}
+
+func TestStorageIntegrityAccountQuotaDefaults(t *testing.T) {
+	q := Default().StorageIntegrity.Ingress.AccountQuota
+	if q.Mode != "off" || q.StatementsPerSecond != 20 || q.StatementBurst != 200 ||
+		q.BytesPerSecond != 8<<20 || q.ByteBurst != 256<<20 {
+		t.Fatalf("account_quota defaults = %+v", q)
+	}
+}
+
+func TestStorageIntegrityAccountQuotaValidate(t *testing.T) {
+	valid := func() Config {
+		c := Default()
+		c.Listen = "127.0.0.1:0"
+		c.NetworkState.Source = "ns.yaml"
+		c.StorageIntegrity.Ingress.Enabled = true
+		c.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+		c.StorageIntegrity.Ingress.AccountQuota.Mode = "enforce"
+		return c
+	}
+	for _, mode := range []string{"", "off", "dry_run", "enforce"} {
+		c := valid()
+		c.StorageIntegrity.Ingress.AccountQuota.Mode = mode
+		if err := c.Validate(); err != nil {
+			t.Fatalf("mode %q rejected: %v", mode, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*Config)
+		want   string
+	}{
+		"unknown mode":         {func(c *Config) { c.StorageIntegrity.Ingress.AccountQuota.Mode = "strict" }, "must be off, dry_run or enforce"},
+		"ingress disabled":     {func(c *Config) { c.StorageIntegrity.Ingress.Enabled = false }, "account_quota.mode requires storage_integrity.ingress.enabled"},
+		"zero statement rate":  {func(c *Config) { c.StorageIntegrity.Ingress.AccountQuota.StatementsPerSecond = 0 }, "statements_per_second"},
+		"zero statement burst": {func(c *Config) { c.StorageIntegrity.Ingress.AccountQuota.StatementBurst = 0 }, "statement_burst"},
+		"zero byte rate":       {func(c *Config) { c.StorageIntegrity.Ingress.AccountQuota.BytesPerSecond = 0 }, "bytes_per_second"},
+		"burst below payload":  {func(c *Config) { c.StorageIntegrity.Ingress.AccountQuota.ByteBurst = 1 << 20 }, "byte_burst"},
+	} {
+		c := valid()
+		tc.mutate(&c)
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: Validate = %v, want an error containing %q", name, err, tc.want)
+		}
+	}
+	// Off ignores the bucket settings entirely.
+	c := valid()
+	c.StorageIntegrity.Ingress.AccountQuota = StorageIntegrityAccountQuotaConfig{Mode: "off"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("off with zero buckets rejected: %v", err)
+	}
+}
+
+// YAML 1.1 reads a bare off as a boolean; the mode must still decode as "off".
+func TestStorageIntegrityAccountQuotaModeDecodesBareYAMLWords(t *testing.T) {
+	dir := t.TempDir()
+	for _, mode := range []string{"off", "dry_run", "enforce"} {
+		path := dir + "/" + mode + ".yaml"
+		body := "storage_integrity:\n  ingress:\n    account_quota:\n      mode: " + mode + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, _, err := LoadFile(path)
+		if err != nil {
+			t.Fatalf("LoadFile(%s): %v", mode, err)
+		}
+		if got := cfg.StorageIntegrity.Ingress.AccountQuota.Mode; got != mode {
+			t.Fatalf("mode %s decoded as %q", mode, got)
+		}
+		if cfg.StorageIntegrity.Ingress.AccountQuota.StatementBurst != 200 {
+			t.Fatalf("mode %s dropped the bucket defaults: %+v", mode, cfg.StorageIntegrity.Ingress.AccountQuota)
+		}
 	}
 }

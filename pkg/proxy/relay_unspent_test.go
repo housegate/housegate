@@ -34,6 +34,7 @@ func TestExceptionForPluginError_RendersUnspentMarkerOnce(t *testing.T) {
 		"plain":        {chproto.MarkSeqUnspent(errors.New("storage_integrity rejects compressed payloads")), "storage_integrity rejects compressed payloads [client_seq unspent]"},
 		"already":      {chproto.MarkSeqUnspent(errors.New("x [client_seq unspent]")), "x [client_seq unspent]"},
 		"unmarked":     {errors.New("jws invalid"), "jws invalid"},
+		"quota":        {&chproto.ClientError{Code: chproto.CodeQuotaExceeded, Message: chproto.AccountQuotaExceededMessage("0xa", "bytes", 3*time.Second), SeqUnspent: true}, "storage_integrity: account 0xa exceeded its write quota (bytes); retry in 3s (retryable) [client_seq unspent]"},
 	} {
 		if got := exceptionForPluginError(tc.err).Message; got != tc.want {
 			t.Errorf("%s: message = %q, want %q", name, got, tc.want)
