@@ -93,6 +93,43 @@ Residual risk with `true`: a statement that crashes the rewriter is itself refus
 
 **Rollout.** Startup now depends on the rewriter being reachable within `rewriter.timeout` (default 5s). Where the rewriter runs as a separate process or container, start it first (for example a Kubernetes native sidecar with a startup probe on its gRPC port) or rely on restart-on-failure; a slow rewriter makes HouseGate, and any process that embeds it, exit at startup instead of running without rewriting.
 
+## Engine `auto`
+
+`rewriter.engine: auto` picks the engine once, at startup, and never changes it while the process runs:
+
+1. HouseGate waits up to `rewriter.auto.grpc_wait` (default `30s`) for the gRPC service at `rewriter.service_addr`, retrying the connection about once a second, so a sidecar that starts during the wait is used.
+2. If the service is still unreachable, HouseGate fetches the native library pinned by `rewriter.native_library_release` and `rewriter.native_library_sha256` and loads it. It never reads `native_library_path`, `POLYGLOT_SQL_FFI_PATH` or the default search locations.
+3. The selected engine runs the usual startup probes. A probe failure refuses startup; HouseGate does not try the other engine.
+
+```yaml
+rewriter:
+  engine: auto
+  service_addr: localhost:50051
+  native_library_release: <the release this HouseGate pins>   # ffifetch.DefaultRelease
+  native_library_sha256: <sha256 of that release's library for this platform>
+  auto:
+    grpc_wait: 30s
+```
+
+Configuration rules (`Config.Validate`, repeated at startup for embedding hosts):
+
+- `service_addr`, `native_library_release` and `native_library_sha256` are required; `native_library_path` is refused.
+- `native_library_release` must be the release whose Go binding this HouseGate is built with (`ffifetch.DefaultRelease`, the version in `go.mod`). Any other release is refused, because the FFI library and its binding must match.
+- `auto` cannot be combined with `storage_integrity.enabled`. The two engines do not yet answer every statement identically, so which engine serves would depend on whether the sidecar was up at startup. Pin `engine: grpc` or `engine: native` on storage-integrity servers. This restriction will be lifted once the engines pass a zero-divergence differential on a shared corpus.
+- The agent's `materialize.engine` does not accept `auto`.
+
+Failure modes:
+
+| Situation | Result |
+|---|---|
+| Service reachable within the wait, probes pass | gRPC serves |
+| Service reachable, a probe fails | startup refused; no fallback |
+| Service unreachable, pinned library fetched and loaded, probes pass | native serves |
+| Service unreachable, library fetch, checksum or load fails | treated like any rewriter that cannot be built: startup refused, unless `fail_open_on_unavailable: true` (see above) |
+| Service goes away after startup | queries fail as `rewriter unavailable` under the per-query rules above; HouseGate never switches to the native engine. Restart HouseGate, or the service, to recover |
+
+Neither the client nor the request can influence the choice. The startup log line `SQL rewriter engine active` names `configured_engine`, `engine` and `engine_version`, and the gauge `clickhouse_proxy_rewriter_engine{configured,engine,version}` is `1` for the serving engine once its probes have passed (`engine="none"` when HouseGate runs without a rewriter under `fail_open_on_unavailable`). The gRPC contract carries no build version, so a gRPC engine reports `version="unknown"`; a native engine reports its release tag. Every configured engine reports the gauge, not only `auto`.
+
 ## What the switch does not cover
 
 - **Sessions that bypass the rewriter.** Maintenance sessions (indexer-signed), platform-operator sessions and peer-trusted sessions arriving from another HouseGate never call the rewriter, so neither rejections nor the switch apply to their decoded queries (an undecodable Query packet is still refused, see above). On an origin HouseGate that forwards a whole session to a peer, the receiving HouseGate runs the rewriter and enforces its answer. Keep `internal_listen` reachable only from trusted peer subnets.

@@ -252,33 +252,71 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter
 	}
 
 	rwConfig := rewriter.Options{
-		Enabled:           true,
-		ServiceAddr:       cfg.Rewriter.ServiceAddr,
-		Engine:            cfg.Rewriter.Engine,
-		NativeLibraryPath: nativeLibPath,
-		Upstream:          cfg.Upstream,
-		Listen:            cfg.Listen,
-		CallbackAddr:      cfg.CallbackUrl,
-		Timeout:           cfg.Rewriter.Timeout.Duration,
-		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
-		AuthEnabled:       cfg.Auth.Enabled,
-		Delim:             cfg.Rewriter.Delimiter,
+		Enabled:              true,
+		ServiceAddr:          cfg.Rewriter.ServiceAddr,
+		Engine:               cfg.Rewriter.Engine,
+		NativeLibraryPath:    nativeLibPath,
+		NativeLibraryVersion: nativeLibraryVersion(cfg.Rewriter.NativeLibraryPath, cfg.Rewriter.NativeLibraryRelease),
+		AutoGRPCWait:         cfg.Rewriter.Auto.GRPCWait.Duration,
+		Upstream:             cfg.Upstream,
+		Listen:               cfg.Listen,
+		CallbackAddr:         cfg.CallbackUrl,
+		Timeout:              cfg.Rewriter.Timeout.Duration,
+		PhysicalDatabase:     cfg.Rewriter.PhysicalDatabase,
+		AuthEnabled:          cfg.Auth.Enabled,
+		Delim:                cfg.Rewriter.Delimiter,
 		// Config.Validate refuses the switch together with storage
 		// integrity; the guard here also covers hosts that skip it.
 		FailOpenOnUnavailable: cfg.Rewriter.FailOpenOnUnavailable && !si.Enabled,
 		StorageIntegrity:      si,
+	}
+	if cfg.Rewriter.Engine == rewriter.EngineAuto {
+		// Config.Validate refuses these too; the guard here also covers
+		// hosts that skip it.
+		if si.Enabled {
+			return nil, fmt.Errorf(`rewriter.engine "auto" cannot be combined with storage_integrity.enabled`)
+		}
+		if cfg.Rewriter.NativeLibraryPath != "" || cfg.Rewriter.NativeLibrarySHA256 == "" || cfg.Rewriter.NativeLibraryRelease != ffifetch.DefaultRelease {
+			return nil, fmt.Errorf(`rewriter.engine "auto" requires native_library_release %q with native_library_sha256 and no native_library_path`, ffifetch.DefaultRelease)
+		}
+		rwConfig.ResolveNativeLibrary = func(ctx context.Context) (string, error) {
+			return ffifetch.Fetch(ctx, ffifetch.Options{
+				Tag:     cfg.Rewriter.NativeLibraryRelease,
+				SHA256:  cfg.Rewriter.NativeLibrarySHA256,
+				BaseURL: cfg.Rewriter.NativeLibraryReleaseBaseURL,
+			})
+		}
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
 		return nil, rewriterStartupFailure(cfg, si, fmt.Errorf("create rewriter factory: %w", err))
 	}
 	log.Infow("SQL rewriter enabled",
-		"engine", cfg.Rewriter.Engine,
+		"configured_engine", configuredEngine(cfg.Rewriter.Engine),
+		"engine", rwf.Engine(),
+		"engine_version", rwf.EngineVersion(),
 		"service_addr", cfg.Rewriter.ServiceAddr,
 		"upstream", cfg.Upstream,
 		"physical_database", cfg.Rewriter.PhysicalDatabase,
 	)
 	return rwf, nil
+}
+
+// nativeLibraryVersion is the release tag the native library is loaded from;
+// an explicit path wins over the release, so it has no known tag.
+func nativeLibraryVersion(explicitPath, release string) string {
+	if explicitPath != "" {
+		return ""
+	}
+	return release
+}
+
+// configuredEngine is rewriter.engine with the empty value spelled out.
+func configuredEngine(engine string) string {
+	if engine == "" {
+		return rewriter.EngineGRPC
+	}
+	return engine
 }
 
 // rewriterStartupFailure decides what an unbuildable rewriter means at
@@ -291,6 +329,7 @@ func rewriterStartupFailure(cfg *config.Config, si rewriter.StorageIntegrityOpti
 	}
 	if cfg.Rewriter.FailOpenOnUnavailable {
 		log.Warne(err, "SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)")
+		rewriter.ReportActiveEngine(cfg.Rewriter.Engine, rewriter.EngineNone, "")
 		return nil
 	}
 	return fmt.Errorf("SQL rewriter unavailable at startup: %w; refusing to forward queries without it (set rewriter.fail_open_on_unavailable: true to run without the rewriter)", err)
@@ -640,6 +679,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			return refuseRewriter(err)
 		}
 		log.Infow("storage-integrity rewriter build verified", "table_state", storageIntegrityTableStateLabel(siStatic))
+	}
+	// Only after every startup probe passed: the series names the engine
+	// that serves, fixed for the process lifetime.
+	if !injectedRewriter {
+		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
+			rewriter.ReportActiveEngine(cfg.Rewriter.Engine, rwf.Engine(), rwf.EngineVersion())
+			log.Infow("SQL rewriter engine active",
+				"configured_engine", configuredEngine(cfg.Rewriter.Engine),
+				"engine", rwf.Engine(), "engine_version", rwf.EngineVersion())
+		}
 	}
 
 	// Cluster: lib-built path constructs and registers Close+Start;

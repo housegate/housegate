@@ -39,11 +39,14 @@ func NewMaterializer(opts Options, poolSize int, profileID string) (Materializer
 	if poolSize <= 0 {
 		return nil, fmt.Errorf("materializer pool size must be > 0, got %d", poolSize)
 	}
-	be, err := newBackend(opts)
+	if opts.Engine == EngineAuto {
+		return nil, fmt.Errorf("materializer engine %q is not supported (want %q or %q)", EngineAuto, EngineGRPC, EngineNative)
+	}
+	sel, err := newBackend(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &sentioMaterializer{be: be, poolSize: poolSize, profileID: profileID, timeout: opts.Timeout}, nil
+	return &sentioMaterializer{be: sel.backend, poolSize: poolSize, profileID: profileID, timeout: opts.Timeout}, nil
 }
 
 type sentioMaterializer struct {

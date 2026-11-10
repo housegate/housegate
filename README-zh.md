@@ -146,7 +146,8 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
 | `rewriter.service_addr` | string | 否 | `localhost:50051` | `sql-rewriter` gRPC 地址 |
-| `rewriter.engine` | string | 否 | `grpc` | `grpc` — 外部 sql-rewriter 服务（默认）；`native` — 进程内 rewriter-go 引擎（忽略 `service_addr`） |
+| `rewriter.engine` | string | 否 | `grpc` | `grpc` — 外部 sql-rewriter 服务（默认）；`native` — 进程内 rewriter-go 引擎（忽略 `service_addr`）；`auto` — 启动时若 gRPC 服务在 `rewriter.auto.grpc_wait` 内可达则用它，否则用固定版本的 native 引擎；进程生命周期内不再切换（见 [docs/rewriter-fail-closed.md](docs/rewriter-fail-closed.md#engine-auto)） |
+| `rewriter.auto.grpc_wait` | duration | 否 | `30s` | `engine: auto` 回落到 native 引擎前等待 gRPC 服务的时长 |
 | `rewriter.native_library_path` | string | 否 | `` | `libpolyglot_sql_ffi.{so,dylib}` 的路径（仅 native 引擎；为空时依次取 `POLYGLOT_SQL_FFI_PATH` 环境变量、系统路径） |
 | `rewriter.native_library_release` | string | 否 | `` | 自动下载 FFI 库所用的 rewriter-go release tag（仅 native；缓存在用户 cache 目录下；`native_library_path` 优先；镜像可通过 `rewriter.native_library_release_base_url` 覆盖） |
 | `rewriter.native_library_sha256` | string | 否 | `` | 可选，对下载库的 sha256 固定（64 位 hex）；不设置时，若 release 带有 `SHA256SUMS` 资产则按它校验 |

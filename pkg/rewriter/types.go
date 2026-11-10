@@ -230,8 +230,25 @@ type Options struct {
 
 	// Engine selects the rewrite backend: EngineGRPC ("" included) calls
 	// the external sql-rewriter service at ServiceAddr; EngineNative runs
-	// the in-process rewriter-go engine and ignores ServiceAddr.
+	// the in-process rewriter-go engine and ignores ServiceAddr; EngineAuto
+	// chooses one of them once at construction (see EngineAuto).
 	Engine string
+
+	// AutoGRPCWait bounds how long EngineAuto waits for the gRPC service
+	// before it falls back to the native engine. Zero means
+	// DefaultAutoGRPCWait. Unused by the other engines.
+	AutoGRPCWait time.Duration
+
+	// ResolveNativeLibrary returns the path of the pinned native library
+	// for EngineAuto's fallback. It is called only when the gRPC service
+	// was unreachable, and must return a verified, non-empty path: the
+	// fallback never consults POLYGLOT_SQL_FFI_PATH or the default search
+	// locations. Unused by the other engines.
+	ResolveNativeLibrary func(ctx context.Context) (string, error)
+
+	// NativeLibraryVersion is the release tag of the native library, for
+	// logs and the active-engine metric. Empty reports EngineVersionUnknown.
+	NativeLibraryVersion string
 
 	// NativeLibraryPath locates libpolyglot_sql_ffi.{so,dylib} for the
 	// native engine. Empty falls back to the POLYGLOT_SQL_FFI_PATH env
