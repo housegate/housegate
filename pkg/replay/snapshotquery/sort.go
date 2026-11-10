@@ -291,7 +291,7 @@ func (s *sortState) add(values []any) error {
 	if uint64(len(key)) != keySize {
 		return fmt.Errorf("canonical key size mismatch")
 	}
-	typed := encodeTyped(normalized, typedSize)
+	typed := encodeTyped(s.schema, normalized, typedSize)
 	s.projectedOutput = projected
 	s.rows = rows
 	s.retained = retained
@@ -633,7 +633,7 @@ func (r *runReader) next() (sortRecord, error) {
 	if e != nil {
 		return sortRecord{}, e
 	}
-	if !bytes.Equal(key, record.key) || !bytes.Equal(encodeTyped(normalized, uint64(len(record.typed))), record.typed) {
+	if !bytes.Equal(key, record.key) || !bytes.Equal(encodeTyped(r.state.schema, normalized, uint64(len(record.typed))), record.typed) {
 		return sortRecord{}, fmt.Errorf("cache typed values disagree with canonical key")
 	}
 	if r.previous != nil && bytes.Compare(r.previous, record.key) > 0 {

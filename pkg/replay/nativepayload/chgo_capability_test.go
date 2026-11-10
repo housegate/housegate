@@ -3,6 +3,7 @@ package nativepayload
 import (
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,35 +128,12 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 			decoderErr: "unsupported column type *proto.ColFixedStr64",
 		},
 		{
-			declared: "Date32",
-			column: func() proto.ColInput {
-				c := new(proto.ColDate32)
-				c.Append(time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC))
-				return c
-			},
-			decoderErr: "unsupported column type *proto.ColDate32",
-		},
-		{
-			declared:   "UUID",
-			column:     func() proto.ColInput { c := new(proto.ColUUID); c.Append(uuid.UUID{}); return c },
-			decoderErr: "unsupported column type *proto.ColUUID",
-		},
-		{
 			declared: "Decimal(18, 4)",
 			column:   func() proto.ColInput { c := new(proto.ColDecimal64); c.Append(proto.Decimal64(12345)); return c },
 			// Decimal has a second obstacle beyond the missing decoder case: the
 			// ColAuto downcast that erases its declared precision and scale,
 			// pinned directly by TestChGoDecodedColumnsReportTheirDeclaredType.
 			decoderErr: "unsupported column type *proto.ColDecimal64",
-		},
-		{
-			declared: "Nullable(UInt64)",
-			column: func() proto.ColInput {
-				c := new(proto.ColUInt64).Nullable()
-				c.Append(proto.NewNullable(uint64(1)))
-				return c
-			},
-			decoderErr: "unsupported column type *proto.ColNullable[uint64]",
 		},
 	} {
 		t.Run(tc.declared, func(t *testing.T) {
@@ -188,6 +166,98 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 				t.Fatalf("%s: nativeColumnValue now decodes it — Q-D7 wants the profile widened with it", tc.declared)
 			} else if !strings.Contains(err.Error(), tc.decoderErr) {
 				t.Fatalf("%s: nativeColumnValue = %v, want an error containing %q", tc.declared, err, tc.decoderErr)
+			}
+		})
+	}
+}
+
+// TestNativeDecoderDecodesV2Types is the other half of Q-D7 for the types
+// admission rules v2 admits: each declaration the profile now admits decodes
+// on the Native lane to exactly the profile's Go value type, NULL decodes to
+// the untyped nil under Nullable(T) only, and the decoded rows hash.
+func TestNativeDecoderDecodesV2Types(t *testing.T) {
+	day := time.Date(1950, time.January, 2, 0, 0, 0, 0, time.UTC)
+	id := uuid.MustParse("61f0c404-5cb3-11e7-907b-a6006ad3dba0")
+	minI128 := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
+	maxU256 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	for _, tc := range []struct {
+		declared string
+		column   func() proto.ColInput
+		want     []any
+	}{
+		{"Date32", func() proto.ColInput { c := new(proto.ColDate32); c.Append(day); return c }, []any{day}},
+		{"UUID", func() proto.ColInput { c := new(proto.ColUUID); c.Append(id); return c }, []any{id}},
+		{"Int128", func() proto.ColInput {
+			c := new(proto.ColInt128)
+			c.Append(proto.Int128{Low: 0, High: 1 << 63})
+			return c
+		}, []any{minI128}},
+		{"UInt128", func() proto.ColInput { c := new(proto.ColUInt128); c.Append(proto.UInt128{Low: 7}); return c }, []any{big.NewInt(7)}},
+		{"Int256", func() proto.ColInput {
+			c := new(proto.ColInt256)
+			c.Append(proto.Int256{Low: proto.UInt128{Low: ^uint64(0), High: ^uint64(0)}, High: proto.UInt128{Low: ^uint64(0), High: ^uint64(0)}})
+			return c
+		}, []any{big.NewInt(-1)}},
+		{"UInt256", func() proto.ColInput {
+			c := new(proto.ColUInt256)
+			c.Append(proto.UInt256{Low: proto.UInt128{Low: ^uint64(0), High: ^uint64(0)}, High: proto.UInt128{Low: ^uint64(0), High: ^uint64(0)}})
+			return c
+		}, []any{maxU256}},
+		{"LowCardinality(String)", func() proto.ColInput {
+			c := proto.NewLowCardinality(new(proto.ColStr))
+			c.AppendArr([]string{"eu", "us", "eu", ""})
+			return c
+		}, []any{"eu", "us", "eu", ""}},
+		{"Nullable(UInt64)", func() proto.ColInput {
+			c := new(proto.ColUInt64).Nullable()
+			c.AppendArr([]proto.Nullable[uint64]{proto.NewNullable[uint64](1), proto.Null[uint64](), proto.NewNullable[uint64](0)})
+			return c
+		}, []any{uint64(1), nil, uint64(0)}},
+		{"Nullable(String)", func() proto.ColInput {
+			c := new(proto.ColStr).Nullable()
+			c.AppendArr([]proto.Nullable[string]{proto.Null[string](), proto.NewNullable("")})
+			return c
+		}, []any{nil, ""}},
+		{"Nullable(DateTime64(3, 'UTC'))", func() proto.ColInput {
+			c := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC).Nullable()
+			c.AppendArr([]proto.Nullable[time.Time]{proto.NewNullable(time.UnixMilli(1700000000123).UTC()), proto.Null[time.Time]()})
+			return c
+		}, []any{time.UnixMilli(1700000000123).UTC(), nil}},
+		{"Nullable(UUID)", func() proto.ColInput {
+			c := new(proto.ColUUID).Nullable()
+			c.AppendArr([]proto.Nullable[uuid.UUID]{proto.Null[uuid.UUID](), proto.NewNullable(id)})
+			return c
+		}, []any{nil, id}},
+		{"Nullable(Int128)", func() proto.ColInput {
+			c := new(proto.ColInt128).Nullable()
+			c.AppendArr([]proto.Nullable[proto.Int128]{proto.NewNullable(proto.Int128{Low: 5}), proto.Null[proto.Int128]()})
+			return c
+		}, []any{big.NewInt(5), nil}},
+	} {
+		t.Run(tc.declared, func(t *testing.T) {
+			schema := payloadexec.TableSchema{TableID: "tenant.capability", Columns: []lthash.Column{{Name: "c", Type: tc.declared}}}
+			profile, err := payloadexec.ResolveColumnProfile(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := Decode(schema, nativePayloadTestRevision, encodeNativePayload(t, proto.Input{{Name: "c", Data: tc.column()}}))
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if len(rows) != len(tc.want) {
+				t.Fatalf("rows = %d, want %d", len(rows), len(tc.want))
+			}
+			for i, row := range rows {
+				got := row.Values[0]
+				if !profile.AcceptsValue(got) {
+					t.Fatalf("row %d: %T is outside the profile (%s)", i, got, profile.GoType)
+				}
+				if !reflect.DeepEqual(got, tc.want[i]) {
+					t.Fatalf("row %d = %#v, want %#v", i, got, tc.want[i])
+				}
+				if _, err := lthash.RowHash(schema.TableID, schema.Columns, row.Values); err != nil {
+					t.Fatalf("row %d does not hash: %v", i, err)
+				}
 			}
 		})
 	}

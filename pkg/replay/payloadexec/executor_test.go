@@ -819,7 +819,7 @@ func TestPartitionIDForRow_RejectsUnadmittedPartitionColumnType(t *testing.T) {
 	schema := TableSchema{
 		TableID:     "db.t",
 		PartitionBy: "p",
-		Columns:     []lthash.Column{{Name: "p", Type: "Date32"}},
+		Columns:     []lthash.Column{{Name: "p", Type: "Decimal(9, 2)"}},
 	}
 	_, err := PartitionIDForRow(schema, []any{time.Now().UTC()})
 	if !errors.Is(err, ErrUnsupportedColumnType) {

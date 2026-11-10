@@ -1,10 +1,13 @@
 package payloadexec
 
 import (
+	"math/big"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/housegate/housegate/pkg/lthash"
 )
@@ -40,6 +43,13 @@ const (
 	FamilyDate       ColumnFamily = "Date"
 	FamilyDateTime   ColumnFamily = "DateTime"
 	FamilyDateTime64 ColumnFamily = "DateTime64"
+	// Admission rules v2 families (Spec Q Phase 2 revision). Date32 encodes
+	// like Date (days under kindTime); UUID under its own kindUUID; the wide
+	// integers under kindInt/kindUint at 16 or 32 bytes.
+	FamilyDate32   ColumnFamily = "Date32"
+	FamilyUUID     ColumnFamily = "UUID"
+	FamilyWideInt  ColumnFamily = "WideInt"
+	FamilyWideUInt ColumnFamily = "WideUInt"
 )
 
 // allColumnFamilies is the closed set of declared families. It exists so the
@@ -56,6 +66,10 @@ var allColumnFamilies = []ColumnFamily{
 	FamilyDate,
 	FamilyDateTime,
 	FamilyDateTime64,
+	FamilyDate32,
+	FamilyUUID,
+	FamilyWideInt,
+	FamilyWideUInt,
 }
 
 // ColumnProfile is one resolved declaration. Every consumer reads these fields
@@ -91,6 +105,24 @@ type ColumnProfile struct {
 	// declarations, and ClickHouse reports the timezone back for the physical
 	// column.
 	Timezone string
+	// Nullable marks a Nullable(T) declaration. Family, GoType, KindTag,
+	// FixedStringWidth, Precision and Timezone then describe T: a non-NULL
+	// value is exactly a T value, and a NULL is the untyped nil, which every
+	// materializer produces for it and lthash encodes as KindNull. Nullable
+	// wraps only a plain scalar: never another Nullable or a LowCardinality.
+	Nullable bool
+	// LowCardinality marks LowCardinality(String). It changes only the wire
+	// encoding (a dictionary); the value is a string, encoded as String's.
+	LowCardinality bool
+}
+
+// AcceptsValue reports whether v is a value a materializer may produce for
+// this column: exactly GoType, or nil for a Nullable column.
+func (p ColumnProfile) AcceptsValue(v any) bool {
+	if v == nil {
+		return p.Nullable
+	}
+	return reflect.TypeOf(v) == p.GoType
 }
 
 // scalarColumnProfiles is the fixed-spelling half of the authority: types whose
@@ -110,7 +142,24 @@ var scalarColumnProfiles = buildScalarColumnProfiles(
 	ColumnProfile{Family: FamilyInt, Canonical: "Int64", GoType: reflect.TypeOf(int64(0)), KindTag: lthash.KindInt},
 	ColumnProfile{Family: FamilyDate, Canonical: "Date", GoType: timeType, KindTag: lthash.KindTime},
 	ColumnProfile{Family: FamilyDateTime, Canonical: "DateTime", GoType: timeType, KindTag: lthash.KindTime},
+	ColumnProfile{Family: FamilyDate32, Canonical: "Date32", GoType: timeType, KindTag: lthash.KindTime},
+	ColumnProfile{Family: FamilyUUID, Canonical: "UUID", GoType: reflect.TypeOf(uuid.UUID{}), KindTag: lthash.KindUUID},
+	ColumnProfile{Family: FamilyWideInt, Canonical: "Int128", GoType: bigIntType, KindTag: lthash.KindInt},
+	ColumnProfile{Family: FamilyWideInt, Canonical: "Int256", GoType: bigIntType, KindTag: lthash.KindInt},
+	ColumnProfile{Family: FamilyWideUInt, Canonical: "UInt128", GoType: bigIntType, KindTag: lthash.KindUint},
+	ColumnProfile{Family: FamilyWideUInt, Canonical: "UInt256", GoType: bigIntType, KindTag: lthash.KindUint},
+	ColumnProfile{Family: FamilyString, Canonical: lowCardinalityStringType, GoType: reflect.TypeOf(""), KindTag: lthash.KindString, LowCardinality: true},
 )
+
+// bigIntType is the Go value type of the wide integers on every lane: ch-go's
+// Int128/UInt256 structs and clickhouse-go's read-back both convert to it.
+var bigIntType = reflect.TypeOf((*big.Int)(nil))
+
+// lowCardinalityStringType is the one LowCardinality declaration admitted.
+const lowCardinalityStringType = "LowCardinality(String)"
+
+// wideIntBits is the declared width of each wide integer type.
+var wideIntBits = map[string]int{"Int128": 128, "Int256": 256, "UInt128": 128, "UInt256": 256}
 
 // timeType is the Go value type every temporal family resolves to. Both lanes
 // must produce it in UTC: nativeColumnValue normalizes, and parseValue below
@@ -127,6 +176,8 @@ var scalarColumnProfileOrder = []string{
 	"UInt8", "UInt16", "UInt32", "UInt64",
 	"Int8", "Int16", "Int32", "Int64",
 	"Date", "DateTime",
+	"Date32", "UUID", "Int128", "Int256", "UInt128", "UInt256",
+	lowCardinalityStringType,
 }
 
 func buildScalarColumnProfiles(entries ...ColumnProfile) map[string]ColumnProfile {
@@ -174,7 +225,29 @@ func ResolveColumnProfile(typeName string) (ColumnProfile, error) {
 	if profile, ok := resolveDateTime64Profile(typeName); ok {
 		return profile, nil
 	}
+	if profile, ok := resolveNullableProfile(typeName); ok {
+		return profile, nil
+	}
 	return ColumnProfile{}, unsupportedColumnTypeError(typeName)
+}
+
+// resolveNullableProfile parses Nullable(T) for a plain scalar T. The inner
+// declaration follows T's own grammar (surrounding whitespace is trimmed) and
+// the canonical spelling rebuilds from T's canonical one, which is how
+// ClickHouse renders it in system.columns.
+func resolveNullableProfile(typeName string) (ColumnProfile, bool) {
+	const prefix = "Nullable("
+	if !strings.HasPrefix(typeName, prefix) || !strings.HasSuffix(typeName, ")") {
+		return ColumnProfile{}, false
+	}
+	inner, err := ResolveColumnProfile(strings.TrimSpace(typeName[len(prefix) : len(typeName)-1]))
+	if err != nil || inner.Nullable || inner.LowCardinality {
+		return ColumnProfile{}, false
+	}
+	inner.Canonical = prefix + inner.Canonical + ")"
+	inner.NativeWireType = prefix + inner.NativeWireType + ")"
+	inner.Nullable = true
+	return inner, true
 }
 
 // resolveFixedStringProfile parses FixedString(N). The spelling grammar is the
@@ -303,7 +376,20 @@ func parseQuotedTimezone(raw string) (string, bool) {
 // test enumerates exactly this list, so adding a family without adding a vector
 // is a test failure rather than an untested widening.
 func AdmittedColumnTypeVectors() []string {
-	out := make([]string, 0, len(scalarColumnProfileOrder)+3)
+	out := admittedPlainVectors()
+	// Nullable(T) for every plain scalar vector: each inner shape is its own
+	// decode, read-back and encode path under the nullable seam.
+	for _, inner := range admittedPlainVectors() {
+		if inner == lowCardinalityStringType {
+			continue
+		}
+		out = append(out, "Nullable("+inner+")")
+	}
+	return out
+}
+
+func admittedPlainVectors() []string {
+	out := make([]string, 0, len(scalarColumnProfileOrder)+4)
 	out = append(out, "String", fixedStringProfileVector)
 	for _, name := range scalarColumnProfileOrder {
 		if name == "String" {

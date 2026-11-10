@@ -5,14 +5,18 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -378,13 +382,41 @@ func (s *deadlineCanonicalStream) Close() error { s.closes++; return nil }
 
 func TestNormalizeAllProfilesAndRoundTrip(t *testing.T) {
 	values := map[string]any{"String": "hello\x00world", "FixedString(32)": make([]byte, 32), "Bool": true, "Float32": float32(-1.5), "Float64": math.NaN(), "UInt8": uint8(255), "UInt16": uint16(65535), "UInt32": uint32(math.MaxUint32), "UInt64": uint64(math.MaxUint64), "Int8": int8(-128), "Int16": int16(-32768), "Int32": int32(math.MinInt32), "Int64": int64(math.MinInt64)}
+	values["UUID"] = uuid.MustParse("61f0c404-5cb3-11e7-907b-a6006ad3dba0")
+	values["Int128"] = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
+	values["Int256"] = big.NewInt(-2)
+	values["UInt128"] = new(big.Int).Lsh(big.NewInt(1), 100)
+	values["UInt256"] = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	values["LowCardinality(String)"] = ""
 	instant := time.Date(2026, 2, 3, 4, 5, 6, 123456789, time.FixedZone("zone", -3*3600))
+	var cases []struct {
+		typ string
+		v   any
+	}
 	for _, typ := range payloadexec.AdmittedColumnTypeVectors() {
-		t.Run(typ, func(t *testing.T) {
-			v, ok := values[typ]
-			if !ok {
-				v = instant
-			}
+		inner, nullable := strings.CutPrefix(typ, "Nullable(")
+		inner = strings.TrimSuffix(inner, ")")
+		if !nullable {
+			inner = typ
+		}
+		v, ok := values[inner]
+		if !ok {
+			v = instant
+		}
+		cases = append(cases, struct {
+			typ string
+			v   any
+		}{typ, v})
+		if nullable {
+			cases = append(cases, struct {
+				typ string
+				v   any
+			}{typ, nil})
+		}
+	}
+	for _, c := range cases {
+		typ, v := c.typ, c.v
+		t.Run(fmt.Sprintf("%s/%v", typ, v == nil), func(t *testing.T) {
 			schema := payloadexec.TableSchema{TableID: "t", Columns: []lthash.Column{{Name: "value", Type: typ}}}
 			normalized, e := NormalizeRow(schema, []any{v})
 			if e != nil {
@@ -394,7 +426,7 @@ func TestNormalizeAllProfilesAndRoundTrip(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			encoded := encodeTyped(normalized, size)
+			encoded := encodeTyped(schema, normalized, size)
 			decoded, e := decodeTyped(schema, encoded)
 			if e != nil {
 				t.Fatal(e)
@@ -461,7 +493,7 @@ func TestSortContentChecksBeyondChecksums(t *testing.T) {
 				t.Fatal(e)
 			}
 			_, size, _, _ := rowLayout(schema, values)
-			record := sortRecord{key: key, typed: encodeTyped(values, size)}
+			record := sortRecord{key: key, typed: encodeTyped(schema, values, size)}
 			switch mode {
 			case "key":
 				record.key = bytes.Clone(key)
@@ -469,7 +501,7 @@ func TestSortContentChecksBeyondChecksums(t *testing.T) {
 			case "typed":
 				record.typed = []byte{1}
 			case "noncanonical_zero":
-				record.typed = encodeTyped([]any{math.Copysign(0, -1)}, size)
+				record.typed = encodeTyped(schema, []any{math.Copysign(0, -1)}, size)
 			}
 			writer, e := state.newWriter()
 			if e != nil {
@@ -478,7 +510,7 @@ func TestSortContentChecksBeyondChecksums(t *testing.T) {
 			if mode == "out_of_order" {
 				high := []any{float64(1)}
 				hk, _ := lthash.EncodeRow("t", schema.Columns, high)
-				if e = writer.write(sortRecord{key: hk, typed: encodeTyped(high, size)}); e != nil {
+				if e = writer.write(sortRecord{key: hk, typed: encodeTyped(schema, high, size)}); e != nil {
 					t.Fatal(e)
 				}
 			}
@@ -526,7 +558,7 @@ func TestCanonicalPostOpenMutationAndReaderRetirement(t *testing.T) {
 			}
 			key, _ := lthash.EncodeRow(state.schema.TableID, state.schema.Columns, values)
 			_, size, _, _ := rowLayout(state.schema, values)
-			record := sortRecord{key: key, typed: encodeTyped(values, size), id: payloadexec.RowID("network", state.schema.TableID, "statement", 0), partition: "p_a"}
+			record := sortRecord{key: key, typed: encodeTyped(state.schema, values, size), id: payloadexec.RowID("network", state.schema.TableID, "statement", 0), partition: "p_a"}
 			if mode == "id" {
 				record.id[0] ^= 1
 			}
@@ -658,5 +690,44 @@ func TestCanonicalConcurrentReadersClose(t *testing.T) {
 		if e = <-done; e != nil {
 			t.Fatal(e)
 		}
+	}
+}
+
+// TestCanonicalOrderWithNullsIsInputIndependent pins how NULLs take part in
+// the canonical commitment order (admission rules v2). That order is the byte
+// order of each row's lthash element, not a SQL ORDER BY: a NULL's value field
+// is the one-byte KindNull, framed by its length, so it sorts before every
+// non-NULL value of the column. SQL ordering stays ClickHouse's own (ASC puts
+// NULLs last); canonicalization never re-sorts by SQL semantics. What must hold
+// is that any input order yields the same rows, row ids and root.
+func TestCanonicalOrderWithNullsIsInputIndependent(t *testing.T) {
+	schema := payloadexec.TableSchema{TableID: "tenant.nulls", Columns: []lthash.Column{{Name: "v", Type: "Nullable(UInt64)"}}}
+	orders := [][][]any{
+		{{uint64(2)}, {nil}, {uint64(0)}, {nil}},
+		{{nil}, {nil}, {uint64(0)}, {uint64(2)}},
+		{{uint64(0)}, {uint64(2)}, {nil}, {nil}},
+	}
+	var root string
+	for i, rows := range orders {
+		out, e := Canonicalize(context.Background(), "network", "statement", schema, &canonicalStream{rows: rows}, canonicalLimits(), t.TempDir())
+		if e != nil {
+			t.Fatal(e)
+		}
+		verifyCanonical(t, out, schema, rows)
+		if i == 0 {
+			root = out.OutputRowsRoot()
+		} else if out.OutputRowsRoot() != root {
+			t.Fatalf("order %d: root %s, want %s", i, out.OutputRowsRoot(), root)
+		}
+		reader, e := out.OpenRows()
+		if e != nil {
+			t.Fatal(e)
+		}
+		first, e := reader.Next(context.Background())
+		if e != nil || first.Values[0] != nil {
+			t.Fatalf("order %d: first canonical row = %#v (%v), want the NULL row", i, first, e)
+		}
+		reader.Close()
+		out.Close()
 	}
 }

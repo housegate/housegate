@@ -23,12 +23,14 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/zeebo/blake3"
 
 	"github.com/housegate/housegate/pkg/lthash"
@@ -298,8 +300,14 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 // partition column can take, so the temporal families are rendered by family
 // rather than by Go type, and always in UTC.
 func partitionValueString(profile ColumnProfile, v any) (string, error) {
+	if v == nil {
+		// A NULL has no partition value; ClickHouse refuses a Nullable
+		// partition key unless allow_nullable_key is set, and the partition
+		// freeze admits only String.
+		return "", fmt.Errorf("partition column carries NULL")
+	}
 	switch profile.Family {
-	case FamilyDate, FamilyDateTime, FamilyDateTime64:
+	case FamilyDate, FamilyDate32, FamilyDateTime, FamilyDateTime64:
 		t, ok := v.(time.Time)
 		if !ok {
 			return "", fmt.Errorf("partition column family %q carries %T, want time.Time", profile.Family, v)
@@ -343,6 +351,10 @@ func partitionValueString(profile ColumnProfile, v any) (string, error) {
 			return "0", nil
 		}
 		return strconv.FormatFloat(x, 'g', -1, 64), nil
+	case uuid.UUID:
+		return x.String(), nil
+	case *big.Int:
+		return x.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported partition value type %T", v)
 	}
@@ -358,7 +370,7 @@ func partitionValueString(profile ColumnProfile, v any) (string, error) {
 func temporalPartitionValueString(profile ColumnProfile, t time.Time) string {
 	utc := t.UTC()
 	switch profile.Family {
-	case FamilyDate:
+	case FamilyDate, FamilyDate32:
 		return utc.Format(dateLayout)
 	case FamilyDateTime64:
 		if profile.Precision > 0 {
@@ -378,9 +390,18 @@ func parseValue(typeName, raw string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if profile.Nullable && raw == csvNull {
+		return nil, nil
+	}
 	switch profile.Family {
 	case FamilyString:
 		return raw, nil
+	case FamilyDate32:
+		return time.ParseInLocation(dateLayout, raw, time.UTC)
+	case FamilyUUID:
+		return parseUUIDValue(raw)
+	case FamilyWideInt, FamilyWideUInt:
+		return parseWideIntValue(profile, raw)
 	case FamilyFixedString:
 		return parseFixedString(profile.FixedStringWidth, raw)
 	case FamilyBool:
@@ -456,6 +477,61 @@ func parseIntValue(profile ColumnProfile, raw string) (any, error) {
 		return nil, unsupportedColumnTypeError(profile.Canonical)
 	}
 }
+
+// csvNull is ClickHouse's CSV rendering of NULL (format_csv_null_representation).
+const csvNull = `\N`
+
+// parseUUIDValue accepts only ClickHouse's own rendering: 36 characters,
+// lowercase hex in 8-4-4-4-12 groups. uuid.Parse alone would also accept
+// braces, a urn: prefix and uppercase.
+func parseUUIDValue(raw string) (any, error) {
+	u, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	if u.String() != raw {
+		return nil, fmt.Errorf("uuid %q is not in canonical lowercase 8-4-4-4-12 form", raw)
+	}
+	return u, nil
+}
+
+// parseWideIntValue parses a base-10 Int128/256 or UInt128/256 and enforces
+// the declared range.
+func parseWideIntValue(profile ColumnProfile, raw string) (any, error) {
+	n, ok := new(big.Int).SetString(raw, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid %s literal %q", profile.Canonical, raw)
+	}
+	if err := checkWideIntRange(profile, n); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// checkWideIntRange enforces a wide integer value's declared range.
+func checkWideIntRange(profile ColumnProfile, n *big.Int) error {
+	name := strings.TrimSuffix(strings.TrimPrefix(profile.Canonical, "Nullable("), ")")
+	bits, ok := wideIntBits[name]
+	if !ok {
+		return unsupportedColumnTypeError(profile.Canonical)
+	}
+	if profile.Family == FamilyWideUInt {
+		if n.Sign() < 0 || n.BitLen() > bits {
+			return fmt.Errorf("%s value %s out of range", profile.Canonical, n)
+		}
+		return nil
+	}
+	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
+	if n.Cmp(new(big.Int).Neg(limit)) < 0 || n.Cmp(limit) >= 0 {
+		return fmt.Errorf("%s value %s out of range", profile.Canonical, n)
+	}
+	return nil
+}
+
+// CheckWideIntRange reports whether n fits the declared wide integer column.
+// Every materializer of a wide integer runs it, so no lane hands lthash a
+// value the declaration cannot hold.
+func CheckWideIntRange(profile ColumnProfile, n *big.Int) error { return checkWideIntRange(profile, n) }
 
 // ClickHouse's own text renderings for the temporal families, alongside RFC3339.
 const (

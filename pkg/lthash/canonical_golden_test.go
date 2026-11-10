@@ -3,9 +3,12 @@ package lthash
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // This file is the byte-level non-regression evidence Spec Q §4 item 2 requires.
@@ -119,6 +122,30 @@ func TestCanonicalValueEncodingsAreFrozen(t *testing.T) {
 		// Date and Date32 on the same calendar day produce identical value
 		// bytes. That is intended: the framed type string separates them.
 		{name: "Date32/same-day-as-Date", typ: "Date32", value: day, wantHex: "06aa50000000000000"},
+
+		// Admission rules v2 additions (Spec Q Phase 2 revision). Every row
+		// above is unchanged: these only append kind tags and value shapes.
+		// NULL is the single tag byte; a non-NULL value of Nullable(T) is
+		// byte-identical to T's, including the temporal branch that keys on
+		// the inner declaration.
+		{name: "Nullable(UInt64)/NULL", typ: "Nullable(UInt64)", value: nil, wantHex: "07"},
+		{name: "Nullable(String)/NULL", typ: "Nullable(String)", value: nil, wantHex: "07"},
+		{name: "Nullable(UInt64)/64", typ: "Nullable(UInt64)", value: uint64(64), wantHex: "024000000000000000"},
+		{name: "Nullable(DateTime64(3, 'UTC'))", typ: "Nullable(DateTime64(3, 'UTC'))", value: milli, wantHex: "06c034c88143c5c218"},
+		{name: "Nullable(Date32)", typ: "Nullable(Date32)", value: day, wantHex: "06aa50000000000000"},
+		{name: "Nullable(DateTime)", typ: "Nullable(DateTime)", value: second, wantHex: "06f0cf586a00000000"},
+		{
+			name: "UUID", typ: "UUID", value: uuid.MustParse("61f0c404-5cb3-11e7-907b-a6006ad3dba0"),
+			wantHex: "08" + "61f0c4045cb311e7907ba6006ad3dba0",
+		},
+		{name: "UUID/nil", typ: "UUID", value: uuid.Nil, wantHex: "08" + strings.Repeat("00", 16)},
+		{name: "Int128/-1", typ: "Int128", value: big.NewInt(-1), wantHex: "01" + strings.Repeat("ff", 16)},
+		{name: "Int128/min", typ: "Int128", value: new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127)), wantHex: "01" + strings.Repeat("00", 15) + "80"},
+		{name: "Int256/300", typ: "Int256", value: big.NewInt(300), wantHex: "01" + "2c01" + strings.Repeat("00", 30)},
+		{name: "UInt128/1", typ: "UInt128", value: big.NewInt(1), wantHex: "02" + "01" + strings.Repeat("00", 15)},
+		{name: "UInt256/max", typ: "UInt256", value: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)), wantHex: "02" + strings.Repeat("ff", 32)},
+		{name: "Nullable(UInt256)/1", typ: "Nullable(UInt256)", value: big.NewInt(1), wantHex: "02" + "01" + strings.Repeat("00", 31)},
+		{name: "LowCardinality(String)", typ: "LowCardinality(String)", value: "abc", wantHex: "04616263"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := EncodeRow("tenant.golden", []Column{{Name: "c", Type: tc.typ}}, []any{tc.value})
@@ -148,6 +175,8 @@ func TestCanonicalKindTagsAreFrozen(t *testing.T) {
 		{"kindString", KindString, 4},
 		{"kindBool", KindBool, 5},
 		{"kindTime", KindTime, 6},
+		{"kindNull", KindNull, 7},
+		{"kindUUID", KindUUID, 8},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d — kind tags are append-only", tc.name, tc.got, tc.want)
@@ -161,5 +190,31 @@ func TestCanonicalKindTagsAreFrozen(t *testing.T) {
 func TestCanonicalDomainIsUnchanged(t *testing.T) {
 	if canonicalDomain != "housegate-row-mvp-v0" {
 		t.Fatalf("canonicalDomain = %q; Spec Q Q-D3 requires it stay housegate-row-mvp-v0", canonicalDomain)
+	}
+}
+
+// TestCanonicalEncodingRefusesMisplacedValues pins the fail-closed half of the
+// v2 additions: NULL only under Nullable(T), wide integers only in range and
+// only for a wide declaration.
+func TestCanonicalEncodingRefusesMisplacedValues(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		typ   string
+		value any
+	}{
+		{"NULL in UInt64", "UInt64", nil},
+		{"NULL in LowCardinality(String)", "LowCardinality(String)", nil},
+		{"Int128 overflow", "Int128", new(big.Int).Lsh(big.NewInt(1), 127)},
+		{"Int128 underflow", "Int128", new(big.Int).Sub(new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127)), big.NewInt(1))},
+		{"UInt128 negative", "UInt128", big.NewInt(-1)},
+		{"UInt256 overflow", "UInt256", new(big.Int).Lsh(big.NewInt(1), 256)},
+		{"big.Int in UInt64", "UInt64", big.NewInt(1)},
+		{"nil *big.Int", "Int256", (*big.Int)(nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeRow("tenant.golden", []Column{{Name: "c", Type: tc.typ}}, []any{tc.value}); err == nil {
+				t.Fatalf("EncodeRow(%s, %v) = nil error", tc.typ, tc.value)
+			}
+		})
 	}
 }

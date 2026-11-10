@@ -73,11 +73,21 @@ func TestChexecScanDestMatchesTheProfileGoType(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newScanDest(%q): %v", v, err)
 		}
-		if got := reflect.TypeOf(dest).Elem(); got != p.GoType {
-			t.Errorf("newScanDest(%q) -> *%s, profile GoType %s", v, got, p.GoType)
+		want := p.GoType
+		if p.Nullable && p.GoType.Kind() != reflect.Pointer {
+			// clickhouse-go leaves the inner pointer nil for NULL;
+			// Nullable(FixedString) goes through **string (no **[]byte case).
+			inner := p.GoType
+			if p.Family == payloadexec.FamilyFixedString {
+				inner = reflect.TypeOf("")
+			}
+			want = reflect.PointerTo(inner)
+		}
+		if got := reflect.TypeOf(dest).Elem(); got != want {
+			t.Errorf("newScanDest(%q) -> *%s, want *%s", v, got, want)
 		}
 	}
-	for _, v := range []string{"FixedString(0)", "DateTime64(10)", "Nullable(String)", "IPv4"} {
+	for _, v := range []string{"FixedString(0)", "DateTime64(10)", "Nullable(Nullable(String))", "IPv4"} {
 		if _, err := newScanDest(v); err == nil {
 			t.Errorf("newScanDest(%q) = nil error, want a rejection: the authority does not admit it", v)
 		}

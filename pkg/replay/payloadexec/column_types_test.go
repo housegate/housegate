@@ -26,21 +26,27 @@ var supportedTypeMatrix = []string{
 	// ClickHouse-backed executor already replay all of these; only this
 	// validator rejected them, which is what Spec L D1 narrowed by accident.
 	"Date", "DateTime", "DateTime('UTC')", "DateTime64(3)", "DateTime64(3, 'UTC')",
+	// Admission rules v2 (Spec Q Phase 2 revision).
+	"Date32", "UUID", "Int128", "Int256", "UInt128", "UInt256", "LowCardinality(String)",
+	"Nullable(String)", "Nullable(UInt64)", "Nullable(Date32)", "Nullable(UUID)", "Nullable(UInt256)",
+	"Nullable(DateTime64(3, 'UTC'))", "Nullable(FixedString(32))", "Nullable( Int8 )",
 }
 
 var rejectedTypeMatrix = []string{
-	"", " String", "string", "Nullable(String)", "Array(UInt64)",
-	"LowCardinality(String)", "Decimal(9, 2)", "UUID", "IPv4",
+	"", " String", "string", "Array(UInt64)",
+	"Decimal(9, 2)", "IPv4",
 	"Enum8('a' = 1)",
-	// Date32 infers in ch-go but nativeColumnValue has no case for it
-	// (measurement M2), so it stays rejected until Spec Q Phase 2 teaches the
-	// Native lane to decode it.
-	"Date32",
+	// Admission rules v2 (Spec Q Phase 2 revision) admits Nullable over a
+	// plain scalar and LowCardinality(String) only; every other wrapper and
+	// every nesting stays refused.
+	"Nullable(Nullable(String))", "Nullable(LowCardinality(String))", "LowCardinality(Nullable(String))",
+	"LowCardinality(UInt64)", "Nullable(Array(UInt64))", "Nullable(Decimal(9, 2))", "Nullable()", "Nullable",
+	"Int512", "UInt512", "uuid",
 	// Temporal parameters the decoder itself would reject at Infer time: an
 	// empty or out-of-range DateTime64 precision, and a timezone that does not
 	// load. The validator must never be the looser of the two.
 	"DateTime64()", "DateTime64(10)", "DateTime64(3, 'Not/AZone')", "DateTime('Not/AZone')",
-	"Int128", "UInt256", "FixedString(0)", "FixedString(-1)", "FixedString(x)",
+	"FixedString(0)", "FixedString(-1)", "FixedString(x)",
 	// Spec Q Q-D7: the validator may never be wider than the Native decoder.
 	// nativeColumnValue handles ColFixedStr32 and nothing else, so every other
 	// width — including the six ch-go can infer — stays rejected until Phase 2
@@ -155,15 +161,15 @@ func TestValidateTableSchemaColumns_NamesTableAndColumn(t *testing.T) {
 		TableID: "db.t",
 		Columns: []lthash.Column{
 			{Name: "ok", Type: "UInt64"},
-			{Name: "bad_nullable", Type: "Nullable(String)"},
-			{Name: "bad_temporal", Type: "Date32"},
+			{Name: "bad_nullable", Type: "Nullable(Nullable(String))"},
+			{Name: "bad_decimal", Type: "Decimal(9, 2)"},
 		},
 	}
 	err := ValidateTableSchemaColumns(schema)
 	if !errors.Is(err, ErrUnsupportedColumnType) {
 		t.Fatalf("ValidateTableSchemaColumns = %v, want ErrUnsupportedColumnType", err)
 	}
-	for _, want := range []string{"db.t", "bad_nullable", "Nullable(String)", "bad_temporal", "Date32"} {
+	for _, want := range []string{"db.t", "bad_nullable", "Nullable(Nullable(String))", "bad_decimal", "Decimal(9, 2)"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not contain %q", err, want)
 		}
@@ -219,7 +225,7 @@ func TestCanonicalColumnType_NormalizesEveryAcceptedFixedStringSpelling(t *testi
 
 func TestCanonicalColumnType_RejectsUnsupportedAndInjectionSpellings(t *testing.T) {
 	for _, typeName := range []string{
-		"Nullable(String)",
+		"Nullable(Nullable(String))",
 		"FixedString(16777216)",
 		"FixedString(4) ENGINE = MergeTree)",
 		"String, injected UInt64",
@@ -284,7 +290,7 @@ func TestCanonicalizeTableSchemaColumnTypes_JoinsContextualErrors(t *testing.T) 
 		TableID: "db.t",
 		Columns: []lthash.Column{
 			{Name: "canonicalized", Type: "FixedString( 032 )"},
-			{Name: "bad_nullable", Type: "Nullable(String)"},
+			{Name: "bad_nullable", Type: "Nullable(Nullable(String))"},
 			{Name: "bad_injection", Type: "String, injected UInt64"},
 		},
 	}
@@ -299,7 +305,7 @@ func TestCanonicalizeTableSchemaColumnTypes_JoinsContextualErrors(t *testing.T) 
 	}
 	for _, want := range []string{
 		"table db.t column \"bad_nullable\"",
-		"Nullable(String)",
+		"Nullable(Nullable(String))",
 		"table db.t column \"bad_injection\"",
 		"String, injected UInt64",
 	} {
@@ -315,7 +321,7 @@ func TestCanonicalizeTableSchemaColumnTypes_JoinsContextualErrors(t *testing.T) 
 	}
 	if !reflect.DeepEqual(schema.Columns, []lthash.Column{
 		{Name: "canonicalized", Type: "FixedString( 032 )"},
-		{Name: "bad_nullable", Type: "Nullable(String)"},
+		{Name: "bad_nullable", Type: "Nullable(Nullable(String))"},
 		{Name: "bad_injection", Type: "String, injected UInt64"},
 	}) {
 		t.Fatalf("input schema mutated: %#v", schema)
@@ -366,7 +372,7 @@ func TestCanonicalColumnType_TemporalSpellings(t *testing.T) {
 		"DateTime64()", "DateTime64( )", "DateTime64(10)", "DateTime64(-1)", "DateTime64(x)",
 		"DateTime64(3, UTC)", "DateTime64(3, '')", "DateTime64(3, 'Not/AZone')",
 		"DateTime()", "DateTime(UTC)", "DateTime('')", "DateTime('Not/AZone')",
-		"Date32", "Date(3)", "DateTime32",
+		"Date32(3)", "Date(3)", "DateTime32",
 	} {
 		t.Run("rejects/"+typeName, func(t *testing.T) {
 			got, err := CanonicalColumnType(typeName)
