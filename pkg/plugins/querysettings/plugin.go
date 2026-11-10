@@ -30,6 +30,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 )
@@ -202,25 +203,63 @@ type Plugin struct{}
 // platform-operator sessions bypass the rewriter and therefore this check;
 // every other session the chain hands it (ordinary, driver, origin-side
 // forwarding, forwarded-from-peer) is checked.
+//
+// The one exception is a database setting naming the session's current
+// logical database: it is removed and the query goes on (see
+// namesSessionDatabase).
 func (*Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if qctx == nil || qctx.Query == nil {
 		return nil
 	}
+	logical := ""
 	if qctx.Session != nil {
 		snap := qctx.Session.State().Snapshot()
 		if snap.Maintenance || snap.PlatformOperator {
 			return nil
 		}
+		logical = snap.LogicalDatabase
 	}
+	var kept []chproto.Setting
+	dropped := false
 	for _, s := range qctx.Query.Settings {
+		if namesSessionDatabase(s, logical) {
+			dropped = true
+			continue
+		}
 		if Refused(s.Key, s.Value) {
 			return refuse(ctx, qctx, s.Key, rejectionLabel(s.Key), reasonRefusedSetting)
 		}
+		kept = append(kept, s)
 	}
 	if len(qctx.Query.OldSettings) > 0 {
 		return refuse(ctx, qctx, qctx.Query.OldSettings[0].Key, labelOldFormat, reasonOldFormat)
 	}
+	if dropped {
+		qctx.Query.Settings = kept
+	}
 	return nil
+}
+
+// namesSessionDatabase reports whether s is the database setting with the
+// session's current logical database as its value. clickhouse-client 26.8
+// copies --database (or a configured database) into that setting on every
+// query and follows each interactive USE, so it names the database HouseGate
+// already holds the session in: the upstream session's current database is
+// that name's mapping (set at Hello, moved by the rewritten USE). Forwarding
+// the logical name would point a 26.8 backend at it unmapped, so the setting
+// is removed; any other value would move the session where the rewriter does
+// not look and is refused. The name is matched exactly (ClickHouse setting
+// names are case-sensitive, so another spelling is refused by Refused), and
+// the value is the plain string a known setting is sent as, or the quoted
+// Field dump of a custom one.
+func namesSessionDatabase(s chproto.Setting, logical string) bool {
+	if s.Key != "database" || logical == "" {
+		return false
+	}
+	if s.Value == logical {
+		return true
+	}
+	return s.Custom && !strings.ContainsAny(logical, `'\`) && s.Value == "'"+logical+"'"
 }
 
 // refuse counts and logs a refusal and returns the client-facing error.

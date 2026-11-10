@@ -450,3 +450,60 @@ func TestRejectionTelemetry(t *testing.T) {
 		t.Fatalf("an accepted query logged: %s", buf.String())
 	}
 }
+
+// TestDatabaseSettingNamingTheSessionDatabase pins the one value-dependent
+// exception: clickhouse-client 26.8 sends --database as the database setting
+// on every query, so that setting naming the session's current logical
+// database is removed and the query goes on; any other value, or the setting
+// on a session without a logical database, is refused.
+func TestDatabaseSettingNamingTheSessionDatabase(t *testing.T) {
+	p := &Plugin{}
+	ctx := context.Background()
+	inTenant := func(t *testing.T) chsession.Session {
+		sess := newSession(t)
+		sess.State().SetLogicalDatabase("tenant1")
+		return sess
+	}
+	for _, s := range []chproto.Setting{
+		{Key: "database", Value: "tenant1", Important: true},
+		{Key: "database", Value: "tenant1"},
+		{Key: "database", Value: "'tenant1'", Custom: true},
+	} {
+		q := queryWith(inTenant(t), chproto.Setting{Key: "max_threads", Value: "2"}, s, chproto.Setting{Key: "SQL_x_auth_token", Value: "'t'", Custom: true})
+		if err := p.OnQuery(ctx, q); err != nil {
+			t.Fatalf("%+v: %v", s, err)
+		}
+		if got := q.Query.Settings; len(got) != 2 || got[0].Key != "max_threads" || got[1].Key != "SQL_x_auth_token" {
+			t.Fatalf("%+v: forwarded settings = %+v, want the database setting removed and the rest kept in order", s, got)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		sess func(*testing.T) chsession.Session
+		s    chproto.Setting
+	}{
+		{"another database", inTenant, chproto.Setting{Key: "database", Value: "tenant2"}},
+		{"the physical database", inTenant, chproto.Setting{Key: "database", Value: "phys"}},
+		{"plain value with the custom flag quoted twice", inTenant, chproto.Setting{Key: "database", Value: "''tenant1''", Custom: true}},
+		{"quoted value without the custom flag", inTenant, chproto.Setting{Key: "database", Value: "'tenant1'"}},
+		{"another case of the name", inTenant, chproto.Setting{Key: "Database", Value: "tenant1"}},
+		{"no logical database", newSession, chproto.Setting{Key: "database", Value: ""}},
+	} {
+		q := queryWith(tc.sess(t), tc.s)
+		if err := p.OnQuery(ctx, q); err == nil {
+			t.Errorf("%s: %+v must be refused", tc.name, tc.s)
+		}
+		if len(q.Query.Settings) != 1 {
+			t.Errorf("%s: a refused query's settings must be left as they were, got %+v", tc.name, q.Query.Settings)
+		}
+	}
+	// A refused setting after the database one still refuses the query and
+	// leaves the packet untouched.
+	q := queryWith(inTenant(t), chproto.Setting{Key: "database", Value: "tenant1"}, chproto.Setting{Key: "filter", Value: "'1'"})
+	if err := p.OnQuery(ctx, q); err == nil || !strings.Contains(err.Error(), "table setting filter") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(q.Query.Settings) != 2 {
+		t.Fatalf("settings = %+v", q.Query.Settings)
+	}
+}
