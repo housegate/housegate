@@ -6,8 +6,11 @@
 // as an unknown table, and data-carrying creation into a governed table
 // (Pending or Active, and Refused too for creation with data: a CREATE TABLE
 // the header lexer cannot prove schema-only, a materialized view writing TO
-// it, or a materialized view named like it) is refused, as is a materialized
-// view whose header cannot be read. A Replica table, another SI indexer's
+// it) is refused, as is a materialized view whose header cannot be read. A
+// view or materialized view whose own name is governed (it is in a
+// storage-integrity database, where every unregistered name is Pending) is
+// refused at creation, and so is a view body that reads a Pending table
+// (housegate#24). A Replica table, another SI indexer's
 // table this host serves read-only from its member's copy (spec 2026-10-14
 // §11), admits reads and metadata only, and with a ReplicaReads counter the
 // plugin counts every allowed query that reads one until it completes.
@@ -69,7 +72,9 @@ const (
 	classWrite            // data write
 	classMetadata         // DESCRIBE, SHOW, EXISTS
 	classCreate           // CREATE of this name, no data
-	classCreateData       // CREATE that may carry data, or any MATERIALIZED VIEW's own name
+	classCreateData       // CREATE that may carry data
+	classCreateView       // a VIEW's or MATERIALIZED VIEW's own name
+	classViewSource       // a table a VIEW or MATERIALIZED VIEW body reads
 	classDrop             // DROP TABLE / DROP VIEW
 	classOtherDDL         // ALTER, RENAME
 	classViewTarget       // the TO target of a MATERIALIZED VIEW
@@ -239,11 +244,29 @@ func decide(t sitable.Table, c class) (severity, error) {
 		// fail closed whatever the engine reported.
 		return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: the materialized view header cannot be read, so its view name and target may be governed by storage integrity; create the table first, then INSERT")
 	}
+	if c == classCreateView {
+		// housegate#24: every unregistered name of a storage-integrity
+		// database is Pending, so a view created there could never be read,
+		// and a materialized view's inner storage would ingest rows under a
+		// governed name. Refuse both at creation, whatever the status.
+		switch t.Status {
+		case sitable.Ordinary:
+			return allow, nil
+		case sitable.Replica:
+			return nonRetryable, replicaRefusal(t)
+		default:
+			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: %s is in a storage-integrity database; views and materialized views cannot be created there", t.ID)
+		}
+	}
 	switch t.Status {
 	case sitable.Pending:
 		switch c {
 		case classRead, classWrite:
 			return retryable, refuse(CodeRetryable, "storage_integrity: table %s is pending activation (retryable)", t.ID)
+		case classViewSource:
+			// Not retryable: once the table is Active both engines refuse a
+			// stored view body that reads it, so a retry never succeeds.
+			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: table %s is governed by storage integrity; a view or materialized view cannot read it", t.ID)
 		case classCreateData, classViewTarget:
 			return nonRetryable, dataCarrying(t.ID)
 		case classOtherDDL:
@@ -251,7 +274,7 @@ func decide(t sitable.Table, c class) (severity, error) {
 		}
 	case sitable.Refused:
 		switch c {
-		case classRead, classWrite, classOtherDDL, classViewTarget:
+		case classRead, classViewSource, classWrite, classOtherDDL, classViewTarget:
 			return nonRetryable, &chproto.ClientError{Code: CodeNonRetryable, Message: chproto.TableRefusedMessage(t.ID, t.RefusedCode, t.RefusedReason)}
 		case classCreateData:
 			// For data-carrying creation a Refused name is governed too
@@ -276,10 +299,14 @@ func decide(t sitable.Table, c class) (severity, error) {
 		// so only reads and metadata are answered here.
 		switch c {
 		case classWrite, classCreate, classCreateData, classDrop, classOtherDDL, classViewTarget:
-			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner", t.ID, t.ReplicaOf)
+			return nonRetryable, replicaRefusal(t)
 		}
 	}
 	return allow, nil
+}
+
+func replicaRefusal(t sitable.Table) error {
+	return refuse(CodeNonRetryable, "storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner", t.ID, t.ReplicaOf)
 }
 
 func dataCarrying(id string) error {
@@ -346,7 +373,7 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 		}
 	case sqlmeta.StatementTypeCreateView:
 		for i, t := range tables {
-			add(t, pick(i == 0, classCreate, classRead))
+			add(t, pick(i == 0, classCreateView, classViewSource))
 		}
 	case sqlmeta.StatementTypeCreateMaterializedView:
 		// The view's own name and its TO target come from the parsed header of
@@ -370,7 +397,7 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 		if h.toDatabase == "" {
 			h.toDatabase = sessionDB
 		}
-		out = append(out, access{database: h.viewDatabase, table: h.view, class: classCreateData})
+		out = append(out, access{database: h.viewDatabase, table: h.view, class: classCreateView})
 		for _, t := range tables {
 			switch db := databaseOf(t); {
 			case t.OriginalTable == h.view && db == h.viewDatabase:
@@ -378,7 +405,7 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 			case h.hasTo && t.OriginalTable == h.toTable && db == h.toDatabase:
 				// Decided once, below, as the view target.
 			default:
-				add(t, classRead)
+				add(t, classViewSource)
 			}
 		}
 		if h.hasTo {

@@ -287,6 +287,45 @@ func TestPermission_ViewsRequireWrite(t *testing.T) {
 	}
 }
 
+// TestPermission_ViewBodySourcesRequireWrite: both engines report a view
+// body's sources after the view's own name in AccessedTables, and every
+// entry is checked with the statement's bit, so CREATE [MATERIALIZED] VIEW
+// needs Write on every database its body reads, not only Read
+// (housegate#24). A writer of foo with only Read on bar cannot create a view
+// in foo over bar; with Write on bar too it can.
+func TestPermission_ViewBodySourcesRequireWrite(t *testing.T) {
+	for _, typ := range []sqlmeta.StatementType{
+		sqlmeta.StatementTypeCreateView,
+		sqlmeta.StatementTypeCreateMaterializedView,
+	} {
+		for _, tc := range []struct {
+			name    string
+			barPerm registry.DbAuth
+			allowed bool
+		}{
+			{"source_read_only_denied", registry.DbAuthRead, false},
+			{"source_write_allowed", registry.DbAuthWrite, true},
+		} {
+			t.Run(typ.String()+"_"+tc.name, func(t *testing.T) {
+				st := fixturePerm("foo", "alice", "bob", registry.DbAuthWrite)
+				st.DatabaseInfos["bar"] = DatabaseInfo{DatabaseId: "bar", Tables: []TableInfo{}}
+				st.DatabasePermissions["bob"]["bar"] = tc.barPerm
+				ev := newEvent(typ, "bob", "foo", "v")
+				ev.AccessedTables = append(ev.AccessedTables, sqlmeta.AccessedTable{
+					OriginalDatabase: "bar", OriginalTable: "t", LogicalDatabase: "bar",
+				})
+				err := newPermObserver(st).BeforeStatement(context.Background(), ev)
+				if tc.allowed && err != nil {
+					t.Errorf("Write on both databases should satisfy %s, got %v", typ, err)
+				}
+				if !tc.allowed && err == nil {
+					t.Errorf("Read on a body source must NOT satisfy %s", typ)
+				}
+			})
+		}
+	}
+}
+
 func TestPermission_WriteBitPromotesToRead(t *testing.T) {
 	// Holding only DbAuthWrite must satisfy a Read check thanks to
 	// the promotion chain (Write → Read).

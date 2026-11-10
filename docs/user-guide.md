@@ -145,6 +145,13 @@ column. A `CREATE TABLE` with another type is refused before anything is created
 **Append-only.** SI tables accept `INSERT` only. `UPDATE`, `DELETE`, `ALTER`, `TRUNCATE` and
 `RENAME` are refused; to change a schema, drop the table and create it again.
 
+**No views.** `CREATE VIEW` and `CREATE MATERIALIZED VIEW` are refused in a database with SI
+tables (code 392 `... is in a storage-integrity database; views and materialized views cannot be
+created there`), and so is a view in another database whose body reads an SI table. Query the
+tables directly, or put the view's `SELECT` in your query (a `WITH` clause works). `DROP VIEW` still
+works, so a view created before this rule can be removed. Ordinary databases keep views and
+materialized views.
+
 ### Granting access
 
 As Owner (or Admin) you grant other accounts with ordinary `GRANT` statements; addresses are quoted
@@ -252,4 +259,5 @@ A query that names a payer whose operator list does not include the signing key 
 | 733 `... (retryable)` | the table is pending, or a source is restarting | retry shortly |
 | 497 `... is not a writer of database <db>` | your key has no Owner or Write grant on `<db>` | ask its Owner for `GRANT INSERT` |
 | 392 `... was refused: ...` | the table uses a type outside the admitted set | `DROP TABLE` and create it with admitted types (§5) |
+| 392 `... views and materialized views cannot be created there` | views are not supported in a database with SI tables | query the tables directly (§5) |
 | `... accepts writes only through the signed statement lane` | the statement is not an `INSERT` (SI tables are append-only) | §5 |
