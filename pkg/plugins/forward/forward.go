@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/housegate/housegate/pkg/log"
@@ -101,6 +102,17 @@ type Plugin struct {
 	dialPeer      func(ctx context.Context, addr string) (*chproto.Codec, error)
 	rebindFn      func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
 	localRebindFn func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
+
+	// pendingUse holds, per session, the logical database a forwarded USE
+	// moves to until that USE succeeds (OnQuerySuccess commits it,
+	// OnQueryComplete and OnClose drop it). Keyed by chsession.Session.
+	pendingUse sync.Map
+}
+
+// pendingLogicalDatabase is a forwarded USE awaiting its outcome.
+type pendingLogicalDatabase struct {
+	queryID  string
+	database string
 }
 
 func (p *Plugin) Name() string { return "forward" }
@@ -421,12 +433,42 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		st.SetReplicaServedDatabase("")
 	}
 	// A forwarded session skips the rewrite plugin here, whose USE
-	// observation would otherwise move the logical database, so record it:
-	// querysettings compares a client's database Query-packet setting (which
-	// clickhouse-client 26.8 sends on every query and moves on each USE)
-	// with it.
-	st.SetLogicalDatabase(newDB)
+	// observation would otherwise move the logical database, so the forward
+	// plugin moves it, once the peer has accepted the USE: querysettings
+	// compares a client's database Query-packet setting (which
+	// clickhouse-client 26.8 sends on every query and moves on each
+	// successful USE) with it, and a USE the peer refuses (a registered
+	// database the account may not use, say) leaves the client where it was.
+	queryID := ""
+	if qctx.Query != nil {
+		queryID = qctx.Query.ID
+	}
+	p.pendingUse.Store(sess, pendingLogicalDatabase{queryID: queryID, database: newDB})
 	return nil
+}
+
+// OnQuerySuccess commits a forwarded USE's logical database: the upstream
+// (the peer) answered it with EndOfStream and the client did not cancel it.
+func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, queryID string) {
+	v, ok := p.pendingUse.LoadAndDelete(sess)
+	if !ok {
+		return
+	}
+	if pending := v.(pendingLogicalDatabase); pending.queryID == queryID {
+		sess.State().SetLogicalDatabase(pending.database)
+	}
+}
+
+// OnQueryComplete drops a forwarded USE that did not succeed (refused here
+// or by the peer, failed, or canceled); OnQuerySuccess has already run for
+// one that did.
+func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
+	p.pendingUse.Delete(sess)
+}
+
+// OnClose drops anything a session left pending.
+func (p *Plugin) OnClose(sess chsession.Session) {
+	p.pendingUse.Delete(sess)
 }
 
 // rebindToLocal is the remote→local counterpart of pivotToPeer. Dialed
@@ -512,8 +554,11 @@ func (*Plugin) RunOnForward() bool { return true }
 func (*Plugin) RunOnPeerTrust() bool { return false }
 
 var (
-	_ plugin.HelloPlugin    = (*Plugin)(nil)
-	_ plugin.QueryPlugin    = (*Plugin)(nil)
-	_ plugin.ForwardAware   = (*Plugin)(nil)
-	_ plugin.PeerTrustAware = (*Plugin)(nil)
+	_ plugin.HelloPlugin         = (*Plugin)(nil)
+	_ plugin.QueryPlugin         = (*Plugin)(nil)
+	_ plugin.QuerySuccessPlugin  = (*Plugin)(nil)
+	_ plugin.QueryCompletePlugin = (*Plugin)(nil)
+	_ plugin.ClosePlugin         = (*Plugin)(nil)
+	_ plugin.ForwardAware        = (*Plugin)(nil)
+	_ plugin.PeerTrustAware      = (*Plugin)(nil)
 )

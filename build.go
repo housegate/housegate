@@ -876,6 +876,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		forwardPlug.TableState = siState
 	}
 	queryPlugins = append(queryPlugins, forwardPlug)
+	// A forwarded USE moves the session's logical database only once it
+	// succeeds.
+	querySuccessPlugins = append(querySuccessPlugins, forwardPlug)
+	queryCompletePlugins = append(queryCompletePlugins, forwardPlug)
+	closePlugins = append(closePlugins, forwardPlug)
 
 	var rewritePlug *rewrite.Plugin
 	if rwFactory != nil {
