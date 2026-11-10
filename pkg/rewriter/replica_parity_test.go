@@ -10,6 +10,7 @@ import (
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
+	"github.com/housegate/housegate/pkg/ffifetch/ffitest"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/sitable"
@@ -196,9 +197,7 @@ func requireReplicaParity(t *testing.T, f *SentioNetworkFactory) {
 //	  --test_filter=TestNativeEngineReplicaTableResolvesBeforeRemoteMapping \
 //	  --test_env=POLYGLOT_SQL_FFI_PATH=<libpolyglot_sql_ffi path>
 func TestNativeEngineReplicaTableResolvesBeforeRemoteMapping(t *testing.T) {
-	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
-	}
+	ffitest.LibOrSkip(t)
 	f, err := NewSentioNetworkFactory(Options{
 		Engine:           EngineNative,
 		PhysicalDatabase: "phys",
@@ -337,9 +336,7 @@ func requireReplicaTableNeedsTheDatabasePermission(t *testing.T, f *SentioNetwor
 //	  --test_filter=TestNativeEngineReplicaTableNeedsTheDatabasePermission \
 //	  --test_env=POLYGLOT_SQL_FFI_PATH=<libpolyglot_sql_ffi path>
 func TestNativeEngineReplicaTableNeedsTheDatabasePermission(t *testing.T) {
-	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
-	}
+	ffitest.LibOrSkip(t)
 	f := replicaPermissionFactory(t, Options{Engine: EngineNative})
 	defer f.Close()
 	requireReplicaTableNeedsTheDatabasePermission(t, f)

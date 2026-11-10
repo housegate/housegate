@@ -7,6 +7,7 @@ go_test(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/ffifetch/ffitest",
         "//pkg/log",
         "//pkg/plugin",
         "@com_github_housegate_rewriter_go//:rewriter-go",

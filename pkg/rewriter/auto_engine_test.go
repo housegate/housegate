@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 
+	"github.com/housegate/housegate/pkg/ffifetch/ffitest"
 	"github.com/housegate/housegate/pkg/network"
 )
 
@@ -179,6 +180,36 @@ func TestAutoEngineFallsBackToThePinnedNativeEngine(t *testing.T) {
 	// The probes must expect the native engine's own output, not gRPC's.
 	if err := f.ProbeTableReferencePolicy(context.Background()); err != nil {
 		t.Fatalf("native probe under auto: %v", err)
+	}
+}
+
+// TestAutoEngineFallsBackToTheRealPinnedLibrary drives the auto fallback with
+// the real native loader and the FFI library CI fetches, so the native probe
+// expectations under auto are held against the engine itself, not the stub.
+func TestAutoEngineFallsBackToTheRealPinnedLibrary(t *testing.T) {
+	lib := ffitest.LibOrSkip(t)
+	resolve, calls := countingResolver(lib, nil)
+
+	f, err := newAutoFactory(t, unusedAddr(t), 200*time.Millisecond, resolve)
+	if err != nil {
+		t.Fatalf("NewSentioNetworkFactory(auto) with the real library: %v", err)
+	}
+	if f.Engine() != EngineNative || calls.Load() != 1 {
+		t.Fatalf("engine = %s after %d resolver calls, want native after one", f.Engine(), calls.Load())
+	}
+	if err := f.ProbeTableReferencePolicy(context.Background()); err != nil {
+		t.Fatalf("table-reference probe under auto: %v", err)
+	}
+	if err := f.ProbeStorageIntegrityBuild(context.Background()); err != nil {
+		t.Fatalf("storage-integrity build probe under auto: %v", err)
+	}
+	rw := f.NewRewriter(&fakeSession{})
+	res, err := rw.Rewrite(context.Background(), "SELECT a FROM db1.t", "")
+	if err != nil {
+		t.Fatalf("Rewrite under auto: %v", err)
+	}
+	if !strings.Contains(res.SQL, "phys.") {
+		t.Fatalf("SQL = %q, want it moved into the physical database", res.SQL)
 	}
 }
 
