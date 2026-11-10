@@ -36,7 +36,6 @@ package forward
 import (
 	"context"
 	"fmt"
-	"net"
 	"slices"
 	"time"
 
@@ -46,6 +45,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/endpointtls"
 	"github.com/housegate/housegate/pkg/peer"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
@@ -94,6 +94,11 @@ type Plugin struct {
 	// 733 once the database is no longer served. Peer-trusted sessions ignore
 	// it. Nil keeps the forward decision exactly as before replica reads.
 	TableState sitable.TableState
+
+	// EndpointTLS is how a pivot dials the peer housegate the registry
+	// advertises (network_state.endpoint_tls). Nil dials plaintext, as
+	// before endpoint TLS existed.
+	EndpointTLS *endpointtls.Config
 
 	// dialPeer / rebindFn / localRebindFn are injectable for tests;
 	// production callers leave them nil and the plugin uses
@@ -272,7 +277,7 @@ func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello 
 
 	dialer := p.dialPeer
 	if dialer == nil {
-		dialer = defaultDial
+		dialer = p.defaultDial
 	}
 	rebind := p.rebindFn
 	if rebind == nil {
@@ -322,11 +327,11 @@ func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello 
 	return nil
 }
 
-// defaultDial dials a peer's internal-port and constructs a chproto.Codec
-// suitable for an upstream-direction handshake.
-func defaultDial(ctx context.Context, addr string) (*chproto.Codec, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+// defaultDial dials the peer address the registry advertises, over TLS when
+// EndpointTLS is set, and constructs a chproto.Codec suitable for an
+// upstream-direction handshake.
+func (p *Plugin) defaultDial(ctx context.Context, addr string) (*chproto.Codec, error) {
+	conn, err := p.EndpointTLS.DialConn(ctx, addr, 0)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

@@ -175,6 +175,7 @@ storage_integrity:
 |-----|------|------|--------|------|
 | `agent.mode` | bool | 否 | `false` | 启用 agent 模式 |
 | `agent.upstream` | string | 条件必填 | `` | 固定的 server-side proxy 地址（如 `10.0.0.8:9001`）。**该字段** 与顶层 `network_state.source` **二者必填其一**。留空时 agent 会基于 NetworkState 在每个 session 自动选一个 server-mode peer（详见 [§Agent 自动发现 upstream](#agent-自动发现-upstream)）。 |
+| `agent.upstream_tls` | bool | 否 | `false` | 用 TLS 连接固定的 `agent.upstream`，按 upstream 的主机名校验证书（设置了 `network_state.tls_ca_file` 时用它，否则用系统根证书）。只能和固定 upstream 一起用；自动发现的 upstream 看 `network_state.endpoint_tls`。环境变量：`HOUSEGATE_AGENT_UPSTREAM_TLS=true`。 |
 | `agent.private_key_hex` | string | 是（agent） | `` | agent 的以太坊私钥，用于 JWS 签名。优先用 `HOUSEGATE_AGENT_KEY` 环境变量或 age 加密配置文件，不要明文写在配置里。 |
 
 ### `usage` — 计费 / 用量上报
@@ -259,6 +260,16 @@ network_state: { source: "redis.internal:6379" }                # Redis 模式
 ```
 
 环境变量回落：`HOUSEGATE_NETWORK_STATE_SOURCE`（现代）和 `HOUSEGATE_NETWORK_STATE_REDIS`（旧字段，仅 Redis）。
+
+**Endpoint TLS。** `network_state.endpoint_tls` 表示各 indexer 公布的端点（indexer url 加 housegate 端口、加 storage RPC 端口）是否走 TLS。它是网络的属性，与 source 自己的 scheme 无关：
+
+| `endpoint_tls` | 拨公布的 housegate 地址 | 公布的 storage RPC 端点 |
+|---|---|---|
+| 不设（默认） | 明文 | 沿用 `network_state.source` 的 scheme（引入该设置之前的行为） |
+| `true` | TLS 客户端，按公布的主机名校验证书并作为 SNI 发送 | `https://` |
+| `false` | 明文 | `http://` |
+
+"拨公布的 housegate 地址"包括 agent 选 upstream 和副本读 failover，以及 server 的 forward pivot、route target 和 router-only 选点。本地 ClickHouse upstream 或 shard 从不走 TLS。`network_state.tls_ca_file` 用一个 PEM bundle 取代系统根证书，作用于所有 TLS 拨号和 https storage RPC 调用。证书校验不能关闭。环境变量：`HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS`（`true`/`false`）、`HOUSEGATE_NETWORK_STATE_TLS_CA_FILE`；flag：`-endpoint-tls`、`-tls-ca-file`。
 
 ### `shard`、`health_check`、`pool`、`routing` — 分片与副本
 
@@ -442,9 +453,12 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 |------|--------|------|
 | `-agent` | `false` | 启用 agent 模式（覆盖 `agent.mode`） |
 | `-agent-upstream` | (空) | server-side proxy 地址 |
+| `-agent-upstream-tls` | `false` | 用 TLS 连接 `-agent-upstream`（也可用 `HOUSEGATE_AGENT_UPSTREAM_TLS`，配置 `agent.upstream_tls`） |
+| `-endpoint-tls` | (不设) | 网络公布的端点走 TLS（配置 `network_state.endpoint_tls`，见 [§network_state](#network_state)）；优先于 `-network` 预设 |
+| `-tls-ca-file` | (空) | 取代系统根证书的 PEM CA bundle（配置 `network_state.tls_ca_file`） |
 | `-agent-key` | (空) | JWS 签名用的以太坊私钥 |
 | `-agent-owner` | (空) | `-agent-key` 是 operator key 时的计费 owner（也可用 `HOUSEGATE_AGENT_OWNER`） |
-| `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`（也可用 `HOUSEGATE_NETWORK`）。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
+| `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`，端点为明文（也可用 `HOUSEGATE_NETWORK`）。预设在 `network_state.endpoint_tls` 未配置时也会设置它。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
 | `-si` | `auto`（无配置文件时） | storage-integrity 签名：`auto` 在 network state 为 RPC source 时启用，另有 `on`、`off`（也可用 `HOUSEGATE_SI`） |
 | `-si-state-dir` | 按操作系统 | `client_seq` 状态目录（也可用 `HOUSEGATE_SI_STATE_DIR`） |
 | `-si-lanes` | (空) | `client_seq` lane（也可用 `HOUSEGATE_SI_LANES`，配置项 `storage_integrity.agent.lanes`）：`auto`（默认）在网络报告已启用 client lane 后改用 client lane 签名，`off` 保持旧式 statement id（driver sidecar）。`storage_integrity.agent.max_inflight_per_lane`（默认 16）限制单个 client lane 上同时在途的 SI 语句数，旧式 lane 不受限。显式设置 `state_dir` 时，client lane 位于 `<state_dir>/<network_id>/<signer>/lanes/` |

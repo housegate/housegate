@@ -32,6 +32,7 @@ go_test(
         "inmemory_writer_test.go",
         "permission_commitgate_observer_test.go",
         "permission_writer_predicate_test.go",
+        "rpc_indexer_scheme_test.go",
         "rpc_indexer_signers_test.go",
         "rpc_replica_hosts_test.go",
         "rpc_routing_test.go",

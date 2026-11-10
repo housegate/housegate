@@ -88,7 +88,7 @@ func TestApplyAgentQuickstart_SourceAndUpstreamOverridesWin(t *testing.T) {
 	}
 	// A pinned upstream fixes routing only: the preset's RPC still supplies
 	// table status and network-id discovery, so -si auto signs.
-	if pinned.NetworkState.Source != AgentNetworkPresets["devnet2"] || !pinned.StorageIntegrity.Agent.Enabled || pinned.Agent.Upstream != "10.0.0.8:9001" {
+	if pinned.NetworkState.Source != AgentNetworkPresets["devnet2"].Source || !pinned.StorageIntegrity.Agent.Enabled || pinned.Agent.Upstream != "10.0.0.8:9001" {
 		t.Fatalf("a pinned quickstart agent keeps its upstream and derives the preset RPC: source=%q upstream=%q si=%+v",
 			pinned.NetworkState.Source, pinned.Agent.Upstream, pinned.StorageIntegrity.Agent)
 	}
@@ -97,7 +97,7 @@ func TestApplyAgentQuickstart_SourceAndUpstreamOverridesWin(t *testing.T) {
 	}
 	named := quickstartBase()
 	named.Agent.Upstream = "10.0.0.8:9001"
-	if err := ApplyAgentQuickstart(named, AgentQuickstart{Network: "devnet2"}); err != nil || named.NetworkState.Source != AgentNetworkPresets["devnet2"] || !named.StorageIntegrity.Agent.Enabled {
+	if err := ApplyAgentQuickstart(named, AgentQuickstart{Network: "devnet2"}); err != nil || named.NetworkState.Source != AgentNetworkPresets["devnet2"].Source || !named.StorageIntegrity.Agent.Enabled {
 		t.Fatalf("an explicit -network with a pinned upstream also derives the preset: source=%q err=%v", named.NetworkState.Source, err)
 	}
 }
@@ -132,7 +132,7 @@ func TestApplyAgentQuickstart_Values(t *testing.T) {
 	}{
 		"si off":          {q: AgentQuickstart{SI: "off"}, check: func(c *Config) bool { return !c.StorageIntegrity.Agent.Enabled }},
 		"si on":           {q: AgentQuickstart{SI: "on"}, check: func(c *Config) bool { return c.StorageIntegrity.Agent.Enabled }},
-		"network devnet2": {q: AgentQuickstart{Network: "devnet2"}, check: func(c *Config) bool { return c.NetworkState.Source == AgentNetworkPresets["devnet2"] }},
+		"network devnet2": {q: AgentQuickstart{Network: "devnet2"}, check: func(c *Config) bool { return c.NetworkState.Source == AgentNetworkPresets["devnet2"].Source }},
 		"state dir":       {q: AgentQuickstart{SIStateDir: "/var/lib/hg"}, check: func(c *Config) bool { return c.StorageIntegrity.Agent.StateDir == "/var/lib/hg" }},
 		"lanes auto":      {q: AgentQuickstart{SILanes: "auto"}, check: func(c *Config) bool { return c.StorageIntegrity.Agent.Lanes == "auto" }},
 		"read mode":       {q: AgentQuickstart{SIReadMode: "safe"}, check: func(c *Config) bool { return c.StorageIntegrity.Agent.ReadMode == "safe" }},
