@@ -518,15 +518,17 @@ func TestCLI_LowCardinalityLargeDictionaryDecodes(t *testing.T) {
 // lane whose Native bytes housegate itself re-encodes: inline VALUES, which
 // the upstream evaluates and the agent re-encodes through ch-go. The v2 row
 // must decode to the same values, and hash to the same row, as the client's
-// own FORMAT Values spelling of it.
+// own FORMAT Values spelling of it. Wide integers are quoted: ClickHouse types
+// an unquoted literal above UInt64 as Float64, and the closure gate refuses
+// one (TestValuesClosure).
 func TestStorageIntegrity_InlineValuesV2TypesHashLikeTheClient(t *testing.T) {
 	const networkID = "itest-inline-v2"
 	schema := v2CLISchema()
 	agent, c := startInlineValuesPair(t, networkID, schema.Columns)
 	conn := openConnNoCompression(t, agent.Addr)
 	sql := "INSERT INTO " + c.schema.TableID + " (id, d32, u, i128, u256, lc, n_u64, n_s, n_dt64) VALUES " +
-		"(1, '1900-01-01', '61f0c404-5cb3-11e7-907b-a6006ad3dba0', -170141183460469231731687303715884105728, " +
-		"115792089237316195423570985008687907853269984665640564039457584007913129639935, 'eu', NULL, 'x', NULL)"
+		"(1, '1900-01-01', '61f0c404-5cb3-11e7-907b-a6006ad3dba0', '-170141183460469231731687303715884105728', " +
+		"'115792089237316195423570985008687907853269984665640564039457584007913129639935', 'eu', NULL, 'x', NULL)"
 	if err := conn.Exec(context.Background(), sql); err != nil {
 		t.Fatalf("inline INSERT: %v", err)
 	}

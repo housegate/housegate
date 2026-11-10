@@ -446,10 +446,14 @@ func scanClosureNumber(rows string, start int) (int, error) {
 		if i < len(rows) && (isStorageIdentPart(rows[i]) || rows[i] == '.') {
 			return 0, closureErr("numeric literal is not delimited", i)
 		}
+		if len(strings.TrimLeft(rows[start+2:i], "0")) > 16 {
+			return 0, closureErr(wideLiteralRefusal, start)
+		}
 		return i, nil
 	}
 
 	i := scanClosureDigits(rows, start)
+	integerEnd := i
 	if i < len(rows) && rows[i] == '.' {
 		i = scanClosureDigits(rows, i+1)
 	}
@@ -467,7 +471,25 @@ func scanClosureNumber(rows string, start int) (int, error) {
 	if i < len(rows) && (isStorageIdentPart(rows[i]) || rows[i] == '.') {
 		return 0, closureErr("numeric literal is not delimited", i)
 	}
+	if i == integerEnd && exceedsUInt64(rows[start:i]) {
+		return 0, closureErr(wideLiteralRefusal, start)
+	}
 	return i, nil
+}
+
+// wideLiteralRefusal names the integer literals ClickHouse cannot keep exact.
+// ClickHouse types an unquoted integer literal above UInt64 (decimal above
+// 18446744073709551615, or more than 16 significant hex digits) as Float64,
+// measured on 25.8 and 26.8, so a 128- or 256-bit value would be rounded
+// before it reached its column. A quoted string converts exactly.
+const wideLiteralRefusal = "integer literal exceeds UInt64 and ClickHouse would round it through Float64; quote it as a string ('…') to keep it exact"
+
+// exceedsUInt64 reports whether a run of decimal digits is above
+// 18446744073709551615.
+func exceedsUInt64(digits string) bool {
+	const max = "18446744073709551615"
+	digits = strings.TrimLeft(digits, "0")
+	return len(digits) > len(max) || (len(digits) == len(max) && digits > max)
 }
 
 func scanClosureDigits(rows string, i int) int {
