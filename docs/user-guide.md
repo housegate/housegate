@@ -14,6 +14,7 @@ The examples use **devnet2**, the network a key-only agent joins by default.
 | Explorer | `https://devnet-explorer.sentio.xyz` |
 | AddressBook | `0xb7e9E56DFC27bcfA63698F2F5890e186426A0123` |
 | Billing | `0x29308290173F324b7Fdb0596A94665144Df17C9b` |
+| VotingParameters (prices) | `0x39796F0E782bD22B7E53FF18af390B09251549F1` |
 
 ## How it fits together
 
@@ -74,7 +75,28 @@ plain token balance:
 
 - each query is one unit, each `INSERT` one unit (two for an inline `INSERT ... VALUES`), charged
   also when the statement is refused;
+- each `INSERT` into a storage-integrity (SI) table is also charged by size, on the
+  `storage_write` SKU: one unit per KiB of the signed payload, rounded up per statement, at least
+  one (a 1 B insert is 1 unit, a 64 MiB insert is 65536). It is charged when the network
+  sequences the statement, so a sequenced statement that later fails to materialize into the
+  table is still charged; a statement refused before sequencing pays only the query unit. A
+  replay of a statement the network already sequenced is not charged again;
 - each `CREATE DATABASE` and each `CREATE TABLE` is a one-time charge.
+
+Prices are per unit and are set by indexer vote each epoch. Read the current price of a SKU
+(`query`, `storage_write`, `user_database_creation`, `user_table_creation`) from the
+VotingParameters contract (`0x39796F0E782bD22B7E53FF18af390B09251549F1` on devnet2):
+
+```bash
+cast call 0x39796F0E782bD22B7E53FF18af390B09251549F1 'getSkuUnitPrice(string)(uint256)' storage_write \
+  --rpc-url https://sentio-devnet.test-rpc.sentio.xyz
+```
+
+The result is in SU; the reporting indexer converts SU to ST at its exchange rate. While
+`storage_write` reads `0` it is not priced yet, and SI writes pay only the query unit.
+
+The balance check before a statement only requires a positive balance, so one large write can cost
+more than the balance holds; the charge then takes the whole balance.
 
 A new account's Billing balance is zero, so its first statement fails with:
 
@@ -173,6 +195,8 @@ Client-side constraints on SI writes:
 - a 25.x `clickhouse-client` sends inline `VALUES` in a shape the lane refuses: upgrade, or use
   `FORMAT Values` with the rows on stdin;
 - at most 64 MiB per statement and 65536 rows per inline `VALUES`;
+- each SI statement is charged per KiB of its signed payload on top of the query unit, see
+  [§3](#funding-an-account);
 - in an inline `VALUES`, `now()`, `rand()` and `generateUUIDv4()` are replaced by constants before
   signing, so every row of one statement gets the same value.
 
