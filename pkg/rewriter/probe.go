@@ -242,6 +242,9 @@ func (p buildProbe) expectedSQL(engine string) string {
 }
 
 func (f *SentioNetworkFactory) engineName() string {
+	if f.engine != "" {
+		return f.engine
+	}
 	if f.options.Engine == "" {
 		return EngineGRPC
 	}

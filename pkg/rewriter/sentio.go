@@ -112,15 +112,20 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 // startup unless rewriter.fail_open_on_unavailable allows running without
 // the rewriter.
 type SentioNetworkFactory struct {
-	options      Options
-	registry     registry.Registry
-	backend      backend                        // transport: grpc service or in-process rewriter-go
-	callbackAddr string                         // resolved address for remote() callback
-	clusterMgr   cluster.Cluster                // optional, for multi-replica isLocal detection
-	credProvider credentials.CredentialProvider // optional, for remote() credential replacement
-	getIndexerId func() uint64                  // optional, identifies "this proxy" for remote-upstream routing
-	peerSigner   PeerSigner                     // optional, mints peer-relay JWS for remote() calls
-	peerTokenTTL time.Duration                  // peer JWS validity window; 0 → 5m default
+	options  Options
+	registry registry.Registry
+	backend  backend // transport: grpc service or in-process rewriter-go
+	// engine is the backend actually serving (EngineGRPC or EngineNative);
+	// under EngineAuto it records the startup choice, fixed for the
+	// factory's lifetime.
+	engine        string
+	engineVersion string
+	callbackAddr  string                         // resolved address for remote() callback
+	clusterMgr    cluster.Cluster                // optional, for multi-replica isLocal detection
+	credProvider  credentials.CredentialProvider // optional, for remote() credential replacement
+	getIndexerId  func() uint64                  // optional, identifies "this proxy" for remote-upstream routing
+	peerSigner    PeerSigner                     // optional, mints peer-relay JWS for remote() calls
+	peerTokenTTL  time.Duration                  // peer JWS validity window; 0 → 5m default
 }
 
 // peerLoginTokenTTL is the default validity window of the peer-relay
@@ -146,16 +151,18 @@ func NewSentioNetworkFactory(opts Options, reg registry.Registry) (*SentioNetwor
 	callbackAddr := resolveCallbackAddr(opts.CallbackAddr, opts.Upstream, opts.Listen)
 	log.Infow("resolved remote() callback address", "addr", callbackAddr)
 
-	be, err := newBackend(opts)
+	sel, err := newBackend(opts)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SentioNetworkFactory{
-		options:      opts,
-		registry:     reg,
-		backend:      be,
-		callbackAddr: callbackAddr,
+		options:       opts,
+		registry:      reg,
+		backend:       sel.backend,
+		engine:        sel.engine,
+		engineVersion: sel.version,
+		callbackAddr:  callbackAddr,
 	}, nil
 }
 

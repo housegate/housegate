@@ -30,6 +30,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/cfgtypes"
 	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/ffifetch"
 	"github.com/housegate/housegate/pkg/plugins/agent"
 	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
 	"github.com/housegate/housegate/pkg/plugins/concurrency"
@@ -422,9 +423,14 @@ func (c *Config) Validate() error {
 	switch c.Rewriter.Engine {
 	case "", rewriter.EngineGRPC, rewriter.EngineNative:
 		// ok
+	case rewriter.EngineAuto:
+		errs = append(errs, c.validateRewriterAuto()...)
 	default:
-		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q or %q)",
-			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
+		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q, %q or %q)",
+			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative, rewriter.EngineAuto))
+	}
+	if c.Rewriter.Auto.GRPCWait.Duration < 0 {
+		errs = append(errs, errors.New("rewriter.auto.grpc_wait must be >= 0"))
 	}
 
 	// Mode validity is mode-independent like the engine check: the guard is
@@ -456,6 +462,34 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid config (mode=%s):\n%w", c.Mode(), joined)
 	}
 	return nil
+}
+
+// validateRewriterAuto checks rewriter.engine "auto". The native fallback
+// runs only a pinned, checksum-verified library of the release this binary's
+// Go binding was built against, never an operator path or the
+// POLYGLOT_SQL_FFI_PATH search. Storage integrity is refused until the two
+// engines answer identically: which engine serves depends on sidecar
+// availability at startup.
+func (c *Config) validateRewriterAuto() []error {
+	var errs []error
+	rw := c.Rewriter
+	if rw.ServiceAddr == "" {
+		errs = append(errs, errors.New(`rewriter.engine "auto" requires rewriter.service_addr`))
+	}
+	if rw.NativeLibraryPath != "" {
+		errs = append(errs, errors.New(`rewriter.engine "auto" refuses rewriter.native_library_path; pin the native fallback with native_library_release and native_library_sha256`))
+	}
+	if rw.NativeLibraryRelease == "" || rw.NativeLibrarySHA256 == "" {
+		errs = append(errs, errors.New(`rewriter.engine "auto" requires rewriter.native_library_release and rewriter.native_library_sha256`))
+	}
+	if rw.NativeLibraryRelease != "" && rw.NativeLibraryRelease != ffifetch.DefaultRelease {
+		errs = append(errs, fmt.Errorf(`rewriter.engine "auto" requires rewriter.native_library_release %q (the release this binary's native binding is built against), got %q`,
+			ffifetch.DefaultRelease, rw.NativeLibraryRelease))
+	}
+	if c.StorageIntegrity.IsEnabled() {
+		errs = append(errs, errors.New(`rewriter.engine "auto" cannot be combined with storage_integrity.enabled until the grpc and native engines answer identically; pin rewriter.engine to "grpc" or "native"`))
+	}
+	return errs
 }
 
 // ValidateExceptNetworkStateSource runs Validate() but treats an empty
@@ -517,6 +551,7 @@ func Default() Config {
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
 			Timeout:     Duration{Duration: 5 * time.Second},
 			Engine:      EnvOrDefault("HOUSEGATE_REWRITER_ENGINE", ""),
+			Auto:        rewrite.AutoConfig{GRPCWait: Duration{Duration: rewriter.DefaultAutoGRPCWait}},
 		},
 		Materialize: materializeplugin.Config{
 			Timeout:        Duration{Duration: 5 * time.Second},

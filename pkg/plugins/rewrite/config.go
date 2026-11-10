@@ -25,8 +25,14 @@ type Config struct {
 	// Engine selects the rewriter implementation: "grpc" (default, also
 	// the empty value) calls the external sql-rewriter service at
 	// ServiceAddr; "native" runs the in-process rewriter-go engine and
-	// ignores ServiceAddr.
+	// ignores ServiceAddr; "auto" uses the service when it is reachable
+	// within Auto.GRPCWait at startup and otherwise the native engine from
+	// the pinned NativeLibraryRelease / NativeLibrarySHA256. The choice is
+	// made once and never changes while the process runs.
 	Engine string `json:"engine" yaml:"engine"`
+
+	// Auto tunes Engine "auto".
+	Auto AutoConfig `json:"auto" yaml:"auto"`
 
 	// NativeLibraryPath is the path to libpolyglot_sql_ffi.{so,dylib}
 	// for the native engine. Empty falls back to the
@@ -60,4 +66,11 @@ type Config struct {
 	// Engine rejections are never fail-open. Invalid together with
 	// storage_integrity.enabled (spec 2026-09-26 T8).
 	FailOpenOnUnavailable bool `json:"fail_open_on_unavailable" yaml:"fail_open_on_unavailable"`
+}
+
+// AutoConfig tunes rewriter.engine "auto".
+type AutoConfig struct {
+	// GRPCWait bounds how long startup waits for the gRPC service before it
+	// falls back to the native engine. Zero means 30s.
+	GRPCWait cfgtypes.Duration `json:"grpc_wait" yaml:"grpc_wait"`
 }

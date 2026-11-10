@@ -40,6 +40,7 @@ go_test(
         "observability_config_test.go",
         "replication_proxy_config_test.go",
         "replication_proxy_config_yaml_test.go",
+        "rewriter_auto_test.go",
         "sample_configs_test.go",
         "sitable_names_test.go",
         "storage_integrity_agent_config_test.go",
@@ -51,6 +52,7 @@ go_test(
     embed = [":config"],
     deps = [
         "//pkg/cluster",
+        "//pkg/ffifetch",
         "//pkg/log",
         "//pkg/plugins/agent",
         "//pkg/plugins/materialize",
