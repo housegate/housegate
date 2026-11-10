@@ -9,6 +9,7 @@
 - [前置依赖](#前置依赖)
 - [快速开始](#快速开始)
 - [构建](#构建)
+- [用户指南（agent 用户）](docs/user-guide.md)
 - **Part 1 — 配置**
   - [配置文件](#配置文件)
   - [完整参数参考](#完整参数参考)
@@ -160,6 +161,8 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 
 **谁可以写。** 签名 ingress 接受目标数据库的所有 writer：indexer signer，或在该库上持有 Owner 或 Write 的账户（只有 Admin、以及 address(0) 的授权都不算）。`storage_integrity.ingress.denied_addresses`（小写地址；改动需重启）会拒绝列表中的 signer 或解析出的 owner；`allowed_addresses` 可选，设置后仍然限制 signer。拒绝使用 497 错误码（`ACCESS_DENIED`）：`storage_integrity: signer 0x… is not permitted to write storage-integrity tables`、`storage_integrity: owner 0x… is not permitted to write storage-integrity tables`、`storage_integrity: 0x… is not an operator of 0x…`、`storage_integrity: 0x… is not a writer of database <db>`。如果拒绝明确没有消耗该语句的 `client_seq`，错误消息以 ` [client_seq unspent]` 结尾，agent 随后会复用这个 seq。peer-trusted 的读取如果指向受治理表的普通物理表，会被拒绝，错误码 392：`storage_integrity: table <db>.<t> is governed by storage integrity and must be read through its host indexer; connect with --database <db> or USE <db>`。
 
+**按账户的写入配额。** `storage_integrity.ingress.account_quota` 用两个 token bucket 限制单个账户经本 ingress 的签名写入，按 principal（校验过的 owner，否则 signer）计：语句数（`statements_per_second`、`statement_burst`，默认 20 和 200）和 payload 字节数（`bytes_per_second`、`byte_burst`，默认 8 MiB 和 256 MiB，`byte_burst` 不得小于 `max_payload_bytes`）。只有字节桶没有欠账时才接纳语句；接纳时扣一个语句 token，并从字节桶预留 `max_payload_bytes`，输入结束时按实际 payload 长度结算，语句提前结束则退回预留。所以同一账户的并发会话不能凭同一份余额全部通过：一个账户同时提交的量不超过 `byte_burst + max_payload_bytes`，同时在接收输入的语句约不超过 `byte_burst / max_payload_bytes + 1` 条。`mode` 为 `off`（默认）、`dry_run`（全部放行，只在 `storage_integrity_ingress_account_quota_total{decision="would_refuse"}` 计数）或 `enforce`（在读 payload 之前以 201 `QUOTA_EXCEEDED` 拒绝：`storage_integrity: account 0x… exceeded its write quota (statements|bytes); retry in <n>s (retryable)`，会话保留，`client_seq` 不消耗）。计数只在本 ingress 内存里，重启清零，indexer 之间不共享。上线时先用 `dry_run`，指标确认预算合适后再切 `enforce`。
+
 ```yaml
 storage_integrity:
   ingress:
@@ -167,6 +170,8 @@ storage_integrity:
     network_id: devnet2-si
     allowed_addresses: []          # 可选；为空则接受所有数据库 writer
     denied_addresses: []           # 在 SI 通道上被拒绝的小写 signer/owner 地址
+    account_quota:
+      mode: off                    # off | dry_run | enforce
 ```
 
 ### `agent` — Agent 模式设置
@@ -175,6 +180,7 @@ storage_integrity:
 |-----|------|------|--------|------|
 | `agent.mode` | bool | 否 | `false` | 启用 agent 模式 |
 | `agent.upstream` | string | 条件必填 | `` | 固定的 server-side proxy 地址（如 `10.0.0.8:9001`）。**该字段** 与顶层 `network_state.source` **二者必填其一**。留空时 agent 会基于 NetworkState 在每个 session 自动选一个 server-mode peer（详见 [§Agent 自动发现 upstream](#agent-自动发现-upstream)）。 |
+| `agent.upstream_tls` | bool | 否 | `false` | 用 TLS 连接固定的 `agent.upstream`，按 upstream 的主机名校验证书（设置了 `network_state.tls_ca_file` 时用它，否则用系统根证书）。只能和固定 upstream 一起用；自动发现的 upstream 看 `network_state.endpoint_tls`。环境变量：`HOUSEGATE_AGENT_UPSTREAM_TLS=true`。 |
 | `agent.private_key_hex` | string | 是（agent） | `` | agent 的以太坊私钥，用于 JWS 签名。优先用 `HOUSEGATE_AGENT_KEY` 环境变量或 age 加密配置文件，不要明文写在配置里。 |
 
 ### `usage` — 计费 / 用量上报
@@ -259,6 +265,16 @@ network_state: { source: "redis.internal:6379" }                # Redis 模式
 ```
 
 环境变量回落：`HOUSEGATE_NETWORK_STATE_SOURCE`（现代）和 `HOUSEGATE_NETWORK_STATE_REDIS`（旧字段，仅 Redis）。
+
+**Endpoint TLS。** `network_state.endpoint_tls` 表示各 indexer 公布的端点（indexer url 加 housegate 端口、加 storage RPC 端口）是否走 TLS。它是网络的属性，与 source 自己的 scheme 无关：
+
+| `endpoint_tls` | 拨公布的 housegate 地址 | 公布的 storage RPC 端点 |
+|---|---|---|
+| 不设（默认） | 明文 | 沿用 `network_state.source` 的 scheme（引入该设置之前的行为） |
+| `true` | TLS 客户端，按公布的主机名校验证书并作为 SNI 发送 | `https://` |
+| `false` | 明文 | `http://` |
+
+"拨公布的 housegate 地址"包括 agent 选 upstream 和副本读 failover，以及 server 的 forward pivot、route target 和 router-only 选点。本地 ClickHouse upstream 或 shard 从不走 TLS。`network_state.tls_ca_file` 用一个 PEM bundle 取代系统根证书，作用于所有 TLS 拨号和 https storage RPC 调用。证书校验不能关闭。环境变量：`HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS`（`true`/`false`）、`HOUSEGATE_NETWORK_STATE_TLS_CA_FILE`；flag：`-endpoint-tls`、`-tls-ca-file`。
 
 ### `shard`、`health_check`、`pool`、`routing` — 分片与副本
 
@@ -383,6 +399,8 @@ Shard 感知（每副本连接池 + 路由）：
 
 #### 快速开始（用户 agent）
 
+新用户请先看 [用户指南](docs/user-guide.md)（英文）：从新建私钥到 safe 读的完整流程，包括安装、给账户的 Billing 余额充值、允许的列类型、读模式和 operator 私钥。
+
 ```bash
 export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY
 housegate                                # agent 模式，devnet2，127.0.0.1:9000
@@ -442,9 +460,12 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 |------|--------|------|
 | `-agent` | `false` | 启用 agent 模式（覆盖 `agent.mode`） |
 | `-agent-upstream` | (空) | server-side proxy 地址 |
+| `-agent-upstream-tls` | `false` | 用 TLS 连接 `-agent-upstream`（也可用 `HOUSEGATE_AGENT_UPSTREAM_TLS`，配置 `agent.upstream_tls`） |
+| `-endpoint-tls` | (不设) | 网络公布的端点走 TLS（配置 `network_state.endpoint_tls`，见 [§network_state](#network_state)）；优先于 `-network` 预设 |
+| `-tls-ca-file` | (空) | 取代系统根证书的 PEM CA bundle（配置 `network_state.tls_ca_file`） |
 | `-agent-key` | (空) | JWS 签名用的以太坊私钥 |
 | `-agent-owner` | (空) | `-agent-key` 是 operator key 时的计费 owner（也可用 `HOUSEGATE_AGENT_OWNER`） |
-| `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`（也可用 `HOUSEGATE_NETWORK`）。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
+| `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`，端点为明文（也可用 `HOUSEGATE_NETWORK`）。预设在 `network_state.endpoint_tls` 未配置时也会设置它。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
 | `-si` | `auto`（无配置文件时） | storage-integrity 签名：`auto` 在 network state 为 RPC source 时启用，另有 `on`、`off`（也可用 `HOUSEGATE_SI`） |
 | `-si-state-dir` | 按操作系统 | `client_seq` 状态目录（也可用 `HOUSEGATE_SI_STATE_DIR`） |
 | `-si-lanes` | (空) | `client_seq` lane（也可用 `HOUSEGATE_SI_LANES`，配置项 `storage_integrity.agent.lanes`）：`auto`（默认）在网络报告已启用 client lane 后改用 client lane 签名，`off` 保持旧式 statement id（driver sidecar）。`storage_integrity.agent.max_inflight_per_lane`（默认 16）限制单个 client lane 上同时在途的 SI 语句数，旧式 lane 不受限。显式设置 `state_dir` 时，client lane 位于 `<state_dir>/<network_id>/<signer>/lanes/` |

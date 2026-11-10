@@ -23,7 +23,7 @@ pkg/plugins/
 |-- sistatement/    # agent-side signed SI INSERT lane and successful-USE tracking
 |-- sisnapshotquery/ # agent-side signed INSERT ... SELECT preparation (default-off, injection-only ports)
 |-- sitablestate/   # server-side SI table-status gate: Pending/Refused/Gone/Replica refusals and in-flight replica reads (spec 2026-09-24 §7, 2026-10-14 §11)
-|-- storageintegrity/ # server-side signed SI ingress and admission
+|-- storageintegrity/ # server-side signed SI ingress, admission and the per-account write quota
 `-- usage/          # query billing usage reporting
 ```
 

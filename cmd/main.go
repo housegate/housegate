@@ -66,6 +66,7 @@ func loadConfigWithOverrides() config.Config {
 
 	agentMode := flag.Bool("agent", false, "enable agent mode (token-signing pass-through proxy)")
 	agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
+	agentUpstreamTLS := flag.Bool("agent-upstream-tls", false, "dial -agent-upstream over TLS, verifying its certificate (overrides config/env HOUSEGATE_AGENT_UPSTREAM_TLS)")
 	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing; implies agent mode without a config file unless -agent is given (prefer env var HOUSEGATE_AGENT_KEY)")
 	agentOwner := flag.String("agent-owner", "", "billed Ethereum address (owner) when -agent-key is an operator key (overrides config/env HOUSEGATE_AGENT_OWNER)")
 	agentDriver := flag.Bool("agent-driver", false, "mark outgoing queries as indexer-driver traffic (injects SQL_sentio_driver=1; upstream still gates on signer == indexer)")
@@ -78,6 +79,8 @@ func loadConfigWithOverrides() config.Config {
 	flag.StringVar(&quick.siInlineValues, "si-inline-values", "", "signed inline INSERT ... VALUES: auto|on|off (default auto without a config file; also HOUSEGATE_SI_INLINE_VALUES)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
+	endpointTLS := flag.Bool("endpoint-tls", false, "the housegate and storage RPC endpoints indexers advertise speak TLS: dial them as verifying TLS clients (overrides config/env HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS and the -network preset)")
+	tlsCAFile := flag.String("tls-ca-file", "", "PEM CA bundle that replaces the system roots for TLS endpoints (overrides config/env HOUSEGATE_NETWORK_STATE_TLS_CA_FILE)")
 	listenAddr := flag.String("listen", "", `proxy listen address, e.g. :9001 (overrides config/env; agent default "127.0.0.1:9000" without a config file)`)
 	metricsAddr := flag.String("metrics-listen", "", "Prometheus metrics listen address, e.g. :9091 (overrides config/env)")
 	dialTimeout := flag.String("dial-timeout", "", "upstream dial timeout, e.g. 5s (overrides config/env)")
@@ -128,6 +131,9 @@ func loadConfigWithOverrides() config.Config {
 	if explicitFlags["agent-upstream"] {
 		cfg.Agent.Upstream = *agentUpstream
 	}
+	if explicitFlags["agent-upstream-tls"] {
+		cfg.Agent.UpstreamTLS = *agentUpstreamTLS
+	}
 	if explicitFlags["agent-key"] {
 		cfg.Agent.PrivateKeyHex = *agentKey
 	}
@@ -139,6 +145,13 @@ func loadConfigWithOverrides() config.Config {
 	}
 	if explicitFlags["state"] {
 		cfg.NetworkState.Source = *stateSource
+	}
+	if explicitFlags["endpoint-tls"] {
+		v := *endpointTLS
+		cfg.NetworkState.EndpointTLS = &v
+	}
+	if explicitFlags["tls-ca-file"] {
+		cfg.NetworkState.TLSCAFile = *tlsCAFile
 	}
 	if explicitFlags["listen"] {
 		cfg.Listen = *listenAddr

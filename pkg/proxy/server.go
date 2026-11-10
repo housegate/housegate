@@ -11,6 +11,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/endpointtls"
 	"github.com/housegate/housegate/pkg/plugin"
 )
 
@@ -49,6 +50,10 @@ type Server struct {
 	// it, and only with an RPC network state; nil keeps every relay exactly
 	// as before.
 	UpstreamFailover UpstreamFailover
+
+	// FailoverTLS is how the relay dials a replica host the failover picked:
+	// nil dials plaintext, as before endpoint TLS existed.
+	FailoverTLS *endpointtls.Config
 
 	nextID atomic.Int64
 	wg     sync.WaitGroup
@@ -166,6 +171,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	// each plug their own).
 	r := NewRelay(sess, s.Hooks, s.Observer, UpstreamDialer(s.UpstreamDialer))
 	r.failover = s.UpstreamFailover
+	r.failoverTLS = s.FailoverTLS
 	if err := r.Run(ctx); err != nil {
 		logger.Warne(err, "relay run ended")
 	}

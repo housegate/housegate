@@ -2,7 +2,9 @@ package chproto
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -25,7 +27,22 @@ const (
 	// a write by a denylisted signer or owner, an invalid operator relation, or
 	// a principal that is not a writer of the database (spec 2026-10-09 R6).
 	CodeAccessDenied int32 = 497
+	// CodeQuotaExceeded is QUOTA_EXCEEDED: the storage-integrity ingress
+	// refuses a signed statement over its account's write quota, retryably,
+	// before the payload is read (AccountQuotaExceededMessage).
+	CodeQuotaExceeded int32 = 201
 )
+
+// AccountQuotaExceededMessage is the client-facing message of the retryable
+// per-account write-quota refusal: account exhausted dimension ("statements"
+// or "bytes") and may retry after retryAfter, rounded up to whole seconds.
+func AccountQuotaExceededMessage(account, dimension string, retryAfter time.Duration) string {
+	seconds := int64((retryAfter + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("storage_integrity: account %s exceeded its write quota (%s); retry in %ds (retryable)", account, dimension, seconds)
+}
 
 // Session-preserving storage-integrity table refusals. The ClickHouse
 // Exception frame has no KeepSession bit, so the relay recognises exactly these

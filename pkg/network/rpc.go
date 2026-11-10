@@ -49,6 +49,9 @@ type RpcNetworkState struct {
 	endpoint string
 	client   *http.Client
 	nextID   atomic.Uint64
+	// indexerScheme is the scheme of the storage RPC endpoints indexers
+	// advertise; empty means the scheme of endpoint.
+	indexerScheme string
 
 	// now is the replica-hosts cache's clock; nil means time.Now.
 	now          func() time.Time
@@ -75,6 +78,13 @@ type RpcOptions struct {
 	// that want to inject httptest.Server's RoundTripper or an
 	// instrumented transport.
 	HTTPClient *http.Client
+	// IndexerScheme is the scheme ("http" or "https") used for the
+	// storage-node RPC endpoints an indexer advertises (url + storage RPC
+	// port). Empty keeps the legacy behaviour: the scheme of the
+	// network-state source. Set it when the source and the advertised
+	// endpoints differ, e.g. a plaintext loopback source in an indexer pod
+	// while every advertised endpoint is behind a TLS listener.
+	IndexerScheme string
 }
 
 // NewRpcNetworkState returns a registry.Registry reading from the
@@ -92,7 +102,12 @@ func NewRpcNetworkState(endpoint string, opts RpcOptions) (*RpcNetworkState, err
 		}
 		client = &http.Client{Timeout: t}
 	}
-	return &RpcNetworkState{endpoint: endpoint, client: client}, nil
+	switch opts.IndexerScheme {
+	case "", "http", "https":
+	default:
+		return nil, fmt.Errorf("rpc network state: indexer scheme must be http or https, got %q", opts.IndexerScheme)
+	}
+	return &RpcNetworkState{endpoint: endpoint, client: client, indexerScheme: opts.IndexerScheme}, nil
 }
 
 // jsonrpcRequest mirrors the JSON-RPC 2.0 request envelope.
@@ -371,11 +386,15 @@ func (r *RpcNetworkState) hostingStorageEndpoint(ctx context.Context, database s
 }
 
 // storageEndpoint is the storage-node JSON-RPC endpoint an indexer
-// advertises, with the scheme of the network-state source.
+// advertises, with the configured indexer scheme, else the scheme of the
+// network-state source.
 func (r *RpcNetworkState) storageEndpoint(indexerURL string, port uint16) string {
-	scheme := "http"
-	if u, err := url.Parse(r.endpoint); err == nil && u.Scheme != "" {
-		scheme = u.Scheme
+	scheme := r.indexerScheme
+	if scheme == "" {
+		scheme = "http"
+		if u, err := url.Parse(r.endpoint); err == nil && u.Scheme != "" {
+			scheme = u.Scheme
+		}
 	}
 	host := indexerURL
 	if u, err := url.Parse(host); err == nil && u.Host != "" {

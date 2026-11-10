@@ -214,6 +214,45 @@ type NetworkStateConfig struct {
 	// Source is either a YAML file path, an http(s) RPC URL, or a
 	// Redis address. See the type-level comment for the dispatch rules.
 	Source string `json:"source" yaml:"source"`
+
+	// EndpointTLS says whether the endpoints indexers advertise in the
+	// network state (each indexer's url with its housegate port and its
+	// storage RPC port) speak TLS. When true, every dial of an advertised
+	// housegate address (agent upstream selection, replica failover, a
+	// server's peer pivot, route and router-only dials) is a TLS client
+	// verifying the certificate for the advertised host, and advertised
+	// storage RPC endpoints are reached over https. When false both are
+	// plaintext. Unset keeps the behaviour from before this setting: dials
+	// are plaintext and the storage RPC scheme follows Source's. The value
+	// is network-wide and independent of Source's own scheme, so an indexer
+	// pod can read a plaintext loopback Source while the network's
+	// advertised endpoints are TLS.
+	EndpointTLS *bool `json:"endpoint_tls,omitempty" yaml:"endpoint_tls,omitempty"`
+
+	// TLSCAFile is an optional PEM bundle that replaces the system roots
+	// when verifying TLS endpoints (EndpointTLS, agent.upstream_tls, and
+	// https storage RPC). Empty uses the system roots.
+	TLSCAFile string `json:"tls_ca_file" yaml:"tls_ca_file"`
+}
+
+// EndpointTLSEnabled reports whether advertised endpoints are dialed over
+// TLS.
+func (c NetworkStateConfig) EndpointTLSEnabled() bool {
+	return c.EndpointTLS != nil && *c.EndpointTLS
+}
+
+// IndexerRPCScheme is the scheme for the storage RPC endpoints indexers
+// advertise: "https" or "http" when EndpointTLS is set, empty (follow
+// Source) when it is not.
+func (c NetworkStateConfig) IndexerRPCScheme() string {
+	switch {
+	case c.EndpointTLS == nil:
+		return ""
+	case *c.EndpointTLS:
+		return "https"
+	default:
+		return "http"
+	}
 }
 
 // IsYAMLSource reports whether Source points to a YAML fixture file.
@@ -335,6 +374,14 @@ func (c *Config) Validate() error {
 		if (c.Shard != nil || c.Upstream != "") && c.CkhManagerConfigPath == "" {
 			errs = append(errs, errors.New("ckh_manager_config_path is required when upstream or shard is configured (needed for SQL rewriter table mapping)"))
 		}
+	}
+
+	if c.NetworkState.TLSCAFile != "" && c.NetworkState.EndpointTLS == nil && !c.Agent.UpstreamTLS &&
+		!strings.HasPrefix(c.NetworkState.Source, "https://") {
+		errs = append(errs, errors.New("network_state.tls_ca_file is set but nothing uses TLS: set network_state.endpoint_tls, agent.upstream_tls, or an https:// network_state.source"))
+	}
+	if c.Agent.UpstreamTLS && c.Agent.Upstream == "" && c.Mode() == ModeAgent {
+		errs = append(errs, errors.New("agent.upstream_tls is set without agent.upstream: it applies only to a pinned upstream; use network_state.endpoint_tls for discovered upstreams"))
 	}
 
 	// Cross-section Redis requirements.
@@ -481,6 +528,7 @@ func Default() Config {
 			PrivateKeyHex: EnvOrDefault("HOUSEGATE_AGENT_KEY", ""),
 			Owner:         EnvOrDefault("HOUSEGATE_AGENT_OWNER", ""),
 			Driver:        EnvOrDefault("HOUSEGATE_AGENT_DRIVER", "") == "true",
+			UpstreamTLS:   EnvOrDefault("HOUSEGATE_AGENT_UPSTREAM_TLS", "") == "true",
 		},
 		Usage: usage.Config{
 			Enabled: false,
@@ -506,7 +554,9 @@ func Default() Config {
 			// non-yaml-suffixed as a Redis address so it still works.
 			// HOUSEGATE_NETWORK_STATE_SOURCE is the modern spelling
 			// and additionally accepts a YAML path.
-			Source: EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
+			Source:      EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
+			EndpointTLS: envBoolPtr("HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS"),
+			TLSCAFile:   EnvOrDefault("HOUSEGATE_NETWORK_STATE_TLS_CA_FILE", ""),
 		},
 		ReplicationProxy: defaultReplicationProxyConfig(),
 		Observability: ObservabilityConfig{
@@ -598,6 +648,21 @@ func envUint64(key string) uint64 {
 
 // EnvOrDefault returns the value of env var key, or fallback if unset
 // or empty.
+// envBoolPtr reads a tri-state boolean env var: "true" or "false" set it,
+// anything else (including unset) leaves it unset.
+func envBoolPtr(key string) *bool {
+	var v bool
+	switch os.Getenv(key) {
+	case "true":
+		v = true
+	case "false":
+		v = false
+	default:
+		return nil
+	}
+	return &v
+}
+
 func EnvOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

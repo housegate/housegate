@@ -17,6 +17,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/endpointtls"
 	"github.com/housegate/housegate/pkg/plugin"
 )
 
@@ -117,7 +118,9 @@ type Relay struct {
 	// the relay exactly as before. failoverMu guards failoverQuery and
 	// serializes every client-to-upstream write of an armed query with a read
 	// failover's upstream switch.
-	failover      UpstreamFailover
+	failover UpstreamFailover
+	// failoverTLS is how failover candidates are dialed; nil is plaintext.
+	failoverTLS   *endpointtls.Config
 	failoverMu    sync.Mutex
 	failoverQuery *failoverQuery
 	// closing is set once one of the two pump goroutines has returned and
@@ -688,9 +691,25 @@ func (r *Relay) probeQueryRunning(up *chproto.Codec, queryID string) (bool, erro
 	}
 }
 
+// exactRedialer is implemented by upstream connections that can open a new
+// connection to the same resolved server under the same transport posture.
+type exactRedialer interface {
+	RedialExact(ctx context.Context, timeout time.Duration) (net.Conn, error)
+}
+
 func (r *Relay) dialExactCurrentUpstream(ctx context.Context) (*chproto.Codec, error) {
 	current := r.sess.Upstream()
 	if current != nil {
+		// A connection that knows how it was dialed (TLS and server name
+		// included) redials itself: a bare TCP redial of a TLS upstream
+		// would speak plaintext to a TLS listener.
+		if rd, ok := current.Conn().(exactRedialer); ok {
+			conn, err := rd.RedialExact(ctx, 5*time.Second)
+			if err != nil {
+				return nil, fmt.Errorf("dial exact upstream: %w", err)
+			}
+			return chproto.NewCodec(conn, chproto.DirToUpstream), nil
+		}
 		if nc, ok := current.Conn().(net.Conn); ok && nc.RemoteAddr() != nil {
 			network := nc.RemoteAddr().Network()
 			if network == "" {

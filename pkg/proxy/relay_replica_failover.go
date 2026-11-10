@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/endpointtls"
 	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -296,7 +297,7 @@ func (r *Relay) prepareReadCandidate(ctx context.Context, addr, database string,
 	hello.ProtocolVersion = snap.ClientRevision
 	attemptCtx, cancel := context.WithTimeout(ctx, replicaFailoverAttemptTimeout)
 	defer cancel()
-	up, err := dialFailoverCandidate(attemptCtx, addr)
+	up, err := dialFailoverCandidate(attemptCtx, addr, r.failoverTLS)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -364,7 +365,7 @@ func (r *Relay) failoverAtHello(ctx context.Context, failed *chproto.Codec, hell
 	for _, addr := range addrs {
 		candidate := *hello
 		candidate.Database = database
-		up, sent, srvPkt, srv, err := helloCandidate(ctx, addr, &candidate)
+		up, sent, srvPkt, srv, err := helloCandidate(ctx, addr, r.failoverTLS, &candidate)
 		if err == nil {
 			if failed == nil {
 				err = r.sess.BindUpstream(ctx, up)
@@ -386,10 +387,10 @@ func (r *Relay) failoverAtHello(ctx context.Context, failed *chproto.Codec, hell
 	return failed, nil, nil, nil, cause
 }
 
-func helloCandidate(ctx context.Context, addr string, hello *chproto.ClientHello) (*chproto.Codec, *chproto.ClientHello, *chproto.Packet, *chproto.ServerHello, error) {
+func helloCandidate(ctx context.Context, addr string, tlsCfg *endpointtls.Config, hello *chproto.ClientHello) (*chproto.Codec, *chproto.ClientHello, *chproto.Packet, *chproto.ServerHello, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, replicaFailoverAttemptTimeout)
 	defer cancel()
-	up, err := dialFailoverCandidate(attemptCtx, addr)
+	up, err := dialFailoverCandidate(attemptCtx, addr, tlsCfg)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -501,20 +502,14 @@ func failedUpstreamAddr(up *chproto.Codec, cause error) string {
 	return ""
 }
 
-// dialFailoverCandidate dials a replica host. Its conn reports the address it
-// was dialed with, as the agent's own dialer's does, so the SI statement
-// lane's upstream switch compares the same identity.
-func dialFailoverCandidate(ctx context.Context, addr string) (*chproto.Codec, error) {
-	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
+// dialFailoverCandidate dials a replica host, over TLS when tlsCfg is
+// non-nil. Its conn reports the address it was dialed with, as the agent's
+// own dialer's does, so the SI statement lane's upstream switch compares the
+// same identity.
+func dialFailoverCandidate(ctx context.Context, addr string, tlsCfg *endpointtls.Config) (*chproto.Codec, error) {
+	conn, err := tlsCfg.DialConn(ctx, addr, 5*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return chproto.NewCodec(&failoverConn{Conn: conn, address: addr}, chproto.DirToUpstream), nil
+	return chproto.NewCodec(conn, chproto.DirToUpstream), nil
 }
-
-type failoverConn struct {
-	net.Conn
-	address string
-}
-
-func (c *failoverConn) UpstreamAddress() string { return c.address }

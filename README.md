@@ -9,6 +9,7 @@ A lightweight ClickHouse native TCP protocol proxy. Sits transparently between c
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Build](#build)
+- [User guide (agent users)](docs/user-guide.md)
 - **Part 1 — Configuration**
   - [Config File](#config-file)
   - [Full Parameter Reference](#full-parameter-reference)
@@ -204,6 +205,8 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 **Who may write.** The signed ingress admits every writer of the target database: the indexer signer, or an account holding Owner or Write on it (Admin alone and address(0) grants do not count). `storage_integrity.ingress.denied_addresses` (lowercase addresses; restart to change) refuses a signer or a resolved owner; `allowed_addresses` is optional and, when set, still limits signers. Refusals are code 497 (`ACCESS_DENIED`): `storage_integrity: signer 0x… is not permitted to write storage-integrity tables`, `storage_integrity: owner 0x… is not permitted to write storage-integrity tables`, `storage_integrity: 0x… is not an operator of 0x…`, `storage_integrity: 0x… is not a writer of database <db>`. A refusal that provably did not spend the statement's `client_seq` ends with ` [client_seq unspent]`; the agent then reuses that seq. A peer-trusted read that names the ordinary physical table of a governed table is refused with 392 `storage_integrity: table <db>.<t> is governed by storage integrity and must be read through its host indexer; connect with --database <db> or USE <db>`. A peer-trusted statement that mentions a reserved database (`hg_safe`, `hg_unsafe`, `hg_promote`, `hg_member_unsafe`, `hg_replica`, `hg_rstage`, `hg_xfer`) or `_hg_row_id`, string literals included, is refused with 392 `storage_integrity: reserved name <name> is not addressable on a peer connection; the peer guard refuses any mention, string literals included`, one that carries an `{x:Identifier}` placeholder with `storage_integrity: a peer statement may not carry ClickHouse Identifier placeholders`, and one that cannot be scanned with `storage_integrity: a peer statement that cannot be checked for reserved names is refused: <scan error>` (spec 2026-10-14 §14). On the same peer connections, an object-carrier table function (`remote`, `merge`, `cluster` and the rest of `sireserved.IsObjectCarrierName`) called with an argument that is not exactly one string literal or unsigned integer literal (an identifier included, since ClickHouse resolves it through the statement's aliases) is refused with 392 `storage_integrity: a peer statement may pass only literal arguments to <callable>(); a computed database or table name is refused on a peer connection` (Plan S3-C4 K48).
 
+**Per-account write quota.** `storage_integrity.ingress.account_quota` bounds the signed writes one account pushes through this ingress with two token buckets per principal (the validated owner, else the signer): statements (`statements_per_second`, `statement_burst`; defaults 20 and 200) and payload bytes (`bytes_per_second`, `byte_burst`; defaults 8 MiB and 256 MiB, and `byte_burst` must be at least `max_payload_bytes`). A statement is admitted only while its account's byte bucket is not in debt; admission takes one statement token and reserves `max_payload_bytes` from the byte bucket, which is settled to the payload's real length once input is complete and released if the statement ends first. Concurrent sessions of one account therefore cannot all pass on the same balance: an account submits at most `byte_burst + max_payload_bytes` at once, and has at most about `byte_burst / max_payload_bytes + 1` statements receiving input at the same time. `mode` is `off` (default), `dry_run` (admit everything and count would-be refusals in `storage_integrity_ingress_account_quota_total{decision="would_refuse"}`) or `enforce` (refuse with 201 `QUOTA_EXCEEDED` `storage_integrity: account 0x… exceeded its write quota (statements|bytes); retry in <n>s (retryable)` before the payload is read; the session survives and the `client_seq` stays unspent). Counters are local to the ingress and reset on restart; they are not shared between indexers. Roll out with `dry_run` first and switch to `enforce` once the metric shows the budget fits real traffic.
+
 Signed INSERT accepts the measured client-streamed `FORMAT` forms, including `FORMAT Values` with rows on stdin. When `storage_integrity.agent.inline_values.enabled` is set on the agent, it also accepts a complete inline `INSERT ... VALUES` whose rows travel inside the query text, as sent by `clickhouse-client` 26.3 and later and the pinned clickhouse-go `Exec`. A 25.x client instead truncates the query after `VALUES` and streams row blocks, but that truncated shape remains unsupported. `INSERT ... SELECT` / `WITH` remain unsupported; the snapshot-query design proposal (internal design doc `2026-09-16-signed-insert-select-design`) and its implementation plans (internal design doc `2026-09-16-signed-insert-select`) describe that future lane but do not enable it.
 
 ```yaml
@@ -214,6 +217,12 @@ storage_integrity:
     network_id: devnet2-si
     allowed_addresses: []          # optional; empty admits every database writer
     denied_addresses: []           # lowercase signer/owner addresses refused on the SI lane
+    account_quota:
+      mode: off                    # off | dry_run | enforce
+      statements_per_second: 20
+      statement_burst: 200
+      bytes_per_second: 8388608    # 8 MiB/s
+      byte_burst: 268435456        # 256 MiB; must be >= max_payload_bytes
   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
   read:
     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
@@ -254,6 +263,7 @@ The agent materializes the statement, applies a closed lexical policy, evaluates
 |-----|------|----------|---------|-------------|
 | `agent.mode` | bool | No | `false` | Enable agent mode |
 | `agent.upstream` | string | Conditional | `` | Pinned server-side proxy address (e.g. `10.0.0.8:9001`). **Either** this **or** a top-level `network_state.source` must be set. When unset, agent auto-discovers a server-mode peer per session via NetworkState (see [§Agent auto-discovery](#agent-auto-discovery)). |
+| `agent.upstream_tls` | bool | No | `false` | Dial the pinned `agent.upstream` over TLS, verifying its certificate for the upstream host (against `network_state.tls_ca_file` when set, else the system roots). Only valid with a pinned upstream; discovered upstreams follow `network_state.endpoint_tls`. Env: `HOUSEGATE_AGENT_UPSTREAM_TLS=true`. |
 | `agent.private_key_hex` | string | Yes (agent) | `` | Agent's Ethereum private key for JWS signing. Prefer `HOUSEGATE_AGENT_KEY` env or an age-encrypted config over a plaintext file. |
 | `agent.owner` | string | No | `` | Optional billed owner represented by the signing key. Auto-discovery uses this owner (lowercased for the registry lookup) when set, while JWS signing continues to use `agent.private_key_hex`; otherwise discovery uses the signer address. |
 
@@ -339,6 +349,22 @@ network_state: { source: "redis.internal:6379" }                # Redis mode
 ```
 
 Env-var fallback: `HOUSEGATE_NETWORK_STATE_SOURCE` (modern) and `HOUSEGATE_NETWORK_STATE_REDIS` (legacy, Redis-only).
+
+**Endpoint TLS.** `network_state.endpoint_tls` says whether the endpoints indexers advertise (each indexer's url with its housegate port and its storage RPC port) speak TLS. It is a property of the network, independent of the source's own scheme:
+
+| `endpoint_tls` | Dials of advertised housegate addresses | Advertised storage RPC endpoints |
+|---|---|---|
+| unset (default) | plaintext | scheme of `network_state.source` (the behaviour before this setting) |
+| `true` | TLS client, certificate verified for the advertised host, host sent as SNI | `https://` |
+| `false` | plaintext | `http://` |
+
+"Dials of advertised housegate addresses" covers the agent's upstream selection and replica read failover, and a server's forward pivots, route targets and router-only picks. A local ClickHouse upstream or shard is never dialed over TLS. `network_state.tls_ca_file` replaces the system roots with a PEM bundle for every TLS dial and https storage RPC call. Certificate verification cannot be turned off. Env: `HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS` (`true`/`false`), `HOUSEGATE_NETWORK_STATE_TLS_CA_FILE`; flags `-endpoint-tls`, `-tls-ca-file`.
+
+```yaml
+network_state:
+  source: "http://localhost:32003"   # plaintext loopback in an indexer pod
+  endpoint_tls: true                 # the network's advertised endpoints are TLS
+```
 
 ### `shard`, `health_check`, `pool`, `routing` — Shard & Replicas
 
@@ -463,6 +489,8 @@ Shard-aware (per-replica pool + routing):
 
 #### Quick start (user agent)
 
+New users: the [user guide](docs/user-guide.md) walks from a fresh key to a safe read, including installation, funding the account's Billing balance, admitted column types, read modes and operator keys.
+
 ```bash
 export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY
 housegate                                # agent mode, devnet2, 127.0.0.1:9000
@@ -522,9 +550,12 @@ All CLI flags:
 |------|---------|-------------|
 | `-agent` | `false` | Enable agent mode (overrides `agent.mode`) |
 | `-agent-upstream` | (empty) | Server-side proxy address |
+| `-agent-upstream-tls` | `false` | Dial `-agent-upstream` over TLS (also `HOUSEGATE_AGENT_UPSTREAM_TLS`, config `agent.upstream_tls`) |
+| `-endpoint-tls` | (unset) | The network's advertised endpoints speak TLS (config `network_state.endpoint_tls`, see [§network_state](#network_state)); wins over the `-network` preset |
+| `-tls-ca-file` | (empty) | PEM CA bundle replacing the system roots for TLS endpoints (config `network_state.tls_ca_file`) |
 | `-agent-key` | (empty) | Ethereum private key for JWS signing |
 | `-agent-owner` | (empty) | Billed owner when `-agent-key` is an operator key (also `HOUSEGATE_AGENT_OWNER`) |
-| `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` win over it. With a pinned `-agent-upstream` the preset is still used for storage-integrity table status and network-id discovery (routing stays pinned) |
+| `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003`, plaintext endpoints (also `HOUSEGATE_NETWORK`). A preset also sets `network_state.endpoint_tls` unless it is configured. `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` win over it. With a pinned `-agent-upstream` the preset is still used for storage-integrity table status and network-id discovery (routing stays pinned) |
 | `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source (the `-network` preset counts, also with a pinned `-agent-upstream`; with a non-RPC `-state` it stays off and logs a warning naming the remedy), `on` (needs `storage_integrity.agent.network_id` without an RPC source), `off` (also `HOUSEGATE_SI`) |
 | `-si-state-dir` | per OS | Directory for the `client_seq` state (also `HOUSEGATE_SI_STATE_DIR`) |
 | `-si-lanes` | (empty) | `client_seq` lanes (also `HOUSEGATE_SI_LANES`, config `storage_integrity.agent.lanes`): `auto` (the default) signs on a client lane once the network reports client lanes enabled, `off` keeps legacy statement ids (the driver sidecar). `storage_integrity.agent.max_inflight_per_lane` (default 16) bounds the SI statements in flight on one client lane; the legacy lane is unbounded. With an explicit `state_dir`, client lanes live in `<state_dir>/<network_id>/<signer>/lanes/` |

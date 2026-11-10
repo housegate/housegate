@@ -24,6 +24,7 @@ import (
 	"github.com/housegate/housegate/pkg/cluster"
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/endpointtls"
 	"github.com/housegate/housegate/pkg/ffifetch"
 	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/network"
@@ -94,9 +95,18 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, 
 		return yamlState, nil
 	}
 	if cfg.NetworkState.IsRpcSource() {
-		rpcState, err := network.NewRpcNetworkState(cfg.NetworkState.Source, network.RpcOptions{
-			Timeout: cfg.DialTimeout.Duration,
-		})
+		rpcOpts := network.RpcOptions{
+			Timeout:       cfg.DialTimeout.Duration,
+			IndexerScheme: cfg.NetworkState.IndexerRPCScheme(),
+		}
+		if cfg.NetworkState.TLSCAFile != "" {
+			ca, err := endpointtls.New(cfg.NetworkState.TLSCAFile)
+			if err != nil {
+				return nil, err
+			}
+			rpcOpts.HTTPClient = ca.HTTPClient(rpcTimeout(cfg.DialTimeout.Duration))
+		}
+		rpcState, err := network.NewRpcNetworkState(cfg.NetworkState.Source, rpcOpts)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create RPC network state: %w", err)
 		}
@@ -402,6 +412,12 @@ type builtServer struct {
 // opts.Config must be non-nil; New validates this before calling.
 func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	cfg := opts.Config
+	// peerTLS is how this server dials the peer housegates the network
+	// state advertises (forward pivots, routes, router-only picks).
+	peerTLS, err := endpointTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// Resolve every dep — opts override > built-from-config.
 	var teardownStack []func()
@@ -869,6 +885,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		Fallback:         credProvider,
 		LocalDialer:      localDialer,
 		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
+		EndpointTLS:      peerTLS,
 	}
 	if siOptions.Enabled {
 		// Spec 2026-10-14 §11: a hello or USE of a database this host serves
@@ -985,6 +1002,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			indexerAddr,
 			nil,
 		)
+		quotaCfg := ingressCfg.AccountQuota
+		accountQuota, err := storageintegrity.NewAccountQuota(storageintegrity.AccountQuotaConfig{
+			Mode:                storageintegrity.AccountQuotaMode(quotaCfg.Mode),
+			StatementsPerSecond: quotaCfg.StatementsPerSecond,
+			StatementBurst:      float64(quotaCfg.StatementBurst),
+			BytesPerSecond:      float64(quotaCfg.BytesPerSecond),
+			ByteBurst:           float64(quotaCfg.ByteBurst),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("storage_integrity.ingress.account_quota: %w", err)
+		}
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
 			Enabled:           true,
 			AuthValidator:     ingressValidator,
@@ -1002,6 +1030,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			DeniedAddresses:      ingressCfg.DeniedAddresses,
 			AllowedAddresses:     ingressCfg.AllowedAddresses,
 			ClientLanesEnabled:   opts.StorageIntegrityClientLanes,
+			AccountQuota:         accountQuota,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -1020,6 +1049,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
 			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
 			"client_lanes_port", opts.StorageIntegrityClientLanes != nil,
+			"account_quota_mode", accountQuota.Mode(),
 		)
 	}
 
@@ -1094,7 +1124,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// Plugin-set route target (e.g. forward.Plugin's USE pivot, or
 		// routeplugin's __route__ envelope) wins over every other path.
 		if target := routeplugin.RouteTarget(sess.State()); target != "" {
-			return dialRaw(ctx, target, cfg.DialTimeout.Duration)
+			// A route target is always an address the network state
+			// advertises (a forward pivot or a rewriter remote() route).
+			return dialEndpoint(ctx, target, cfg.DialTimeout.Duration, peerTLS)
 		}
 		// Local replica pool — present only when cfg.Shard is set.
 		if clusterIface != nil {
@@ -1121,7 +1153,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if err != nil {
 				return nil, err
 			}
-			codec, err := dialRaw(ctx, target, cfg.DialTimeout.Duration)
+			codec, err := dialEndpoint(ctx, target, cfg.DialTimeout.Duration, peerTLS)
 			if err == nil {
 				log.Infow("router-only: bound peer", "target", target, "attempt", i+1)
 				return codec, nil
@@ -1302,6 +1334,10 @@ func buildAgentWithBuilders(
 	evaluatorBuilder func(func(context.Context, string) (net.Conn, error), auth.Signer) inlineValuesEvaluator,
 ) (*builtServer, error) {
 	cfg := opts.Config
+	upstreamTLS, err := agentUpstreamTLS(cfg)
+	if err != nil {
+		return nil, err
+	}
 	// Config.Validate already enforces these; the same rule runs here so a host
 	// that constructs the agent directly gets the identical startup refusal.
 	if prereq := errors.Join(cfg.StorageIntegrity.Agent.InlineValuesPrerequisiteErrors(cfg.Materialize.Enabled)...); prereq != nil {
@@ -1449,7 +1485,7 @@ func buildAgentWithBuilders(
 			up := evaluatorBuilder(func(ctx context.Context, address string) (net.Conn, error) {
 				// Never invoke the per-session selector here: the request carries
 				// the exact endpoint selected by this query's current session.
-				codec, err := dialRaw(ctx, address, cfg.DialTimeout.Duration)
+				codec, err := dialEndpoint(ctx, address, cfg.DialTimeout.Duration, upstreamTLS)
 				if err != nil {
 					return nil, err
 				}
@@ -1519,6 +1555,9 @@ func buildAgentWithBuilders(
 	}
 	if failover != nil {
 		srv.UpstreamFailover = failover
+		// Failover runs only without a pinned upstream, so its candidates
+		// are advertised addresses dialed like every discovered upstream.
+		srv.FailoverTLS = upstreamTLS
 		log.Infow("agent replica read failover enabled: a read its owner refuses as quarantined, or a session whose owner cannot be reached, moves to a host serving the owner's copy",
 			"network_state_source", cfg.NetworkState.Source)
 	}
@@ -1611,6 +1650,10 @@ const agentTableStatusFailureTTL = 5 * time.Second
 // then stay off. The caller sets Signer, Evaluator and Observer.
 func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Registry, signerAddress string) (sistatement.Options, string, error) {
 	agentCfg := cfg.StorageIntegrity.Agent
+	upstreamTLS, err := agentUpstreamTLS(cfg)
+	if err != nil {
+		return sistatement.Options{}, "", err
+	}
 	statuses, fromRegistry, err := resolveAgentTableStatuses(opts, reg)
 	if err != nil {
 		return sistatement.Options{}, "", err
@@ -1671,7 +1714,7 @@ func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Regist
 		// its UpstreamAddress with the hosting indexer's address, so without it
 		// every INSERT would switch again.
 		Dial: func(ctx context.Context, address string) (*chproto.Codec, error) {
-			return dialRaw(ctx, address, dialTimeout)
+			return dialEndpoint(ctx, address, dialTimeout, upstreamTLS)
 		},
 		PinnedUpstream: pinned,
 		SwitchTimeout:  agentSwitchTimeout(dialTimeout),
@@ -1836,8 +1879,12 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 	if cfg.Agent.Upstream != "" {
 		log.Infow("agent proxy mode: signing queries",
 			"signer_address", signerAddress, "upstream", cfg.Agent.Upstream)
+		upstreamTLS, err := agentUpstreamTLS(cfg)
+		if err != nil {
+			return nil, err
+		}
 		return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
-			return dialRaw(ctx, cfg.Agent.Upstream, cfg.DialTimeout.Duration)
+			return dialEndpoint(ctx, cfg.Agent.Upstream, cfg.DialTimeout.Duration, upstreamTLS)
 		}, nil
 	}
 
@@ -1854,10 +1901,15 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 		Access:    reg,
 		Account:   routingAccount,
 	}
+	endpointTLS, err := endpointTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	log.Infow("agent proxy mode: signing queries with NetworkState upstream auto-discovery",
 		"signer_address", signerAddress,
 		"routing_account", routingAccount,
-		"network_state_source", cfg.NetworkState.Source)
+		"network_state_source", cfg.NetworkState.Source,
+		"endpoint_tls", endpointTLS.Enabled())
 
 	return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
 		// One *rand.Rand per Pick keeps the lock-free path goroutine-safe;
@@ -1873,7 +1925,7 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 				"routing_account", routingAccount, "indexer_id", choice.IndexerId, "addr", choice.Addr())
 			obs.AgentBootstrapFallback()
 		}
-		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
+		return dialEndpoint(ctx, choice.Addr(), cfg.DialTimeout.Duration, endpointTLS)
 	}, nil
 }
 
@@ -1899,16 +1951,55 @@ func buildAgentReplicaFailover(opts Options, rf *redisFactory) (proxy.UpstreamFa
 	return &agent.ReplicaFailover{Discovery: discovery, Databases: reg, Topology: reg}, nil
 }
 
+// dialRaw dials a configured plaintext upstream (a local ClickHouse or a
+// test fixture).
 func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.Codec, error) {
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	return dialEndpoint(ctx, addr, timeout, nil)
+}
+
+// dialEndpoint dials addr, over TLS when tlsCfg is non-nil, and keeps the
+// configured address and transport on the conn so it can be redialed.
+func dialEndpoint(ctx context.Context, addr string, timeout time.Duration, tlsCfg *endpointtls.Config) (*chproto.Codec, error) {
+	conn, err := tlsCfg.Dial(ctx, addr, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	return chproto.NewCodec(&configuredAddressConn{
 		Conn:            conn,
 		upstreamAddress: addr,
+		tls:             tlsCfg,
 	}, chproto.DirToUpstream), nil
+}
+
+// endpointTLSConfig is the client TLS posture for dials of the housegate
+// addresses the network state advertises: nil (plaintext) unless
+// network_state.endpoint_tls is on.
+func endpointTLSConfig(cfg *config.Config) (*endpointtls.Config, error) {
+	if !cfg.NetworkState.EndpointTLSEnabled() {
+		return nil, nil
+	}
+	return endpointtls.New(cfg.NetworkState.TLSCAFile)
+}
+
+// agentUpstreamTLS is the client TLS posture for the agent's upstream: a
+// pinned agent.upstream follows agent.upstream_tls, a discovered one
+// network_state.endpoint_tls.
+func agentUpstreamTLS(cfg *config.Config) (*endpointtls.Config, error) {
+	if cfg.Agent.Upstream == "" {
+		return endpointTLSConfig(cfg)
+	}
+	if !cfg.Agent.UpstreamTLS {
+		return nil, nil
+	}
+	return endpointtls.New(cfg.NetworkState.TLSCAFile)
+}
+
+// rpcTimeout mirrors RpcOptions' default for a zero dial timeout.
+func rpcTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 5 * time.Second
+	}
+	return d
 }
 
 // configuredAddressConn preserves the configured endpoint across DNS
@@ -1918,10 +2009,22 @@ func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.
 type configuredAddressConn struct {
 	net.Conn
 	upstreamAddress string
+	// tls is the transport the conn was dialed with; nil is plaintext.
+	tls *endpointtls.Config
 }
 
 func (c *configuredAddressConn) UpstreamAddress() string {
 	return c.upstreamAddress
+}
+
+// RedialExact opens a new connection to the same resolved server with the
+// same transport, verifying a TLS server under the configured host name.
+func (c *configuredAddressConn) RedialExact(ctx context.Context, timeout time.Duration) (net.Conn, error) {
+	conn, err := c.tls.DialExact(ctx, c.Conn.RemoteAddr(), c.upstreamAddress, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &configuredAddressConn{Conn: conn, upstreamAddress: c.upstreamAddress, tls: c.tls}, nil
 }
 
 func pickRandomBoundProxy(topo registry.Topology, selfPort int) (string, error) {
