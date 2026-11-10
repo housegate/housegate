@@ -34,6 +34,11 @@ type StorageIntegrityMergeGuard interface {
 type StorageIntegrityRuntimeOptions struct {
 	ArbiterIngressClient pb.ArbiterIngressClient
 	PayloadStoreClient   pb.PayloadStoreClient
+	// PayloadPutAuthorizer, when set, authorises every put made through
+	// PayloadStoreClient (the payload store's write authentication). Nil
+	// sends puts without authorisation. It does not apply to a host-supplied
+	// PayloadWriter.
+	PayloadPutAuthorizer sicore.PayloadPutAuthorizer
 
 	StatementSubmitter sicore.StatementSubmitter
 	SourcePreparer     sicore.SourcePreparer
@@ -69,7 +74,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	payloadWriter := opts.PayloadWriter
 	if payloadWriter == nil && opts.PayloadStoreClient != nil {
-		payloadWriter = sicore.NewArbiterPayloadStoreWriter(opts.PayloadStoreClient)
+		payloadWriter = sicore.NewAuthorizedArbiterPayloadStoreWriter(opts.PayloadStoreClient, opts.PayloadPutAuthorizer)
 	}
 
 	journal := opts.Journal

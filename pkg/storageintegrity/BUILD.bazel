@@ -70,6 +70,7 @@ go_test(
         "parts_pressure_test.go",
         "payload_lease_test.go",
         "payload_partitions_test.go",
+        "payload_put_auth_test.go",
         "payload_spool_test.go",
         "physical_table_test.go",
         "settings_test.go",
@@ -91,6 +92,7 @@ go_test(
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
     ],
 )

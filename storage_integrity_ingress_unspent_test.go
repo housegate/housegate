@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,6 +83,29 @@ func TestConsumeAdmission_BackpressureRefusalIsUnspent(t *testing.T) {
 	}
 	if writer.calls != 0 || submitter.calls != 0 {
 		t.Fatalf("writer/submit calls = %d/%d, want 0/0", writer.calls, submitter.calls)
+	}
+}
+
+// A payload-store refusal for capacity or the per-indexer write quota is
+// retryable back-pressure: session-preserving 252, unspent, never submitted.
+func TestConsumeAdmission_PayloadStoreBackpressureIsRetryable(t *testing.T) {
+	submitter := &rootRecordingSubmitter{}
+	orch := sicore.NewOrchestrator(submitter, &rootRecordingPreparer{}, sicore.OrchestratorConfig{})
+	writer := &rootRecordingPayloadWriter{err: fmt.Errorf("%w: payload store: write quota exceeded for indexer 7 (bytes)", sicore.ErrBackpressure)}
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding(sicore.PayloadEncodingClickHouseNativeData, 54465))
+	var clientErr *chproto.ClientError
+	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeTooManyParts || !chproto.KeepsSession(err) || !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want unspent session-preserving ClientError 252", err)
+	}
+	if !strings.Contains(err.Error(), "write quota exceeded") {
+		t.Fatalf("err = %v, want the store's reason", err)
+	}
+	if writer.calls != 1 || submitter.calls != 0 {
+		t.Fatalf("writer/submit calls = %d/%d, want 1/0", writer.calls, submitter.calls)
 	}
 }
 
