@@ -80,6 +80,10 @@ type Config struct {
 	// follower). Nil means disabled. Before activation a laned statement id is
 	// refused here instead of reaching the arbiter as MALFORMED.
 	ClientLanesEnabled func() bool
+
+	// AccountQuota is the per-account signed-write budget. Nil (mode off)
+	// admits every authorized statement without tracking it.
+	AccountQuota *AccountQuota
 }
 
 type AdmissionConsumer interface {
@@ -99,6 +103,7 @@ type Plugin struct {
 	authorizer        *writeAuthorizer
 	// clientLanesEnabled is Config.ClientLanesEnabled; nil means disabled.
 	clientLanesEnabled func() bool
+	quota              *AccountQuota
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -157,6 +162,9 @@ type admissionState struct {
 	// consumer (spec 2026-10-09 §6.2).
 	payer    string
 	database string
+	// quotaAdmitted marks a statement the account quota admitted, so its
+	// payload bytes are charged once its input is complete.
+	quotaAdmitted bool
 }
 
 type purposeValidator interface {
@@ -187,6 +195,7 @@ func New(cfg Config) *Plugin {
 		requireSnapshot:    cfg.RequireTableSnapshot,
 		authorizer:         newWriteAuthorizer(cfg.DeniedAddresses, cfg.AllowedAddresses, cfg.Writers, cfg.Operators),
 		clientLanesEnabled: cfg.ClientLanesEnabled,
+		quota:              cfg.AccountQuota,
 		active:             map[int64]*admissionState{},
 		pending:            map[int64]*admissionState{},
 	}
@@ -356,6 +365,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			"result", result, "err", err)
 		return err
 	}
+	quotaAdmitted, err := p.admitQuota(ctx, stmtID, authz.principal)
+	if err != nil {
+		return err
+	}
 	if (!snapshotPath && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
@@ -391,6 +404,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		tableSchema:     tableSchema,
 		payer:           payer,
 		database:        target.database,
+		quotaAdmitted:   quotaAdmitted,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -414,6 +428,36 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		qctx.SuppressUpstreamExecution = true
 	}
 	return nil
+}
+
+// admitQuota applies the account quota to an authorized statement of
+// principal. In enforce mode a statement over budget is refused with the
+// retryable 201 before its payload is read; in dry_run it is only counted.
+// The result reports whether the quota admitted (and so tracks) it.
+func (p *Plugin) admitQuota(ctx context.Context, stmtID, principal string) (bool, error) {
+	refusal, admitted := p.quota.Admit(principal)
+	if refusal == nil {
+		return admitted, nil
+	}
+	_, logger := log.FromContext(ctx)
+	if p.quota.Mode() == AccountQuotaDryRun {
+		logger.Debugw("storage_integrity account quota would refuse write (dry_run)",
+			"statement_id", stmtID, "principal", refusal.Account, "dimension", refusal.Dimension,
+			"retry_after", refusal.RetryAfter)
+		return false, nil
+	}
+	logger.Infow("storage_integrity account quota refused write",
+		"statement_id", stmtID, "principal", refusal.Account, "dimension", refusal.Dimension,
+		"retry_after", refusal.RetryAfter)
+	return false, refusal.clientError()
+}
+
+// chargeQuota charges a completed statement's payload to its principal.
+func (p *Plugin) chargeQuota(state *admissionState) {
+	if state == nil || !state.quotaAdmitted {
+		return
+	}
+	p.quota.ChargeBytes(state.admission.Principal, uint64(state.payload.Len()))
 }
 
 func accessesStorageIntegrity(tables []sqlmeta.AccessedTable) bool {
@@ -501,6 +545,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	state.complete = true
 	delete(p.active, id)
 	p.mu.Unlock()
+	p.chargeQuota(state)
 
 	admission, err := p.admissionFromState(ctx, state)
 	if err != nil {
@@ -539,6 +584,7 @@ func (p *Plugin) OnQueryInputComplete(ctx context.Context, qctx *plugin.QueryCon
 	}
 	state.complete = true
 	delete(p.active, id)
+	p.chargeQuota(state)
 	if p.pending[id] == nil {
 		p.pending[id] = state
 	}

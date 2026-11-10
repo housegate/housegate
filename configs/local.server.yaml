@@ -76,6 +76,8 @@ rewriter:
 #     network_id: devnet2-si
 #     allowed_addresses: []        # optional; empty admits every database writer
 #     denied_addresses: []         # lowercase signer/owner addresses refused on the SI lane
+#     account_quota:
+#       mode: off                  # off | dry_run | enforce (per-account statement/byte buckets)
 
 # Optional replication-plane forwarding. Disabled here by default; uncomment in
 # deployments where ClickHouse should open replication-plane TCP only to its

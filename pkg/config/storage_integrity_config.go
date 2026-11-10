@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"runtime"
@@ -16,6 +17,11 @@ const (
 	defaultStorageIntegrityMaxPayloadBytes     uint64 = 64 << 20
 	defaultStorageIntegrityInlineValuesTimeout        = 10 * time.Second
 	defaultStorageIntegrityInlineValuesMaxRows uint64 = 65536
+
+	defaultStorageIntegrityQuotaStatementsPerSecond float64 = 20
+	defaultStorageIntegrityQuotaStatementBurst      uint64  = 200
+	defaultStorageIntegrityQuotaBytesPerSecond      uint64  = 8 << 20
+	defaultStorageIntegrityQuotaByteBurst           uint64  = 256 << 20
 
 	// Physical homes of storage-integrity tables (Spec C D2 naming freeze).
 	StorageIntegrityUnsafeDatabase  = "hg_unsafe"
@@ -162,6 +168,25 @@ type StorageIntegrityIngressConfig struct {
 	MaxTokenAge      Duration `json:"max_token_age"     yaml:"max_token_age"`
 	RequestTimeout   Duration `json:"request_timeout"  yaml:"request_timeout"`
 	MaxPayloadBytes  uint64   `json:"max_payload_bytes" yaml:"max_payload_bytes"`
+	// AccountQuota bounds the signed writes one account may push through
+	// this ingress (default off).
+	AccountQuota StorageIntegrityAccountQuotaConfig `json:"account_quota" yaml:"account_quota"`
+}
+
+// StorageIntegrityAccountQuotaConfig is the ingress's per-account write
+// budget: two token buckets per principal (the validated owner, else the
+// signer), one of statements and one of payload bytes. Counters are local to
+// this ingress and reset on restart. Mode is off (default), dry_run (count
+// would-be refusals in storage_integrity_ingress_account_quota_total, admit
+// everything) or enforce (refuse with 201 QUOTA_EXCEEDED, retryable, before
+// the payload is read; the client_seq stays unspent).
+type StorageIntegrityAccountQuotaConfig struct {
+	Mode                string  `json:"mode"                  yaml:"mode"`
+	StatementsPerSecond float64 `json:"statements_per_second" yaml:"statements_per_second"`
+	StatementBurst      uint64  `json:"statement_burst"       yaml:"statement_burst"`
+	BytesPerSecond      uint64  `json:"bytes_per_second"      yaml:"bytes_per_second"`
+	// ByteBurst must hold at least one max_payload_bytes statement.
+	ByteBurst uint64 `json:"byte_burst" yaml:"byte_burst"`
 }
 
 // StorageIntegrityRuntimeConfig turns on HouseGate's built-in P1e runtime
@@ -222,6 +247,13 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			MaxTokenAge:     Duration{Duration: time.Minute},
 			RequestTimeout:  Duration{Duration: 5 * time.Second},
 			MaxPayloadBytes: defaultStorageIntegrityMaxPayloadBytes,
+			AccountQuota: StorageIntegrityAccountQuotaConfig{
+				Mode:                "off",
+				StatementsPerSecond: defaultStorageIntegrityQuotaStatementsPerSecond,
+				StatementBurst:      defaultStorageIntegrityQuotaStatementBurst,
+				BytesPerSecond:      defaultStorageIntegrityQuotaBytesPerSecond,
+				ByteBurst:           defaultStorageIntegrityQuotaByteBurst,
+			},
 		},
 		Runtime: StorageIntegrityRuntimeConfig{
 			PayloadLease: StorageIntegrityRuntimePayloadLeaseConfig{
@@ -309,7 +341,16 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.Read.DefaultMode != "" && !c.IsEnabled() {
 		errs = append(errs, errors.New("storage_integrity.read.default_mode requires storage_integrity.enabled"))
 	}
+	quotaMode := strings.TrimSpace(c.Ingress.AccountQuota.Mode)
+	quotaOn := quotaMode != "" && quotaMode != "off"
+	if quotaMode != "" && quotaMode != "off" && quotaMode != "dry_run" && quotaMode != "enforce" {
+		errs = append(errs, fmt.Errorf("storage_integrity.ingress.account_quota.mode %q must be off, dry_run or enforce", c.Ingress.AccountQuota.Mode))
+		quotaOn = false
+	}
 	if !c.Ingress.Enabled {
+		if quotaOn {
+			errs = append(errs, errors.New("storage_integrity.ingress.account_quota.mode requires storage_integrity.ingress.enabled"))
+		}
 		if c.Runtime.Enabled {
 			errs = append(errs, errors.New("storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled"))
 		}
@@ -333,6 +374,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.Ingress.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_payload_bytes must be > 0 when storage_integrity.ingress.enabled"))
+	}
+	if quotaOn {
+		errs = append(errs, c.Ingress.AccountQuota.validate(c.Ingress.MaxPayloadBytes)...)
 	}
 	if c.Runtime.Enabled {
 		if strings.TrimSpace(c.Runtime.ExpectedSource) == "" {
@@ -533,6 +577,23 @@ func validateDeniedAddresses(addresses []string) []error {
 			errs = append(errs, fmt.Errorf("storage_integrity.ingress.denied_addresses lists %s twice (duplicate)", address))
 		}
 		seen[address] = true
+	}
+	return errs
+}
+
+func (q StorageIntegrityAccountQuotaConfig) validate(maxPayloadBytes uint64) []error {
+	var errs []error
+	if !(q.StatementsPerSecond > 0) || math.IsInf(q.StatementsPerSecond, 0) {
+		errs = append(errs, errors.New("storage_integrity.ingress.account_quota.statements_per_second must be > 0"))
+	}
+	if q.StatementBurst == 0 {
+		errs = append(errs, errors.New("storage_integrity.ingress.account_quota.statement_burst must be > 0"))
+	}
+	if q.BytesPerSecond == 0 {
+		errs = append(errs, errors.New("storage_integrity.ingress.account_quota.bytes_per_second must be > 0"))
+	}
+	if q.ByteBurst < maxPayloadBytes {
+		errs = append(errs, fmt.Errorf("storage_integrity.ingress.account_quota.byte_burst %d must be >= storage_integrity.ingress.max_payload_bytes %d", q.ByteBurst, maxPayloadBytes))
 	}
 	return errs
 }

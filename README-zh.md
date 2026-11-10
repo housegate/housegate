@@ -161,6 +161,8 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 
 **谁可以写。** 签名 ingress 接受目标数据库的所有 writer：indexer signer，或在该库上持有 Owner 或 Write 的账户（只有 Admin、以及 address(0) 的授权都不算）。`storage_integrity.ingress.denied_addresses`（小写地址；改动需重启）会拒绝列表中的 signer 或解析出的 owner；`allowed_addresses` 可选，设置后仍然限制 signer。拒绝使用 497 错误码（`ACCESS_DENIED`）：`storage_integrity: signer 0x… is not permitted to write storage-integrity tables`、`storage_integrity: owner 0x… is not permitted to write storage-integrity tables`、`storage_integrity: 0x… is not an operator of 0x…`、`storage_integrity: 0x… is not a writer of database <db>`。如果拒绝明确没有消耗该语句的 `client_seq`，错误消息以 ` [client_seq unspent]` 结尾，agent 随后会复用这个 seq。peer-trusted 的读取如果指向受治理表的普通物理表，会被拒绝，错误码 392：`storage_integrity: table <db>.<t> is governed by storage integrity and must be read through its host indexer; connect with --database <db> or USE <db>`。
 
+**按账户的写入配额。** `storage_integrity.ingress.account_quota` 用两个 token bucket 限制单个账户经本 ingress 的签名写入，按 principal（校验过的 owner，否则 signer）计：语句数（`statements_per_second`、`statement_burst`，默认 20 和 200）和 payload 字节数（`bytes_per_second`、`byte_burst`，默认 8 MiB 和 256 MiB，`byte_burst` 不得小于 `max_payload_bytes`）。语句被接纳时扣一个语句 token，输入结束时按实际 payload 扣字节；字节桶可以欠账，账户的下一条语句要等欠账还清。`mode` 为 `off`（默认）、`dry_run`（全部放行，只在 `storage_integrity_ingress_account_quota_total{decision="would_refuse"}` 计数）或 `enforce`（在读 payload 之前以 201 `QUOTA_EXCEEDED` 拒绝：`storage_integrity: account 0x… exceeded its write quota (statements|bytes); retry in <n>s (retryable)`，会话保留，`client_seq` 不消耗）。计数只在本 ingress 内存里，重启清零，indexer 之间不共享。上线时先用 `dry_run`，指标确认预算合适后再切 `enforce`。
+
 ```yaml
 storage_integrity:
   ingress:
@@ -168,6 +170,8 @@ storage_integrity:
     network_id: devnet2-si
     allowed_addresses: []          # 可选；为空则接受所有数据库 writer
     denied_addresses: []           # 在 SI 通道上被拒绝的小写 signer/owner 地址
+    account_quota:
+      mode: off                    # off | dry_run | enforce
 ```
 
 ### `agent` — Agent 模式设置

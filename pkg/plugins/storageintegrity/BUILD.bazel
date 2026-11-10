@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storageintegrity",
     srcs = [
+        "account_quota.go",
         "authorize.go",
         "plugin.go",
     ],
@@ -30,6 +31,7 @@ go_library(
 go_test(
     name = "storageintegrity_test",
     srcs = [
+        "account_quota_test.go",
         "authorize_test.go",
         "nondeterminism_pin_test.go",
         "plugin_test.go",

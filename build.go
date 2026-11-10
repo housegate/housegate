@@ -997,6 +997,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			indexerAddr,
 			nil,
 		)
+		quotaCfg := ingressCfg.AccountQuota
+		accountQuota, err := storageintegrity.NewAccountQuota(storageintegrity.AccountQuotaConfig{
+			Mode:                storageintegrity.AccountQuotaMode(quotaCfg.Mode),
+			StatementsPerSecond: quotaCfg.StatementsPerSecond,
+			StatementBurst:      float64(quotaCfg.StatementBurst),
+			BytesPerSecond:      float64(quotaCfg.BytesPerSecond),
+			ByteBurst:           float64(quotaCfg.ByteBurst),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("storage_integrity.ingress.account_quota: %w", err)
+		}
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
 			Enabled:           true,
 			AuthValidator:     ingressValidator,
@@ -1014,6 +1025,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			DeniedAddresses:      ingressCfg.DeniedAddresses,
 			AllowedAddresses:     ingressCfg.AllowedAddresses,
 			ClientLanesEnabled:   opts.StorageIntegrityClientLanes,
+			AccountQuota:         accountQuota,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -1032,6 +1044,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
 			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
 			"client_lanes_port", opts.StorageIntegrityClientLanes != nil,
+			"account_quota_mode", accountQuota.Mode(),
 		)
 	}
 
