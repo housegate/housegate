@@ -661,6 +661,13 @@ func backpressureClientError(table string, err error) error {
 // flag is sticky through wrapping, so no post-Orchestrate refusal may wrap a
 // pre-Orchestrate one.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
+	start := time.Now()
+	err := i.consumeStorageIntegrityAdmission(ctx, adm)
+	observeIntake(start, err)
+	return err
+}
+
+func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	if i.guard != nil {
 		// Only the target's latch: one unready table blocks only itself.
 		if err := i.guard.CheckMergeHealth(adm.TableID); err != nil {
@@ -732,7 +739,9 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		i.setPressureReservation(rec.StatementID, rec.TableID, partitions, attemptReservation)
 	}
 	if i.payloadWriter != nil {
+		putStart := time.Now()
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
+		observeIntakeStage(intakeStagePayloadPut, time.Since(putStart), err)
 		if err != nil {
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
@@ -753,7 +762,9 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		}
 		rec.PayloadRef = put.PayloadRef
 	}
+	orchestrateStart := time.Now()
 	res, err := i.orch.Orchestrate(ctx, rec)
+	observeIntakeStage(intakeStageOrchestrate, time.Since(orchestrateStart), err)
 	if res.Submit.Category == sicore.OutcomeAccepted {
 		// Sequenced means spent; metering follows the arbiter, not ACK2.
 		i.meterSequenced(adm, res.Submit.StatementSeq)

@@ -163,6 +163,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		ExpectedSource:      expectedSource,
 		Journal:             journal,
 		PayloadLeaseManager: leaseManager,
+		StageObserver:       intakeStageMetrics{},
 	}
 	orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, statusQuerier, orchCfg)
 	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerNative, payloadWriter)
