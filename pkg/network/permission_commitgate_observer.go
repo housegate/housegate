@@ -129,10 +129,14 @@ var permissionPolicy = map[sqlmeta.StatementType]registry.DbAuth{
 	sqlmeta.StatementTypeDropTable:     registry.DbAuthWrite,
 	// CREATE / DROP VIEW and CREATE MATERIALIZED VIEW are schema
 	// mutations symmetric with CREATE / DROP TABLE — same Write bit.
-	// The rewriter is expected to surface only the view's own
-	// (db, name) in AccessedTables; the AS-SELECT source tables are
-	// NOT included, otherwise this loop would require Write on every
-	// referenced table.
+	// Both engines report the view's own (db, name) first and then
+	// every table its body reads (and a materialized view's TO
+	// target), and BeforeStatement checks every entry with this bit,
+	// so creating a view needs Write on every database it reads, not
+	// only Read. A stored view keeps reading those databases for
+	// whoever reads the view, under the one shared ClickHouse user, so
+	// do not relax this to Read without a same-database or
+	// definer-rights rule (housegate#330).
 	sqlmeta.StatementTypeCreateView:             registry.DbAuthWrite,
 	sqlmeta.StatementTypeCreateMaterializedView: registry.DbAuthWrite,
 	sqlmeta.StatementTypeDropView:               registry.DbAuthWrite,
