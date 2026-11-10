@@ -64,10 +64,11 @@ A cluster-aware driver is not supported. When the ClickHouse behind HouseGate re
 ClickHouse clients can send per-query settings in the native Query packet, outside the SQL text, where the rewriter never sees them; `clickhouse-client` copies a `SETTINGS` clause and command-line settings there, and expands `--compatibility=21.1` into `compatibility`, `enable_global_with_statement = 0`, `legacy_column_name_of_tuple_literal = 1` and `allow_experimental_analyzer = 0`. HouseGate refuses, before forwarding, the settings the rewriter refuses in SQL:
 
 - whatever the value: `additional_table_filters`, `additional_result_filter`, `parallel_replicas_custom_key`, `dialect`, `polyglot_dialect`, `allow_experimental_polyglot_dialect`, `allow_experimental_prql_dialect`, `allow_experimental_kusto_dialect`, any name ending in `_dialect`, `enable_global_with_statement`, `compatibility`, `implicit_table_at_top_level`, `promql_table`, `promql_database`, `legacy_column_name_of_tuple_literal` and `profile`;
+- whatever the value, the settings a ClickHouse 26.8 server honours: `select`, `filter`, `order`, `sort` (SQL text the server wraps around the query), `database` (the current database, like `USE`), `format`, `input_format`, `output_format`, `default_format`, `asterisk_include_virtual_columns` (adds the physical `_database` to `SELECT *`), `s3_allow_server_credentials_in_user_queries`, any name starting with `dynamic_disk_allow_`, `url_base`, `s3_base`, `analyzer_compatibility_allow_cte_redefinition`, `analyzer_compatibility_prefer_alias_over_subcolumn`, `analyzer_compatibility_multiple_joins_qualify_column_names`, `analyzer_inline_views`, `enable_streaming_queries`, `ai_function_text_default_credentials` and `ai_function_embedding_default_credentials`. A 26.8 `clickhouse-client` started with `--format` or `--database` may send one of these in the Query packet; such a query is refused, so select the database in the Hello or with `USE`, and pick the output format in the SQL text (`FORMAT …`) instead;
 - `enable_analyzer` / `allow_experimental_analyzer` unless the value is exactly `1`, `true`, `'1'` or `'true'` (any case, no other spelling);
 - any setting in the old (pre-54429) Query-packet format, whatever its name or value; only very old clients send it.
 
-Names are compared case-insensitively. The client receives an Exception `table setting <name> is not accepted (native-protocol query setting)` (code 403); the connection stays usable for the next query. The check runs on the same servers as the guard, on ordinary and driver sessions, on sessions this server forwards to a peer and on sessions forwarded to it from a peer; it skips maintenance, platform-operator and `remote()` peer sessions. It has no observe mode. Each refusal is logged at warn level (`query refused: native-protocol query setting is not accepted`, with the setting, query id, connection, account and user) and counted in `clickhouse_proxy_query_settings_rejections_total{setting="…"}`, labelled with the lowercased name, `other_dialect` for another `_dialect` name, or `old_format`.
+Names are compared case-insensitively. The client receives an Exception `table setting <name> is not accepted (native-protocol query setting)` (code 403); the connection stays usable for the next query. The check runs on the same servers as the guard, on ordinary and driver sessions, on sessions this server forwards to a peer and on sessions forwarded to it from a peer; it skips maintenance, platform-operator and `remote()` peer sessions. It has no observe mode. Each refusal is logged at warn level (`query refused: native-protocol query setting is not accepted`, with the setting, query id, connection, account and user) and counted in `clickhouse_proxy_query_settings_rejections_total{setting="…"}`, labelled with the lowercased name, `other_dialect` for another `_dialect` name, `dynamic_disk_allow` for a `dynamic_disk_allow_` name, or `old_format`.
 
 ## Keep the analyzer on in every ClickHouse settings profile
 
@@ -81,16 +82,28 @@ FROM system.settings
 WHERE name IN ('enable_analyzer', 'allow_experimental_analyzer', 'compatibility', 'enable_global_with_statement',
                'legacy_column_name_of_tuple_literal', 'implicit_table_at_top_level', 'dialect',
                'additional_table_filters', 'additional_result_filter', 'parallel_replicas_custom_key',
-               'promql_table', 'promql_database')
-   OR endsWith(name, '_dialect');
+               'promql_table', 'promql_database', 'select', 'filter', 'order', 'sort', 'database', 'format',
+               'input_format', 'output_format', 'default_format', 'asterisk_include_virtual_columns',
+               's3_allow_server_credentials_in_user_queries', 'url_base', 's3_base',
+               'analyzer_compatibility_allow_cte_redefinition', 'analyzer_compatibility_prefer_alias_over_subcolumn',
+               'analyzer_compatibility_multiple_joins_qualify_column_names', 'analyzer_inline_views',
+               'enable_streaming_queries', 'ai_function_text_default_credentials',
+               'ai_function_embedding_default_credentials')
+   OR endsWith(name, '_dialect') OR startsWith(name, 'dynamic_disk_allow_');
 
 SELECT profile_name, user_name, role_name, setting_name, value
 FROM system.settings_profile_elements
 WHERE setting_name IN ('enable_analyzer', 'allow_experimental_analyzer', 'compatibility', 'enable_global_with_statement',
                        'legacy_column_name_of_tuple_literal', 'implicit_table_at_top_level', 'dialect',
                        'additional_table_filters', 'additional_result_filter', 'parallel_replicas_custom_key',
-                       'promql_table', 'promql_database')
-   OR endsWith(setting_name, '_dialect');
+                       'promql_table', 'promql_database', 'select', 'filter', 'order', 'sort', 'database', 'format',
+                       'input_format', 'output_format', 'default_format', 'asterisk_include_virtual_columns',
+                       's3_allow_server_credentials_in_user_queries', 'url_base', 's3_base',
+                       'analyzer_compatibility_allow_cte_redefinition', 'analyzer_compatibility_prefer_alias_over_subcolumn',
+                       'analyzer_compatibility_multiple_joins_qualify_column_names', 'analyzer_inline_views',
+                       'enable_streaming_queries', 'ai_function_text_default_credentials',
+                       'ai_function_embedding_default_credentials')
+   OR endsWith(setting_name, '_dialect') OR startsWith(setting_name, 'dynamic_disk_allow_');
 ```
 
 Expected: `enable_analyzer` and `allow_experimental_analyzer` are `1`, every other row of the first query has `changed = 0`, and the second query returns no row, or only `enable_analyzer` / `allow_experimental_analyzer` set to `1`. Measured on ClickHouse 25.8: a default server passes; a `users.d` file setting `<compatibility>21.1</compatibility>` in the `default` profile shows `compatibility`, `enable_analyzer`, `allow_experimental_analyzer`, `enable_global_with_statement`, `legacy_column_name_of_tuple_literal` and the PRQL / Kusto dialect switches as changed in the first query and `compatibility` in the second. Add this check to every ClickHouse deployment change; as of `sentioxyz/production` `d1a757627` no ClickHouse configuration sets any of these settings.

@@ -76,6 +76,32 @@ func TestRefused(t *testing.T) {
 		{"SQL_x_auth_token", "x", false},
 		{"enable_scopes_for_with_statement", "0", false},
 		{"allow_deprecated_syntax_for_merge_tree", "1", false}, // spec §13: deliberately not R5
+		// ClickHouse 26.8 settings, any value.
+		{"filter", "a IN (SELECT a FROM other.t)", true},
+		{"select", "(SELECT 1)", true},
+		{"order", "a", true},
+		{"sort", "a", true},
+		{"database", "other", true},
+		{"DATABASE", "other", true},
+		{"format", "Values", true},
+		{"input_format", "Values", true},
+		{"output_format", "JSON", true},
+		{"default_format", "JSON", true},
+		{"asterisk_include_virtual_columns", "1", true},
+		{"s3_allow_server_credentials_in_user_queries", "1", true},
+		{"dynamic_disk_allow_from_env", "1", true},
+		{"Dynamic_Disk_Allow_Future", "0", true},
+		{"url_base", "file://", true},
+		{"s3_base", "https://b/", true},
+		{"analyzer_compatibility_allow_cte_redefinition", "1", true},
+		{"analyzer_compatibility_prefer_alias_over_subcolumn", "1", true},
+		{"analyzer_compatibility_multiple_joins_qualify_column_names", "1", true},
+		{"analyzer_inline_views", "1", true},
+		{"enable_streaming_queries", "1", true},
+		{"ai_function_text_default_credentials", "c", true},
+		{"ai_function_embedding_default_credentials", "c", true},
+		{"output_format_json_quote_64bit_integers", "1", false},
+		{"input_format_skip_unknown_fields", "1", false},
 		{"", "", false},
 	} {
 		if got := Refused(tc.name, tc.value); got != tc.want {
@@ -84,27 +110,47 @@ func TestRefused(t *testing.T) {
 	}
 }
 
-// The fixed names are exactly rewriter-go v0.16.0's sqlBearingSettings and
-// analyzerSettings (internal/engine/settings.go:46-74), sorted.
+// The fixed names are exactly rewriter-go's sqlBearingSettings and
+// analyzerSettings (internal/engine/settings.go), sorted.
 func TestRefusedNames(t *testing.T) {
 	want := []string{
 		"additional_result_filter",
 		"additional_table_filters",
+		"ai_function_embedding_default_credentials",
+		"ai_function_text_default_credentials",
 		"allow_experimental_analyzer",
 		"allow_experimental_kusto_dialect",
 		"allow_experimental_polyglot_dialect",
 		"allow_experimental_prql_dialect",
+		"analyzer_compatibility_allow_cte_redefinition",
+		"analyzer_compatibility_multiple_joins_qualify_column_names",
+		"analyzer_compatibility_prefer_alias_over_subcolumn",
+		"analyzer_inline_views",
+		"asterisk_include_virtual_columns",
 		"compatibility",
+		"database",
+		"default_format",
 		"dialect",
 		"enable_analyzer",
 		"enable_global_with_statement",
+		"enable_streaming_queries",
+		"filter",
+		"format",
 		"implicit_table_at_top_level",
+		"input_format",
 		"legacy_column_name_of_tuple_literal",
+		"order",
+		"output_format",
 		"parallel_replicas_custom_key",
 		"polyglot_dialect",
 		"profile",
 		"promql_database",
 		"promql_table",
+		"s3_allow_server_credentials_in_user_queries",
+		"s3_base",
+		"select",
+		"sort",
+		"url_base",
 	}
 	got := RefusedNames()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -321,6 +367,9 @@ func TestRejectionLabel(t *testing.T) {
 		{"PROFILE", "profile"},
 		{"allow_experimental_kusto_dialect", "allow_experimental_kusto_dialect"},
 		{"some_future_dialect", labelOtherDialect},
+		{"database", "database"},
+		{"dynamic_disk_allow_from_env", labelDynamicDisk},
+		{"DYNAMIC_DISK_ALLOW_X", labelDynamicDisk},
 		{"X_DIALECT", labelOtherDialect},
 	} {
 		if got := rejectionLabel(tc.name); got != tc.want {

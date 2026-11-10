@@ -36,10 +36,13 @@ import (
 
 // Counter labels beyond the fixed refused names, which keep the label set
 // bounded: a refused name outside the fixed list can only be a _dialect
-// suffix match, and an old-format setting can carry any name.
+// suffix or a dynamic_disk_allow_ prefix match, and an old-format setting can
+// carry any name.
 const (
 	labelOtherDialect = "other_dialect"
+	labelDynamicDisk  = "dynamic_disk_allow"
 	labelOldFormat    = "old_format"
+	dynamicDiskPrefix = "dynamic_disk_allow_"
 )
 
 // Log reasons.
@@ -50,18 +53,22 @@ const (
 
 var rejections = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Name: "clickhouse_proxy_query_settings_rejections_total",
-	Help: "Queries refused for a setting in the native-protocol Query packet, by setting (fixed refused names, other_dialect, old_format).",
+	Help: "Queries refused for a setting in the native-protocol Query packet, by setting (fixed refused names, other_dialect, dynamic_disk_allow, old_format).",
 }, []string{"setting"})
 
 func init() { prometheus.MustRegister(rejections) }
 
 // rejectionLabel maps a refused setting name to its bounded counter label:
-// the lowercased name when it is a fixed refused name, otherwise
-// other_dialect (the only other way a name is refused).
+// the lowercased name when it is a fixed refused name, dynamic_disk_allow for
+// the dynamic_disk_allow_ prefix rule, otherwise other_dialect (the only other
+// way a name is refused).
 func rejectionLabel(name string) string {
 	lower := strings.ToLower(name)
 	if refusedWhateverTheValue[lower] || analyzerSettings[lower] {
 		return lower
+	}
+	if strings.HasPrefix(lower, dynamicDiskPrefix) {
+		return labelDynamicDisk
 	}
 	return labelOtherDialect
 }
@@ -70,8 +77,10 @@ func rejectionLabel(name string) string {
 // internal/engine/settings.go:46-66 (sqlBearingSettings) and rewriter-grpc
 // v0.16.0 src/handlers/table_reference.cc:1332-1354 (sqlBearingSetting):
 // settings whose value is SQL evaluated against tables, the dialect switches,
-// the name-binding settings and the old analyzer's name resolution. Keep the
-// three lists equal; the integration suite checks them against the engine.
+// the name-binding settings, the old analyzer's name resolution, and the
+// settings a ClickHouse 26.8 server honours (rewriter-go and
+// rewriter-grpc after their ClickHouse 26.8 hardening). Keep the three lists equal; the
+// integration suite checks them against the engine.
 // allow_deprecated_syntax_for_merge_tree is deliberately absent (spec §13).
 var refusedWhateverTheValue = map[string]bool{
 	"additional_table_filters":            true,
@@ -89,6 +98,38 @@ var refusedWhateverTheValue = map[string]bool{
 	"promql_database":                     true,
 	"legacy_column_name_of_tuple_literal": true,
 	"profile":                             true,
+	// ClickHouse 26.8. select / filter / order / sort are SQL text the server
+	// parses and wraps around the query, outside the rewriter's view;
+	// database sets the current database like USE; the format overrides
+	// change how an INSERT's inline data or the result is read or written;
+	// asterisk_include_virtual_columns puts the physical _database into
+	// SELECT *; the cloud-credential and dynamic-disk switches (the
+	// dynamic_disk_allow_ prefix, Refused) hand the server's own credentials
+	// to s3() / disk(); url_base / s3_base relocate a relative url() / s3()
+	// target; the analyzer compatibility switches and view inlining change
+	// what a name binds; enable_streaming_queries admits the STREAM table
+	// expression; the AI functions' default credentials name a server named
+	// collection.
+	"select":                           true,
+	"filter":                           true,
+	"order":                            true,
+	"sort":                             true,
+	"database":                         true,
+	"format":                           true,
+	"input_format":                     true,
+	"output_format":                    true,
+	"default_format":                   true,
+	"asterisk_include_virtual_columns": true,
+	"s3_allow_server_credentials_in_user_queries": true,
+	"url_base": true,
+	"s3_base":  true,
+	"analyzer_compatibility_allow_cte_redefinition":              true,
+	"analyzer_compatibility_prefer_alias_over_subcolumn":         true,
+	"analyzer_compatibility_multiple_joins_qualify_column_names": true,
+	"analyzer_inline_views":                                      true,
+	"enable_streaming_queries":                                   true,
+	"ai_function_text_default_credentials":                       true,
+	"ai_function_embedding_default_credentials":                  true,
 }
 
 // analyzerSettings mirrors rewriter-go internal/engine/settings.go:71-74 and
@@ -100,15 +141,16 @@ var analyzerSettings = map[string]bool{
 	"allow_experimental_analyzer": true,
 }
 
-// Refused reports whether a Query-packet setting is refused: a listed name, or
-// any name ending in _dialect, whatever the value (names compared
+// Refused reports whether a Query-packet setting is refused: a listed name,
+// any name ending in _dialect or starting with dynamic_disk_allow_, whatever
+// the value (names compared
 // case-insensitively, a deliberate over-match like the engines', rewriter-go
 // settings.go:122-125); or an analyzer switch whose value is not a closed true
 // spelling (settings.go:98-100, SettingRefused). Names arrive decoded from the
 // packet, so R5's escaped-spelling rule has nothing to apply to here.
 func Refused(name, value string) bool {
 	lower := strings.ToLower(name)
-	if refusedWhateverTheValue[lower] || strings.HasSuffix(lower, "_dialect") {
+	if refusedWhateverTheValue[lower] || strings.HasSuffix(lower, "_dialect") || strings.HasPrefix(lower, dynamicDiskPrefix) {
 		return true
 	}
 	return analyzerSettings[lower] && !trueSpelling(value)
@@ -138,7 +180,8 @@ func trueSpelling(value string) bool {
 }
 
 // RefusedNames returns the fixed refused names, analyzer switches included,
-// sorted. The _dialect suffix rule is not enumerable and is not listed.
+// sorted. The _dialect suffix and dynamic_disk_allow_ prefix rules are not
+// enumerable and are not listed.
 func RefusedNames() []string {
 	out := make([]string, 0, len(refusedWhateverTheValue)+len(analyzerSettings))
 	for name := range refusedWhateverTheValue {
