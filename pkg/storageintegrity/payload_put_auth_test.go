@@ -75,7 +75,9 @@ func TestPayloadStoreWriterAuthorizerFailureStopsThePut(t *testing.T) {
 	client := &recordingPayloadStoreClient{
 		limits: &pb.StoreLimits{MaxInlineBytes: 32, MaxChunkBytes: 8, MaxPayloadBytes: 64},
 	}
-	failing := func(context.Context, string, uint64) (context.Context, error) { return nil, errors.New("key unavailable") }
+	failing := func(context.Context, string, uint64) (context.Context, error) {
+		return nil, errors.New("key unavailable")
+	}
 	payload := []byte("abc")
 	if _, err := NewAuthorizedArbiterPayloadStoreWriter(client, failing).PutPayload(context.Background(), payload, replay.DigestBytes(payload), 3); err == nil {
 		t.Fatal("put succeeded without authorisation")
@@ -87,6 +89,13 @@ func TestPayloadStoreWriterAuthorizerFailureStopsThePut(t *testing.T) {
 
 func TestPayloadStoreRefusalIsBackpressure(t *testing.T) {
 	exhausted := status.Error(codes.ResourceExhausted, "write quota exceeded for indexer 7 (bytes); retry after 2s")
+	concurrency := status.Error(codes.ResourceExhausted, "put concurrency limit exceeded")
+	if _, err := NewArbiterPayloadStoreWriter(&recordingPayloadStoreClient{
+		limits:    &pb.StoreLimits{MaxInlineBytes: 32, MaxChunkBytes: 8, MaxPayloadBytes: 64},
+		inlineErr: concurrency,
+	}).PutPayload(context.Background(), []byte("abc"), replay.DigestBytes([]byte("abc")), 3); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("concurrency refusal: err = %v, want back-pressure", err)
+	}
 	for name, client := range map[string]*recordingPayloadStoreClient{
 		"inline": {
 			limits:    &pb.StoreLimits{MaxInlineBytes: 32, MaxChunkBytes: 8, MaxPayloadBytes: 64},
@@ -106,8 +115,10 @@ func TestPayloadStoreRefusalIsBackpressure(t *testing.T) {
 		}
 	}
 	for name, err := range map[string]error{
-		"permission denied": status.Error(codes.PermissionDenied, "not allowlisted"),
-		"message too large": status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5 vs. 4)"),
+		"permission denied":             status.Error(codes.PermissionDenied, "not allowlisted"),
+		"message too large":             status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5 vs. 4)"),
+		"too large after decompression": status.Error(codes.ResourceExhausted, "grpc: received message after decompression larger than max 4194304"),
+		"send too large":                status.Error(codes.ResourceExhausted, "grpc: trying to send message larger than max (5 vs. 4)"),
 	} {
 		client := &recordingPayloadStoreClient{
 			limits:    &pb.StoreLimits{MaxInlineBytes: 32, MaxChunkBytes: 8, MaxPayloadBytes: 64},
