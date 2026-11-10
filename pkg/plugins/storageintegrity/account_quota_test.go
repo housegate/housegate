@@ -152,12 +152,16 @@ func TestAccountQuota_SweepDropsOnlyFullBuckets(t *testing.T) {
 	q.mu.Lock()
 	_, signerKept := q.buckets[azSigner]
 	_, ownerKept := q.buckets[azOwner]
+	_, adminKept := q.buckets[azAdmin]
 	q.mu.Unlock()
 	if signerKept {
 		t.Fatal("a refilled bucket was kept")
 	}
 	if !ownerKept {
-		t.Fatal("a bucket still in debt was dropped, which would forgive its debt")
+		t.Fatal("a bucket with an outstanding hold was dropped")
+	}
+	if !adminKept {
+		t.Fatal("the bucket just used was dropped")
 	}
 }
 
@@ -183,13 +187,51 @@ func TestAccountQuota_ReservationsBoundConcurrentStatements(t *testing.T) {
 	if refusal, admitted := q.Admit(azSigner, 8); refusal != nil || !admitted {
 		t.Fatalf("after release: refusal %v admitted %v", refusal, admitted)
 	}
-	// A refund never lifts a bucket above its burst.
+	// Releasing a hold never adds credit.
 	q.Settle(azOwner, 1000, 0)
 	q.mu.Lock()
-	got := q.buckets[azOwner].bytes
+	got := q.buckets[azOwner]
 	q.mu.Unlock()
-	if got != 10 {
-		t.Fatalf("refunded bucket = %v, want capped at 10", got)
+	if got.bytes != 10 || got.held != 0 {
+		t.Fatalf("released bucket = %+v, want credit 10 and no hold", got)
+	}
+}
+
+// Refill must not replace capacity an outstanding hold claims, and dropping
+// an old hold after refill must not bank extra credit (second review finding).
+func TestAccountQuota_RefillDoesNotReplaceHeldCapacity(t *testing.T) {
+	q, clock := newTestQuota(t, AccountQuotaEnforce, 100, 10) // 5 B/s
+	const maxPayload = 8
+	// Two unfinished inputs hold 16 of the 10-byte burst.
+	for i := 0; i < 2; i++ {
+		if refusal, _ := q.Admit(azSigner, maxPayload); refusal != nil {
+			t.Fatalf("hold %d: %+v", i, refusal)
+		}
+	}
+	clock.advance(10 * time.Second) // refill would add 50; credit stays capped at 10
+	used := uint64(0)
+	write := func() bool {
+		if refusal, _ := q.Admit(azSigner, maxPayload); refusal != nil {
+			return false
+		}
+		q.Settle(azSigner, maxPayload, maxPayload)
+		used += maxPayload
+		return true
+	}
+	if write() {
+		t.Fatal("a fresh write was admitted while refill-restored credit was still held")
+	}
+	// Close each old input, then write as much as admission allows.
+	for i := 0; i < 2; i++ {
+		q.Settle(azSigner, maxPayload, 0)
+		for write() {
+		}
+	}
+	if limit := uint64(10 + maxPayload); used > limit {
+		t.Fatalf("fresh writes at one instant used %d bytes, above burst + max payload %d", used, limit)
+	}
+	if used == 0 {
+		t.Fatal("no fresh write was admitted once the holds were released")
 	}
 }
 
