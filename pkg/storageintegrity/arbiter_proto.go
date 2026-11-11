@@ -68,6 +68,9 @@ func (q *ArbiterIntakeStatusQuerier) QuerySubmitStatus(ctx context.Context, stat
 	if !status.GetFound() {
 		return SubmitOutcome{Category: OutcomeUnspecified, Reason: "arbiter has no statement record"}, nil
 	}
+	if status.GetPruned() {
+		return SubmitOutcome{}, prunedStatementError(statementID, status)
+	}
 	return SubmitOutcome{Category: OutcomeExactIdempotent, Reason: firstNonEmpty(status.GetStatus(), "arbiter statement found")}, nil
 }
 
@@ -78,6 +81,9 @@ func (q *ArbiterIntakeStatusQuerier) QueryClaimStatus(ctx context.Context, state
 	status, err := q.statementStatus(ctx, statementID)
 	if err != nil {
 		return ClaimOutcome{}, err
+	}
+	if status.GetFound() && status.GetPruned() {
+		return ClaimOutcome{}, prunedStatementError(statementID, status)
 	}
 	if !status.GetFound() || !status.GetRcBound() {
 		return ClaimOutcome{Category: OutcomeUnspecified, Reason: "arbiter has no bound result claim"}, nil
@@ -91,6 +97,20 @@ func (q *ArbiterIntakeStatusQuerier) QueryClaimStatus(ctx context.Context, state
 		BoundSource: source,
 		Reason:      firstNonEmpty(status.GetStatus(), "arbiter result claim bound"),
 	}, nil
+}
+
+// ErrStatementPruned reports that the Arbiter has already sequenced the
+// statement, that it is safe, and that its record was pruned with the sealed
+// history, so neither its submit nor its result-claim outcome can be read any
+// more. The statement must not be resent: the Arbiter's replay protection
+// refuses a resend as a duplicate client_seq. Intake keeps the entry held and
+// surfaces this error instead of resending or aborting, because an abort
+// would clean up the unsafe write of a statement that is already safe.
+var ErrStatementPruned = errors.New("storageintegrity: statement already sequenced and safe; its arbiter record was pruned")
+
+func prunedStatementError(statementID string, status *pb.StatementStatus) error {
+	return fmt.Errorf("%w: statement %s was pruned at arbiter history checkpoint through block %d; do not resend, resolve the intake journal entry by hand",
+		ErrStatementPruned, statementID, status.GetCheckpointThroughBlockSeq())
 }
 
 func (q *ArbiterIntakeStatusQuerier) statementStatus(ctx context.Context, statementID string) (*pb.StatementStatus, error) {
@@ -116,6 +136,15 @@ func (q *ArbiterIntakeStatusQuerier) statementStatus(ctx context.Context, statem
 	if !res.GetFound() {
 		if res.GetStatementSeq() != 0 || strings.TrimSpace(res.GetStatus()) != "" || res.GetRcBound() || boundSource != "" {
 			return nil, fmt.Errorf("storageintegrity: arbiter status for %s is not found with statement data set", statementID)
+		}
+		return res, nil
+	}
+	if res.GetPruned() {
+		// The Arbiter pruned the statement's record with its sealed history:
+		// it answers found and Safe, the newest history checkpoint, and no
+		// statement_seq, rc_bound or bound_source.
+		if res.GetCheckpointThroughBlockSeq() == 0 || res.GetStatementSeq() != 0 || res.GetRcBound() || boundSource != "" {
+			return nil, fmt.Errorf("storageintegrity: arbiter status for %s is pruned with inconsistent fields", statementID)
 		}
 		return res, nil
 	}
