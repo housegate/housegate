@@ -290,8 +290,10 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 // engine-argument cases; rewriter-go v0.16.0 fails driver-function-spelling
 // and driver-view-comment; rewriter-grpc v0.16.0 fails
 // driver-grouped-literal-tuple; rewriter-go before v0.22.0 and rewriter-grpc
-// before v0.19.0 fail the ch268-* cases.
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.22.0 or rewriter-grpc >= v0.19.0 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, and Sentio-driver compatibility)"
+// before v0.19.0 fail the ch268-* cases; rewriter-go before v0.23.2 and
+// rewriter-grpc before v0.21.1 fail system-completions-refused and
+// information-schema-refused (housegate/housegate#319).
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.2 or rewriter-grpc >= v0.21.1 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table refusals, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -368,6 +370,15 @@ var tableReferenceProbes = []buildProbe{
 		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
 	rejectedProbe("system-table-refused", "SELECT * FROM system.processes",
 		pb.RewriteCode_UnsupportedStatement, "system table system.processes is not accessible"),
+	// housegate/housegate#319: class (c) metadata tables no client reads
+	// through HouseGate, and every information_schema table, show every
+	// tenant's names under the shared ClickHouse user. Measured 2026-11-11
+	// against rewriter-go v0.23.2 (native FFI) and rewriter-grpc v0.21.1's
+	// tree; every earlier engine answers Success for both.
+	rejectedProbe("system-completions-refused", "SELECT * FROM system.completions",
+		pb.RewriteCode_UnsupportedStatement, "system table system.completions is not accessible; tenant-filtered metadata reads are tracked in housegate/housegate#218"),
+	rejectedProbe("information-schema-refused", "SELECT * FROM information_schema.tables",
+		pb.RewriteCode_UnsupportedStatement, "database information_schema is not accessible; tenant-filtered metadata reads are tracked in housegate/housegate#218"),
 	// Spec §13 round 2; rewriter-go v0.15.0 answers Success.
 	rejectedProbe("analyzer-off-refused", "SELECT * FROM db1.o SETTINGS allow_experimental_analyzer = 0",
 		pb.RewriteCode_UnsupportedStatement, "table setting allow_experimental_analyzer is not accepted"),

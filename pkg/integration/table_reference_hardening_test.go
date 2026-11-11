@@ -20,7 +20,7 @@ func requireNativeLib(t *testing.T) string {
 	t.Helper()
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.2` and pass --test_env")
 	}
 	return lib
 }
@@ -314,6 +314,49 @@ func TestTableReference_SystemReadsWithAuthOff(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("system.tables rows = %d, want 1 (the physical table of db1.s)", n)
+	}
+}
+
+// TestTableReference_MetadataTablesRefused: system.completions,
+// parts_columns, projection_parts[_columns] and every information_schema
+// table show every tenant's names under the shared ClickHouse user and are
+// refused by the engine (housegate/housegate#319). Auth is off, so no
+// permission observer runs and the refusal is the engine's own. The driver's
+// system.tables read keeps working, and the session survives every refusal.
+func TestTableReference_MetadataTablesRefused(t *testing.T) {
+	const phys = "phys_tr_meta"
+	const suffix = "; tenant-filtered metadata reads are tracked in housegate/housegate#218"
+	proxy := startTableRefProxy(t, phys, "enforce")
+	conn := openConn(t, proxy.Addr)
+	ctx := context.Background()
+	if err := conn.Exec(ctx, "CREATE TABLE db1.m (a UInt64) ENGINE = MergeTree ORDER BY a"); err != nil {
+		t.Fatal(err)
+	}
+	// clickhouse-client 25.8+ loads its interactive suggestions with this
+	// query (Suggest.cpp); a refusal only makes it print a warning.
+	suggestions := "SELECT DISTINCT arrayJoin(extractAll(word, '[\\\\w_]{2,}')) AS res FROM (SELECT word FROM system.completions " +
+		"WHERE context IN ('function', 'keyword') UNION ALL SELECT word FROM (SELECT word, context, " +
+		"ROW_NUMBER() OVER (PARTITION BY context ORDER BY word) AS rn FROM (SELECT DISTINCT word, context " +
+		"FROM system.completions WHERE context IN ('database', 'table', 'column'))) WHERE rn <= 10000) WHERE notEmpty(res)"
+	for _, tc := range []struct{ sql, want string }{
+		{suggestions, "system table system.completions is not accessible" + suffix},
+		{"SELECT * FROM system.parts_columns", "system table system.parts_columns is not accessible" + suffix},
+		{"SELECT * FROM system.projection_parts", "system table system.projection_parts is not accessible" + suffix},
+		{"SELECT * FROM system.projection_parts_columns", "system table system.projection_parts_columns is not accessible" + suffix},
+		{"SELECT table_name FROM information_schema.tables", "database information_schema is not accessible" + suffix},
+		{"SELECT * FROM INFORMATION_SCHEMA.COLUMNS", "database INFORMATION_SCHEMA is not accessible" + suffix},
+		{"SHOW COLUMNS FROM tables FROM information_schema", "database information_schema is not accessible" + suffix},
+	} {
+		if err := conn.Exec(ctx, tc.sql); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%.60s: err = %v, want it to contain %q", tc.sql, err, tc.want)
+		}
+	}
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = '"+phys+"' AND name = 'db1.m'").Scan(&n); err != nil {
+		t.Fatalf("system.tables read: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("system.tables rows = %d, want 1", n)
 	}
 }
 
