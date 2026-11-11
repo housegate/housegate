@@ -178,7 +178,8 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `rewriter.service_addr` | string | No | `localhost:50051` | `sql-rewriter` gRPC address |
-| `rewriter.engine` | string | No | `grpc` | `grpc` — external sql-rewriter service (default); `native` — in-process rewriter-go engine (ignores `service_addr`) |
+| `rewriter.engine` | string | No | `grpc` | `grpc` — external sql-rewriter service (default); `native` — in-process rewriter-go engine (ignores `service_addr`); `auto` — at startup, the service if it is reachable within `rewriter.auto.grpc_wait`, otherwise the pinned native engine; fixed for the process lifetime ([docs/rewriter-fail-closed.md](docs/rewriter-fail-closed.md#engine-auto)) |
+| `rewriter.auto.grpc_wait` | duration | No | `30s` | How long `engine: auto` waits for the gRPC service before falling back to the native engine |
 | `rewriter.native_library_path` | string | No | `` | Path to `libpolyglot_sql_ffi.{so,dylib}` (native engine only; empty → `POLYGLOT_SQL_FFI_PATH` env, then system paths) |
 | `rewriter.native_library_release` | string | No | `` | rewriter-go release tag to auto-fetch the FFI lib from (native only; cached under the user cache dir; `native_library_path` wins; also overridable via `rewriter.native_library_release_base_url` for mirrors) |
 | `rewriter.native_library_sha256` | string | No | `` | Optional sha256 pin for the fetched library (64 hex); without it the release's `SHA256SUMS` asset is checked when present |

@@ -22,6 +22,7 @@ package chexec
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"reflect"
 	"regexp"
 	"strings"
@@ -291,12 +292,31 @@ func supportedColumnType(typeName string) bool {
 // decode hand lthash identical value types for the same row and the canonical
 // element bytes agree across the two lanes. FixedString(N) scans into []byte
 // (exactly N bytes, NUL-padded) to match parseFixedString.
+//
+// A Nullable(T) column scans into a pointer to a pointer: clickhouse-go leaves
+// the inner pointer nil for NULL. Two inner types differ: *big.Int is already
+// a pointer, so its destination is **big.Int as for the plain column, and
+// clickhouse-go's FixedString has no **[]byte case, so Nullable(FixedString)
+// scans through **string.
 func newScanDest(typeName string) (any, error) {
 	profile, err := payloadexec.ResolveColumnProfile(typeName)
 	if err != nil {
 		return nil, fmt.Errorf("chexec: unsupported column type %q for ClickHouse read-back: %w", typeName, err)
 	}
-	return reflect.New(profile.GoType).Interface(), nil
+	return reflect.New(scanType(profile)).Interface(), nil
+}
+
+var stringType = reflect.TypeOf("")
+
+func scanType(profile payloadexec.ColumnProfile) reflect.Type {
+	switch {
+	case !profile.Nullable, profile.GoType.Kind() == reflect.Pointer:
+		return profile.GoType
+	case profile.Family == payloadexec.FamilyFixedString:
+		return reflect.PointerTo(stringType)
+	default:
+		return reflect.PointerTo(profile.GoType)
+	}
 }
 
 // derefScan unwraps a read-back destination and applies the lane-specific
@@ -309,22 +329,40 @@ func derefScan(typeName string, p any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("chexec: unsupported column type %q for ClickHouse read-back: %w", typeName, err)
 	}
+	want := scanType(profile)
 	holder := reflect.ValueOf(p)
-	if holder.Kind() != reflect.Pointer || holder.IsNil() || holder.Elem().Type() != profile.GoType {
-		return nil, fmt.Errorf("chexec: scan destination %T does not match the profile value type %s for column type %q", p, profile.GoType, typeName)
+	if holder.Kind() != reflect.Pointer || holder.IsNil() || holder.Elem().Type() != want {
+		return nil, fmt.Errorf("chexec: scan destination %T does not match the profile value type %s for column type %q", p, want, typeName)
 	}
-	value := holder.Elem().Interface()
+	elem := holder.Elem()
+	if profile.Nullable {
+		if elem.IsNil() {
+			return nil, nil // NULL: the untyped nil, as on the Native lane
+		}
+		if profile.GoType.Kind() != reflect.Pointer {
+			elem = elem.Elem()
+		}
+		if profile.Family == payloadexec.FamilyFixedString {
+			elem = reflect.ValueOf([]byte(elem.String()))
+		}
+	}
+	value := elem.Interface()
 
 	switch profile.Family {
 	case payloadexec.FamilyString, payloadexec.FamilyBool,
-		payloadexec.FamilyFloat, payloadexec.FamilyUInt, payloadexec.FamilyInt:
+		payloadexec.FamilyFloat, payloadexec.FamilyUInt, payloadexec.FamilyInt,
+		payloadexec.FamilyUUID:
 		return value, nil
 	case payloadexec.FamilyFixedString:
 		// Defensive copy: clickhouse-go's FixedString column aliases a shared
 		// row buffer. The []byte flows through lthash's []byte->kindString path,
 		// matching the in-process parseFixedString encoding.
-		return append([]byte(nil), value.([]byte)...), nil
-	case payloadexec.FamilyDate:
+		b := append([]byte(nil), value.([]byte)...)
+		if len(b) != profile.FixedStringWidth {
+			return nil, fmt.Errorf("chexec: %s read back %d bytes", typeName, len(b))
+		}
+		return b, nil
+	case payloadexec.FamilyDate, payloadexec.FamilyDate32:
 		// clickhouse-go preserves Date's calendar day but relocates its midnight
 		// into the server/user timezone. Rebuild that calendar value at UTC
 		// midnight so Date's day commitment is independent of the executor
@@ -333,6 +371,16 @@ func derefScan(typeName string, p any) (any, error) {
 		return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
 	case payloadexec.FamilyDateTime, payloadexec.FamilyDateTime64:
 		return value.(time.Time).UTC(), nil
+	case payloadexec.FamilyWideInt, payloadexec.FamilyWideUInt:
+		n, ok := value.(*big.Int)
+		if !ok || n == nil {
+			return nil, fmt.Errorf("chexec: %s read back no integer", typeName)
+		}
+		n = new(big.Int).Set(n)
+		if err := payloadexec.CheckWideIntRange(profile, n); err != nil {
+			return nil, fmt.Errorf("chexec: %w", err)
+		}
+		return n, nil
 	default:
 		return nil, fmt.Errorf("chexec: no read-back normalization defined for column family %q (type %q)", profile.Family, typeName)
 	}

@@ -127,15 +127,30 @@ The database is created on the indexer your session lands on and registered on c
 its Owner. A new table starts *pending*: writes to it are refused with the retryable code 733
 `... is pending activation (retryable)` until it turns active, usually within a minute.
 
-**Admitted column types.** `String`, `FixedString(32)`, `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`,
-`Float32`, `Float64`, `Date`, `DateTime`, `DateTime('UTC')`, and `DateTime64(0..9)` with an optional
-`'UTC'`. Nothing else: no `Nullable`, `Decimal`, `Array`, `UUID`, `LowCardinality` or `Map`. A
-`PARTITION BY`, if any, must be a single `String` column. The type check runs after the table is
-created: a table with another type is created and then refused, every read and write of it answers
-code 392 `... was refused: ...`, and the only way out is `DROP TABLE` and creating it again.
+**Admitted column types.** Which types a table may declare is decided by the network's table
+admission rules version, a consensus parameter.
+
+- Admission rules v1: `String`, `FixedString(32)`, `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`,
+  `Float32`, `Float64`, `Date`, `DateTime`, `DateTime('UTC')`, and `DateTime64(0..9)` with an
+  optional `'UTC'`.
+- Admission rules v2, once the network has activated it, adds `Date32`, `UUID`, `Int128`,
+  `Int256`, `UInt128`, `UInt256`, `LowCardinality(String)`, and `Nullable(T)` for every type above
+  except `LowCardinality(String)`.
+
+Nothing else under either version: no `Decimal`, `Array`, `Map`, `Tuple`, `Enum`, no other
+`LowCardinality` and no nested `Nullable`. A `PARTITION BY`, if any, must be a single `String`
+column. A `CREATE TABLE` with another type is refused before anything is created (code 392
+`... refused by table admission rules ...: column_type: ...; nothing was created`).
 
 **Append-only.** SI tables accept `INSERT` only. `UPDATE`, `DELETE`, `ALTER`, `TRUNCATE` and
 `RENAME` are refused; to change a schema, drop the table and create it again.
+
+**No views.** `CREATE VIEW` and `CREATE MATERIALIZED VIEW` are refused in a database with SI
+tables (code 392 `... is in a storage-integrity database; views and materialized views cannot be
+created there`), and so is a view in another database whose body reads an SI table. Query the
+tables directly, or put the view's `SELECT` in your query (a `WITH` clause works). `DROP VIEW` still
+works, so a view created before this rule can be removed. Ordinary databases keep views and
+materialized views.
 
 ### Granting access
 
@@ -244,4 +259,5 @@ A query that names a payer whose operator list does not include the signing key 
 | 733 `... (retryable)` | the table is pending, or a source is restarting | retry shortly |
 | 497 `... is not a writer of database <db>` | your key has no Owner or Write grant on `<db>` | ask its Owner for `GRANT INSERT` |
 | 392 `... was refused: ...` | the table uses a type outside the admitted set | `DROP TABLE` and create it with admitted types (§5) |
+| 392 `... views and materialized views cannot be created there` | views are not supported in a database with SI tables | query the tables directly (§5) |
 | `... accepts writes only through the signed statement lane` | the statement is not an `INSERT` (SI tables are append-only) | §5 |

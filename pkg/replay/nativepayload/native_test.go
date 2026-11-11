@@ -143,7 +143,7 @@ func TestValidateNativePayloadDecodable(t *testing.T) {
 
 	bad := encodeNativePayload(t, proto.Input{
 		{Name: "region", Data: newColStr("eu")},
-		{Name: "id", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
+		{Name: "id", Data: &proto.ColDecimal64{1}},
 	})
 	err := ValidateDecodable(schema, nativePayloadTestRevision, bad)
 	if err == nil || !errors.Is(err, ErrUnsupported) {
@@ -154,10 +154,10 @@ func TestValidateNativePayloadDecodable(t *testing.T) {
 func TestNativePayloadRejectsUnsupportedPinnedScalarType(t *testing.T) {
 	schema := payloadexec.TableSchema{
 		TableID: "tenant.unsupported",
-		Columns: []lthash.Column{{Name: "value", Type: "Int128"}},
+		Columns: []lthash.Column{{Name: "value", Type: "Decimal(18, 4)"}},
 	}
 	payload := encodeNativePayload(t, proto.Input{
-		{Name: "value", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
+		{Name: "value", Data: &proto.ColDecimal64{1}},
 	})
 	err := ValidateDecodable(schema, nativePayloadTestRevision, payload)
 	if err == nil || !errors.Is(err, ErrUnsupported) {

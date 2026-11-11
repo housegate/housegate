@@ -88,7 +88,7 @@ func TestEveryColumnFamilyHasAnAdmittedVector(t *testing.T) {
 // contract every caller depends on: one sentinel, and an operator message that
 // names both the offending declaration and the admitted profile.
 func TestResolveColumnProfileRejectionsUnwrapAndNameTheType(t *testing.T) {
-	for _, typeName := range []string{"Nullable(String)", "IPv4", "FixedString(x)", ""} {
+	for _, typeName := range []string{"Nullable(Nullable(String))", "IPv4", "FixedString(x)", ""} {
 		_, err := ResolveColumnProfile(typeName)
 		if !errors.Is(err, ErrUnsupportedColumnType) {
 			t.Errorf("ResolveColumnProfile(%q) = %v, want ErrUnsupportedColumnType", typeName, err)

@@ -101,6 +101,12 @@ var (
 	withDataErr = func(id string) outcome {
 		return outcome{392, "storage_integrity: table " + id + " is governed by storage integrity and cannot be created with data; create the table first, then INSERT"}
 	}
+	viewErr = func(id string) outcome {
+		return outcome{392, "storage_integrity: " + id + " is in a storage-integrity database; views and materialized views cannot be created there"}
+	}
+	viewSourceErr = func(id string) outcome {
+		return outcome{392, "storage_integrity: table " + id + " is governed by storage integrity; a view or materialized view cannot read it"}
+	}
 	unreadableErr = outcome{392, "storage_integrity: the materialized view header cannot be read, so its view name and target may be governed by storage integrity; create the table first, then INSERT"}
 	alterErr      = func(id string) outcome {
 		return outcome{392, "storage_integrity: table " + id + " is governed by storage integrity; ALTER and RENAME are not supported"}
@@ -183,26 +189,26 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"unlexable CREATE of a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p (a UInt8) ENGINE = Memory COMMENT 'x", accessed("db1.p"), withDataErr("db1.p")},
 		{"unlexable CREATE of an ordinary name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o (a UInt8) ENGINE = Memory COMMENT 'x", accessed("db1.o"), ok},
 		{"schema clone of a pending table", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o AS db1.p", accessed("db1.o", "db1.p"), ok},
-		{"MV POPULATE into a pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory POPULATE AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
+		{"MV POPULATE into a pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory POPULATE AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), viewErr("db1.p")},
 		{"MV TO a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.p", "db1.o"), withDataErr("db1.p")},
 		{"MV TO an active table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.a AS SELECT a FROM db1.o", accessed("db1.mv", "db1.a", "db1.o"), withDataErr("db1.a")},
 		{"MV TO a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.r AS SELECT a FROM db1.o", accessed("db1.mv", "db1.r", "db1.o"), refusedErr("db1.r")},
 		{"MV TO an ordinary table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.o AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
-		{"MV reading a pending source", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.p", accessed("db1.mv", "db1.p"), pendingErr("db1.p")},
+		{"MV reading a pending source", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.p", accessed("db1.mv", "db1.p"), viewSourceErr("db1.p")},
 		// The engine omits a REFRESH ... TO target from AccessedTables (and from
 		// its forwarded body); the gate takes it from the parsed header.
 		{"refreshable MV TO a pending table, target not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.p")},
 		{"MV TO an active table, target not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.a AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.a")},
 		// Spec gap (ruled): an MV whose own name is governed is refused in any
 		// form, because its inner storage ingests rows under that name.
-		{"plain MV named like a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
-		{"plain MV named like an active table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.a", "db1.o"), withDataErr("db1.a")},
-		{"MV named like a pending table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p TO db1.o AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
-		{"plain MV named like a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), withDataErr("db1.r")},
-		{"MV named like a refused table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r TO db1.o AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), withDataErr("db1.r")},
+		{"plain MV named like a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), viewErr("db1.p")},
+		{"plain MV named like an active table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.a", "db1.o"), viewErr("db1.a")},
+		{"MV named like a pending table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p TO db1.o AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), viewErr("db1.p")},
+		{"plain MV named like a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), viewErr("db1.r")},
+		{"MV named like a refused table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r TO db1.o AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), viewErr("db1.r")},
 		// The view's own name comes from the header, not AccessedTables[0].
-		{"MV named like a pending table, view not reported first", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o", "db1.p"), withDataErr("db1.p")},
-		{"MV named like a pending table, view not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW IF NOT EXISTS db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o"), withDataErr("db1.p")},
+		{"MV named like a pending table, view not reported first", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o", "db1.p"), viewErr("db1.p")},
+		{"MV named like a pending table, view not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW IF NOT EXISTS db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o"), viewErr("db1.p")},
 		{"plain MV with an ordinary name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
 		// An unreadable header is refused whatever the engine reported.
 		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
@@ -213,7 +219,44 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"MV TO an escaped pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.`\\x70` AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
 		{"schema copy into an escaped pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.`\\x70` AS db1.o ENGINE = Memory", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
 		{"view over a gone table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.g", accessed("db1.v", "db1.g"), unknownErr("db1.g")},
+		{"MV named like a gone table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.g ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.g", "db1.o"), viewErr("db1.g")},
 		{"CTAS into a gone name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.g ENGINE = Memory AS SELECT 1 AS a", accessed("db1.g"), purgingErr("db1.g")},
+	} {
+		check(t, tc.name, run(t, tc.typ, tc.sql, tc.tables), tc.want)
+	}
+}
+
+// TestViewsInStorageIntegrityDatabases (housegate#24): a view whose own name
+// is not Ordinary here lives in a storage-integrity database, where every
+// unregistered name is Pending, so every read of it would be refused; it is
+// refused when it is created instead. A view or materialized view body that
+// reads a Pending table is refused non-retryably, because both engines refuse
+// the same body once the table is Active. DROP VIEW still passes, so a view
+// created before this rule can be dropped. Views in ordinary databases over
+// ordinary tables are unchanged.
+func TestViewsInStorageIntegrityDatabases(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    sqlmeta.StatementType
+		sql    string
+		tables []sqlmeta.AccessedTable
+		want   outcome
+	}{
+		{"view in an ordinary database", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.o", accessed("db1.v", "db1.o"), ok},
+		{"view with no source in an ordinary database", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT 1 AS a", accessed("db1.v"), ok},
+		{"view named like a pending table, no source", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.p AS SELECT 1 AS a", accessed("db1.p"), viewErr("db1.p")},
+		{"view named like a pending table over an ordinary one", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.p AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), viewErr("db1.p")},
+		{"or-replace view named like a pending table", sqlmeta.StatementTypeCreateView, "CREATE OR REPLACE VIEW db1.p AS SELECT 1 AS a", accessed("db1.p"), viewErr("db1.p")},
+		{"view named like an active table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.a AS SELECT 1 AS a", accessed("db1.a"), viewErr("db1.a")},
+		{"view named like a refused table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.r AS SELECT 1 AS a", accessed("db1.r"), viewErr("db1.r")},
+		{"view named like a gone table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.g AS SELECT 1 AS a", accessed("db1.g"), viewErr("db1.g")},
+		{"view over a pending table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.p", accessed("db1.v", "db1.p"), viewSourceErr("db1.p")},
+		{"view over a refused table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.r", accessed("db1.v", "db1.r"), refusedErr("db1.r")},
+		// Both engines refuse an Active source in a view body themselves.
+		{"view over an active table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.a", accessed("db1.v", "db1.a"), ok},
+		{"MV to an ordinary table over a pending one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.o AS SELECT a FROM db1.p", accessed("db1.mv", "db1.o", "db1.p"), viewSourceErr("db1.p")},
+		{"drop view named like a pending table", sqlmeta.StatementTypeDropView, "DROP VIEW db1.p", accessed("db1.p"), ok},
+		{"select from a view named like a pending table", sqlmeta.StatementTypeSelect, "SELECT * FROM db1.p", accessed("db1.p"), pendingErr("db1.p")},
 	} {
 		check(t, tc.name, run(t, tc.typ, tc.sql, tc.tables), tc.want)
 	}
@@ -424,6 +467,8 @@ func TestDecide_ReplicaRows(t *testing.T) {
 		{"write", classWrite, nonRetryable, replicaErr("db2.a", 0)},
 		{"create", classCreate, nonRetryable, replicaErr("db2.a", 0)},
 		{"create with data", classCreateData, nonRetryable, replicaErr("db2.a", 0)},
+		{"create view", classCreateView, nonRetryable, replicaErr("db2.a", 0)},
+		{"view source", classViewSource, allow, ok},
 		{"drop", classDrop, nonRetryable, replicaErr("db2.a", 0)},
 		{"other DDL", classOtherDDL, nonRetryable, replicaErr("db2.a", 0)},
 		{"view target", classViewTarget, nonRetryable, replicaErr("db2.a", 0)},
@@ -466,6 +511,7 @@ func TestDecide_ReplicaRows(t *testing.T) {
 		{"materialized view named like a copy", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db2.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db2.a", "db1.o"), replicaErr("db2.a", 0)},
 		{"materialized view reading a copy", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.o AS SELECT a FROM db2.a", accessed("db1.mv", "db1.o", "db2.a"), ok},
 		{"view over a copy", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db2.a", accessed("db1.v", "db2.a"), ok},
+		{"view named like a copy", sqlmeta.StatementTypeCreateView, "CREATE VIEW db2.a AS SELECT a FROM db1.o", accessed("db2.a", "db1.o"), replicaErr("db2.a", 0)},
 		{"a copy and a pending table", sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db1.p USING (k)", accessed("db2.a", "db1.p"), pendingErr("db1.p")},
 	} {
 		check(t, tc.name, (&Plugin{}).OnQuery(context.Background(), replicaQuery(newSession(t, 40), tc.typ, tc.sql, tc.tables)), tc.want)

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -18,8 +19,20 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// defaultCHImage is the ClickHouse server the integration suite runs against.
+// HOUSEGATE_CH_IMAGE overrides it, so CI can run the same suite on every
+// ClickHouse version a deployment may use (25.8 and 26.8 today).
+const defaultCHImage = "clickhouse/clickhouse-server:25.8"
+
+// chImage is the image the suite starts: HOUSEGATE_CH_IMAGE when set.
+var chImage = func() string {
+	if image := os.Getenv("HOUSEGATE_CH_IMAGE"); image != "" {
+		return image
+	}
+	return defaultCHImage
+}()
+
 const (
-	chImage    = "clickhouse/clickhouse-server:25.8"
 	chUser     = "housegate_test"
 	chPassword = "housegate_test_pw"
 	chDatabase = "housegate_test"

@@ -9,6 +9,7 @@ import (
 	rewritergo "github.com/housegate/rewriter-go"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -20,10 +21,30 @@ import (
 
 // Engine values for Options.Engine, selecting which backend
 // NewSentioNetworkFactory constructs. Empty means EngineGRPC.
+//
+// EngineAuto picks one of the other two once, at construction: the gRPC
+// service when it becomes reachable within Options.AutoGRPCWait, otherwise
+// the native engine loaded from the library Options.ResolveNativeLibrary
+// returns. The choice is fixed for the factory's lifetime; a later gRPC
+// outage fails closed like under EngineGRPC and never switches engines.
 const (
 	EngineGRPC   = "grpc"
 	EngineNative = "native"
+	EngineAuto   = "auto"
 )
+
+// DefaultAutoGRPCWait bounds how long EngineAuto waits for the gRPC service
+// before it falls back to the native engine.
+const DefaultAutoGRPCWait = 30 * time.Second
+
+// autoGRPCMaxBackoff caps the reconnect delay while EngineAuto waits, so a
+// sidecar that comes up during the wait is found within about a second.
+const autoGRPCMaxBackoff = time.Second
+
+// EngineVersionUnknown labels an engine whose build cannot be read: the gRPC
+// contract carries no version, and a native library given by path has no
+// release tag.
+const EngineVersionUnknown = "unknown"
 
 // backend abstracts the rewrite transport: the remote sql-rewriter gRPC
 // service or the in-process rewriter-go engine. Both speak the same proto
@@ -58,27 +79,41 @@ type grpcBackend struct {
 // refuses startup unless rewriter.fail_open_on_unavailable allows running
 // without the rewriter.
 func newGRPCBackend(opts Options) (*grpcBackend, error) {
+	connectTimeout := opts.Timeout
+	if connectTimeout == 0 {
+		connectTimeout = 10 * time.Second
+	}
+	return dialGRPCBackend(opts, EngineGRPC, connectTimeout)
+}
+
+// dialGRPCBackend blocks until the service at opts.ServiceAddr is connected
+// or connectTimeout expires. Under EngineAuto the reconnect backoff is capped
+// at autoGRPCMaxBackoff so the wait notices a late sidecar promptly.
+func dialGRPCBackend(opts Options, engine string, connectTimeout time.Duration) (*grpcBackend, error) {
 	if opts.ServiceAddr == "" {
-		return nil, fmt.Errorf("rewriter service_addr is required when rewriter engine is %q", EngineGRPC)
+		return nil, fmt.Errorf("rewriter service_addr is required when rewriter engine is %q", engine)
 	}
 	kaParams := keepalive.ClientParameters{
 		Time:                30 * time.Second,
 		Timeout:             5 * time.Second,
 		PermitWithoutStream: true,
 	}
-	connectTimeout := opts.Timeout
-	if connectTimeout == 0 {
-		connectTimeout = 10 * time.Second
-	}
 	connectCtx, connectCancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer connectCancel()
 
-	conn, err := grpc.DialContext(connectCtx, opts.ServiceAddr,
+	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithKeepaliveParams(kaParams),
 		grpc.WithStatsHandler(requestSentTracker{}),
 		grpc.WithBlock(),
-	)
+	}
+	if engine == EngineAuto {
+		bo := backoff.DefaultConfig
+		bo.BaseDelay = 100 * time.Millisecond
+		bo.MaxDelay = autoGRPCMaxBackoff
+		dialOpts = append(dialOpts, grpc.WithConnectParams(grpc.ConnectParams{Backoff: bo}))
+	}
+	conn, err := grpc.DialContext(connectCtx, opts.ServiceAddr, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to rewriter service at %s: %w", opts.ServiceAddr, err)
 	}
@@ -176,14 +211,80 @@ func newNativeBackend(opts Options) (backend, error) {
 	return svc, nil
 }
 
+// loadNativeBackend loads the native engine; tests replace it to cover the
+// EngineAuto fallback without the FFI library.
+var loadNativeBackend = newNativeBackend
+
+// selectedBackend is a constructed backend and the engine that serves it:
+// EngineGRPC or EngineNative, never EngineAuto.
+type selectedBackend struct {
+	backend backend
+	engine  string
+	version string
+}
+
 // newBackend dispatches on Options.Engine ("" defaults to grpc).
-func newBackend(opts Options) (backend, error) {
+func newBackend(opts Options) (selectedBackend, error) {
 	switch opts.Engine {
 	case "", EngineGRPC:
-		return newGRPCBackend(opts)
+		be, err := newGRPCBackend(opts)
+		if err != nil {
+			return selectedBackend{}, err
+		}
+		return selectedBackend{backend: be, engine: EngineGRPC, version: EngineVersionUnknown}, nil
 	case EngineNative:
-		return newNativeBackend(opts)
+		be, err := loadNativeBackend(opts)
+		if err != nil {
+			return selectedBackend{}, err
+		}
+		return selectedBackend{backend: be, engine: EngineNative, version: nativeVersion(opts)}, nil
+	case EngineAuto:
+		return newAutoBackend(opts)
 	default:
-		return nil, fmt.Errorf("unknown rewriter engine %q (want %q or %q)", opts.Engine, EngineGRPC, EngineNative)
+		return selectedBackend{}, fmt.Errorf("unknown rewriter engine %q (want %q, %q or %q)", opts.Engine, EngineGRPC, EngineNative, EngineAuto)
 	}
+}
+
+// newAutoBackend selects the engine once. The gRPC service wins when it is
+// reachable within the wait; otherwise the native library is resolved and
+// loaded. A native resolution or load failure is returned with the gRPC
+// failure so the operator sees both, and nothing is constructed.
+func newAutoBackend(opts Options) (selectedBackend, error) {
+	wait := opts.AutoGRPCWait
+	if wait <= 0 {
+		wait = DefaultAutoGRPCWait
+	}
+	grpcBe, grpcErr := dialGRPCBackend(opts, EngineAuto, wait)
+	if grpcErr == nil {
+		log.Infow("rewriter engine auto: selected grpc", "service_addr", opts.ServiceAddr)
+		return selectedBackend{backend: grpcBe, engine: EngineGRPC, version: EngineVersionUnknown}, nil
+	}
+	log.Warnw("rewriter engine auto: grpc service unreachable, falling back to the pinned native engine",
+		"service_addr", opts.ServiceAddr, "grpc_wait", wait.String(), "err", grpcErr)
+	if opts.ResolveNativeLibrary == nil {
+		return selectedBackend{}, fmt.Errorf("rewriter engine %q: %w; no pinned native library to fall back to", EngineAuto, grpcErr)
+	}
+	path, err := opts.ResolveNativeLibrary(context.Background())
+	if err == nil && path == "" {
+		err = fmt.Errorf("resolved an empty library path")
+	}
+	if err != nil {
+		return selectedBackend{}, fmt.Errorf("rewriter engine %q: %w; native fallback: resolve pinned library: %v", EngineAuto, grpcErr, err)
+	}
+	nativeOpts := opts
+	nativeOpts.NativeLibraryPath = path
+	be, err := loadNativeBackend(nativeOpts)
+	if err != nil {
+		return selectedBackend{}, fmt.Errorf("rewriter engine %q: %w; native fallback: %v", EngineAuto, grpcErr, err)
+	}
+	log.Infow("rewriter engine auto: selected native", "lib", path, "version", nativeVersion(opts))
+	return selectedBackend{backend: be, engine: EngineNative, version: nativeVersion(opts)}, nil
+}
+
+// nativeVersion is the release tag the native library came from, when known.
+func nativeVersion(opts Options) string {
+	if opts.NativeLibraryVersion != "" {
+		return opts.NativeLibraryVersion
+	}
+	return EngineVersionUnknown
 }

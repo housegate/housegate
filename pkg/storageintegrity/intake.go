@@ -453,6 +453,9 @@ type OrchestratorConfig struct {
 	Journal               IntakeJournal
 	RecoveryRetryInterval time.Duration
 	PayloadLeaseManager   PayloadLeaseManager
+	// StageObserver, when set, is told how long each intake stage took
+	// (intake_metrics.go). Nil records nothing.
+	StageObserver IntakeStageObserver
 }
 
 // IntakeResult is the orchestration outcome for one admission.
@@ -709,11 +712,15 @@ const defaultFrontierKey = "__default_source__"
 
 // NewOrchestrator constructs an Orchestrator over the two staged-intake ports.
 func NewOrchestrator(submitter StatementSubmitter, preparer SourcePreparer, cfg OrchestratorConfig) *Orchestrator {
+	journal := cfg.Journal
+	if journal != nil && cfg.StageObserver != nil {
+		journal = timedJournal{IntakeJournal: journal, observer: cfg.StageObserver}
+	}
 	return &Orchestrator{
 		submitter:           submitter,
 		preparer:            preparer,
 		cfg:                 cfg,
-		journal:             cfg.Journal,
+		journal:             journal,
 		records:             map[string]*intakeRecord{},
 		frontiers:           map[string]*sourceFrontier{},
 		nextFrontierOrdinal: map[string]uint64{},
@@ -914,7 +921,10 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// Acquire the source frontier before any source write. This is re-entrant
 	// for the statement that already holds it (its own retry passes through) and
 	// blocks a different statement until the holder reaches a terminal stage.
-	if err := o.acquireFrontier(ctx, rec.source, env.StatementID); err != nil {
+	frontierStart := time.Now()
+	err = o.acquireFrontier(ctx, rec.source, env.StatementID)
+	o.observeStage(IntakeStageFrontierWait, frontierStart, err)
+	if err != nil {
 		o.finishAttempt(rec, IntakeResult{StatementID: env.StatementID}, err, false)
 		return IntakeResult{StatementID: env.StatementID}, err
 	}
@@ -979,7 +989,10 @@ func (o *Orchestrator) finishAttemptAndDropRecord(rec *intakeRecord, res IntakeR
 // active/done/terminal bookkeeping.
 func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm AdmissionRecord, rec *intakeRecord) (IntakeResult, error) {
 	if rankLifecycle(rec.stage) < rankLifecycle(LifecycleSubmitAccepted) && o.cfg.PayloadLeaseManager != nil {
-		if err := o.cfg.PayloadLeaseManager.EnsurePayloadLease(ctx, adm, env.PayloadRef); err != nil {
+		leaseStart := time.Now()
+		err := o.cfg.PayloadLeaseManager.EnsurePayloadLease(ctx, adm, env.PayloadRef)
+		o.observeStage(IntakeStagePayloadLease, leaseStart, err)
+		if err != nil {
 			return IntakeResult{StatementID: env.StatementID}, fmt.Errorf("intake: ensure payload lease for %s: %w", env.StatementID, err)
 		}
 	}
@@ -1036,7 +1049,9 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 				submit = queried
 			} else {
 				var submitErr error
+				submitStart := time.Now()
 				submit, submitErr = o.submitter.SubmitStatement(ctx, env)
+				o.observeStage(IntakeStageSubmit, submitStart, submitErr)
 				if submitErr != nil {
 					return IntakeResult{StatementID: env.StatementID, Prepared: prepared}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
 				}
@@ -1106,11 +1121,15 @@ func (o *Orchestrator) prepareAndSubmit(ctx context.Context, env StatementEnvelo
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		start := time.Now()
 		prepared, prepareErr = o.preparer.PrepareLocalStatement(ctx, env, adm.Payload)
+		o.observeStage(IntakeStagePrepare, start, prepareErr)
 	}()
 	go func() {
 		defer wg.Done()
+		start := time.Now()
 		submit, submitErr = o.submitter.SubmitStatement(ctx, env)
+		o.observeStage(IntakeStageSubmit, start, submitErr)
 	}()
 	wg.Wait()
 	return prepared, submit, prepareErr, submitErr
@@ -1201,7 +1220,9 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 		}
 	}
 
+	claimStart := time.Now()
 	claim, claimErr := o.preparer.RegisterPreparedClaim(ctx, env.StatementID)
+	o.observeStage(IntakeStageRegisterClaim, claimStart, claimErr)
 	if claimErr != nil {
 		return res, fmt.Errorf("intake: register claim failed for %s: %w", env.StatementID, claimErr)
 	}
