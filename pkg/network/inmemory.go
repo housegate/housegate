@@ -127,9 +127,9 @@ func (s *InMemoryNetworkState) All() map[string]registry.Database {
 // --- registry.Access
 
 // PermissionsFor returns the per-database permission bitmap for an
-// account. The map merges the account's explicit grants with any
-// wildcard grants held by WildcardAddress; callers should treat the
-// returned map as opaque and not modify it.
+// account. The map merges the account's explicit grants with the Read
+// implied by any wildcard grant held by WildcardAddress (PublicReadBits);
+// callers should treat the returned map as opaque and not modify it.
 func (s *InMemoryNetworkState) PermissionsFor(account string) (map[string]registry.DbAuth, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -147,10 +147,23 @@ func (s *InMemoryNetworkState) PermissionsFor(account string) (map[string]regist
 	}
 	if wildcardOk && addr != WildcardAddress {
 		for db, auth := range wildcard {
-			out[string(db)] |= auth
+			if read := PublicReadBits(auth); read != 0 {
+				out[string(db)] |= read
+			}
 		}
 	}
 	return out, true
+}
+
+// PublicReadBits is what a grant held by the public (wildcard) address
+// contributes to every other account: only the Read bit its grant implies
+// (Owner and Write imply Read, Admin alone does not). The public address is
+// the encoding for public reads, and the Databases contract never unions
+// address(0) into another account — isDatabaseWriter says so explicitly and
+// GRANT / REVOKE check the caller's own bits — so a public Admin, Owner or
+// Write grant must not hand those bits to everyone (housegate/housegate#346).
+func PublicReadBits(auth registry.DbAuth) registry.DbAuth {
+	return promotePermissionBits(auth) & registry.DbAuthRead
 }
 
 func (s *InMemoryNetworkState) HasPermission(account, database string, action registry.Action) (bool, error) {
@@ -165,7 +178,7 @@ func (s *InMemoryNetworkState) HasPermission(account, database string, action re
 	}
 	if AccountAddress(account) != WildcardAddress {
 		if perms, ok := s.DatabasePermissions[WildcardAddress]; ok {
-			auth |= perms[Database(database)]
+			auth |= PublicReadBits(perms[Database(database)])
 		}
 	}
 	return promotePermissionBits(auth)&registry.DbAuth(action) != 0, nil

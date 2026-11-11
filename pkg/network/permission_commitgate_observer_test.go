@@ -649,3 +649,100 @@ func TestPermission_OnStatementExceptionNoOp(t *testing.T) {
 		t.Fatalf("OnStatementException must not mutate state")
 	}
 }
+
+// TestPermission_PublicAddress_GrantsReadOnly pins housegate/housegate#346:
+// the public address (0x000…000) is the encoding for public reads, and the
+// Databases contract never unions address(0) into another account
+// (isDatabaseWriter, GRANT/REVOKE's caller check). So a public Admin, Owner or
+// Write grant must not let another account ALTER, RENAME, GRANT, REVOKE,
+// write or DROP DATABASE; the Read such a grant implies stays public.
+func TestPermission_PublicAddress_GrantsReadOnly(t *testing.T) {
+	denied := []sqlmeta.StatementType{
+		sqlmeta.StatementTypeAlterTable,
+		sqlmeta.StatementTypeRenameTable,
+		sqlmeta.StatementTypeGrant,
+		sqlmeta.StatementTypeRevoke,
+		sqlmeta.StatementTypeInsert,
+		sqlmeta.StatementTypeCreateTable,
+		sqlmeta.StatementTypeDropTable,
+		sqlmeta.StatementTypeDropDatabase,
+	}
+	for _, bits := range []registry.DbAuth{
+		registry.DbAuthAdmin,
+		registry.DbAuthOwner,
+		registry.DbAuthWrite,
+		registry.DbAuthRead | registry.DbAuthWrite | registry.DbAuthAdmin | registry.DbAuthOwner,
+	} {
+		st := NewInMemoryNetworkState()
+		st.DatabaseInfos["foo"] = DatabaseInfo{DatabaseId: "foo"}
+		st.DatabasePermissions[PublicAccountAddress] = DatabasePermissions{"foo": bits}
+		for _, o := range []*PermissionCommitGateObserver{newPermObserver(st), NewPermissionCommitGateObserverWithWriters(st, st)} {
+			for _, typ := range denied {
+				ev := newEvent(typ, "bob", "foo", "t")
+				if typ == sqlmeta.StatementTypeDropDatabase {
+					ev = newEvent(typ, "bob", "foo", "")
+				}
+				if err := o.BeforeStatement(context.Background(), ev); err == nil {
+					t.Errorf("public bits %d: bob's %s must be refused", bits, typ)
+				}
+			}
+			// Admin alone implies no Read, as for any account; Owner and
+			// Write imply it.
+			err := o.BeforeStatement(context.Background(), newEvent(sqlmeta.StatementTypeSelect, "bob", "foo", "t"))
+			if wantRead := bits != registry.DbAuthAdmin; (err == nil) != wantRead {
+				t.Errorf("public bits %d: bob's SELECT err = %v, want allowed %v", bits, err, wantRead)
+			}
+		}
+	}
+}
+
+// TestInMemoryNetworkState_PublicGrantsAreReadOnly: the registry merges
+// only the Read the public address's grant implies into other accounts
+// (housegate/housegate#346), so buildDatabaseMap still maps a public
+// database and nothing beyond Read reaches another account.
+func TestInMemoryNetworkState_PublicGrantsAreReadOnly(t *testing.T) {
+	st := NewInMemoryNetworkState()
+	for _, db := range []string{"r", "w", "a", "o", "own"} {
+		st.DatabaseInfos[Database(db)] = DatabaseInfo{DatabaseId: db}
+	}
+	st.DatabasePermissions[WildcardAddress] = DatabasePermissions{
+		"r": registry.DbAuthRead, "w": registry.DbAuthWrite, "a": registry.DbAuthAdmin, "o": registry.DbAuthOwner,
+		"own": registry.DbAuthAdmin,
+	}
+	st.DatabasePermissions["bob"] = DatabasePermissions{"own": registry.DbAuthWrite}
+	perms, ok := st.PermissionsFor("bob")
+	if !ok {
+		t.Fatal("PermissionsFor(bob) not ok")
+	}
+	want := map[string]registry.DbAuth{"r": registry.DbAuthRead, "w": registry.DbAuthRead, "o": registry.DbAuthRead, "own": registry.DbAuthWrite}
+	for db, w := range want {
+		if perms[db] != w {
+			t.Errorf("perms[%s] = %d, want %d", db, perms[db], w)
+		}
+	}
+	if _, has := perms["a"]; has {
+		t.Errorf("a public Admin-only grant reached bob: %d", perms["a"])
+	}
+	// An account with no row of its own still sees the public reads.
+	if perms, ok := st.PermissionsFor("carol"); !ok || perms["r"] != registry.DbAuthRead || perms["o"] != registry.DbAuthRead {
+		t.Errorf("PermissionsFor(carol) = %v, %v", perms, ok)
+	}
+	// The public address keeps its own row unchanged.
+	if perms, _ := st.PermissionsFor(string(WildcardAddress)); perms["a"] != registry.DbAuthAdmin {
+		t.Errorf("public row = %v", perms)
+	}
+	for _, tc := range []struct {
+		db     string
+		action registry.Action
+		want   bool
+	}{
+		{"r", registry.Read, true}, {"w", registry.Read, true}, {"o", registry.Read, true},
+		{"w", registry.Write, false}, {"o", registry.Write, false}, {"a", registry.Read, false},
+		{"o", registry.Action(registry.DbAuthAdmin), false}, {"a", registry.Action(registry.DbAuthAdmin), false},
+	} {
+		got, err := st.HasPermission("carol", tc.db, tc.action)
+		if err != nil || got != tc.want {
+			t.Errorf("HasPermission(carol, %s, %d) = %v, %v; want %v", tc.db, tc.action, got, err, tc.want)
+		}
+	}
+}

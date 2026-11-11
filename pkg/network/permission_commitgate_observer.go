@@ -270,11 +270,11 @@ func allowsEmptyAccess(t sqlmeta.StatementType) bool {
 const systemDatabase Database = "system"
 
 // PublicAccountAddress is the all-zeros Ethereum address acting as a
-// public-grant pseudo-account. Permissions held by this address are
-// OR'd into every authenticated account's effective permissions
-// during checkAccess — i.e. granting Read on db `foo` to the public
-// address makes `foo` readable by every user, in addition to whatever
-// per-account permissions the bitmap holds.
+// public-read pseudo-account. The Read implied by its grant is OR'd into
+// every authenticated account's effective permissions during checkAccess —
+// granting Read on db `foo` to the public address makes `foo` readable by
+// every user. Its Write, Admin and Owner bits are not shared
+// (PublicReadBits, housegate/housegate#346).
 //
 // The address is intentionally the canonical zero address so it
 // matches the args-validator's NormalizeEthereumAddress output for
@@ -323,13 +323,14 @@ func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Da
 	if perms, permsOk := o.reg.PermissionsFor(string(account)); permsOk {
 		auth |= perms[dbKey]
 	}
-	// PublicAccountAddress acts as a wildcard grantee: anything it
-	// holds on `db` is unioned into the caller's effective bitmap.
-	// Skip the lookup when the caller IS the public address to avoid
-	// a redundant fetch.
+	// PublicAccountAddress grants public reads: only the Read its grant
+	// implies is unioned into the caller's bitmap (PublicReadBits), never
+	// its Write, Admin or Owner — the contract unions nothing from
+	// address(0) (housegate/housegate#346). Skip the lookup when the caller
+	// IS the public address.
 	if account != PublicAccountAddress {
 		if pubPerms, pubOk := o.reg.PermissionsFor(string(PublicAccountAddress)); pubOk {
-			auth |= pubPerms[dbKey]
+			auth |= PublicReadBits(pubPerms[dbKey])
 		}
 	}
 	auth = promotePermissionBits(auth)

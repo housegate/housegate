@@ -28,10 +28,13 @@ type Access interface {
 	// account that exists but holds no grants returns (empty-map, true).
 	// The returned map is owned by the caller.
 	//
-	// The bitmap MUST already include the grants held by the wildcard
-	// (public) address 0x0000000000000000000000000000000000000000, ORed into
-	// the account's own: a grant to that address means "every account", as
-	// sentio-core's registry.MergeAccountPermissions applies it. The
+	// The bitmap MUST already include the public reads of the wildcard
+	// address 0x0000000000000000000000000000000000000000: the Read its grant
+	// implies (Owner and Write imply Read, Admin alone does not), ORed into
+	// the account's own, as sentio-core's registry.MergeAccountPermissions
+	// applies it. The wildcard's Write, Admin and Owner bits MUST NOT be
+	// shared: the Databases contract unions nothing from address(0)
+	// (housegate/housegate#346). The
 	// rewriter builds each session's database_map from this result
 	// (rewriter.SentioNetworkFactory.buildDatabaseMap), so a database
 	// granted only to the public address is reachable exactly when this

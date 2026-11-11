@@ -43,13 +43,17 @@ func TestPermissionContractPredicate(t *testing.T) {
 		wantContract bool
 		wantBitmap   bool
 	}{
-		{"wildcard Write no longer admits INSERT", sqlmeta.StatementTypeInsert, predNobody, false, true},
-		{"wildcard Write no longer admits CREATE TABLE", sqlmeta.StatementTypeCreateTable, predNobody, false, true},
+		// The public address's Write is shared with neither predicate
+		// (housegate/housegate#346); before, the bitmap predicate admitted
+		// every account through it.
+		{"wildcard Write no longer admits INSERT", sqlmeta.StatementTypeInsert, predNobody, false, false},
+		{"wildcard Write no longer admits CREATE TABLE", sqlmeta.StatementTypeCreateTable, predNobody, false, false},
 		{"wildcard Read still admits SELECT", sqlmeta.StatementTypeSelect, predNobody, true, true},
-		{"indexer signer writes its own database", sqlmeta.StatementTypeInsert, predIndexer, true, true},
+		// The bitmap predicate knows no indexer signer.
+		{"indexer signer writes its own database", sqlmeta.StatementTypeInsert, predIndexer, true, false},
 		{"Write grantee", sqlmeta.StatementTypeInsert, predWriter, true, true},
 		{"Owner", sqlmeta.StatementTypeDropTable, predOwner, true, true},
-		{"Read grantee cannot write", sqlmeta.StatementTypeInsert, predReader, false, true},
+		{"Read grantee cannot write", sqlmeta.StatementTypeInsert, predReader, false, false},
 		{"Admin statements unchanged", sqlmeta.StatementTypeGrant, predWriter, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

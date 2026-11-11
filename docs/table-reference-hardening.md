@@ -139,7 +139,7 @@ What changes for clients:
 - ClickHouse names are case-sensitive: `SYSTEM.processes` and `Information_Schema.tables` name databases that do not exist, and are refused with this message.
 - With an empty `rewriter.physical_database` the map is empty, so every qualified read except `system` is refused.
 - The Sentio driver reads only its own logical databases and `system`, and is unaffected.
-- A database granted only to the public address (`0x000…000`) is not mapped yet, so its reads are refused: housegate/housegate#340.
+- A database granted to the public address (`0x000…000`) is in every account's `database_map`: the Read that grant implies is public (housegate/housegate#340). The public address's Write, Admin and Owner bits are not shared with anyone (housegate/housegate#346).
 
 `TestTableReference_UnmappedDatabaseRefused` runs these refusals through a proxy on the native engine with auth off, against a real table in ClickHouse's `default` database.
 
