@@ -76,6 +76,32 @@ func TestRefused(t *testing.T) {
 		{"SQL_x_auth_token", "x", false},
 		{"enable_scopes_for_with_statement", "0", false},
 		{"allow_deprecated_syntax_for_merge_tree", "1", false}, // spec §13: deliberately not R5
+		// ClickHouse 26.8 settings, any value.
+		{"filter", "a IN (SELECT a FROM other.t)", true},
+		{"select", "(SELECT 1)", true},
+		{"order", "a", true},
+		{"sort", "a", true},
+		{"database", "other", true},
+		{"DATABASE", "other", true},
+		{"format", "Values", true},
+		{"input_format", "Values", true},
+		{"output_format", "JSON", true},
+		{"default_format", "JSON", true},
+		{"asterisk_include_virtual_columns", "1", true},
+		{"s3_allow_server_credentials_in_user_queries", "1", true},
+		{"dynamic_disk_allow_from_env", "1", true},
+		{"Dynamic_Disk_Allow_Future", "0", true},
+		{"url_base", "file://", true},
+		{"s3_base", "https://b/", true},
+		{"analyzer_compatibility_allow_cte_redefinition", "1", true},
+		{"analyzer_compatibility_prefer_alias_over_subcolumn", "1", true},
+		{"analyzer_compatibility_multiple_joins_qualify_column_names", "1", true},
+		{"analyzer_inline_views", "1", true},
+		{"enable_streaming_queries", "1", true},
+		{"ai_function_text_default_credentials", "c", true},
+		{"ai_function_embedding_default_credentials", "c", true},
+		{"output_format_json_quote_64bit_integers", "1", false},
+		{"input_format_skip_unknown_fields", "1", false},
 		{"", "", false},
 	} {
 		if got := Refused(tc.name, tc.value); got != tc.want {
@@ -84,27 +110,47 @@ func TestRefused(t *testing.T) {
 	}
 }
 
-// The fixed names are exactly rewriter-go v0.16.0's sqlBearingSettings and
-// analyzerSettings (internal/engine/settings.go:46-74), sorted.
+// The fixed names are exactly rewriter-go's sqlBearingSettings and
+// analyzerSettings (internal/engine/settings.go), sorted.
 func TestRefusedNames(t *testing.T) {
 	want := []string{
 		"additional_result_filter",
 		"additional_table_filters",
+		"ai_function_embedding_default_credentials",
+		"ai_function_text_default_credentials",
 		"allow_experimental_analyzer",
 		"allow_experimental_kusto_dialect",
 		"allow_experimental_polyglot_dialect",
 		"allow_experimental_prql_dialect",
+		"analyzer_compatibility_allow_cte_redefinition",
+		"analyzer_compatibility_multiple_joins_qualify_column_names",
+		"analyzer_compatibility_prefer_alias_over_subcolumn",
+		"analyzer_inline_views",
+		"asterisk_include_virtual_columns",
 		"compatibility",
+		"database",
+		"default_format",
 		"dialect",
 		"enable_analyzer",
 		"enable_global_with_statement",
+		"enable_streaming_queries",
+		"filter",
+		"format",
 		"implicit_table_at_top_level",
+		"input_format",
 		"legacy_column_name_of_tuple_literal",
+		"order",
+		"output_format",
 		"parallel_replicas_custom_key",
 		"polyglot_dialect",
 		"profile",
 		"promql_database",
 		"promql_table",
+		"s3_allow_server_credentials_in_user_queries",
+		"s3_base",
+		"select",
+		"sort",
+		"url_base",
 	}
 	got := RefusedNames()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -321,6 +367,9 @@ func TestRejectionLabel(t *testing.T) {
 		{"PROFILE", "profile"},
 		{"allow_experimental_kusto_dialect", "allow_experimental_kusto_dialect"},
 		{"some_future_dialect", labelOtherDialect},
+		{"database", "database"},
+		{"dynamic_disk_allow_from_env", labelDynamicDisk},
+		{"DYNAMIC_DISK_ALLOW_X", labelDynamicDisk},
 		{"X_DIALECT", labelOtherDialect},
 	} {
 		if got := rejectionLabel(tc.name); got != tc.want {
@@ -399,5 +448,62 @@ func TestRejectionTelemetry(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Fatalf("an accepted query logged: %s", buf.String())
+	}
+}
+
+// TestDatabaseSettingNamingTheSessionDatabase pins the one value-dependent
+// exception: clickhouse-client 26.8 sends --database as the database setting
+// on every query, so that setting naming the session's current logical
+// database is removed and the query goes on; any other value, or the setting
+// on a session without a logical database, is refused.
+func TestDatabaseSettingNamingTheSessionDatabase(t *testing.T) {
+	p := &Plugin{}
+	ctx := context.Background()
+	inTenant := func(t *testing.T) chsession.Session {
+		sess := newSession(t)
+		sess.State().SetLogicalDatabase("tenant1")
+		return sess
+	}
+	for _, s := range []chproto.Setting{
+		{Key: "database", Value: "tenant1", Important: true},
+		{Key: "database", Value: "tenant1"},
+		{Key: "database", Value: "'tenant1'", Custom: true},
+	} {
+		q := queryWith(inTenant(t), chproto.Setting{Key: "max_threads", Value: "2"}, s, chproto.Setting{Key: "SQL_x_auth_token", Value: "'t'", Custom: true})
+		if err := p.OnQuery(ctx, q); err != nil {
+			t.Fatalf("%+v: %v", s, err)
+		}
+		if got := q.Query.Settings; len(got) != 2 || got[0].Key != "max_threads" || got[1].Key != "SQL_x_auth_token" {
+			t.Fatalf("%+v: forwarded settings = %+v, want the database setting removed and the rest kept in order", s, got)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		sess func(*testing.T) chsession.Session
+		s    chproto.Setting
+	}{
+		{"another database", inTenant, chproto.Setting{Key: "database", Value: "tenant2"}},
+		{"the physical database", inTenant, chproto.Setting{Key: "database", Value: "phys"}},
+		{"plain value with the custom flag quoted twice", inTenant, chproto.Setting{Key: "database", Value: "''tenant1''", Custom: true}},
+		{"quoted value without the custom flag", inTenant, chproto.Setting{Key: "database", Value: "'tenant1'"}},
+		{"another case of the name", inTenant, chproto.Setting{Key: "Database", Value: "tenant1"}},
+		{"no logical database", newSession, chproto.Setting{Key: "database", Value: ""}},
+	} {
+		q := queryWith(tc.sess(t), tc.s)
+		if err := p.OnQuery(ctx, q); err == nil {
+			t.Errorf("%s: %+v must be refused", tc.name, tc.s)
+		}
+		if len(q.Query.Settings) != 1 {
+			t.Errorf("%s: a refused query's settings must be left as they were, got %+v", tc.name, q.Query.Settings)
+		}
+	}
+	// A refused setting after the database one still refuses the query and
+	// leaves the packet untouched.
+	q := queryWith(inTenant(t), chproto.Setting{Key: "database", Value: "tenant1"}, chproto.Setting{Key: "filter", Value: "'1'"})
+	if err := p.OnQuery(ctx, q); err == nil || !strings.Contains(err.Error(), "table setting filter") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(q.Query.Settings) != 2 {
+		t.Fatalf("settings = %+v", q.Query.Settings)
 	}
 }

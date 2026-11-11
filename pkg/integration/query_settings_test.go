@@ -33,6 +33,15 @@ func TestQuerySettings_RefusedInTheQueryPacket(t *testing.T) {
 		{"profile", clickhouse.Settings{"profile": "default"}, "profile"},
 		{"implicit table", clickhouse.Settings{"implicit_table_at_top_level": "x"}, "implicit_table_at_top_level"},
 		{"dialect", clickhouse.Settings{"dialect": "kusto"}, "dialect"},
+		// ClickHouse 26.8: SQL text the server wraps around the query, the
+		// current database and the INSERT input format.
+		{"26.8 filter", clickhouse.Settings{"filter": "1 IN (SELECT 1 FROM system.one)"}, "filter"},
+		{"26.8 database", clickhouse.Settings{"database": "phys_qs"}, "database"},
+		// The session's own logical database is what clickhouse-client 26.8
+		// sends for --database on every query: removed, not refused.
+		{"26.8 database naming the session database", clickhouse.Settings{"database": chEnv.Database}, ""},
+		{"26.8 input format", clickhouse.Settings{"input_format": "Values"}, "input_format"},
+		{"26.8 dynamic disk", clickhouse.Settings{"dynamic_disk_allow_from_env": 1}, "dynamic_disk_allow_from_env"},
 		{"analyzer on", clickhouse.Settings{"enable_analyzer": 1}, ""},
 		{"analyzer true", clickhouse.Settings{"enable_analyzer": true}, ""},
 		{"ordinary setting", clickhouse.Settings{"max_threads": 2}, ""},

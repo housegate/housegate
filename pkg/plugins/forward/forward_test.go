@@ -13,6 +13,7 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/sitable"
 )
 
@@ -317,6 +318,93 @@ func TestForwardPlugin_OnQuery_USEDifferentDb_TriggersRebind(t *testing.T) {
 	}
 	if sess.State().RouteTarget != "other.internal:9002" {
 		t.Errorf("RouteTarget should update to new peer; got %q", sess.State().RouteTarget)
+	}
+	// The rewrite plugin does not run on the now-forwarded session, so the
+	// forward plugin moves the logical database itself, once the peer has
+	// answered the USE.
+	if got := sess.State().LogicalDatabaseName(); got != "tenant2" {
+		t.Errorf("LogicalDatabase = %q before the USE succeeded, want tenant2", got)
+	}
+	p.OnQuerySuccess(context.Background(), sess, "")
+	p.OnQueryComplete(context.Background(), sess)
+	if got := sess.State().LogicalDatabaseName(); got != "tenant3" {
+		t.Errorf("LogicalDatabase = %q, want tenant3 after a forwarded USE", got)
+	}
+	// clickhouse-client 26.8 follows the USE with database = tenant3 on its
+	// next query; the origin's Query-packet check accepts it (and removes
+	// it), while the old database is now refused.
+	qs := &querysettings.Plugin{}
+	next := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1",
+		Settings: []chproto.Setting{{Key: "database", Value: "tenant3", Important: true}}}}
+	if err := qs.OnQuery(context.Background(), next); err != nil {
+		t.Fatalf("database = tenant3 after the forwarded USE: %v", err)
+	}
+	if len(next.Query.Settings) != 0 {
+		t.Errorf("forwarded settings = %+v, want the database setting removed", next.Query.Settings)
+	}
+	stale := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1",
+		Settings: []chproto.Setting{{Key: "database", Value: "tenant2", Important: true}}}}
+	if err := qs.OnQuery(context.Background(), stale); err == nil {
+		t.Error("database = tenant2 after USE tenant3 must be refused")
+	}
+}
+
+// TestForwardPlugin_OnQuery_USEOnTheSamePeer_MovesTheLogicalDatabase covers a
+// USE between two databases one peer hosts: no pivot, and the rewrite plugin
+// is skipped on the forwarded session, so the forward plugin must still move
+// the logical database the querysettings check compares a client's database
+// setting with, and only once the peer has accepted the USE.
+func TestForwardPlugin_OnQuery_USEOnTheSamePeer_MovesTheLogicalDatabase(t *testing.T) {
+	ns := newFakeNS(t).
+		WithDatabase("tenant2", 200).
+		WithDatabase("tenant4", 200).
+		WithIndexer(200, "peer.internal", 9001)
+	p := newTestForwardPlugin(t, ns, 100)
+	p.dialPeer = func(_ context.Context, _ string) (*chproto.Codec, error) {
+		t.Fatal("USE on the same peer must not dial")
+		return nil, nil
+	}
+	sess := newTestSession(t)
+	sess.State().SetForwarding(true)
+	sess.State().SetRouteTarget("peer.internal:9001")
+	sess.State().LogicalDatabase = "tenant2"
+	use := func(sql, queryID string) {
+		t.Helper()
+		q := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{ID: queryID, Body: sql}}
+		if err := p.OnQuery(context.Background(), q); err != nil {
+			t.Fatalf("OnQuery(%s): %v", sql, err)
+		}
+	}
+	// The peer refuses the USE (a registered database this account may not
+	// use, say): the query completes without success, and the logical
+	// database stays where the client stays.
+	use("USE tenant4", "q1")
+	p.OnQueryComplete(context.Background(), sess)
+	if got := sess.State().LogicalDatabaseName(); got != "tenant2" {
+		t.Errorf("LogicalDatabase = %q after a refused USE, want tenant2", got)
+	}
+	// A success reported for another query does not commit it either.
+	use("USE tenant4", "q2")
+	p.OnQuerySuccess(context.Background(), sess, "q-other")
+	p.OnQueryComplete(context.Background(), sess)
+	if got := sess.State().LogicalDatabaseName(); got != "tenant2" {
+		t.Errorf("LogicalDatabase = %q after a mismatched success, want tenant2", got)
+	}
+	// The peer accepts it.
+	use("USE tenant4", "q3")
+	p.OnQuerySuccess(context.Background(), sess, "q3")
+	p.OnQueryComplete(context.Background(), sess)
+	if got := sess.State().LogicalDatabaseName(); got != "tenant4" {
+		t.Errorf("LogicalDatabase = %q, want tenant4", got)
+	}
+	if _, pending := p.pendingUse.Load(sess); pending {
+		t.Error("a completed USE must leave nothing pending")
+	}
+	// An unknown database leaves it alone (ClickHouse answers the USE).
+	use("USE nowhere", "q4")
+	p.OnQuerySuccess(context.Background(), sess, "q4")
+	if got := sess.State().LogicalDatabaseName(); got != "tenant4" {
+		t.Errorf("LogicalDatabase = %q after an unknown USE, want tenant4", got)
 	}
 }
 

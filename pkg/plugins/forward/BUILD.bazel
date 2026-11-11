@@ -39,6 +39,7 @@ go_test(
         "//pkg/endpointtls/endpointtlstest",
         "//pkg/network",
         "//pkg/plugin",
+        "//pkg/plugins/querysettings",
         "//pkg/sitable",
     ],
 )

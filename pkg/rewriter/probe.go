@@ -289,8 +289,9 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 // the operator to deploy. rewriter-go v0.15.0 fails the analyzer-off and
 // engine-argument cases; rewriter-go v0.16.0 fails driver-function-spelling
 // and driver-view-comment; rewriter-grpc v0.16.0 fails
-// driver-grouped-literal-tuple.
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.17.0 or rewriter-grpc >= v0.17.0 (table-reference policy, spec 2026-09-26, and Sentio-driver compatibility)"
+// driver-grouped-literal-tuple; rewriter-go before v0.22.0 and rewriter-grpc
+// before v0.19.0 fail the ch268-* cases.
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.22.0 or rewriter-grpc >= v0.19.0 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -373,6 +374,20 @@ var tableReferenceProbes = []buildProbe{
 	// Spec §13; rewriter-go v0.15.0 answers Success.
 	rejectedProbe("engine-argument-read-refused", "CREATE TABLE db1.n (d Date, n UInt8) ENGINE = MergeTree(d, (SELECT max(n) FROM db1.o), 8192)",
 		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
+	// What a ClickHouse 26.8 backend honours (spec 2026-09-26 §16): a setting
+	// whose SQL text the server wraps around the query, a deployment-identity
+	// function and the _database virtual column, measured 2026-11-10 against
+	// rewriter-go v0.22.0 (native FFI, library v0.22.0) and rewriter-grpc
+	// v0.19.0's tree. rewriter-go before v0.22.0 and rewriter-grpc before
+	// v0.19.0 answer Success for all three, so a
+	// HouseGate whose Query-packet check refuses the 26.8 settings cannot
+	// start against an engine that does not.
+	rejectedProbe("ch268-setting-refused", "SELECT a FROM db1.o SETTINGS filter = 'a = 1'",
+		pb.RewriteCode_UnsupportedStatement, "table setting filter is not accepted"),
+	rejectedProbe("ch268-identity-function-refused", "SELECT pg_get_userbyid(1)",
+		pb.RewriteCode_UnsupportedStatement, "function pg_get_userbyid is not accessible"),
+	rejectedProbe("ch268-database-column-refused", "SELECT _database FROM db1.o",
+		pb.RewriteCode_UnsupportedStatement, "virtual column _database is not accessible"),
 	// Sentio-driver compatibility (measured 2026-10-02). The indexer driver
 	// sends startsWith(...) before every lightweight delete; rewriter-go
 	// v0.16.0 refuses it (Polyglot respells it STARTS_WITH and the drop gate
