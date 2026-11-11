@@ -111,7 +111,7 @@ jobs:
           - ch_image: "clickhouse/clickhouse-server:25.8"
             test_filter: ""
           - ch_image: "clickhouse/clickhouse-server:26.8"
-            test_filter: "TestPartitionKey|TestColumnProfile|TestReplayCHExecutor|TestClickHouseSortsNullsLast|TestCLI_V2Types|TestCLI_LowCardinality|TestCLI_SignableInsertFormats|TestStorageIntegrity_InlineValues|TestUpstreamGrantsCheck"
+            test_filter: "TestPartitionKey|TestColumnProfile|TestReplayCHExecutor|TestClickHouseSortsNullsLast|TestCLI_V2Types|TestCLI_LowCardinality|TestCLI_SignableInsertFormats|TestStorageIntegrity_InlineValues|TestUpstreamGrantsCheck|TestMergeGuard_"
     env:
       HOUSEGATE_CH_IMAGE: ${{ matrix.ch_image }}
       HOUSEGATE_TEST_FILTER: ${{ matrix.test_filter }}
