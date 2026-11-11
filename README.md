@@ -498,6 +498,8 @@ housegate                                # agent mode, devnet2, 127.0.0.1:9000
 clickhouse-client --host 127.0.0.1 --port 9000
 ```
 
+An interactive `clickhouse-client` prints `Cannot load data for command line suggestions` once at startup: HouseGate refuses `system.completions`, which would list every account's databases, tables and columns. Keyword completion still works; add `-A` to skip the load ([table-reference-hardening.md](docs/table-reference-hardening.md#metadata-tables)).
+
 With only a key and no config file the agent joins `devnet2`, discovers the network id and table status from the indexer hosting each database, keeps its `client_seq` counter under `<base>/si/<network_id>/<signer>/`, where `<base>` is `$XDG_STATE_HOME/housegate` when `XDG_STATE_HOME` is an absolute path and `~/.local/state/housegate` otherwise on Linux, or `~/Library/Application Support/housegate` on macOS, fetches the native engine for inline `VALUES` on linux/amd64 and darwin/arm64, and moves the session to the hosting indexer for SI INSERTs. Reads are not moved: connect with `--database <db>` to read an SI table. Billing: each INSERT is one query unit (two for inline `VALUES`), charged also when refused. The automatic native materializer (`-si-inline-values auto` or `on`) rewrites `now()`, `rand()` and `generateUUIDv4()` to literal constants only in inline `INSERT ... VALUES` statements, the shape the signed inline `VALUES` lane claims; every other query, including `SELECT` and `INSERT ... SELECT`, reaches the server untouched and keeps its per-row values. An explicit `materialize.enabled: true` in a config file rewrites every agent query, so there a `SELECT rand() FROM numbers(10)` returns ten identical values.
 
 #### Configured agent

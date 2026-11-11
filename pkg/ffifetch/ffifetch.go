@@ -29,7 +29,7 @@ const DefaultBaseURL = "https://github.com/housegate/rewriter-go/releases/downlo
 // DefaultRelease is the rewriter-go release whose FFI library matches the Go
 // binding this binary was built with (the go.mod require; a root test pins
 // them together). The agent's implicit native materializer fetches it.
-const DefaultRelease = "v0.23.0"
+const DefaultRelease = "v0.23.2"
 
 // Supported reports whether a prebuilt FFI library exists for the platform.
 func Supported(goos, goarch string) bool {
