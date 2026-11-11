@@ -515,13 +515,13 @@ func TestSentioRewriter_UnsafeLatestWithoutPortIsRejectedBeforeBackend(t *testin
 func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
 	for _, code := range []pb.RewriteCode{pb.RewriteCode_UnsupportedStatement, pb.RewriteCode_RewriteError} {
 		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
-			Code: code, Message: "storage-integrity table db1.t accepts writes only through the signed statement lane",
+			Code: code, Message: "storage-integrity table db1.t is append-only: only INSERT and SELECT are accepted, and UPDATE, DELETE, ALTER, TRUNCATE and other statements on it are refused",
 			OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", IsStorageIntegrity: true}},
 		})}
 		rw := newSIFactory(be, nil, true).NewRewriter(&fakeSession{})
 		_, err := rw.Rewrite(context.Background(), "DROP TABLE db1.t", "")
 		var rej *RejectedError
-		if !errors.As(err, &rej) || rej.Code != code || !strings.Contains(rej.Message, "signed statement lane") {
+		if !errors.As(err, &rej) || rej.Code != code || rej.Message != "storage-integrity table db1.t is append-only: only INSERT and SELECT are accepted, and UPDATE, DELETE, ALTER, TRUNCATE and other statements on it are refused" {
 			t.Fatalf("code %v: err = %v, want RejectedError carrying the rewriter message", code, err)
 		}
 	}
@@ -688,7 +688,7 @@ func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 	})}
 	_, err := newSIFactory(be, nil, false).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t (a) VALUES (1)", "")
 	var rej *RejectedError
-	if !errors.As(err, &rej) || rej.Message != "storage-integrity table db1.t accepts writes only through the signed statement lane" {
+	if !errors.As(err, &rej) || rej.Message != "storage-integrity table db1.t accepts INSERT only through the signed statement lane, which is not enabled on this server" {
 		t.Fatalf("err = %v", err)
 	}
 	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t (a) VALUES (1)", "")
