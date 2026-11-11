@@ -16,8 +16,9 @@ import (
 // to what a storage-integrity gateway needs passes in enforce mode, and the
 // same user with one more grant on `default` (directly, or through a role,
 // which SHOW GRANTS FINAL expands), a url() source, a role held WITH ADMIN
-// OPTION, or a write behind a quoted column name refuses enforce-mode
-// startup. A role held without the admin option passes. The superuser the other tests run as is reported, never refused,
+// OPTION (directly or inherited through a parent role), a non-default role
+// granting `default.*`, or a write behind a quoted column name refuses
+// enforce-mode startup. A role held without the admin option passes. The superuser the other tests run as is reported, never refused,
 // in warn mode.
 func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	ctx := context.Background()
@@ -35,7 +36,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 		exec(q)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{"DROP USER IF EXISTS hg341_gw", "DROP USER IF EXISTS hg341_wide", "DROP USER IF EXISTS hg341_role_user", "DROP ROLE IF EXISTS hg341_role", "DROP USER IF EXISTS hg341_admin_user", "DROP USER IF EXISTS hg341_col", "DROP ROLE IF EXISTS hg341_phys_role"} {
+		for _, q := range []string{"DROP USER IF EXISTS hg341_gw", "DROP USER IF EXISTS hg341_wide", "DROP USER IF EXISTS hg341_role_user", "DROP ROLE IF EXISTS hg341_role", "DROP USER IF EXISTS hg341_admin_user", "DROP USER IF EXISTS hg341_col", "DROP USER IF EXISTS hg341_nested", "DROP USER IF EXISTS hg341_nondefault", "DROP ROLE IF EXISTS hg341_parent", "DROP ROLE IF EXISTS hg341_nd", "DROP ROLE IF EXISTS hg341_phys_role"} {
 			_ = admin.Exec(ctx, q)
 		}
 	})
@@ -49,7 +50,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 		"GRANT SELECT ON system.processes TO %s",
 		"GRANT TABLE ENGINE ON MergeTree TO %s",
 	}
-	for _, u := range []string{"hg341_gw", "hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col"} {
+	for _, u := range []string{"hg341_gw", "hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col", "hg341_nested", "hg341_nondefault"} {
 		exec("CREATE USER " + u + " IDENTIFIED WITH plaintext_password BY 'pw341'")
 		for _, g := range gateway {
 			exec(strings.ReplaceAll(g, "%s", u))
@@ -66,6 +67,15 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	exec("GRANT SELECT ON phys_341.* TO hg341_phys_role")
 	exec("GRANT hg341_phys_role TO hg341_admin_user WITH ADMIN OPTION")
 	exec("GRANT hg341_phys_role TO hg341_gw")
+	// The admin option inherited through a parent role.
+	exec("CREATE ROLE hg341_parent")
+	exec("GRANT hg341_phys_role TO hg341_parent WITH ADMIN OPTION")
+	exec("GRANT hg341_parent TO hg341_nested")
+	// A non-default role is expanded too.
+	exec("CREATE ROLE hg341_nd")
+	exec("GRANT SELECT ON default.* TO hg341_nd")
+	exec("GRANT hg341_nd TO hg341_nondefault")
+	exec("SET DEFAULT ROLE NONE TO hg341_nondefault")
 	// A write hidden behind a quoted column name with a parenthesis.
 	exec("GRANT SELECT(`(`), INSERT(a) ON hg_safe.t TO hg341_col")
 
@@ -78,7 +88,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	if err := check(chgrants.ModeEnforce, "hg341_gw", "pw341"); err != nil {
 		t.Fatalf("narrowed gateway user refused: %v", err)
 	}
-	for _, u := range []string{"hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col"} {
+	for _, u := range []string{"hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col", "hg341_nested", "hg341_nondefault"} {
 		if err := check(chgrants.ModeEnforce, u, "pw341"); !errors.Is(err, chgrants.ErrViolations) {
 			t.Fatalf("%s: err = %v, want ErrViolations", u, err)
 		}

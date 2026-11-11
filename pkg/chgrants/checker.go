@@ -160,46 +160,57 @@ func (c *Checker) checkOne(ctx context.Context, u Upstream, phase string) (int, 
 	return len(violations), true
 }
 
-// ShowGrants returns a QueryFunc that reads addr's grants as user: every
-// line of `SHOW GRANTS FINAL`, which lists the privileges of the user's
-// roles in place of the role grants, plus the role-grant lines of plain
-// `SHOW GRANTS`, which FINAL drops and which alone carry WITH ADMIN OPTION.
-// It opens a fresh native connection per check, so a check holds no
-// connection between runs. The current user needs no privilege to read its
-// own grants.
+// ShowGrants returns a QueryFunc that reads addr's grants as user, on one
+// connection:
+//
+//  1. `SET ROLE ALL`, so every role granted to the user, directly or through
+//     another role, default or not, is enabled on this connection;
+//  2. `SHOW GRANTS FINAL`, which lists the privileges of every granted role in
+//     place of the role grants (measured on 25.8 and 26.8: it expands
+//     non-default roles too);
+//  3. `system.enabled_roles` rows WITH ADMIN OPTION, returned as
+//     `GRANT <role> TO CURRENT_USER WITH ADMIN OPTION` lines. FINAL drops role
+//     grants, and plain SHOW GRANTS lists only the user's direct role grants,
+//     while an admin option inherited through a parent role lets the user
+//     grant the role just the same.
+//
+// The current user needs no privilege for any of these. A fresh connection is
+// opened per check, so a check holds no connection between runs.
 func ShowGrants(addr, user, password string) QueryFunc {
 	return func(ctx context.Context) ([]string, error) {
 		conn, err := clickhouse.Open(&clickhouse.Options{
-			Addr:     []string{addr},
-			Auth:     clickhouse.Auth{Username: user, Password: password},
-			Protocol: clickhouse.Native,
+			Addr:         []string{addr},
+			Auth:         clickhouse.Auth{Username: user, Password: password},
+			Protocol:     clickhouse.Native,
+			MaxOpenConns: 1,
+			MaxIdleConns: 1,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("open: %w", err)
 		}
 		defer func() { _ = conn.Close() }()
-		final, err := queryLines(ctx, conn, "SHOW GRANTS FINAL")
+		if err := conn.Exec(ctx, "SET ROLE ALL"); err != nil {
+			return nil, fmt.Errorf("SET ROLE ALL: %w", err)
+		}
+		lines, err := queryLines(ctx, conn, "SHOW GRANTS FINAL")
 		if err != nil {
 			return nil, err
 		}
-		plain, err := queryLines(ctx, conn, "SHOW GRANTS")
+		admin, err := queryLines(ctx, conn, "SELECT role_name FROM system.enabled_roles WHERE with_admin_option ORDER BY role_name")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("system.enabled_roles: %w", err)
 		}
-		return append(final, RoleLines(plain)...), nil
+		for _, role := range admin {
+			lines = append(lines, RoleAdminLine(role))
+		}
+		return lines, nil
 	}
 }
 
-// RoleLines keeps the role-grant lines (`GRANT <role> TO <user> …`) of plain
-// SHOW GRANTS output.
-func RoleLines(lines []string) []string {
-	var out []string
-	for _, l := range lines {
-		if g, err := parseLine(strings.TrimSpace(l)); err == nil && g.role {
-			out = append(out, l)
-		}
-	}
-	return out
+// RoleAdminLine is the grant line Check reads for a role the user may grant
+// on (system.enabled_roles.with_admin_option).
+func RoleAdminLine(role string) string {
+	return "GRANT `" + strings.NewReplacer("\\", "\\\\", "`", "\\`").Replace(role) + "` TO CURRENT_USER WITH ADMIN OPTION"
 }
 
 func queryLines(ctx context.Context, conn clickhouse.Conn, query string) ([]string, error) {

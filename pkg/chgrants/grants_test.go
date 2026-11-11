@@ -43,16 +43,12 @@ func TestCheck_RoleWithoutAdminOptionPasses(t *testing.T) {
 	}
 }
 
-func TestRoleLines(t *testing.T) {
-	plain := []string{
-		"GRANT SELECT ON phys.* TO gw",
-		"GRANT pr2 TO gw",
-		"GRANT pr TO gw WITH ADMIN OPTION",
-		"REVOKE INSERT ON phys.secret FROM gw",
-	}
-	got := RoleLines(plain)
-	if len(got) != 2 || got[0] != "GRANT pr2 TO gw" || got[1] != "GRANT pr TO gw WITH ADMIN OPTION" {
-		t.Fatalf("RoleLines = %v", got)
+func TestRoleAdminLine(t *testing.T) {
+	for _, role := range []string{"leaf", "we`ird", `back\slash`} {
+		v := Check(devnetPolicy(), []string{RoleAdminLine(role)})
+		if len(v) != 1 || !strings.Contains(v[0].Reason, "WITH ADMIN OPTION") {
+			t.Fatalf("%q: violations = %v, want one admin-option violation", role, v)
+		}
 	}
 }
 

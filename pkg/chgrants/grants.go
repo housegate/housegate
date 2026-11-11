@@ -68,9 +68,9 @@ var readPrivileges = map[string]bool{
 	"SHOW COLUMNS":   true,
 }
 
-// Check parses grant lines — those of `SHOW GRANTS FINAL` plus the role lines
-// of `SHOW GRANTS` (see ShowGrants) — and returns every violation of p, in
-// line order. A role grant is checked only for WITH ADMIN OPTION: FINAL
+// Check parses grant lines — those of `SHOW GRANTS FINAL` plus a role line per
+// role held WITH ADMIN OPTION (see ShowGrants) — and returns every violation
+// of p, in line order. A role grant is checked only for WITH ADMIN OPTION: FINAL
 // already lists the role's privileges. REVOKE lines only narrow what a GRANT line allows, so
 // they are ignored: a GRANT the policy does not expect is a violation even
 // when a REVOKE carves part of it out.
@@ -91,10 +91,9 @@ func Check(p Policy, lines []string) []Violation {
 		}
 		if g.role {
 			// FINAL lists a role's privileges in place of the role grant, and
-			// drops the grant itself; the query also reads the plain SHOW
-			// GRANTS role lines (ShowGrants) for this check. A role held WITH
-			// ADMIN OPTION can be granted on, like a WITH GRANT OPTION
-			// privilege.
+			// drops the grant itself; ShowGrants adds a line per role the user
+			// holds WITH ADMIN OPTION, directly or inherited. Such a role can
+			// be granted on, like a WITH GRANT OPTION privilege.
 			if g.adminOption {
 				out = append(out, Violation{Line: line, Reason: "WITH ADMIN OPTION lets the user grant the role on"})
 			}
