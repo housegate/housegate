@@ -163,8 +163,8 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.23.4 h1:FLiOzzF278ol9EhqxazkrwPAvy+YvowGDPQ5bnuHlH4=
-github.com/housegate/rewriter-go v0.23.4/go.mod h1:xeG4nzzhkGgePEQdk9fn4u4UjmoMDdVvJsyXwhSUHeo=
+github.com/housegate/rewriter-go v0.23.5 h1:H8mCvrjnlvQkAxb3IpT6w+FkacpYy0xxuPTXsNnTYsI=
+github.com/housegate/rewriter-go v0.23.5/go.mod h1:xeG4nzzhkGgePEQdk9fn4u4UjmoMDdVvJsyXwhSUHeo=
 github.com/housegate/rewriter-proto v0.4.0 h1:6ENKNqYtZUMqST10E/7JlYH0OE+0F+AkVNZZfA0fQEA=
 github.com/housegate/rewriter-proto v0.4.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
