@@ -19,11 +19,11 @@ import (
 var ErrPartitionFreeze = errors.New("storage_integrity: table violates the partition freeze (partition_by must be empty or an admitted partition key)")
 
 // PayloadPartitionIDs decodes an admitted payload under its pinned schema and
-// returns the sorted, unique logical partition ids it touches. It is the
-// ingress's decode of a new statement, so it also applies the intake-only
-// refusals: a DateTime64 value outside the int64-nanosecond range is refused
-// with ErrDateTime64OutOfRange on either encoding (#343). Replay never calls
-// it.
+// returns the sorted, unique logical partition ids it touches. It decodes with
+// the replay-side decoders, so it answers for a statement an earlier binary
+// admitted exactly as that binary did: ingress also runs it on journal
+// recovery and on exact retries. Refusals that apply only to a new admission
+// are ValidateNewAdmissionPayload's.
 func PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revision int, payload []byte) ([]string, error) {
 	if err := validatePartitionFreeze(schema); err != nil {
 		return nil, err
@@ -33,11 +33,8 @@ func PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revisi
 	switch encoding {
 	case EncodingCSVWithNames:
 		rows, err = payloadexec.DecodeCSV(payload, schema)
-		if err == nil {
-			err = csvDateTime64sRepresentable(schema, rows)
-		}
 	case PayloadEncodingClickHouseNativeData:
-		rows, err = nativepayload.DecodeForIntake(schema, revision, payload)
+		rows, err = DecodeNativePayload(schema, revision, payload)
 	default:
 		return nil, fmt.Errorf("storage_integrity: cannot derive partitions for payload encoding %q", encoding)
 	}
@@ -54,6 +51,32 @@ func PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revisi
 	}
 	sort.Strings(partitions)
 	return partitions, nil
+}
+
+// ValidateNewAdmissionPayload applies the refusals that guard a statement the
+// ingress is about to prepare for the first time. Today that is one: a
+// DateTime64 value whose instant lies outside the int64-nanosecond range is
+// refused with ErrDateTime64OutOfRange, on Native (nativepayload's
+// DecodeForIntake) and CSV payloads alike. ClickHouse would store such a value
+// as sent, but every write path re-encodes ch-go's wrapped decode of it, so
+// the network would store and commit a different row (#343). It never runs for
+// a statement already admitted, whose replay must not change.
+func ValidateNewAdmissionPayload(schema payloadexec.TableSchema, encoding string, revision int, payload []byte) error {
+	switch encoding {
+	case EncodingCSVWithNames:
+		rows, err := payloadexec.DecodeCSV(payload, schema)
+		if err != nil {
+			return fmt.Errorf("storage_integrity: decode payload for intake: %w", err)
+		}
+		return csvDateTime64sRepresentable(schema, rows)
+	case PayloadEncodingClickHouseNativeData:
+		if _, err := nativepayload.DecodeForIntake(schema, revision, payload); err != nil {
+			return fmt.Errorf("storage_integrity: decode payload for intake: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("storage_integrity: cannot validate payload encoding %q", encoding)
+	}
 }
 
 // csvDateTime64sRepresentable is the CSV lane's DateTime64 intake refusal. The

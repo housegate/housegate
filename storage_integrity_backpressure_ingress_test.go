@@ -2062,34 +2062,49 @@ func TestIngress_ResolverTableIDMismatchFailsClosedBeforeReservationOrPut(t *tes
 	}
 }
 
+// dt64AdmissionAt is bpAdmission for a table with a DateTime64(3, 'UTC')
+// column whose single row holds when.
+func dt64AdmissionAt(t *testing.T, when time.Time) siplugin.Admission {
+	t.Helper()
+	schema := payloadexec.TableSchema{
+		TableID: "net1.events",
+		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "ts", Type: "DateTime64(3, 'UTC')"}},
+	}
+	ts := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
+	ts.Data = append(ts.Data, proto.DateTime64(when.UnixMilli()))
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: 1, Columns: 2}).EncodeBlock(&buf, 54465, proto.Input{{Name: "id", Data: &proto.ColUInt64{1}}, {Name: "ts", Data: ts}}); err != nil {
+		t.Fatal(err)
+	}
+	adm := bpAdmission()
+	adm.TableSchema = &schema
+	adm.SchemaHash = payloadexec.TableSchemaHash(adm.NetworkID, schema)
+	adm.Payload.Bytes = buf.Buf
+	adm.Payload.Length = uint64(len(buf.Buf))
+	return adm
+}
+
+var dt64At2299 = time.Date(2299, 12, 31, 23, 59, 59, 999000000, time.UTC)
+
+// newDT64Ingress is newBackpressureIngress whose source prepares one part of
+// the unpartitioned dt64AdmissionAt table.
+func newDT64Ingress(t *testing.T, pressure StorageIntegrityPartsPressure) (*StorageIntegrityIngress, *rootRecordingPayloadWriter, *rootRecordingSubmitter, *rootRecordingPreparer) {
+	t.Helper()
+	ingress, writer, submitter, preparer := newBackpressureIngress(t, pressure)
+	preparer.candidates = []sicore.CandidatePart{{TableID: "net1.events", PartitionID: "all", PartName: "all_1_1_0"}}
+	return ingress, writer, submitter, preparer
+}
+
 // TestIngress_RefusesDateTime64OutsideInt64NanosecondsBeforePut: a DateTime64
 // value ClickHouse stores (2299) but the network would store and commit as a
 // 1715 instant is refused at intake, before any reservation, payload put or
 // prepare, with the sequence number left unspent (#343).
 func TestIngress_RefusesDateTime64OutsideInt64NanosecondsBeforePut(t *testing.T) {
 	pressure := &fakePartsPressure{}
-	ingress, writer, _, preparer := newBackpressureIngress(t, pressure)
-	schema := payloadexec.TableSchema{
-		TableID: "net1.events",
-		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "ts", Type: "DateTime64(3, 'UTC')"}},
-	}
-	payload := func(when time.Time) []byte {
-		ts := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
-		ts.Data = append(ts.Data, proto.DateTime64(when.UnixMilli()))
-		var buf proto.Buffer
-		buf.PutUVarInt(uint64(proto.ClientCodeData))
-		buf.PutString("")
-		if err := (proto.Block{Rows: 1, Columns: 2}).EncodeBlock(&buf, 54465, proto.Input{{Name: "id", Data: &proto.ColUInt64{1}}, {Name: "ts", Data: ts}}); err != nil {
-			t.Fatal(err)
-		}
-		return buf.Buf
-	}
-	adm := bpAdmission()
-	adm.TableSchema = &schema
-	adm.SchemaHash = payloadexec.TableSchemaHash(adm.NetworkID, schema)
-	adm.Payload.Bytes = payload(time.Date(2299, 12, 31, 23, 59, 59, 999000000, time.UTC))
-	adm.Payload.Length = uint64(len(adm.Payload.Bytes))
-	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	ingress, writer, _, preparer := newDT64Ingress(t, pressure)
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), dt64AdmissionAt(t, dt64At2299))
 	if !errors.Is(err, sicore.ErrDateTime64OutOfRange) || !chproto.IsSeqUnspent(err) {
 		t.Fatalf("err = %v, want an unspent ErrDateTime64OutOfRange refusal", err)
 	}
@@ -2098,9 +2113,122 @@ func TestIngress_RefusesDateTime64OutsideInt64NanosecondsBeforePut(t *testing.T)
 	}
 
 	// The same table admits its last representable instant.
-	adm.Payload.Bytes = payload(time.Date(2262, 4, 11, 23, 47, 16, 854000000, time.UTC))
-	adm.Payload.Length = uint64(len(adm.Payload.Bytes))
-	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); errors.Is(err, sicore.ErrDateTime64OutOfRange) {
-		t.Fatalf("in-range instant refused: %v", err)
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), dt64AdmissionAt(t, time.Date(2262, 4, 11, 23, 47, 16, 854000000, time.UTC))); err != nil {
+		t.Fatalf("in-range instant: %v", err)
+	}
+}
+
+// TestIngress_DateTime64RefusalSparesStatementsAdmittedBeforeIt: the refusal
+// guards only a genuinely new prepare. A statement an earlier binary already
+// admitted (its ACK2 cached, or its prepare done and submit pending) keeps its
+// byte-identical retry: the ACK2 replays and the resume completes, without the
+// refusal and without marking an already-spent sequence number unspent.
+func TestIngress_DateTime64RefusalSparesStatementsAdmittedBeforeIt(t *testing.T) {
+	ctx := context.Background()
+	adm := dt64AdmissionAt(t, dt64At2299)
+	seed := func(t *testing.T, ingress *StorageIntegrityIngress) (sicore.IntakeResult, error) {
+		t.Helper()
+		// The orchestrator alone is what an earlier binary ran after its ingress
+		// admitted the payload.
+		rec := AdmissionRecordFromPlugin(adm)
+		rec.PayloadRef = "payload://store/ref-1"
+		rec.TouchedPartitionIDs = []string{"all"}
+		return ingress.orch.Orchestrate(ctx, rec)
+	}
+
+	t.Run("terminal ACK2 replay", func(t *testing.T) {
+		ingress, _, _, preparer := newDT64Ingress(t, &fakePartsPressure{})
+		if res, err := seed(t, ingress); err != nil || !res.Ack2 {
+			t.Fatalf("seed = (%+v, %v), want ACK2", res, err)
+		}
+		if err := ingress.ConsumeStorageIntegrityAdmission(ctx, adm); err != nil {
+			t.Fatalf("retry of an admitted statement = %v, want its cached ACK2", err)
+		}
+		if preparer.prepareCalls != 1 {
+			t.Fatalf("prepare calls = %d, want 1", preparer.prepareCalls)
+		}
+	})
+
+	t.Run("prepared resume", func(t *testing.T) {
+		ingress, _, submitter, preparer := newDT64Ingress(t, &fakePartsPressure{})
+		submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "not leader"}
+		if res, _ := seed(t, ingress); res.Ack2 || preparer.prepareCalls != 1 {
+			t.Fatalf("seed = %+v prepare calls %d, want a prepared, unacknowledged statement", res, preparer.prepareCalls)
+		}
+		submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+		if err := ingress.ConsumeStorageIntegrityAdmission(ctx, adm); err != nil {
+			t.Fatalf("resume of a prepared statement = %v, want ACK2", err)
+		}
+		if preparer.prepareCalls != 1 {
+			t.Fatalf("prepare calls = %d, want 1", preparer.prepareCalls)
+		}
+	})
+
+	t.Run("sequenced, prepare rejected, retried after a restart", func(t *testing.T) {
+		journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dt64Preparer := func() *rootRecordingPreparer {
+			return &rootRecordingPreparer{
+				source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+				candidates: []sicore.CandidatePart{{TableID: "net1.events", PartitionID: "all", PartName: "all_1_1_0"}},
+			}
+		}
+		rejecting := dt64Preparer()
+		rejecting.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+		before := sicore.NewOrchestrator(&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}, rejecting,
+			sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+		rec := AdmissionRecordFromPlugin(adm)
+		rec.PayloadRef = "payload://store/ref-1"
+		rec.TouchedPartitionIDs = []string{"all"}
+		if res, _ := before.Orchestrate(ctx, rec); res.Ack2 || res.Submit.Category != sicore.OutcomeAccepted {
+			t.Fatalf("seed = %+v, want an accepted submit without ACK2", res)
+		}
+		preparer := dt64Preparer()
+		after := sicore.NewOrchestrator(&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}, preparer,
+			sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+		ingress, err := NewStorageIntegrityIngressWithPayloadWriter(after, nil, sicore.MaterializerNative,
+			&rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ingress.WithTableSchemas(StorageIntegrityTableSchemaResolverFunc(func(string) (payloadexec.TableSchema, bool) { return *adm.TableSchema, true }))
+		if err := ingress.ConsumeStorageIntegrityAdmission(ctx, adm); err != nil {
+			t.Fatalf("retry after restart = %v, want ACK2", err)
+		}
+		if preparer.prepareCalls != 1 {
+			t.Fatalf("prepare calls after restart = %d, want 1", preparer.prepareCalls)
+		}
+	})
+
+	// Prepare and Submit run concurrently, so a sequenced statement can still
+	// need a source prepare: these retries must prepare again, not be refused.
+	for _, tc := range []struct {
+		name       string
+		prepareErr error
+	}{
+		{"sequenced, prepare rejected before writing", fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)},
+		{"sequenced, prepare indeterminate and not found", errors.New("connection reset by peer")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ingress, _, _, preparer := newDT64Ingress(t, &fakePartsPressure{})
+			preparer.err = tc.prepareErr
+			if res, _ := seed(t, ingress); res.Ack2 || res.Submit.Category != sicore.OutcomeAccepted {
+				t.Fatalf("seed = %+v, want an accepted submit without ACK2", res)
+			}
+			preparer.err = nil
+			preparer.lookupFound = false
+			err := ingress.ConsumeStorageIntegrityAdmission(ctx, adm)
+			if errors.Is(err, sicore.ErrDateTime64OutOfRange) || chproto.IsSeqUnspent(err) {
+				t.Fatalf("retry of a sequenced statement = %v, want it not refused and not unspent", err)
+			}
+			if err != nil {
+				t.Fatalf("retry of a sequenced statement = %v, want ACK2", err)
+			}
+			if preparer.prepareCalls != 2 {
+				t.Fatalf("prepare calls = %d, want 2", preparer.prepareCalls)
+			}
+		})
 	}
 }

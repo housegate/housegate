@@ -117,37 +117,57 @@ func dateTime64IntakeSchema(partitionBy string) payloadexec.TableSchema {
 	}
 }
 
-// TestPayloadPartitionIDs_RefusesDateTime64OutsideInt64Nanoseconds: intake
-// refuses a DateTime64 value ClickHouse would store (2299, or 1600) but the
-// network would store and commit as a different instant, in an ordinary
-// column on both payload encodings (#343).
-func TestPayloadPartitionIDs_RefusesDateTime64OutsideInt64Nanoseconds(t *testing.T) {
+// TestValidateNewAdmissionPayload_RefusesDateTime64OutsideInt64Nanoseconds:
+// intake refuses a DateTime64 value ClickHouse would store (2299, or 1600) but
+// the network would store and commit as a different instant, in an ordinary
+// column on both payload encodings, at both int64-nanosecond bounds (#343).
+// PayloadPartitionIDs, which ingress also runs on journal recovery and on
+// retries of statements an earlier binary admitted, keeps admitting them.
+func TestValidateNewAdmissionPayload_RefusesDateTime64OutsideInt64Nanoseconds(t *testing.T) {
 	schema := dateTime64IntakeSchema("")
 	native := func(raw int64) []byte {
 		ts := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
 		ts.Data = append(ts.Data, proto.DateTime64(raw))
 		return encodeNativePayload(t, proto.Input{{Name: "id", Data: &proto.ColUInt32{1}}, {Name: "ts", Data: ts}})
 	}
+	csv := func(text string) []byte { return []byte("id,ts\n1," + text + "\n") }
 	maxRaw, minRaw := int64(math.MaxInt64/1_000_000), int64(math.MinInt64/1_000_000)
+
+	type payloadCase struct {
+		encoding string
+		revision int
+		name     string
+		payload  []byte
+	}
+	var admitted, refused []payloadCase
 	for _, raw := range []int64{minRaw, maxRaw, 0} {
-		if _, err := PayloadPartitionIDs(schema, PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, native(raw)); err != nil {
-			t.Errorf("Native raw %d: %v, want admitted", raw, err)
-		}
+		admitted = append(admitted, payloadCase{PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, "native", native(raw)})
 	}
 	for _, raw := range []int64{minRaw - 1, maxRaw + 1, time.Date(2299, 12, 31, 23, 59, 59, 999000000, time.UTC).UnixMilli()} {
-		if _, err := PayloadPartitionIDs(schema, PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, native(raw)); !errors.Is(err, ErrDateTime64OutOfRange) {
-			t.Errorf("Native raw %d: %v, want ErrDateTime64OutOfRange", raw, err)
-		}
+		refused = append(refused, payloadCase{PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, "native", native(raw)})
 	}
-
 	for _, text := range []string{"1677-09-21 00:12:43.146", "2262-04-11 23:47:16.854", "1900-01-01 00:00:00.000"} {
-		if _, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte("id,ts\n1,"+text+"\n")); err != nil {
-			t.Errorf("CSV %s: %v, want admitted", text, err)
-		}
+		admitted = append(admitted, payloadCase{EncodingCSVWithNames, 0, "csv " + text, csv(text)})
 	}
 	for _, text := range []string{"1677-09-21 00:12:43.145", "2262-04-11 23:47:16.855", "2299-12-31 23:59:59.999", "1600-01-01 00:00:00.000"} {
-		if _, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte("id,ts\n1,"+text+"\n")); !errors.Is(err, ErrDateTime64OutOfRange) {
-			t.Errorf("CSV %s: %v, want ErrDateTime64OutOfRange", text, err)
+		refused = append(refused, payloadCase{EncodingCSVWithNames, 0, "csv " + text, csv(text)})
+	}
+	for _, c := range admitted {
+		if err := ValidateNewAdmissionPayload(schema, c.encoding, c.revision, c.payload); err != nil {
+			t.Errorf("%s: ValidateNewAdmissionPayload = %v, want admitted", c.name, err)
 		}
+	}
+	for _, c := range refused {
+		if err := ValidateNewAdmissionPayload(schema, c.encoding, c.revision, c.payload); !errors.Is(err, ErrDateTime64OutOfRange) {
+			t.Errorf("%s: ValidateNewAdmissionPayload = %v, want ErrDateTime64OutOfRange", c.name, err)
+		}
+	}
+	for _, c := range append(admitted, refused...) {
+		if got, err := PayloadPartitionIDs(schema, c.encoding, c.revision, c.payload); err != nil || !reflect.DeepEqual(got, []string{"all"}) {
+			t.Errorf("%s: PayloadPartitionIDs = (%v, %v), want the replay-compatible [all]", c.name, got, err)
+		}
+	}
+	if err := ValidateNewAdmissionPayload(schema, "bogus", 0, nil); err == nil {
+		t.Error("ValidateNewAdmissionPayload admitted an unknown encoding")
 	}
 }
