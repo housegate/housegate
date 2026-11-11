@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -69,12 +70,41 @@ func (m Materializer) Materialize(ctx context.Context, schema payloadexec.TableS
 	return rows, nil
 }
 
+// ErrDateTime64OutOfRange marks a DateTime64 tick count whose instant lies
+// outside the int64-nanosecond range, 1677-09-21 00:12:43.145224192 to
+// 2262-04-11 23:47:16.854775807 UTC. DecodeForIntake refuses it.
+var ErrDateTime64OutOfRange = errors.New("DateTime64 value is outside the int64-nanosecond range (1677-09-21 to 2262-04-11 UTC)")
+
 // Decode parses concatenated ClickHouse Native ClientData packets
 // against the pinned table schema. Returned rows are schema-ordered,
 // partitioned, and carry deterministic logical Native value bytes. RowID is
 // intentionally left unset for Materialize to inject with the statement
 // identity.
+//
+// Decode is the replay-side decoder: the SNode source write, the verifier
+// materializer and every replay lane run it, so what it admits and the values
+// it returns are part of what the network commits. A DateTime64 value outside
+// the int64-nanosecond range is admitted in an ordinary column and decodes to
+// ch-go's wrapped instant; only a partition-key value is refused. Intake
+// refuses every such value up front with DecodeForIntake instead (#343).
 func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]payloadexec.Row, error) {
+	return decode(schema, revision, payload, false)
+}
+
+// DecodeForIntake is Decode for the ingress that admits a new statement. It
+// additionally refuses, with ErrDateTime64OutOfRange, any DateTime64 value
+// (in any column, Nullable included) whose instant lies outside the
+// int64-nanosecond range. ClickHouse stores such a tick count as sent, but
+// ch-go decodes it through int64 nanoseconds, which wraps, and re-encodes the
+// wrapped instant on every write path, so the row the network would store and
+// commit is not the row the client sent (2299 becomes 1715). Refusing it
+// before the statement is sequenced changes nothing any replica replays.
+// Rows it returns are exactly Decode's.
+func DecodeForIntake(schema payloadexec.TableSchema, revision int, payload []byte) ([]payloadexec.Row, error) {
+	return decode(schema, revision, payload, true)
+}
+
+func decode(schema payloadexec.TableSchema, revision int, payload []byte, intake bool) ([]payloadexec.Row, error) {
 	if schema.TableID == "" {
 		return nil, fmt.Errorf("table_id is required")
 	}
@@ -112,6 +142,11 @@ func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]pay
 		colPos, err := nativeBlockColumnPositions(schema, block.Columns)
 		if err != nil {
 			return nil, err
+		}
+		if intake {
+			if err := block.dateTime64sRepresentable(len(out)); err != nil {
+				return nil, err
+			}
 		}
 		for rowIndex := 0; rowIndex < block.Rows; rowIndex++ {
 			wireValues, rawBytes, err := block.Row(rowIndex)
@@ -250,11 +285,51 @@ func (b *nativeDataBlock) partitionValueRepresentable(col, row int) error {
 		return nil
 	}
 	raw := int64(c.Data[row])
-	scale := c.Precision.Scale()
-	if raw > math.MaxInt64/scale || raw < math.MinInt64/scale {
+	if !dateTime64InNanosecondRange(raw, c.Precision) {
 		return fmt.Errorf("DateTime64 value %d at precision %d is outside the representable nanosecond range", raw, c.Precision)
 	}
 	return nil
+}
+
+// dateTime64sRepresentable refuses the block when any DateTime64 or
+// Nullable(DateTime64) column holds a tick count outside the int64-nanosecond
+// range. A NULL row's nested tick count is checked too: a conforming encoder
+// writes 0 there. firstRow is the payload ordinal of the block's first row.
+func (b *nativeDataBlock) dateTime64sRepresentable(firstRow int) error {
+	for i, col := range b.cols {
+		c, ok := dateTime64Column(col)
+		if !ok {
+			continue
+		}
+		for row, v := range c.Data {
+			if raw := int64(v); !dateTime64InNanosecondRange(raw, c.Precision) {
+				return fmt.Errorf("native row %d: column %q (%s): tick count %d at precision %d: %w",
+					firstRow+row, b.Columns[i].Name, b.Columns[i].Type, raw, c.Precision, ErrDateTime64OutOfRange)
+			}
+		}
+	}
+	return nil
+}
+
+// dateTime64Column returns the DateTime64 tick column of a DateTime64 or
+// Nullable(DateTime64) result column.
+func dateTime64Column(col proto.ColResult) (*proto.ColDateTime64, bool) {
+	if c, ok := col.(*proto.ColDateTime64); ok {
+		return c, true
+	}
+	if n, ok := col.(*proto.ColNullable[time.Time]); ok {
+		c, ok := n.Values.(*proto.ColDateTime64)
+		return c, ok
+	}
+	return nil, false
+}
+
+// dateTime64InNanosecondRange reports whether raw ticks at precision p name an
+// instant whose nanosecond count fits int64, the range ch-go's DateTime64.Time
+// decodes without wrapping. Every DateTime64(9) tick count does.
+func dateTime64InNanosecondRange(raw int64, p proto.Precision) bool {
+	scale := p.Scale()
+	return raw <= math.MaxInt64/scale && raw >= math.MinInt64/scale
 }
 
 func (b *nativeDataBlock) Row(i int) ([]any, uint64, error) {

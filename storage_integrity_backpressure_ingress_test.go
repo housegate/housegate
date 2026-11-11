@@ -2061,3 +2061,46 @@ func TestIngress_ResolverTableIDMismatchFailsClosedBeforeReservationOrPut(t *tes
 		t.Fatalf("pressure/writer calls = %d/%d want 0/0", len(pressure.allowCalls), writer.calls)
 	}
 }
+
+// TestIngress_RefusesDateTime64OutsideInt64NanosecondsBeforePut: a DateTime64
+// value ClickHouse stores (2299) but the network would store and commit as a
+// 1715 instant is refused at intake, before any reservation, payload put or
+// prepare, with the sequence number left unspent (#343).
+func TestIngress_RefusesDateTime64OutsideInt64NanosecondsBeforePut(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, writer, _, preparer := newBackpressureIngress(t, pressure)
+	schema := payloadexec.TableSchema{
+		TableID: "net1.events",
+		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "ts", Type: "DateTime64(3, 'UTC')"}},
+	}
+	payload := func(when time.Time) []byte {
+		ts := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
+		ts.Data = append(ts.Data, proto.DateTime64(when.UnixMilli()))
+		var buf proto.Buffer
+		buf.PutUVarInt(uint64(proto.ClientCodeData))
+		buf.PutString("")
+		if err := (proto.Block{Rows: 1, Columns: 2}).EncodeBlock(&buf, 54465, proto.Input{{Name: "id", Data: &proto.ColUInt64{1}}, {Name: "ts", Data: ts}}); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Buf
+	}
+	adm := bpAdmission()
+	adm.TableSchema = &schema
+	adm.SchemaHash = payloadexec.TableSchemaHash(adm.NetworkID, schema)
+	adm.Payload.Bytes = payload(time.Date(2299, 12, 31, 23, 59, 59, 999000000, time.UTC))
+	adm.Payload.Length = uint64(len(adm.Payload.Bytes))
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	if !errors.Is(err, sicore.ErrDateTime64OutOfRange) || !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want an unspent ErrDateTime64OutOfRange refusal", err)
+	}
+	if len(pressure.allowCalls) != 0 || writer.calls != 0 || preparer.prepareCalls != 0 {
+		t.Fatalf("refused statement reached reservation/put/prepare: allow=%d put=%d prepare=%d", len(pressure.allowCalls), writer.calls, preparer.prepareCalls)
+	}
+
+	// The same table admits its last representable instant.
+	adm.Payload.Bytes = payload(time.Date(2262, 4, 11, 23, 47, 16, 854000000, time.UTC))
+	adm.Payload.Length = uint64(len(adm.Payload.Bytes))
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); errors.Is(err, sicore.ErrDateTime64OutOfRange) {
+		t.Fatalf("in-range instant refused: %v", err)
+	}
+}

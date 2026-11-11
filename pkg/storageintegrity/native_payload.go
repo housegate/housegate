@@ -12,6 +12,10 @@ const PayloadEncodingClickHouseNativeData = nativepayload.PayloadFormat
 // ErrNativePayloadUnsupported aliases nativepayload.ErrUnsupported.
 var ErrNativePayloadUnsupported = nativepayload.ErrUnsupported
 
+// ErrDateTime64OutOfRange aliases nativepayload.ErrDateTime64OutOfRange: intake
+// refuses a DateTime64 value outside the int64-nanosecond range (#343).
+var ErrDateTime64OutOfRange = nativepayload.ErrDateTime64OutOfRange
+
 // NativeMaterializer aliases nativepayload.Materializer.
 type NativeMaterializer = nativepayload.Materializer
 

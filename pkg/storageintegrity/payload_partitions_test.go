@@ -3,8 +3,10 @@ package storageintegrity
 import (
 	"bytes"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -103,6 +105,49 @@ func TestPayloadPartitionIDs_AdmitsRulesV3Keys(t *testing.T) {
 		got, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte(tc.csv))
 		if err != nil || !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: partitions = %v err=%v want %v", tc.key, got, err, tc.want)
+		}
+	}
+}
+
+func dateTime64IntakeSchema(partitionBy string) payloadexec.TableSchema {
+	return payloadexec.TableSchema{
+		TableID:     "db.dt64",
+		PartitionBy: partitionBy,
+		Columns:     []lthash.Column{{Name: "id", Type: "UInt32"}, {Name: "ts", Type: "DateTime64(3, 'UTC')"}},
+	}
+}
+
+// TestPayloadPartitionIDs_RefusesDateTime64OutsideInt64Nanoseconds: intake
+// refuses a DateTime64 value ClickHouse would store (2299, or 1600) but the
+// network would store and commit as a different instant, in an ordinary
+// column on both payload encodings (#343).
+func TestPayloadPartitionIDs_RefusesDateTime64OutsideInt64Nanoseconds(t *testing.T) {
+	schema := dateTime64IntakeSchema("")
+	native := func(raw int64) []byte {
+		ts := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
+		ts.Data = append(ts.Data, proto.DateTime64(raw))
+		return encodeNativePayload(t, proto.Input{{Name: "id", Data: &proto.ColUInt32{1}}, {Name: "ts", Data: ts}})
+	}
+	maxRaw, minRaw := int64(math.MaxInt64/1_000_000), int64(math.MinInt64/1_000_000)
+	for _, raw := range []int64{minRaw, maxRaw, 0} {
+		if _, err := PayloadPartitionIDs(schema, PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, native(raw)); err != nil {
+			t.Errorf("Native raw %d: %v, want admitted", raw, err)
+		}
+	}
+	for _, raw := range []int64{minRaw - 1, maxRaw + 1, time.Date(2299, 12, 31, 23, 59, 59, 999000000, time.UTC).UnixMilli()} {
+		if _, err := PayloadPartitionIDs(schema, PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, native(raw)); !errors.Is(err, ErrDateTime64OutOfRange) {
+			t.Errorf("Native raw %d: %v, want ErrDateTime64OutOfRange", raw, err)
+		}
+	}
+
+	for _, text := range []string{"1677-09-21 00:12:43.146", "2262-04-11 23:47:16.854", "1900-01-01 00:00:00.000"} {
+		if _, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte("id,ts\n1,"+text+"\n")); err != nil {
+			t.Errorf("CSV %s: %v, want admitted", text, err)
+		}
+	}
+	for _, text := range []string{"1677-09-21 00:12:43.145", "2262-04-11 23:47:16.855", "2299-12-31 23:59:59.999", "1600-01-01 00:00:00.000"} {
+		if _, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte("id,ts\n1,"+text+"\n")); !errors.Is(err, ErrDateTime64OutOfRange) {
+			t.Errorf("CSV %s: %v, want ErrDateTime64OutOfRange", text, err)
 		}
 	}
 }
