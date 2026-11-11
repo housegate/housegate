@@ -100,10 +100,10 @@ jobs:
     timeout-minutes: 15
     # Every ClickHouse server version a deployment may run: the replay lanes,
     # the canonical type spellings and the client matrix must agree on each.
-    # 25.8 runs the whole suite. 26.8 runs the column-type, replay and
-    # signed-format tests only: the whole suite does not pass on 26.8 yet
-    # (TestMergeGuard_ReleasesOutdatedPartCleanupWithoutMerging) and exceeds
-    # the target's timeout there.
+    # 25.8 runs the whole suite. 26.8 runs the column-type, replay,
+    # signed-format and merge-guard tests only: the whole suite exceeds the
+    # target's timeout there (TestPartsPressure_HotPathReadStaysBoundedWithManyParts
+    # alone takes several minutes on 26.8).
     strategy:
       fail-fast: false
       matrix:
