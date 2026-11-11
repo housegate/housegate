@@ -31,7 +31,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	}
 	for _, q := range []string{
 		"DROP USER IF EXISTS hg341_gw", "DROP USER IF EXISTS hg341_wide", "DROP USER IF EXISTS hg341_role_user", "DROP ROLE IF EXISTS hg341_role",
-		} {
+	} {
 		exec(q)
 	}
 	t.Cleanup(func() {
