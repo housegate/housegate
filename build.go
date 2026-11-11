@@ -1014,6 +1014,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if !isNilInterface(opts.StorageIntegrityWriteMeter) {
 				consumer.SetWriteMeter(opts.StorageIntegrityWriteMeter)
 			}
+			consumer.SetAccountBudgetRetryAfter(cfg.StorageIntegrity.Ingress.AccountBudgetRetryAfter.Duration)
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
 			storageIntegrityRuntime = consumer

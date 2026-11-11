@@ -604,3 +604,26 @@ func TestStorageIntegrityAccountQuotaModeDecodesBareYAMLWords(t *testing.T) {
 		}
 	}
 }
+
+// TestStorageIntegrityAccountBudgetRetryAfter (sentioxyz/arbiter#143 layer
+// C): the retry hint of the arbiter's write-budget refusal defaults to 60s,
+// may be overridden, and is never negative.
+func TestStorageIntegrityAccountBudgetRetryAfter(t *testing.T) {
+	c := Default()
+	if got := c.StorageIntegrity.Ingress.AccountBudgetRetryAfter.Duration; got != time.Minute {
+		t.Fatalf("account_budget_retry_after = %s, want 1m", got)
+	}
+	c.Listen = "127.0.0.1:0"
+	c.NetworkState.Source = "ns.yaml"
+	c.StorageIntegrity.Ingress.Enabled = true
+	c.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	c.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x0000000000000000000000000000000000000001"}
+	c.StorageIntegrity.Ingress.AccountBudgetRetryAfter.Duration = 15 * time.Second
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a 15s hint was rejected: %v", err)
+	}
+	c.StorageIntegrity.Ingress.AccountBudgetRetryAfter.Duration = -time.Second
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "account_budget_retry_after must not be negative") {
+		t.Fatalf("a negative hint = %v", err)
+	}
+}

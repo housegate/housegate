@@ -2394,7 +2394,10 @@ func markUnspentIfSigned(q *chproto.Query, err error) error {
 // writes" message (the table retired before the arbiter sequenced the
 // statement) or the exact indexer-quarantined message (the arbiter's
 // INDEXER_QUARANTINED: the table's owning SI indexer is quarantined, spec
-// 2026-10-10 §7.4). All are raised only after the server consumed the complete
+// 2026-10-10 §7.4), and code 201 with the exact write-budget message (the
+// arbiter's ACCOUNT_BUDGET_EXCEEDED, sentioxyz/arbiter#143; the ingress's own
+// per-account quota refusal, raised before the payload is read, keeps its
+// other message and is not matched here). All are raised only after the server consumed the complete
 // staged input. A native ClickHouse TOO_MANY_PARTS, the other 733/392
 // lifecycle refusals (392 is also sipeerguard's and sitablestate's code), or
 // any other late payload exception stays fail-closed because it does not
@@ -2413,6 +2416,8 @@ func isSessionPreservingIngressException(decoded any) bool {
 			chproto.IsVerifiersUnavailableMessage(message)
 	case chproto.CodeQueryIsProhibited:
 		return chproto.IsTableNoLongerAcceptsWritesMessage(message) || chproto.IsIndexerQuarantinedMessage(message)
+	case chproto.CodeQuotaExceeded:
+		return chproto.IsWriteBudgetExceededMessage(message)
 	default:
 		return false
 	}

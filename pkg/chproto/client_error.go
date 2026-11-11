@@ -3,6 +3,7 @@ package chproto
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -42,6 +43,35 @@ func AccountQuotaExceededMessage(account, dimension string, retryAfter time.Dura
 		seconds = 1
 	}
 	return fmt.Sprintf("storage_integrity: account %s exceeded its write quota (%s); retry in %ds (retryable)", account, dimension, seconds)
+}
+
+// WriteBudgetExceededMessage is the client-facing message of the arbiter's
+// retryable ACCOUNT_BUDGET_EXCEEDED (sentioxyz/arbiter#143 layer C): the
+// signer account's share of the network write budget, or with an empty
+// account the network-wide total, is exhausted in dimension ("statements" or
+// "bytes"); the client may retry after retryAfter, rounded up to whole
+// seconds. It is raised after the complete staged input was consumed, so
+// unlike AccountQuotaExceededMessage it is session-preserving on the wire
+// (IsWriteBudgetExceededMessage).
+func WriteBudgetExceededMessage(account, dimension string, retryAfter time.Duration) string {
+	seconds := int64((retryAfter + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if account == "" {
+		return fmt.Sprintf("%sthe network write budget is exhausted (%s); retry in %ds (retryable)", writeBudgetPrefix, dimension, seconds)
+	}
+	return fmt.Sprintf("%saccount %s exceeded its network write budget (%s); retry in %ds (retryable)", writeBudgetPrefix, account, dimension, seconds)
+}
+
+const writeBudgetPrefix = "storage_integrity: "
+
+var writeBudgetMessagePattern = regexp.MustCompile(`^storage_integrity: (account [^\s]+ exceeded its network write budget|the network write budget is exhausted) \((statements|bytes)\); retry in [1-9][0-9]*s \(retryable\)$`)
+
+// IsWriteBudgetExceededMessage reports whether message is exactly a
+// WriteBudgetExceededMessage, ignoring a trailing SeqUnspentSuffix.
+func IsWriteBudgetExceededMessage(message string) bool {
+	return writeBudgetMessagePattern.MatchString(TrimSeqUnspentSuffix(message))
 }
 
 // Session-preserving storage-integrity table refusals. The ClickHouse

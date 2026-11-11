@@ -84,6 +84,7 @@ rewriter:
 #     denied_addresses: []         # lowercase signer/owner addresses refused on the SI lane
 #     account_quota:
 #       mode: off                  # off | dry_run | enforce (per-account statement/byte buckets)
+#     account_budget_retry_after: 60s  # retry hint of the Arbiter's network write budget refusal (201)
 
 # Optional replication-plane forwarding. Disabled here by default; uncomment in
 # deployments where ClickHouse should open replication-plane TCP only to its

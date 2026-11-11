@@ -24,12 +24,17 @@ var (
 		Name: "storage_integrity_backpressure_total",
 		Help: "Storage-integrity INSERT admissions refused with back-pressure (ClickHouse exception 252).",
 	}, []string{"table"})
+	storageIntegrityAccountBudgetRefusalsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "storage_integrity_account_budget_refusals_total",
+		Help: "Storage-integrity statements the arbiter refused on its consensus write budget (ACCOUNT_BUDGET_EXCEEDED, answered with ClickHouse exception 201), by bucket scope (account or total) and dimension (statements or bytes).",
+	}, []string{"scope", "dimension"})
 )
 
 func init() {
 	prometheus.MustRegister(storageIntegrityUnsafeParts)
 	prometheus.MustRegister(storageIntegritySafeParts)
 	prometheus.MustRegister(storageIntegrityBackpressureTotal)
+	prometheus.MustRegister(storageIntegrityAccountBudgetRefusalsTotal)
 }
 
 // StorageIntegrityPartsPressure is the ingress-facing admission port; the
