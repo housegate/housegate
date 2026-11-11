@@ -4,13 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
-// ErrPartitionFreeze rejects schemas outside the v1 partition-key freeze.
-var ErrPartitionFreeze = errors.New("storage_integrity: table violates the P1c partition freeze (partition_by must be a bare String column)")
+// ErrPartitionFreeze rejects schemas whose partition key is not admitted. The
+// admitted set is payloadexec.ParsePartitionKey's (table admission rules v3):
+// no key, a bare String column (the P1c freeze), a bare integer, Date, Date32
+// or UTC DateTime/DateTime64 column, or an admitted partition expression. It is
+// safe to admit them all unconditionally here: the table registry admits no
+// such table before the network raises its admission rules version to 3.
+var ErrPartitionFreeze = errors.New("storage_integrity: table violates the partition freeze (partition_by must be empty or an admitted partition key)")
 
 // PayloadPartitionIDs decodes an admitted payload under its pinned schema and
 // returns the sorted, unique logical partition ids it touches.
@@ -44,19 +48,8 @@ func PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revisi
 }
 
 func validatePartitionFreeze(schema payloadexec.TableSchema) error {
-	if schema.PartitionBy == "" {
-		return nil
+	if _, err := payloadexec.ParsePartitionKey(schema); err != nil {
+		return fmt.Errorf("%w: %v", ErrPartitionFreeze, err)
 	}
-	if strings.ContainsAny(schema.PartitionBy, "()") {
-		return fmt.Errorf("%w: table %s partition_by %q is an expression", ErrPartitionFreeze, schema.TableID, schema.PartitionBy)
-	}
-	for _, column := range schema.Columns {
-		if column.Name == schema.PartitionBy {
-			if column.Type != "String" {
-				return fmt.Errorf("%w: table %s partition column %q has type %s", ErrPartitionFreeze, schema.TableID, column.Name, column.Type)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: table %s partition_by %q names no declared column", ErrPartitionFreeze, schema.TableID, schema.PartitionBy)
+	return nil
 }

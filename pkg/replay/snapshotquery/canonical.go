@@ -76,6 +76,13 @@ func rowLayout(schema payloadexec.TableSchema, values []any) (keySize, typedSize
 	}
 	keySize = uint64(4 + len("housegate-row-mvp-v0") + 4 + len(schema.TableID) + 4)
 	partitionBound = 64
+	// The bound is 64 plus the size of the key's source column: enough for
+	// every admitted key's rendering (at most 29 characters of temporal text
+	// or 20 decimal digits) and for a bare String key's own bytes.
+	key, err := payloadexec.ParsePartitionKey(schema)
+	if err != nil {
+		return 0, 0, 0, err
+	}
 	for i, c := range schema.Columns {
 		p, e := payloadexec.ResolveColumnProfile(c.Type)
 		if e != nil {
@@ -121,7 +128,7 @@ func rowLayout(schema payloadexec.TableSchema, values []any) (keySize, typedSize
 		if e != nil {
 			return 0, 0, 0, e
 		}
-		if c.Name == schema.PartitionBy {
+		if key.IsPartitioned() && i == key.ColumnIndex() {
 			partitionBound, e = checkedAdd(partitionBound, n)
 			if e != nil {
 				return 0, 0, 0, e

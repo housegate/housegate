@@ -2028,12 +2028,12 @@ func TestIngress_UnknownSchemaOrFreezeViolationRefusedWithoutPut(t *testing.T) {
 
 	freezeSchema := payloadexec.TableSchema{
 		TableID: "net1.events", PartitionBy: "region",
-		Columns: []lthash.Column{{Name: "region", Type: "UInt64"}},
+		Columns: []lthash.Column{{Name: "region", Type: "Float64"}},
 	}
 	ingress.schemas = StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		return payloadexec.TableSchema{
 			TableID: tableID, PartitionBy: "region",
-			Columns: []lthash.Column{{Name: "region", Type: "UInt64"}},
+			Columns: []lthash.Column{{Name: "region", Type: "Float64"}},
 		}, true
 	})
 	adm = bpAdmission()

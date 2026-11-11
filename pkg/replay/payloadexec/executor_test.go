@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
@@ -179,7 +182,8 @@ func TestPartitionIDForRow(t *testing.T) {
 }
 
 // TestPartitionIDForRowTypedValueGoldenMatrix pins the non-temporal partition
-// renderings. Each case now carries the declared column type its value belongs
+// renderings of the admitted bare key types; Bool, Float and FixedString keys
+// are refused (TestPartitionIDForRowRefusesUnadmittedBareKeyTypes). Each case now carries the declared column type its value belongs
 // to, because PartitionIDForRow resolves the partition column against the
 // column-type authority before rendering (Spec Q Q-D1); the uint/int cases keep
 // their platform-width Go values under the 64-bit declaration they would arrive
@@ -192,8 +196,6 @@ func TestPartitionIDForRowTypedValueGoldenMatrix(t *testing.T) {
 		want       string
 	}{
 		{name: "string", columnType: "String", value: "eu", want: "p_eu"},
-		{name: "bytes", columnType: "FixedString(32)", value: []byte("eu"), want: "p_eu"},
-		{name: "bool", columnType: "Bool", value: true, want: "p_true"},
 		{name: "uint8", columnType: "UInt8", value: uint8(8), want: "p_8"},
 		{name: "uint16", columnType: "UInt16", value: uint16(16), want: "p_16"},
 		{name: "uint32", columnType: "UInt32", value: uint32(32), want: "p_32"},
@@ -204,12 +206,6 @@ func TestPartitionIDForRowTypedValueGoldenMatrix(t *testing.T) {
 		{name: "int32", columnType: "Int32", value: int32(-32), want: "p_-32"},
 		{name: "int64", columnType: "Int64", value: int64(-64), want: "p_-64"},
 		{name: "int", columnType: "Int64", value: int(-65), want: "p_-65"},
-		{name: "float32", columnType: "Float32", value: float32(1.5), want: "p_1.5"},
-		{name: "float64", columnType: "Float64", value: float64(2.5), want: "p_2.5"},
-		{name: "float32 negative zero", columnType: "Float32", value: math.Float32frombits(1 << 31), want: "p_0"},
-		{name: "float64 negative zero", columnType: "Float64", value: math.Float64frombits(1 << 63), want: "p_0"},
-		{name: "float64 signaling nan", columnType: "Float64", value: math.Float64frombits(0x7ff0000000000001), want: "p_NaN"},
-		{name: "float64 quiet nan", columnType: "Float64", value: math.Float64frombits(0x7ff8000000000002), want: "p_NaN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -263,15 +259,48 @@ func TestPartitionIDForRowRejectsUndefinedTypedPartitionValue(t *testing.T) {
 	}
 }
 
-func TestDecodeCSVPreservesLegacyPartitionWireText(t *testing.T) {
+// TestPartitionIDForRowRefusesUnadmittedBareKeyTypes: a bare key of a type
+// admission rules v3 does not admit is refused on every lane rather than
+// rendered. Before v3 the renderer accepted these; no network ever committed
+// such a table, because the partition freeze admitted only String.
+func TestPartitionIDForRowRefusesUnadmittedBareKeyTypes(t *testing.T) {
+	for _, tt := range []struct {
+		columnType string
+		value      any
+	}{
+		{"FixedString(32)", make([]byte, 32)},
+		{"Bool", true},
+		{"Float32", float32(1.5)},
+		{"Float64", math.Float64frombits(0x7ff8000000000002)},
+		{"UUID", uuid.UUID{}},
+		{"Int128", big.NewInt(1)},
+		{"DateTime", time.Unix(0, 0).UTC()},
+		{"DateTime64(3)", time.Unix(0, 0).UTC()},
+		{"DateTime('Asia/Tokyo')", time.Unix(0, 0).UTC()},
+		{"Nullable(String)", "eu"},
+		{"LowCardinality(String)", "eu"},
+	} {
+		schema := TableSchema{TableID: testTable, Columns: []lthash.Column{{Name: "shard", Type: tt.columnType}}, PartitionBy: "shard"}
+		if _, err := PartitionIDForRow(schema, []any{tt.value}); !errors.Is(err, ErrPartitionKeyNotAdmitted) {
+			t.Errorf("%s: PartitionIDForRow = %v, want ErrPartitionKeyNotAdmitted", tt.columnType, err)
+		}
+	}
+}
+
+// TestDecodeCSVDerivesPartitionFromParsedValue: the CSV lane derives the
+// partition from the parsed value, exactly as the Native lane does, so a
+// non-canonical wire text lands in ClickHouse's partition. A String key's
+// parsed value is its wire text, so String ids are unchanged.
+func TestDecodeCSVDerivesPartitionFromParsedValue(t *testing.T) {
 	tests := []struct {
 		name       string
 		columnType string
 		wireValue  string
 		want       string
 	}{
-		{name: "uint with leading zeroes", columnType: "UInt64", wireValue: "001", want: "p_001"},
-		{name: "float with trailing fraction", columnType: "Float64", wireValue: "1.0", want: "p_1.0"},
+		{name: "string keeps wire text", columnType: "String", wireValue: "001", want: "p_001"},
+		{name: "uint with leading zeroes", columnType: "UInt64", wireValue: "001", want: "p_1"},
+		{name: "datetime64 short fraction", columnType: "DateTime64(3, 'UTC')", wireValue: "2024-01-15 10:00:00.5", want: "p_2024-01-15 10:00:00.500"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -285,7 +314,7 @@ func TestDecodeCSVPreservesLegacyPartitionWireText(t *testing.T) {
 				t.Fatalf("DecodeCSV: %v", err)
 			}
 			if got := rows[0].PartitionID; got != tt.want {
-				t.Fatalf("partition id = %q, want legacy wire-derived %q", got, tt.want)
+				t.Fatalf("partition id = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -296,9 +325,12 @@ func TestLegacyCSVPartitionStateRootGolden(t *testing.T) {
 		networkID = "net-legacy-partition-golden"
 		tableID   = "tenant.legacy_partition_golden"
 	)
+	// A String key: its CSV partition id is the wire text, before and after
+	// rules v3. (This golden used a UInt64 key, whose wire-text id p_001 was
+	// never ClickHouse's partition; such a key was never admitted.)
 	schema := TableSchema{
 		TableID:     tableID,
-		Columns:     []lthash.Column{{Name: "shard", Type: "UInt64"}},
+		Columns:     []lthash.Column{{Name: "shard", Type: "String"}},
 		PartitionBy: "shard",
 	}
 	exec := New(networkID, schema)
@@ -333,7 +365,7 @@ func TestLegacyCSVPartitionStateRootGolden(t *testing.T) {
 	if len(result.AffectedParts) != 1 || result.AffectedParts[0].PartitionID != "p_001" {
 		t.Fatalf("affected parts = %+v, want one part in p_001", result.AffectedParts)
 	}
-	const wantStateRoot = "0xe769a7aab847f24f11b5cea94679ac46df6c673b99b11f82d9fdc19ad48d896d"
+	const wantStateRoot = "0xe87f5ffc1bc8bd21f81182130a7b66d926ba198e124f306a09331390e0f40a19"
 	if result.ComputedStateRoot != wantStateRoot {
 		t.Fatalf("computed state root = %q, want golden %q", result.ComputedStateRoot, wantStateRoot)
 	}
@@ -741,11 +773,11 @@ func TestPartitionIDForRow_AcceptsTemporalPartitionColumns(t *testing.T) {
 		want string
 	}{
 		{"Date", time.Date(2026, time.July, 16, 0, 0, 0, 0, time.UTC), "p_2026-07-16"},
-		{"DateTime", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
 		{"DateTime('UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
-		{"DateTime64(0)", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
+		{"DateTime64(0, 'UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
 		{"DateTime64(3, 'UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 123000000, time.UTC), "p_2026-07-16 12:34:56.123"},
-		{"DateTime64(9)", time.Date(2026, time.July, 16, 12, 34, 56, 123456789, time.UTC), "p_2026-07-16 12:34:56.123456789"},
+		{"DateTime64(9, 'UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 123456789, time.UTC), "p_2026-07-16 12:34:56.123456789"},
+		{"Date32", time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC), "p_1900-01-01"},
 	} {
 		t.Run(tc.typ, func(t *testing.T) {
 			schema := TableSchema{

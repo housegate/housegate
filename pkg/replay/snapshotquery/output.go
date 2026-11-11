@@ -70,7 +70,7 @@ func (s *sortState) finishOutput(input *sortRun) (out *canonicalOutput, err erro
 		if e != nil {
 			return nil, e
 		}
-		record.partition, e = payloadexec.PartitionIDForRow(s.schema, values)
+		record.partition, e = s.key.PartitionID(values)
 		if e != nil {
 			return nil, e
 		}
@@ -234,7 +234,7 @@ func (r *outputRows) Next(ctx context.Context) (payloadexec.Row, error) {
 	if err != nil {
 		return payloadexec.Row{}, err
 	}
-	partition, err := payloadexec.PartitionIDForRow(o.state.schema, values)
+	partition, err := o.state.key.PartitionID(values)
 	if err != nil {
 		return payloadexec.Row{}, err
 	}

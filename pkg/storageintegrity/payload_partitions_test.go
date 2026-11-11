@@ -75,11 +75,34 @@ func TestPayloadPartitionIDs_UnpartitionedIsAll(t *testing.T) {
 }
 
 func TestPayloadPartitionIDs_RejectsFreezeViolationAndUnknownEncoding(t *testing.T) {
-	bad := payloadexec.TableSchema{TableID: "db.t", PartitionBy: "n", Columns: []lthash.Column{{Name: "n", Type: "UInt64"}}}
+	// Float64 is not an admitted partition key type (a bare UInt64 key is, from
+	// table admission rules v3).
+	bad := payloadexec.TableSchema{TableID: "db.t", PartitionBy: "n", Columns: []lthash.Column{{Name: "n", Type: "Float64"}}}
 	if _, err := PayloadPartitionIDs(bad, EncodingCSVWithNames, 0, []byte("n\n1\n")); !errors.Is(err, ErrPartitionFreeze) {
 		t.Fatalf("err = %v want ErrPartitionFreeze", err)
 	}
 	if _, err := PayloadPartitionIDs(partitionsSchema(), "future-encoding-v2", 0, []byte("x")); err == nil {
 		t.Fatal("unknown encoding must error")
+	}
+}
+
+// TestPayloadPartitionIDs_AdmitsRulesV3Keys: the indexer derives partitions for
+// every key table admission rules v3 admits, bare non-String keys and
+// partition expressions included.
+func TestPayloadPartitionIDs_AdmitsRulesV3Keys(t *testing.T) {
+	for _, tc := range []struct {
+		key, columnType, csv string
+		want                 []string
+	}{
+		{"n", "UInt64", "n\n1\n007\n1\n", []string{"p_1", "p_7"}},
+		{"intDiv(n, 1000)", "Int64", "n\n-1500\n999\n2000\n", []string{"p_-1", "p_0", "p_2"}},
+		{"toYYYYMM(n)", "DateTime('UTC')", "n\n2024-01-31 23:59:59\n2024-02-01 00:00:00\n", []string{"p_202401", "p_202402"}},
+		{"toMonday(n)", "Date", "n\n1970-01-03\n2024-02-29\n", []string{"p_1970-01-01", "p_2024-02-26"}},
+	} {
+		schema := payloadexec.TableSchema{TableID: "db.t", PartitionBy: tc.key, Columns: []lthash.Column{{Name: "n", Type: tc.columnType}}}
+		got, err := PayloadPartitionIDs(schema, EncodingCSVWithNames, 0, []byte(tc.csv))
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: partitions = %v err=%v want %v", tc.key, got, err, tc.want)
+		}
 	}
 }

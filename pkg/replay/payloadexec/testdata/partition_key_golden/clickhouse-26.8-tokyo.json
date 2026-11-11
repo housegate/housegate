@@ -1,0 +1,5627 @@
+{
+ "cases": [
+  {
+   "column_type": "String",
+   "name": "bare/String",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "a",
+     "partition_id": "51fbadfb0deeea70ceafbd3c7c8aef25",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "930449c52fc4ce1cda4e371a228b9f87",
+     "rows": 1
+    },
+    {
+     "partition": "with space",
+     "partition_id": "930d90792b6f0ebb2653bec44dddc2d8",
+     "rows": 1
+    },
+    {
+     "partition": "tuple()",
+     "partition_id": "9a18a341f0e8ad9d2fefa9f7034c6afe",
+     "rows": 1
+    },
+    {
+     "partition": "中文",
+     "partition_id": "a95941af241be2c14d36fa361186643f",
+     "rows": 1
+    },
+    {
+     "partition": "it's",
+     "partition_id": "de8077ca66b7d4c91dec24170dce4d53",
+     "rows": 1
+    },
+    {
+     "partition": "back\\slash",
+     "partition_id": "f1ae904178bb5abd356076afed9b7941",
+     "rows": 1
+    },
+    {
+     "partition": "",
+     "partition_id": "f64abffc6c96f8ef72c783f1b9426e19",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "",
+     "id": 1,
+     "key": "",
+     "key_type": "String",
+     "partition_id": "f64abffc6c96f8ef72c783f1b9426e19"
+    },
+    {
+     "cv": "a",
+     "id": 2,
+     "key": "a",
+     "key_type": "String",
+     "partition_id": "51fbadfb0deeea70ceafbd3c7c8aef25"
+    },
+    {
+     "cv": "it's",
+     "id": 3,
+     "key": "it's",
+     "key_type": "String",
+     "partition_id": "de8077ca66b7d4c91dec24170dce4d53"
+    },
+    {
+     "cv": "back\\slash",
+     "id": 4,
+     "key": "back\\slash",
+     "key_type": "String",
+     "partition_id": "f1ae904178bb5abd356076afed9b7941"
+    },
+    {
+     "cv": "with space",
+     "id": 5,
+     "key": "with space",
+     "key_type": "String",
+     "partition_id": "930d90792b6f0ebb2653bec44dddc2d8"
+    },
+    {
+     "cv": "中文",
+     "id": 6,
+     "key": "中文",
+     "key_type": "String",
+     "partition_id": "a95941af241be2c14d36fa361186643f"
+    },
+    {
+     "cv": "tuple()",
+     "id": 7,
+     "key": "tuple()",
+     "key_type": "String",
+     "partition_id": "9a18a341f0e8ad9d2fefa9f7034c6afe"
+    },
+    {
+     "cv": "202401",
+     "id": 8,
+     "key": "202401",
+     "key_type": "String",
+     "partition_id": "930449c52fc4ce1cda4e371a228b9f87"
+    }
+   ],
+   "values": [
+    "''",
+    "'a'",
+    "'it\\'s'",
+    "'back\\\\slash'",
+    "'with space'",
+    "'中文'",
+    "'tuple()'",
+    "'202401'"
+   ]
+  },
+  {
+   "column_type": "UInt8",
+   "name": "bare/UInt8",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "255",
+     "partition_id": "255",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt8",
+     "partition_id": "0"
+    },
+    {
+     "cv": "255",
+     "id": 2,
+     "key": "255",
+     "key_type": "UInt8",
+     "partition_id": "255"
+    }
+   ],
+   "values": [
+    "0",
+    "255"
+   ]
+  },
+  {
+   "column_type": "UInt16",
+   "name": "bare/UInt16",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "65535",
+     "partition_id": "65535",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt16",
+     "partition_id": "0"
+    },
+    {
+     "cv": "65535",
+     "id": 2,
+     "key": "65535",
+     "key_type": "UInt16",
+     "partition_id": "65535"
+    }
+   ],
+   "values": [
+    "0",
+    "65535"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "bare/UInt32",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "4294967295",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "4294967295",
+     "id": 2,
+     "key": "4294967295",
+     "key_type": "UInt32",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "0",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "bare/UInt64",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "18446744073709551615",
+     "partition_id": "18446744073709551615",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 2,
+     "key": "18446744073709551615",
+     "key_type": "UInt64",
+     "partition_id": "18446744073709551615"
+    }
+   ],
+   "values": [
+    "0",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "Int8",
+   "name": "bare/Int8",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "-128",
+     "partition_id": "-128",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "127",
+     "partition_id": "127",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-128",
+     "id": 1,
+     "key": "-128",
+     "key_type": "Int8",
+     "partition_id": "-128"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int8",
+     "partition_id": "0"
+    },
+    {
+     "cv": "127",
+     "id": 3,
+     "key": "127",
+     "key_type": "Int8",
+     "partition_id": "127"
+    }
+   ],
+   "values": [
+    "-128",
+    "0",
+    "127"
+   ]
+  },
+  {
+   "column_type": "Int16",
+   "name": "bare/Int16",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "-32768",
+     "partition_id": "-32768",
+     "rows": 1
+    },
+    {
+     "partition": "32767",
+     "partition_id": "32767",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-32768",
+     "id": 1,
+     "key": "-32768",
+     "key_type": "Int16",
+     "partition_id": "-32768"
+    },
+    {
+     "cv": "32767",
+     "id": 2,
+     "key": "32767",
+     "key_type": "Int16",
+     "partition_id": "32767"
+    }
+   ],
+   "values": [
+    "-32768",
+    "32767"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "bare/Int32",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "-2147483648",
+     "partition_id": "-2147483648",
+     "rows": 1
+    },
+    {
+     "partition": "2147483647",
+     "partition_id": "2147483647",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "-2147483648",
+     "key_type": "Int32",
+     "partition_id": "-2147483648"
+    },
+    {
+     "cv": "2147483647",
+     "id": 2,
+     "key": "2147483647",
+     "key_type": "Int32",
+     "partition_id": "2147483647"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "bare/Int64",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "-1",
+     "partition_id": "-1",
+     "rows": 1
+    },
+    {
+     "partition": "-9223372036854775808",
+     "partition_id": "-9223372036854775808",
+     "rows": 1
+    },
+    {
+     "partition": "9223372036854775807",
+     "partition_id": "9223372036854775807",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "-9223372036854775808",
+     "key_type": "Int64",
+     "partition_id": "-9223372036854775808"
+    },
+    {
+     "cv": "-1",
+     "id": 2,
+     "key": "-1",
+     "key_type": "Int64",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 3,
+     "key": "9223372036854775807",
+     "key_type": "Int64",
+     "partition_id": "9223372036854775807"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "-1",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_type": "Bool",
+   "name": "bare/Bool",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "false",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "true",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "false",
+     "id": 1,
+     "key": "false",
+     "key_type": "Bool",
+     "partition_id": "0"
+    },
+    {
+     "cv": "true",
+     "id": 2,
+     "key": "true",
+     "key_type": "Bool",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "false",
+    "true"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "bare/Date",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2024-02-29",
+     "partition_id": "20240229",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "2024-02-29",
+     "key_type": "Date",
+     "partition_id": "20240229"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "bare/Date32",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "1969-12-31",
+     "partition_id": "-1",
+     "rows": 1
+    },
+    {
+     "partition": "1900-01-01",
+     "partition_id": "-25567",
+     "rows": 1
+    },
+    {
+     "partition": "2299-12-31",
+     "partition_id": "120529",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "19737",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "1900-01-01",
+     "key_type": "Date32",
+     "partition_id": "-25567"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "1969-12-31",
+     "key_type": "Date32",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date32",
+     "partition_id": "19737"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "2299-12-31",
+     "key_type": "Date32",
+     "partition_id": "120529"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "bare/DateTime('UTC')",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-14 15:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 23:59:59",
+     "partition_id": "1705363199",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 06:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-14 15:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705244400"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15 23:59:59",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705363199"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-07 06:28:15",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "bare/DateTime64(0, 'UTC')",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "2024-01-15 23:59:59",
+     "partition_id": "0b441785abcaa06b1380b7579ab6748e",
+     "rows": 1
+    },
+    {
+     "partition": "2299-12-31 23:59:59",
+     "partition_id": "23842bb056cda96e54a418cc4eb2202d",
+     "rows": 1
+    },
+    {
+     "partition": "1900-01-01 00:00:00",
+     "partition_id": "92930fec6bbfa6b88dcde11db9894303",
+     "rows": 1
+    },
+    {
+     "partition": "1969-12-31 23:59:59",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "1900-01-01 00:00:00",
+     "key_type": "DateTime64(0, 'UTC')",
+     "partition_id": "92930fec6bbfa6b88dcde11db9894303"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "1969-12-31 23:59:59",
+     "key_type": "DateTime64(0, 'UTC')",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15 23:59:59",
+     "key_type": "DateTime64(0, 'UTC')",
+     "partition_id": "0b441785abcaa06b1380b7579ab6748e"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "2299-12-31 23:59:59",
+     "key_type": "DateTime64(0, 'UTC')",
+     "partition_id": "23842bb056cda96e54a418cc4eb2202d"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "bare/DateTime64(3, 'UTC')",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "1900-01-01 00:00:00.000",
+     "partition_id": "21262023d7d01243cf6c9eceaf9879be",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 23:59:59.999",
+     "partition_id": "3670d71063e3792c2efb3db8ac8dc9e0",
+     "rows": 1
+    },
+    {
+     "partition": "2299-12-31 23:59:59.999",
+     "partition_id": "830f1b8136e9f86f3a74f0222909c013",
+     "rows": 1
+    },
+    {
+     "partition": "1969-12-31 23:59:59.999",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "1900-01-01 00:00:00.000",
+     "key_type": "DateTime64(3, 'UTC')",
+     "partition_id": "21262023d7d01243cf6c9eceaf9879be"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "1969-12-31 23:59:59.999",
+     "key_type": "DateTime64(3, 'UTC')",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "2024-01-15 23:59:59.999",
+     "key_type": "DateTime64(3, 'UTC')",
+     "partition_id": "3670d71063e3792c2efb3db8ac8dc9e0"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "2299-12-31 23:59:59.999",
+     "key_type": "DateTime64(3, 'UTC')",
+     "partition_id": "830f1b8136e9f86f3a74f0222909c013"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "bare/DateTime64(9, 'UTC')",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "2262-04-11 23:47:16.854775807",
+     "partition_id": "8e4c71d7b9b539d27270b427a5475c75",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 23:59:59.123456789",
+     "partition_id": "98616fba797ba73507381c324203800d",
+     "rows": 1
+    },
+    {
+     "partition": "1900-01-01 00:00:00.000000000",
+     "partition_id": "a1a6a9ddab7b3723b1c341e0531be760",
+     "rows": 1
+    },
+    {
+     "partition": "1969-12-31 23:59:59.999999999",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "1900-01-01 00:00:00.000000000",
+     "key_type": "DateTime64(9, 'UTC')",
+     "partition_id": "a1a6a9ddab7b3723b1c341e0531be760"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "1969-12-31 23:59:59.999999999",
+     "key_type": "DateTime64(9, 'UTC')",
+     "partition_id": "f7fcd6a9d47734e6df4a9de0e15af831"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "2024-01-15 23:59:59.123456789",
+     "key_type": "DateTime64(9, 'UTC')",
+     "partition_id": "98616fba797ba73507381c324203800d"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "2262-04-11 23:47:16.854775807",
+     "key_type": "DateTime64(9, 'UTC')",
+     "partition_id": "8e4c71d7b9b539d27270b427a5475c75"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "bare/DateTime",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "2024-01-14 16:00:00",
+     "partition_id": "1705215600",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 20:00:00",
+     "partition_id": "1705316400",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-14 16:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705215600"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15 20:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705316400"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "UUID",
+   "name": "bare/UUID",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "61f0c404-5cb3-11e7-907b-a6006ad3dba0",
+     "partition_id": "48406fdb38e23228b776558b4edfa795",
+     "rows": 1
+    },
+    {
+     "partition": "00000000-0000-0000-0000-000000000000",
+     "partition_id": "8e32790eacaf6f3ccad265daae3b6a64",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "00000000-0000-0000-0000-000000000000",
+     "id": 1,
+     "key": "00000000-0000-0000-0000-000000000000",
+     "key_type": "UUID",
+     "partition_id": "8e32790eacaf6f3ccad265daae3b6a64"
+    },
+    {
+     "cv": "61f0c404-5cb3-11e7-907b-a6006ad3dba0",
+     "id": 2,
+     "key": "61f0c404-5cb3-11e7-907b-a6006ad3dba0",
+     "key_type": "UUID",
+     "partition_id": "48406fdb38e23228b776558b4edfa795"
+    }
+   ],
+   "values": [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'61f0c404-5cb3-11e7-907b-a6006ad3dba0'"
+   ]
+  },
+  {
+   "column_type": "FixedString(32)",
+   "name": "bare/FixedString(32)",
+   "partition_by": "c",
+   "partition_key": "c",
+   "parts": [
+    {
+     "partition": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "partition_id": "c3ab1b6ff01489f66cb4eb629161e81e",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "id": 1,
+     "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "key_type": "FixedString(32)",
+     "partition_id": "c3ab1b6ff01489f66cb4eb629161e81e"
+    }
+   ],
+   "values": [
+    "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toYYYYMM/Date",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "197001",
+     "partition_id": "197001",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 1
+    },
+    {
+     "partition": "202402",
+     "partition_id": "202402",
+     "rows": 1
+    },
+    {
+     "partition": "214906",
+     "partition_id": "214906",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "197001",
+     "key_type": "UInt32",
+     "partition_id": "197001"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "202402",
+     "key_type": "UInt32",
+     "partition_id": "202402"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "214906",
+     "key_type": "UInt32",
+     "partition_id": "214906"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toYYYYMM/Date32",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "190001",
+     "partition_id": "190001",
+     "rows": 1
+    },
+    {
+     "partition": "196912",
+     "partition_id": "196912",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 1
+    },
+    {
+     "partition": "229912",
+     "partition_id": "229912",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "190001",
+     "key_type": "UInt32",
+     "partition_id": "190001"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "196912",
+     "key_type": "UInt32",
+     "partition_id": "196912"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "229912",
+     "key_type": "UInt32",
+     "partition_id": "229912"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toYYYYMM/DateTime('UTC')",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "197001",
+     "partition_id": "197001",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 2
+    },
+    {
+     "partition": "210602",
+     "partition_id": "210602",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "197001",
+     "key_type": "UInt32",
+     "partition_id": "197001"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "210602",
+     "key_type": "UInt32",
+     "partition_id": "210602"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toYYYYMM/DateTime64(0, 'UTC')",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "190001",
+     "partition_id": "190001",
+     "rows": 1
+    },
+    {
+     "partition": "196912",
+     "partition_id": "196912",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 1
+    },
+    {
+     "partition": "229912",
+     "partition_id": "229912",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "190001",
+     "key_type": "UInt32",
+     "partition_id": "190001"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "196912",
+     "key_type": "UInt32",
+     "partition_id": "196912"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "229912",
+     "key_type": "UInt32",
+     "partition_id": "229912"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toYYYYMM/DateTime64(3, 'UTC')",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "190001",
+     "partition_id": "190001",
+     "rows": 1
+    },
+    {
+     "partition": "196912",
+     "partition_id": "196912",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 1
+    },
+    {
+     "partition": "229912",
+     "partition_id": "229912",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "190001",
+     "key_type": "UInt32",
+     "partition_id": "190001"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "196912",
+     "key_type": "UInt32",
+     "partition_id": "196912"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "229912",
+     "key_type": "UInt32",
+     "partition_id": "229912"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toYYYYMM/DateTime64(9, 'UTC')",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "190001",
+     "partition_id": "190001",
+     "rows": 1
+    },
+    {
+     "partition": "196912",
+     "partition_id": "196912",
+     "rows": 1
+    },
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 1
+    },
+    {
+     "partition": "226204",
+     "partition_id": "226204",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "190001",
+     "key_type": "UInt32",
+     "partition_id": "190001"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "196912",
+     "key_type": "UInt32",
+     "partition_id": "196912"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "226204",
+     "key_type": "UInt32",
+     "partition_id": "226204"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toYYYYMM/DateTime",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 2
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toYYYYMM/DateTime64(3)",
+   "partition_by": "toYYYYMM(c)",
+   "partition_key": "toYYYYMM(c)",
+   "parts": [
+    {
+     "partition": "202401",
+     "partition_id": "202401",
+     "rows": 2
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "202401",
+     "key_type": "UInt32",
+     "partition_id": "202401"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toYYYYMMDD/Date",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19700101",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "20240229",
+     "partition_id": "20240229",
+     "rows": 1
+    },
+    {
+     "partition": "21490606",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "19700101",
+     "key_type": "UInt32",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "20240229",
+     "key_type": "UInt32",
+     "partition_id": "20240229"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "21490606",
+     "key_type": "UInt32",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toYYYYMMDD/Date32",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19000101",
+     "partition_id": "19000101",
+     "rows": 1
+    },
+    {
+     "partition": "19691231",
+     "partition_id": "19691231",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "22991231",
+     "partition_id": "22991231",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "19000101",
+     "key_type": "UInt32",
+     "partition_id": "19000101"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "19691231",
+     "key_type": "UInt32",
+     "partition_id": "19691231"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "22991231",
+     "key_type": "UInt32",
+     "partition_id": "22991231"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toYYYYMMDD/DateTime('UTC')",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19700101",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "20240114",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "21060207",
+     "partition_id": "21060207",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "19700101",
+     "key_type": "UInt32",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "20240114",
+     "key_type": "UInt32",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "21060207",
+     "key_type": "UInt32",
+     "partition_id": "21060207"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toYYYYMMDD/DateTime64(0, 'UTC')",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19000101",
+     "partition_id": "19000101",
+     "rows": 1
+    },
+    {
+     "partition": "19691231",
+     "partition_id": "19691231",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "22991231",
+     "partition_id": "22991231",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "19000101",
+     "key_type": "UInt32",
+     "partition_id": "19000101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "19691231",
+     "key_type": "UInt32",
+     "partition_id": "19691231"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "22991231",
+     "key_type": "UInt32",
+     "partition_id": "22991231"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toYYYYMMDD/DateTime64(3, 'UTC')",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19000101",
+     "partition_id": "19000101",
+     "rows": 1
+    },
+    {
+     "partition": "19691231",
+     "partition_id": "19691231",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "22991231",
+     "partition_id": "22991231",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "19000101",
+     "key_type": "UInt32",
+     "partition_id": "19000101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "19691231",
+     "key_type": "UInt32",
+     "partition_id": "19691231"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "22991231",
+     "key_type": "UInt32",
+     "partition_id": "22991231"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toYYYYMMDD/DateTime64(9, 'UTC')",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "19000101",
+     "partition_id": "19000101",
+     "rows": 1
+    },
+    {
+     "partition": "19691231",
+     "partition_id": "19691231",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "22620411",
+     "partition_id": "22620411",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "19000101",
+     "key_type": "UInt32",
+     "partition_id": "19000101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "19691231",
+     "key_type": "UInt32",
+     "partition_id": "19691231"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "22620411",
+     "key_type": "UInt32",
+     "partition_id": "22620411"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toYYYYMMDD/DateTime",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "20240114",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "20240114",
+     "key_type": "UInt32",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toYYYYMMDD/DateTime64(3)",
+   "partition_by": "toYYYYMMDD(c)",
+   "partition_key": "toYYYYMMDD(c)",
+   "parts": [
+    {
+     "partition": "20240114",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "20240115",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "20240114",
+     "key_type": "UInt32",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "20240115",
+     "key_type": "UInt32",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toDate/Date",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2024-02-29",
+     "partition_id": "20240229",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "2024-02-29",
+     "key_type": "Date",
+     "partition_id": "20240229"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toDate/Date32",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2079-06-07",
+     "partition_id": "20790607",
+     "rows": 1
+    },
+    {
+     "partition": "2120-07-26",
+     "partition_id": "21200726",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "2079-06-07",
+     "key_type": "Date",
+     "partition_id": "20790607"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "2120-07-26",
+     "key_type": "Date",
+     "partition_id": "21200726"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toDate/DateTime('UTC')",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-14",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07",
+     "partition_id": "21060207",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-14",
+     "key_type": "Date",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-07",
+     "key_type": "Date",
+     "partition_id": "21060207"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toDate/DateTime64(0, 'UTC')",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2079-06-07",
+     "partition_id": "20790607",
+     "rows": 1
+    },
+    {
+     "partition": "2120-07-26",
+     "partition_id": "21200726",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "2079-06-07",
+     "key_type": "Date",
+     "partition_id": "20790607"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "2120-07-26",
+     "key_type": "Date",
+     "partition_id": "21200726"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toDate/DateTime64(3, 'UTC')",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2079-06-07",
+     "partition_id": "20790607",
+     "rows": 1
+    },
+    {
+     "partition": "2120-07-26",
+     "partition_id": "21200726",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "2079-06-07",
+     "key_type": "Date",
+     "partition_id": "20790607"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "2120-07-26",
+     "key_type": "Date",
+     "partition_id": "21200726"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toDate/DateTime64(9, 'UTC')",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2079-06-07",
+     "partition_id": "20790607",
+     "rows": 1
+    },
+    {
+     "partition": "2082-11-04",
+     "partition_id": "20821104",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "2079-06-07",
+     "key_type": "Date",
+     "partition_id": "20790607"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "2082-11-04",
+     "key_type": "Date",
+     "partition_id": "20821104"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toDate/DateTime",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-14",
+     "key_type": "Date",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toDate/DateTime64(3)",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "2024-01-14",
+     "key_type": "Date",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toStartOfMonth/Date",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-02-01",
+     "partition_id": "20240201",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-01",
+     "partition_id": "21490601",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "2024-02-01",
+     "key_type": "Date",
+     "partition_id": "20240201"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "2149-06-01",
+     "key_type": "Date",
+     "partition_id": "21490601"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toStartOfMonth/Date32",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toStartOfMonth/DateTime('UTC')",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 2
+    },
+    {
+     "partition": "2106-02-01",
+     "partition_id": "21060201",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-01",
+     "key_type": "Date",
+     "partition_id": "21060201"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toStartOfMonth/DateTime64(0, 'UTC')",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toStartOfMonth/DateTime64(3, 'UTC')",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toStartOfMonth/DateTime64(9, 'UTC')",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toStartOfMonth/DateTime",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 2
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toStartOfMonth/DateTime64(3)",
+   "partition_by": "toStartOfMonth(c)",
+   "partition_key": "toStartOfMonth(c)",
+   "parts": [
+    {
+     "partition": "2024-01-01",
+     "partition_id": "20240101",
+     "rows": 2
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "2024-01-01",
+     "key_type": "Date",
+     "partition_id": "20240101"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toMonday/Date",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2024-02-26",
+     "partition_id": "20240226",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-02",
+     "partition_id": "21490602",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "2024-02-26",
+     "key_type": "Date",
+     "partition_id": "20240226"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "2149-06-02",
+     "key_type": "Date",
+     "partition_id": "21490602"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toMonday/Date32",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toMonday/DateTime('UTC')",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-08",
+     "partition_id": "20240108",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-01",
+     "partition_id": "21060201",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-08",
+     "key_type": "Date",
+     "partition_id": "20240108"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-01",
+     "key_type": "Date",
+     "partition_id": "21060201"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toMonday/DateTime64(0, 'UTC')",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toMonday/DateTime64(3, 'UTC')",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toMonday/DateTime64(9, 'UTC')",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2149-06-06",
+     "partition_id": "21490606",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "2149-06-06",
+     "key_type": "Date",
+     "partition_id": "21490606"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toMonday/DateTime",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "2024-01-08",
+     "partition_id": "20240108",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-08",
+     "key_type": "Date",
+     "partition_id": "20240108"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toMonday/DateTime64(3)",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "2024-01-08",
+     "partition_id": "20240108",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "2024-01-08",
+     "key_type": "Date",
+     "partition_id": "20240108"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "Date",
+   "name": "toStartOfDay/Date",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    },
+    {
+     "partition": "2024-02-29 00:00:00",
+     "partition_id": "1709132400",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 15:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    },
+    {
+     "partition": "1970-01-02 00:00:00",
+     "partition_id": "54000",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-02 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "54000"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 2,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705244400"
+    },
+    {
+     "cv": "2024-02-29",
+     "id": 3,
+     "key": "2024-02-29 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1709132400"
+    },
+    {
+     "cv": "2149-06-06",
+     "id": 4,
+     "key": "2106-02-07 15:28:15",
+     "key_type": "DateTime",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'2024-01-15'",
+    "'2024-02-29'",
+    "'2149-06-06'"
+   ]
+  },
+  {
+   "column_type": "Date32",
+   "name": "toStartOfDay/Date32",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 09:00:00",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 15:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01",
+     "id": 1,
+     "key": "1970-01-01 09:00:00",
+     "key_type": "DateTime",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1969-12-31",
+     "id": 2,
+     "key": "1970-01-01 09:00:00",
+     "key_type": "DateTime",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-15",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705244400"
+    },
+    {
+     "cv": "2299-12-31",
+     "id": 4,
+     "key": "2106-02-07 15:28:15",
+     "key_type": "DateTime",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1900-01-01'",
+    "'1969-12-31'",
+    "'2024-01-15'",
+    "'2299-12-31'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toStartOfDay/DateTime('UTC')",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-14 00:00:00",
+     "partition_id": "1705190400",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705276800",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 00:00:00",
+     "partition_id": "4294944000",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-14 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705190400"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705276800"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-07 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294944000"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(0, 'UTC')",
+   "name": "toStartOfDay/DateTime64(0, 'UTC')",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705276800",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 06:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1969-12-31 23:59:59",
+     "id": 2,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705276800"
+    },
+    {
+     "cv": "2299-12-31 23:59:59",
+     "id": 4,
+     "key": "2106-02-07 06:28:15",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00'",
+    "'1969-12-31 23:59:59'",
+    "'2024-01-15 23:59:59'",
+    "'2299-12-31 23:59:59'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3, 'UTC')",
+   "name": "toStartOfDay/DateTime64(3, 'UTC')",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705276800",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 06:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999",
+     "id": 2,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.999",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705276800"
+    },
+    {
+     "cv": "2299-12-31 23:59:59.999",
+     "id": 4,
+     "key": "2106-02-07 06:28:15",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000'",
+    "'1969-12-31 23:59:59.999'",
+    "'2024-01-15 23:59:59.999'",
+    "'2299-12-31 23:59:59.999'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(9, 'UTC')",
+   "name": "toStartOfDay/DateTime64(9, 'UTC')",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705276800",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 06:28:15",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1900-01-01 00:00:00.000000000",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1969-12-31 23:59:59.999999999",
+     "id": 2,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-15 23:59:59.123456789",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705276800"
+    },
+    {
+     "cv": "2262-04-11 23:47:16.854775807",
+     "id": 4,
+     "key": "2106-02-07 06:28:15",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "'1900-01-01 00:00:00.000000000'",
+    "'1969-12-31 23:59:59.999999999'",
+    "'2024-01-15 23:59:59.123456789'",
+    "'2262-04-11 23:47:16.854775807'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "name": "toStartOfDay/DateTime",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14 00:00:00",
+     "partition_id": "1705158000",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-14 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705158000"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705244400"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime64(3)",
+   "name": "toStartOfDay/DateTime64(3)",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14 00:00:00",
+     "partition_id": "1705158000",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00.000",
+     "id": 1,
+     "key": "2024-01-14 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705158000"
+    },
+    {
+     "cv": "2024-01-15 20:00:00.000",
+     "id": 2,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705244400"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00.000'",
+    "'2024-01-15 20:00:00.000'"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "intDiv1000/UInt32",
+   "partition_by": "intDiv(c, 1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    },
+    {
+     "partition": "4294967",
+     "partition_id": "4294967",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "999",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1000",
+     "id": 3,
+     "key": "1",
+     "key_type": "UInt32",
+     "partition_id": "1"
+    },
+    {
+     "cv": "4294967295",
+     "id": 4,
+     "key": "4294967",
+     "key_type": "UInt32",
+     "partition_id": "4294967"
+    }
+   ],
+   "values": [
+    "0",
+    "999",
+    "1000",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "intDiv1000/UInt64",
+   "partition_by": "intDiv(c, 1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    },
+    {
+     "partition": "18446744073709551",
+     "partition_id": "18446744073709551",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "999",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1000",
+     "id": 3,
+     "key": "1",
+     "key_type": "UInt64",
+     "partition_id": "1"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 4,
+     "key": "18446744073709551",
+     "key_type": "UInt64",
+     "partition_id": "18446744073709551"
+    }
+   ],
+   "values": [
+    "0",
+    "999",
+    "1000",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "intDiv1000/Int32",
+   "partition_by": "intDiv(c, 1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "parts": [
+    {
+     "partition": "-1",
+     "partition_id": "-1",
+     "rows": 2
+    },
+    {
+     "partition": "-2147483",
+     "partition_id": "-2147483",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 4
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    },
+    {
+     "partition": "2147483",
+     "partition_id": "2147483",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "-2147483",
+     "key_type": "Int32",
+     "partition_id": "-2147483"
+    },
+    {
+     "cv": "-1500",
+     "id": 2,
+     "key": "-1",
+     "key_type": "Int32",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "-1000",
+     "id": 3,
+     "key": "-1",
+     "key_type": "Int32",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "-999",
+     "id": 4,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "-1",
+     "id": 5,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 6,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "999",
+     "id": 7,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1000",
+     "id": 8,
+     "key": "1",
+     "key_type": "Int32",
+     "partition_id": "1"
+    },
+    {
+     "cv": "2147483647",
+     "id": 9,
+     "key": "2147483",
+     "key_type": "Int32",
+     "partition_id": "2147483"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "-1500",
+    "-1000",
+    "-999",
+    "-1",
+    "0",
+    "999",
+    "1000",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "intDiv1000/Int64",
+   "partition_by": "intDiv(c, 1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "parts": [
+    {
+     "partition": "-1",
+     "partition_id": "-1",
+     "rows": 2
+    },
+    {
+     "partition": "-9223372036854775",
+     "partition_id": "-9223372036854775",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    },
+    {
+     "partition": "9223372036854775",
+     "partition_id": "9223372036854775",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "-9223372036854775",
+     "key_type": "Int64",
+     "partition_id": "-9223372036854775"
+    },
+    {
+     "cv": "-1500",
+     "id": 2,
+     "key": "-1",
+     "key_type": "Int64",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "-1000",
+     "id": 3,
+     "key": "-1",
+     "key_type": "Int64",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "-1",
+     "id": 4,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 5,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "1500",
+     "id": 6,
+     "key": "1",
+     "key_type": "Int64",
+     "partition_id": "1"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 7,
+     "key": "9223372036854775",
+     "key_type": "Int64",
+     "partition_id": "9223372036854775"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "-1500",
+    "-1000",
+    "-1",
+    "0",
+    "1500",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "insert_settings": {
+    "session_timezone": "Asia/Tokyo"
+   },
+   "name": "toDate/DateTime/session_tz_tokyo",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-14",
+     "key_type": "Date",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime",
+   "insert_settings": {
+    "session_timezone": "Asia/Tokyo"
+   },
+   "name": "toStartOfDay/DateTime/session_tz_tokyo",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "2024-01-14 00:00:00",
+     "partition_id": "1705158000",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705244400",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "2024-01-14 16:00:00",
+     "id": 1,
+     "key": "2024-01-14 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705158000"
+    },
+    {
+     "cv": "2024-01-15 20:00:00",
+     "id": 2,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime",
+     "partition_id": "1705244400"
+    }
+   ],
+   "values": [
+    "'2024-01-14 16:00:00'",
+    "'2024-01-15 20:00:00'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "insert_settings": {
+    "session_timezone": "Asia/Tokyo"
+   },
+   "name": "toDate/DateTime('UTC')/session_tz_tokyo",
+   "partition_by": "toDate(c)",
+   "partition_key": "toDate(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-14",
+     "partition_id": "20240114",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15",
+     "partition_id": "20240115",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07",
+     "partition_id": "21060207",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-14",
+     "key_type": "Date",
+     "partition_id": "20240114"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15",
+     "key_type": "Date",
+     "partition_id": "20240115"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-07",
+     "key_type": "Date",
+     "partition_id": "21060207"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "insert_settings": {
+    "session_timezone": "Asia/Tokyo"
+   },
+   "name": "toStartOfDay/DateTime('UTC')/session_tz_tokyo",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01 00:00:00",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-14 00:00:00",
+     "partition_id": "1705190400",
+     "rows": 1
+    },
+    {
+     "partition": "2024-01-15 00:00:00",
+     "partition_id": "1705276800",
+     "rows": 1
+    },
+    {
+     "partition": "2106-02-07 00:00:00",
+     "partition_id": "4294944000",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2024-01-14 15:00:00",
+     "id": 2,
+     "key": "2024-01-14 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705190400"
+    },
+    {
+     "cv": "2024-01-15 23:59:59",
+     "id": 3,
+     "key": "2024-01-15 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "1705276800"
+    },
+    {
+     "cv": "2106-02-07 06:28:15",
+     "id": 4,
+     "key": "2106-02-07 00:00:00",
+     "key_type": "DateTime('UTC')",
+     "partition_id": "4294944000"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'2024-01-14 15:00:00'",
+    "'2024-01-15 23:59:59'",
+    "'2106-02-07 06:28:15'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toYYYYMM( c )",
+   "partition_by": "toYYYYMM( c )",
+   "partition_key": "toYYYYMM(c)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "create_error": "46: Unknown function toyyyymm. Maybe you meant: ['toYYYYMM','toYYYYMMDD']: While processing toyyyymm(c). (UNKNOWN_FUNCTION))",
+   "name": "spelling/DateTime('UTC')/toyyyymm(c)",
+   "partition_by": "toyyyymm(c)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/(toYYYYMM(c))",
+   "partition_by": "(toYYYYMM(c))",
+   "partition_key": "(toYYYYMM(c))",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/`c`",
+   "partition_by": "`c`",
+   "partition_key": "c",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/(c)",
+   "partition_by": "(c)",
+   "partition_key": "(c)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toYYYYMM(`c`)",
+   "partition_by": "toYYYYMM(`c`)",
+   "partition_key": "toYYYYMM(c)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toDate(c, 'UTC')",
+   "partition_by": "toDate(c, 'UTC')",
+   "partition_key": "toDate(c, 'UTC')",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toStartOfDay(c, 'UTC')",
+   "partition_by": "toStartOfDay(c, 'UTC')",
+   "partition_key": "toStartOfDay(c, 'UTC')",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toYYYYMM(c, 'UTC')",
+   "partition_by": "toYYYYMM(c, 'UTC')",
+   "partition_key": "toYYYYMM(c, 'UTC')",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toMonday(c)",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toStartOfWeek(c, 1)",
+   "partition_by": "toStartOfWeek(c, 1)",
+   "partition_key": "toStartOfWeek(c, 1)",
+   "values": []
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "spelling/DateTime('UTC')/toStartOfDay(toDate(c))",
+   "partition_by": "toStartOfDay(toDate(c))",
+   "partition_key": "toStartOfDay(toDate(c))",
+   "values": []
+  },
+  {
+   "column_type": "Date",
+   "name": "spelling/Date/toStartOfDay(c)",
+   "partition_by": "toStartOfDay(c)",
+   "partition_key": "toStartOfDay(c)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c,1000)",
+   "partition_by": "intDiv(c,1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c, 1e3)",
+   "partition_by": "intDiv(c, 1e3)",
+   "partition_key": "intDiv(c, 1000.)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c, 1000.0)",
+   "partition_by": "intDiv(c, 1000.0)",
+   "partition_key": "intDiv(c, 1000.)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/c DIV 1000",
+   "partition_by": "c DIV 1000",
+   "partition_key": "intDiv(c, 1000)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c, toUInt64(1000))",
+   "partition_by": "intDiv(c, toUInt64(1000))",
+   "partition_key": "intDiv(c, toUInt64(1000))",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c, -1000)",
+   "partition_by": "intDiv(c, -1000)",
+   "partition_key": "intDiv(c, -1000)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/intDiv(c, 0)",
+   "partition_by": "intDiv(c, 0)",
+   "partition_key": "intDiv(c, 0)",
+   "values": []
+  },
+  {
+   "column_type": "Int64",
+   "name": "spelling/Int64/intDiv(c, 1000)",
+   "partition_by": "intDiv(c, 1000)",
+   "partition_key": "intDiv(c, 1000)",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/c % 16",
+   "partition_by": "c % 16",
+   "partition_key": "c % 16",
+   "values": []
+  },
+  {
+   "column_type": "UInt64",
+   "name": "spelling/UInt64/modulo(c, 16)",
+   "partition_by": "modulo(c, 16)",
+   "partition_key": "modulo(c, 16)",
+   "values": []
+  },
+  {
+   "column_type": "String",
+   "name": "spelling/String/tuple(c)",
+   "partition_by": "tuple(c)",
+   "partition_key": "tuple(c)",
+   "values": []
+  },
+  {
+   "column_type": "String",
+   "name": "spelling/String/(c, c)",
+   "partition_by": "(c, c)",
+   "partition_key": "(c, c)",
+   "values": []
+  },
+  {
+   "column_type": "Date",
+   "name": "toMonday/Date/epoch_week",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 4
+    },
+    {
+     "partition": "1970-01-05",
+     "partition_id": "19700105",
+     "rows": 2
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-02",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-03",
+     "id": 3,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-04",
+     "id": 4,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-05",
+     "id": 5,
+     "key": "1970-01-05",
+     "key_type": "Date",
+     "partition_id": "19700105"
+    },
+    {
+     "cv": "1970-01-06",
+     "id": 6,
+     "key": "1970-01-05",
+     "key_type": "Date",
+     "partition_id": "19700105"
+    }
+   ],
+   "values": [
+    "'1970-01-01'",
+    "'1970-01-02'",
+    "'1970-01-03'",
+    "'1970-01-04'",
+    "'1970-01-05'",
+    "'1970-01-06'"
+   ]
+  },
+  {
+   "column_type": "DateTime('UTC')",
+   "name": "toMonday/DateTime('UTC')/epoch_week",
+   "partition_by": "toMonday(c)",
+   "partition_key": "toMonday(c)",
+   "parts": [
+    {
+     "partition": "1970-01-01",
+     "partition_id": "19700101",
+     "rows": 3
+    },
+    {
+     "partition": "1970-01-05",
+     "partition_id": "19700105",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "1970-01-01 00:00:00",
+     "id": 1,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-02 12:00:00",
+     "id": 2,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-04 23:59:59",
+     "id": 3,
+     "key": "1970-01-01",
+     "key_type": "Date",
+     "partition_id": "19700101"
+    },
+    {
+     "cv": "1970-01-05 00:00:00",
+     "id": 4,
+     "key": "1970-01-05",
+     "key_type": "Date",
+     "partition_id": "19700105"
+    }
+   ],
+   "values": [
+    "'1970-01-01 00:00:00'",
+    "'1970-01-02 12:00:00'",
+    "'1970-01-04 23:59:59'",
+    "'1970-01-05 00:00:00'"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "intDivBoundary/UInt32/1",
+   "partition_by": "intDiv(c, 1)",
+   "partition_key": "intDiv(c, 1)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "4294967295",
+     "partition_id": "4294967295",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "4294967295",
+     "id": 3,
+     "key": "4294967295",
+     "key_type": "UInt32",
+     "partition_id": "4294967295"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "intDivBoundary/UInt32/2",
+   "partition_by": "intDiv(c, 2)",
+   "partition_key": "intDiv(c, 2)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "2147483647",
+     "partition_id": "2147483647",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "4294967295",
+     "id": 3,
+     "key": "2147483647",
+     "key_type": "UInt32",
+     "partition_id": "2147483647"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "intDivBoundary/UInt32/4294967295",
+   "partition_by": "intDiv(c, 4294967295)",
+   "partition_key": "intDiv(c, 4294967295)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "4294967295",
+     "id": 3,
+     "key": "1",
+     "key_type": "UInt32",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt32",
+   "name": "intDivBoundary/UInt32/4294967296",
+   "partition_by": "intDiv(c, 4294967296)",
+   "partition_key": "intDiv(c, 4294967296)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 3
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "4294967295",
+     "id": 3,
+     "key": "0",
+     "key_type": "UInt32",
+     "partition_id": "0"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "4294967295"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "intDivBoundary/UInt64/1",
+   "partition_by": "intDiv(c, 1)",
+   "partition_key": "intDiv(c, 1)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "18446744073709551615",
+     "partition_id": "18446744073709551615",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 3,
+     "key": "18446744073709551615",
+     "key_type": "UInt64",
+     "partition_id": "18446744073709551615"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "intDivBoundary/UInt64/2",
+   "partition_by": "intDiv(c, 2)",
+   "partition_key": "intDiv(c, 2)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "9223372036854775807",
+     "partition_id": "9223372036854775807",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 3,
+     "key": "9223372036854775807",
+     "key_type": "UInt64",
+     "partition_id": "9223372036854775807"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "intDivBoundary/UInt64/18446744073709551615",
+   "partition_by": "intDiv(c, 18446744073709551615)",
+   "partition_key": "intDiv(c, 18446744073709551615)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "UInt64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 3,
+     "key": "1",
+     "key_type": "UInt64",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "UInt64",
+   "name": "intDivBoundary/UInt64/18446744073709551616",
+   "partition_by": "intDiv(c, 18446744073709551616)",
+   "partition_key": "intDiv(c, 18446744073709552000.)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "0",
+     "id": 1,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "18446744073709551615",
+     "id": 3,
+     "key": "1",
+     "key_type": "Int64",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "0",
+    "0",
+    "18446744073709551615"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "intDivBoundary/Int32/1",
+   "partition_by": "intDiv(c, 1)",
+   "partition_key": "intDiv(c, 1)",
+   "parts": [
+    {
+     "partition": "-2147483648",
+     "partition_id": "-2147483648",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "2147483647",
+     "partition_id": "2147483647",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "-2147483648",
+     "key_type": "Int32",
+     "partition_id": "-2147483648"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2147483647",
+     "id": 3,
+     "key": "2147483647",
+     "key_type": "Int32",
+     "partition_id": "2147483647"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "0",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "intDivBoundary/Int32/2",
+   "partition_by": "intDiv(c, 2)",
+   "partition_key": "intDiv(c, 2)",
+   "parts": [
+    {
+     "partition": "-1073741824",
+     "partition_id": "-1073741824",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "1073741823",
+     "partition_id": "1073741823",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "-1073741824",
+     "key_type": "Int32",
+     "partition_id": "-1073741824"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2147483647",
+     "id": 3,
+     "key": "1073741823",
+     "key_type": "Int32",
+     "partition_id": "1073741823"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "0",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "intDivBoundary/Int32/2147483647",
+   "partition_by": "intDiv(c, 2147483647)",
+   "partition_key": "intDiv(c, 2147483647)",
+   "parts": [
+    {
+     "partition": "-1",
+     "partition_id": "-1",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "-1",
+     "key_type": "Int32",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2147483647",
+     "id": 3,
+     "key": "1",
+     "key_type": "Int32",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "0",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int32",
+   "name": "intDivBoundary/Int32/2147483648",
+   "partition_by": "intDiv(c, 2147483648)",
+   "partition_key": "intDiv(c, 2147483648)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-2147483648",
+     "id": 1,
+     "key": "1",
+     "key_type": "Int32",
+     "partition_id": "1"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    },
+    {
+     "cv": "2147483647",
+     "id": 3,
+     "key": "0",
+     "key_type": "Int32",
+     "partition_id": "0"
+    }
+   ],
+   "values": [
+    "-2147483648",
+    "0",
+    "2147483647"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "intDivBoundary/Int64/1",
+   "partition_by": "intDiv(c, 1)",
+   "partition_key": "intDiv(c, 1)",
+   "parts": [
+    {
+     "partition": "-9223372036854775808",
+     "partition_id": "-9223372036854775808",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "9223372036854775807",
+     "partition_id": "9223372036854775807",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "-9223372036854775808",
+     "key_type": "Int64",
+     "partition_id": "-9223372036854775808"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 3,
+     "key": "9223372036854775807",
+     "key_type": "Int64",
+     "partition_id": "9223372036854775807"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "0",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "intDivBoundary/Int64/2",
+   "partition_by": "intDiv(c, 2)",
+   "partition_key": "intDiv(c, 2)",
+   "parts": [
+    {
+     "partition": "-4611686018427387904",
+     "partition_id": "-4611686018427387904",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "4611686018427387903",
+     "partition_id": "4611686018427387903",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "-4611686018427387904",
+     "key_type": "Int64",
+     "partition_id": "-4611686018427387904"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 3,
+     "key": "4611686018427387903",
+     "key_type": "Int64",
+     "partition_id": "4611686018427387903"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "0",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "intDivBoundary/Int64/9223372036854775807",
+   "partition_by": "intDiv(c, 9223372036854775807)",
+   "partition_key": "intDiv(c, 9223372036854775807)",
+   "parts": [
+    {
+     "partition": "-1",
+     "partition_id": "-1",
+     "rows": 1
+    },
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 1
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "-1",
+     "key_type": "Int64",
+     "partition_id": "-1"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 3,
+     "key": "1",
+     "key_type": "Int64",
+     "partition_id": "1"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "0",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_type": "Int64",
+   "name": "intDivBoundary/Int64/9223372036854775808",
+   "partition_by": "intDiv(c, 9223372036854775808)",
+   "partition_key": "intDiv(c, 9223372036854775808)",
+   "parts": [
+    {
+     "partition": "0",
+     "partition_id": "0",
+     "rows": 2
+    },
+    {
+     "partition": "1",
+     "partition_id": "1",
+     "rows": 1
+    }
+   ],
+   "rows": [
+    {
+     "cv": "-9223372036854775808",
+     "id": 1,
+     "key": "1",
+     "key_type": "Int64",
+     "partition_id": "1"
+    },
+    {
+     "cv": "0",
+     "id": 2,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    },
+    {
+     "cv": "9223372036854775807",
+     "id": 3,
+     "key": "0",
+     "key_type": "Int64",
+     "partition_id": "0"
+    }
+   ],
+   "values": [
+    "-9223372036854775808",
+    "0",
+    "9223372036854775807"
+   ]
+  },
+  {
+   "column_name": "select",
+   "column_type": "UInt64",
+   "name": "identifier/bare/select",
+   "partition_by": "`select`",
+   "partition_key": "`select`",
+   "values": []
+  },
+  {
+   "column_name": "select",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/select",
+   "partition_by": "toYYYYMM(`select`)",
+   "partition_key": "toYYYYMM(`select`)",
+   "values": []
+  },
+  {
+   "column_name": "select",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/select",
+   "partition_by": "intDiv(`select`, 1000)",
+   "partition_key": "intDiv(`select`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "Select",
+   "column_type": "UInt64",
+   "name": "identifier/bare/Select",
+   "partition_by": "`Select`",
+   "partition_key": "`Select`",
+   "values": []
+  },
+  {
+   "column_name": "Select",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/Select",
+   "partition_by": "toYYYYMM(`Select`)",
+   "partition_key": "toYYYYMM(`Select`)",
+   "values": []
+  },
+  {
+   "column_name": "Select",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/Select",
+   "partition_by": "intDiv(`Select`, 1000)",
+   "partition_key": "intDiv(`Select`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "from",
+   "column_type": "UInt64",
+   "name": "identifier/bare/from",
+   "partition_by": "`from`",
+   "partition_key": "`from`",
+   "values": []
+  },
+  {
+   "column_name": "from",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/from",
+   "partition_by": "toYYYYMM(`from`)",
+   "partition_key": "toYYYYMM(`from`)",
+   "values": []
+  },
+  {
+   "column_name": "from",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/from",
+   "partition_by": "intDiv(`from`, 1000)",
+   "partition_key": "intDiv(`from`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "values",
+   "column_type": "UInt64",
+   "name": "identifier/bare/values",
+   "partition_by": "`values`",
+   "partition_key": "`values`",
+   "values": []
+  },
+  {
+   "column_name": "values",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/values",
+   "partition_by": "toYYYYMM(`values`)",
+   "partition_key": "toYYYYMM(`values`)",
+   "values": []
+  },
+  {
+   "column_name": "values",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/values",
+   "partition_by": "intDiv(`values`, 1000)",
+   "partition_key": "intDiv(`values`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "all",
+   "column_type": "UInt64",
+   "name": "identifier/bare/all",
+   "partition_by": "`all`",
+   "partition_key": "`all`",
+   "values": []
+  },
+  {
+   "column_name": "all",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/all",
+   "partition_by": "toYYYYMM(`all`)",
+   "partition_key": "toYYYYMM(`all`)",
+   "values": []
+  },
+  {
+   "column_name": "all",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/all",
+   "partition_by": "intDiv(`all`, 1000)",
+   "partition_key": "intDiv(`all`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "distinct",
+   "column_type": "UInt64",
+   "name": "identifier/bare/distinct",
+   "partition_by": "`distinct`",
+   "partition_key": "`distinct`",
+   "values": []
+  },
+  {
+   "column_name": "distinct",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/distinct",
+   "partition_by": "toYYYYMM(`distinct`)",
+   "partition_key": "toYYYYMM(`distinct`)",
+   "values": []
+  },
+  {
+   "column_name": "distinct",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/distinct",
+   "partition_by": "intDiv(`distinct`, 1000)",
+   "partition_key": "intDiv(`distinct`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "table",
+   "column_type": "UInt64",
+   "name": "identifier/bare/table",
+   "partition_by": "`table`",
+   "partition_key": "`table`",
+   "values": []
+  },
+  {
+   "column_name": "table",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/table",
+   "partition_by": "toYYYYMM(`table`)",
+   "partition_key": "toYYYYMM(`table`)",
+   "values": []
+  },
+  {
+   "column_name": "table",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/table",
+   "partition_by": "intDiv(`table`, 1000)",
+   "partition_key": "intDiv(`table`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "null",
+   "column_type": "UInt64",
+   "name": "identifier/bare/null",
+   "partition_by": "`null`",
+   "partition_key": "`null`",
+   "values": []
+  },
+  {
+   "column_name": "null",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/null",
+   "partition_by": "toYYYYMM(`null`)",
+   "partition_key": "toYYYYMM(`null`)",
+   "values": []
+  },
+  {
+   "column_name": "null",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/null",
+   "partition_by": "intDiv(`null`, 1000)",
+   "partition_key": "intDiv(`null`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "NULL",
+   "column_type": "UInt64",
+   "name": "identifier/bare/NULL",
+   "partition_by": "`NULL`",
+   "partition_key": "`NULL`",
+   "values": []
+  },
+  {
+   "column_name": "NULL",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/NULL",
+   "partition_by": "toYYYYMM(`NULL`)",
+   "partition_key": "toYYYYMM(`NULL`)",
+   "values": []
+  },
+  {
+   "column_name": "NULL",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/NULL",
+   "partition_by": "intDiv(`NULL`, 1000)",
+   "partition_key": "intDiv(`NULL`, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "true",
+   "column_type": "UInt64",
+   "name": "identifier/bare/true",
+   "partition_by": "`true`",
+   "partition_key": "true",
+   "values": []
+  },
+  {
+   "column_name": "true",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/true",
+   "partition_by": "toYYYYMM(`true`)",
+   "partition_key": "toYYYYMM(true)",
+   "values": []
+  },
+  {
+   "column_name": "true",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/true",
+   "partition_by": "intDiv(`true`, 1000)",
+   "partition_key": "intDiv(true, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "date",
+   "column_type": "UInt64",
+   "name": "identifier/bare/date",
+   "partition_by": "`date`",
+   "partition_key": "date",
+   "values": []
+  },
+  {
+   "column_name": "date",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/date",
+   "partition_by": "toYYYYMM(`date`)",
+   "partition_key": "toYYYYMM(date)",
+   "values": []
+  },
+  {
+   "column_name": "date",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/date",
+   "partition_by": "intDiv(`date`, 1000)",
+   "partition_key": "intDiv(date, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "index",
+   "column_type": "UInt64",
+   "name": "identifier/bare/index",
+   "partition_by": "`index`",
+   "partition_key": "index",
+   "values": []
+  },
+  {
+   "column_name": "index",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/index",
+   "partition_by": "toYYYYMM(`index`)",
+   "partition_key": "toYYYYMM(index)",
+   "values": []
+  },
+  {
+   "column_name": "index",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/index",
+   "partition_by": "intDiv(`index`, 1000)",
+   "partition_key": "intDiv(index, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "key",
+   "column_type": "UInt64",
+   "name": "identifier/bare/key",
+   "partition_by": "`key`",
+   "partition_key": "key",
+   "values": []
+  },
+  {
+   "column_name": "key",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/key",
+   "partition_by": "toYYYYMM(`key`)",
+   "partition_key": "toYYYYMM(key)",
+   "values": []
+  },
+  {
+   "column_name": "key",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/key",
+   "partition_by": "intDiv(`key`, 1000)",
+   "partition_key": "intDiv(key, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "_x",
+   "column_type": "UInt64",
+   "name": "identifier/bare/_x",
+   "partition_by": "`_x`",
+   "partition_key": "_x",
+   "values": []
+  },
+  {
+   "column_name": "_x",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/_x",
+   "partition_by": "toYYYYMM(`_x`)",
+   "partition_key": "toYYYYMM(_x)",
+   "values": []
+  },
+  {
+   "column_name": "_x",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/_x",
+   "partition_by": "intDiv(`_x`, 1000)",
+   "partition_key": "intDiv(_x, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "x1",
+   "column_type": "UInt64",
+   "name": "identifier/bare/x1",
+   "partition_by": "`x1`",
+   "partition_key": "x1",
+   "values": []
+  },
+  {
+   "column_name": "x1",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/x1",
+   "partition_by": "toYYYYMM(`x1`)",
+   "partition_key": "toYYYYMM(x1)",
+   "values": []
+  },
+  {
+   "column_name": "x1",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/x1",
+   "partition_by": "intDiv(`x1`, 1000)",
+   "partition_key": "intDiv(x1, 1000)",
+   "values": []
+  },
+  {
+   "column_name": "my col",
+   "column_type": "UInt64",
+   "name": "identifier/bare/my col",
+   "partition_by": "`my col`",
+   "partition_key": "`my col`",
+   "values": []
+  },
+  {
+   "column_name": "my col",
+   "column_type": "DateTime('UTC')",
+   "name": "identifier/toYYYYMM/my col",
+   "partition_by": "toYYYYMM(`my col`)",
+   "partition_key": "toYYYYMM(`my col`)",
+   "values": []
+  },
+  {
+   "column_name": "my col",
+   "column_type": "UInt64",
+   "name": "identifier/intDiv/my col",
+   "partition_by": "intDiv(`my col`, 1000)",
+   "partition_key": "intDiv(`my col`, 1000)",
+   "values": []
+  }
+ ],
+ "server": {
+  "timezone": "Asia/Tokyo",
+  "version": "26.8.36.3"
+ }
+}

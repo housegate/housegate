@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"reflect"
 
@@ -86,6 +87,10 @@ func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]pay
 	if err := validateNativePinnedSchema(schema); err != nil {
 		return nil, err
 	}
+	key, err := payloadexec.ParsePartitionKey(schema)
+	if err != nil {
+		return nil, err
+	}
 
 	var out []payloadexec.Row
 	pr := proto.NewReader(bytes.NewReader(payload))
@@ -117,7 +122,12 @@ func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]pay
 			for schemaPos, blockPos := range colPos {
 				values[schemaPos] = wireValues[blockPos]
 			}
-			partitionID, err := payloadexec.PartitionIDForRow(schema, values)
+			if key.IsPartitioned() {
+				if err := block.partitionValueRepresentable(colPos[key.ColumnIndex()], rowIndex); err != nil {
+					return nil, fmt.Errorf("native row %d: partition column %q: %w", len(out), key.Column(), err)
+				}
+			}
+			partitionID, err := key.PartitionID(values)
 			if err != nil {
 				return nil, fmt.Errorf("native row %d: %w", len(out), err)
 			}
@@ -227,6 +237,24 @@ func decodeNativeDataBlock(pr *proto.Reader, revision int, code uint64) (*native
 		out.cols = append(out.cols, col)
 	}
 	return out, nil
+}
+
+// partitionValueRepresentable refuses a DateTime64 partition value whose
+// instant is outside the int64-nanosecond range (1677-09-21 to 2262-04-11).
+// ch-go's DateTime64.Time multiplies the raw value up to nanoseconds and wraps
+// silently there, so the decoded time.Time, and the partition id derived from
+// it, would name a partition ClickHouse does not hold the row in.
+func (b *nativeDataBlock) partitionValueRepresentable(col, row int) error {
+	c, ok := b.cols[col].(*proto.ColDateTime64)
+	if !ok {
+		return nil
+	}
+	raw := int64(c.Data[row])
+	scale := c.Precision.Scale()
+	if raw > math.MaxInt64/scale || raw < math.MinInt64/scale {
+		return fmt.Errorf("DateTime64 value %d at precision %d is outside the representable nanosecond range", raw, c.Precision)
+	}
+	return nil
 }
 
 func (b *nativeDataBlock) Row(i int) ([]any, uint64, error) {
