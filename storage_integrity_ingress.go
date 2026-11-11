@@ -628,12 +628,14 @@ func (i *StorageIntegrityIngress) lockStatement(statementID string) func() {
 	return lock.Unlock
 }
 
-// markUnspentBeforePrepare marks a refusal raised before Orchestrate only when
-// the orchestrator still requires a genuinely new prepare for the statement:
-// a statement that already prepared may also have been submitted, so its
-// coordinate is not provably unspent.
-func markUnspentBeforePrepare(requiresPrepare bool, err error) error {
-	if !requiresPrepare {
+// markUnspentBeforePrepare marks a refusal raised before Orchestrate only for
+// a first admission: the statement needs a Prepare (AdmissionRequiresPrepare)
+// and this node has never recorded it (AdmissionIsFirst). A recorded statement
+// may already have been submitted, even one that still needs a Prepare
+// (Prepare and Submit run concurrently), so its coordinate is not provably
+// unspent.
+func markUnspentBeforePrepare(firstAdmission bool, err error) error {
+	if !firstAdmission {
 		return err
 	}
 	return chproto.MarkSeqUnspent(err)
@@ -665,8 +667,9 @@ func backpressureClientError(table string, err error) error {
 // and submitted by an earlier attempt, so the marks are hardened where this
 // function can tell: the preflight refusal is never marked (its
 // "reused with a different envelope" class only arises on re-presentation),
-// and the payload-store refusals are marked only when the orchestrator still
-// requires a genuinely new prepare (requiresPrepare). The merge-health,
+// and the parts-pressure and payload-store refusals are marked only for a
+// first admission (AdmissionRequiresPrepare and AdmissionIsFirst): a recorded
+// statement may be sequenced while it still needs a Prepare. The merge-health,
 // materializer and snapshot-schema refusals run before the record is
 // consulted and rely on the first-presentation assumption alone. After
 // Orchestrate only a coded terminal reject other than DUPLICATE_CLIENT_SEQ is
@@ -730,20 +733,21 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 		// envelope, journal recovery) says nothing about earlier attempts.
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
-	if requiresPrepare && schema != nil {
-		// Intake-only refusals (#343) guard a first admission only. A statement
-		// this node already recorded was admitted by the binary that recorded
-		// it and may already be sequenced (Prepare and Submit run concurrently,
-		// so it can still need a Prepare): it keeps its ACK2, resume or
-		// re-prepare, and its sequence number is never reported unspent.
-		first, err := i.orch.AdmissionIsFirst(ctx, rec.StatementID)
+	// firstAdmission: this node has never recorded the statement. A recorded
+	// one may already be sequenced even while it still needs a Prepare
+	// (Prepare and Submit run concurrently), so only a first admission's
+	// coordinate is provably unspent, and only it is subject to the intake
+	// refusals added after it may have been admitted (#343).
+	firstAdmission := false
+	if requiresPrepare {
+		firstAdmission, err = i.orch.AdmissionIsFirst(ctx, rec.StatementID)
 		if err != nil {
 			return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 		}
-		if first {
-			if err := sicore.ValidateNewAdmissionPayload(*schema, rec.PayloadEncoding, rec.Revision, rec.Payload); err != nil {
-				return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
-			}
+	}
+	if firstAdmission && schema != nil {
+		if err := sicore.ValidateNewAdmissionPayload(*schema, rec.PayloadEncoding, rec.Revision, rec.Payload); err != nil {
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
 		}
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
@@ -762,7 +766,7 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 	if i.pressure != nil && requiresPrepare && attemptReservation == nil {
 		attemptReservation, err = i.reservePartsPressure(ctx, rec.StatementID, table, partitions)
 		if err != nil {
-			return chproto.MarkSeqUnspent(err)
+			return markUnspentBeforePrepare(firstAdmission, err)
 		}
 		trackedReservation = attemptReservation
 		i.setPressureReservation(rec.StatementID, rec.TableID, partitions, attemptReservation)
@@ -781,13 +785,13 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 				// (capacity or per-indexer write quota): retryable.
 				err = backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
 			}
-			return markUnspentBeforePrepare(requiresPrepare, err)
+			return markUnspentBeforePrepare(firstAdmission, err)
 		}
 		if put.PayloadRef == "" {
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
+			return markUnspentBeforePrepare(firstAdmission, fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
 		}
 		rec.PayloadRef = put.PayloadRef
 	}

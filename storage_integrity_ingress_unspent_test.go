@@ -243,3 +243,88 @@ func TestConsumeAdmission_PreflightRefusalIsUnmarked(t *testing.T) {
 		t.Fatalf("preflight err = %v carries the unspent flag", err)
 	}
 }
+
+// A statement can be sequenced while it still needs a source Prepare: Prepare
+// and Submit run concurrently, so the arbiter can accept the Submit while the
+// Prepare is rejected before writing, or fails indeterminately and is not
+// found. AdmissionRequiresPrepare is then true on the re-presentation, but the
+// client_seq coordinate is spent. A payload-store refusal of that retry must
+// not carry the unspent flag: a client honouring it would release the seq and
+// reuse it for its next statement, whose id then collides with the sequenced
+// one, while the sequenced statement is left unprepared.
+func TestConsumeAdmission_PayloadRefusalOfASequencedUnpreparedStatementIsUnmarked(t *testing.T) {
+	failures := map[string]func(*rootRecordingPayloadWriter){
+		"put payload": func(w *rootRecordingPayloadWriter) { w.err = errors.New("store down") },
+		"put back-pressure": func(w *rootRecordingPayloadWriter) {
+			w.err = fmt.Errorf("%w: payload store: write quota exceeded", sicore.ErrBackpressure)
+		},
+		"empty payload_ref": func(w *rootRecordingPayloadWriter) { w.result.PayloadRef = "" },
+	}
+	prepareFailures := map[string]error{
+		"prepare rejected before writing":     fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject),
+		"prepare indeterminate and not found": errors.New("connection reset by peer"),
+	}
+	for prepName, prepErr := range prepareFailures {
+		for failName, fail := range failures {
+			t.Run(prepName+"/"+failName, func(t *testing.T) {
+				ingress, writer, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+				adm := bpAdmission()
+				preparer.err = prepErr
+				if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err == nil || chproto.IsSeqUnspent(err) {
+					t.Fatalf("first attempt err = %v, want an unmarked refusal", err)
+				}
+				if submitter.calls != 1 {
+					t.Fatalf("submit calls = %d, want 1: the statement is sequenced", submitter.calls)
+				}
+				probe := AdmissionRecordFromPlugin(adm)
+				probe.TouchedPartitionIDs = []string{"p_eu", "p_us"} // as ingress derives them
+				requires, err := ingress.orch.AdmissionRequiresPrepare(context.Background(), probe)
+				if err != nil || !requires {
+					t.Fatalf("AdmissionRequiresPrepare = (%v, %v), want true: the sequenced statement still needs a Prepare", requires, err)
+				}
+				preparer.err = nil
+				preparer.lookupFound = false
+				fail(writer)
+				err = ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+				if err == nil {
+					t.Fatal("the retry must refuse")
+				}
+				if chproto.IsSeqUnspent(err) {
+					t.Fatalf("retry err = %v carries the unspent flag although the statement was sequenced", err)
+				}
+				if preparer.prepareCalls != 1 {
+					t.Fatalf("prepare calls = %d, want 1", preparer.prepareCalls)
+				}
+			})
+		}
+	}
+}
+
+// The same holds for the parts-pressure refusal: a sequenced statement that
+// still needs a Prepare and holds no tracked reservation (here seeded straight
+// through the orchestrator, as after a restart that did not restore one)
+// re-reserves, and a refusal of that reservation is not unspent.
+func TestConsumeAdmission_BackpressureRefusalOfASequencedUnpreparedStatementIsUnmarked(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, _, preparer := newBackpressureIngress(t, pressure)
+	adm := bpAdmission()
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+	rec := AdmissionRecordFromPlugin(adm)
+	rec.PayloadRef = "payload://store/ref-1"
+	rec.TouchedPartitionIDs = []string{"p_eu", "p_us"}
+	if res, _ := ingress.orch.Orchestrate(context.Background(), rec); res.Ack2 || res.Submit.Category != sicore.OutcomeAccepted {
+		t.Fatalf("seed = %+v, want an accepted submit without ACK2", res)
+	}
+	preparer.err = nil
+	pressure.refuse = map[string]error{
+		"net1__events/p_us": &sicore.BackpressureError{Database: "hg_unsafe", Table: "net1__events", Partition: "p_us", Parts: 2400, Limit: 2400, Kind: "soft"},
+	}
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	var clientErr *chproto.ClientError
+	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeTooManyParts {
+		t.Fatalf("err = %v, want the 252 back-pressure refusal", err)
+	}
+	if chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v carries the unspent flag although the statement was sequenced", err)
+	}
+}
