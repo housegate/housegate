@@ -32,7 +32,7 @@ auth:
   allow_no_auth: false
   allowed_addresses:
   max_token_age: "1m"
-  # writer_predicate: contract   # contract (default) | bitmap (address(0) Write wildcard escape hatch)
+  # writer_predicate: contract   # contract (default) | bitmap (stored per-account bitmap; address(0) adds only Read)
 
 # Rewriter owns logical↔physical database mapping for this deployment.
 # physical_database is the single real ClickHouse DB that hosts every

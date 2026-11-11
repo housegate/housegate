@@ -129,7 +129,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `auth.allowed_addresses` | []string | 否 | `[]` | 允许的小写 `0x…` 地址，查询和 proxy-to-proxy（`__peer__`）登录共用。空 = 任意通过签名校验的签名者都可以查询；此时 proxy-to-proxy 登录只接受已注册的 indexer signer，network state 给不出 indexer signer 时一律拒绝 |
 | `auth.max_token_age` | duration | 否 | `1m` | JWS `iat` claim 的最大年龄 |
 | `auth.allow_no_auth` | bool | 否 | `false` | 放行未签名的 query（用于灰度切换） |
-| `auth.writer_predicate` | string | 否 | `contract` | INSERT/CREATE/DROP 及其他 Write 位语句如何鉴权：`contract` 使用宿主的 `isDatabaseWriter`（没有 address(0) 的 Write 通配；indexer signer 算 writer）；`bitmap` 保留存储的 bitmap 检查，并带 address(0) 并集。对不支持 `WriterAccess` 的 registry，启动时会拒绝 `contract`。 |
+| `auth.writer_predicate` | string | 否 | `contract` | INSERT/CREATE/DROP 及其他 Write 位语句如何鉴权：`contract` 使用宿主的 `isDatabaseWriter`（没有 address(0) 的 Write 通配；indexer signer 算 writer）；`bitmap` 检查账户自己存储的 bitmap；两种模式下 address(0) 的授权都只贡献它所隐含的 Read（housegate/housegate#346）。对不支持 `WriterAccess` 的 registry，启动时会拒绝 `contract`。 |
 
 `auth.writer_predicate: contract` 需要 registry 能回答合约的 `isDatabaseWriter`：嵌入宿主的链状态 registry，或内存（YAML）network state。RPC network-state source（`network_state.source` 为 `http(s)://` URL）不实现它，因此 server 模式下 `auth.enabled: true` 且使用 RPC source 的配置，在默认值下会拒绝启动，并在错误里点名这个 key。此时请设置 `auth.writer_predicate: bitmap`，沿用存储 bitmap 检查（含 address(0) 并集）。
 
