@@ -57,13 +57,35 @@ jobs:
       - name: Build All
         run: bazel build --config=ci //...
 
+      # The unit gate exercises the native rewriter engine (issue #134).
+      # fetch-rewriter-lib without --tag fetches ffifetch.DefaultRelease, the
+      # release go.mod pins (TestFFIDefaultReleaseMatchesGoMod), and
+      # --require-checksum holds the download and any cached copy to the
+      # release's SHA256SUMS entry. The library is cached per tag on the
+      # runner under ~/.cache/housegate/rewriter-ffi/<tag>/, so a cache hit
+      # costs one manifest request. The release is public: no secret is used.
+      - name: Fetch rewriter FFI lib
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffi_path="$(bazel run --config=ci //cmd:housegate -- fetch-rewriter-lib --require-checksum | tail -n 1)"
+          test -n "$ffi_path"
+          test -s "$ffi_path"
+          echo "POLYGLOT_SQL_FFI_PATH=$ffi_path" >> "$GITHUB_ENV"
+
       # Spec J D1: the unit suite is a merge gate. `--config=ci` pins
       # --platforms=//:linux_amd64 (.bazelrc:47), which only resolves a test
       # toolchain on this linux/x64 self-hosted runner — do not try to
       # reproduce this invocation on darwin, use plain `bazel test //...`.
       # Integration targets are tagged `manual` and stay in their own job.
+      # HOUSEGATE_REQUIRE_NATIVE_FFI=1 makes every native-engine test fail
+      # rather than skip when the library is missing or empty, so a green
+      # gate means the native engine ran.
       - name: Build & Test All
-        run: bazel test --config=ci //...
+        run: |
+          bazel test --config=ci //... \
+            --test_env=POLYGLOT_SQL_FFI_PATH \
+            --test_env=HOUSEGATE_REQUIRE_NATIVE_FFI=1
 
   integration:
     name: Integration (ClickHouse)
@@ -125,7 +147,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ffi_path="$(bazel run --config=ci //cmd:housegate -- fetch-rewriter-lib --tag v0.23.0 | tail -n 1)"
+          ffi_path="$(bazel run --config=ci //cmd:housegate -- fetch-rewriter-lib --require-checksum | tail -n 1)"
           test -n "$ffi_path"
           test -s "$ffi_path"
           echo "POLYGLOT_SQL_FFI_PATH=$ffi_path" >> "$GITHUB_ENV"

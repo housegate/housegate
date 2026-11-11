@@ -46,6 +46,11 @@ type Options struct {
 	// SHA256 is an optional hex pin; when set the download (and any cached
 	// copy) must match it.
 	SHA256 string
+	// RequireChecksum, when SHA256 is empty, makes the release's SHA256SUMS
+	// entry for the asset mandatory and checks the cached copy against it
+	// too, so a missing manifest or entry fails instead of falling back to
+	// TLS alone. A cache hit then costs one small manifest request.
+	RequireChecksum bool
 	// CacheDir overrides the cache root (default
 	// os.UserCacheDir()/housegate/rewriter-ffi); layout is
 	// <CacheDir>/<tag>/libpolyglot_sql_ffi.<ext>.
@@ -108,6 +113,32 @@ func Fetch(ctx context.Context, opts Options) (string, error) {
 	}
 	target := filepath.Join(dir, "libpolyglot_sql_ffi"+ext)
 
+	client := opts.Client
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Minute}
+	}
+	base := strings.TrimSuffix(opts.BaseURL, "/")
+	if base == "" {
+		base = DefaultBaseURL
+	}
+	if opts.SHA256 == "" && opts.RequireChecksum {
+		// The manifest entry becomes the pin, so the cached copy and the
+		// download are both held to it below.
+		want, sumsErr := releaseSum(ctx, client, base+"/"+opts.Tag+"/SHA256SUMS", asset)
+		switch {
+		case errors.Is(sumsErr, errNoSums):
+			return "", fmt.Errorf("ffifetch: release %s publishes no SHA256SUMS asset and a checksum is required", opts.Tag)
+		case sumsErr != nil:
+			return "", sumsErr
+		case want == "":
+			return "", fmt.Errorf("ffifetch: release %s SHA256SUMS has no entry for %s and a checksum is required", opts.Tag, asset)
+		}
+		if raw, err := hex.DecodeString(want); err != nil || len(raw) != sha256.Size {
+			return "", fmt.Errorf("ffifetch: release %s SHA256SUMS entry for %s is not a sha256", opts.Tag, asset)
+		}
+		opts.SHA256 = want
+	}
+
 	if _, statErr := os.Stat(target); statErr == nil {
 		if opts.SHA256 == "" {
 			return target, nil // cache hit, zero network
@@ -122,14 +153,6 @@ func Fetch(ctx context.Context, opts Options) (string, error) {
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("ffifetch: %w", err)
-	}
-	client := opts.Client
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
-	}
-	base := strings.TrimSuffix(opts.BaseURL, "/")
-	if base == "" {
-		base = DefaultBaseURL
 	}
 
 	sum, tmp, err := downloadTemp(ctx, client, base+"/"+opts.Tag+"/"+asset, dir)

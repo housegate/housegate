@@ -2,10 +2,10 @@ package rewriter
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/housegate/housegate/pkg/ffifetch/ffitest"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 )
@@ -13,15 +13,13 @@ import (
 // TestNativeEngineSmoke drives the real in-process rewriter-go engine
 // through the full factory path: dynamic args from network state →
 // native backend → RewriteResult. Skips when the polyglot FFI library is
-// not available (CI); run locally with:
+// not available (the CI unit gate requires it); run locally with:
 //
 //	bazel test //pkg/rewriter:rewriter_test \
 //	  --test_filter=TestNativeEngineSmoke \
 //	  --test_env=POLYGLOT_SQL_FFI_PATH=$HOME/Dev/housegate/rewriter-go/third_party/lib/libpolyglot_sql_ffi.dylib
 func TestNativeEngineSmoke(t *testing.T) {
-	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
-	}
+	ffitest.LibOrSkip(t)
 	st := network.NewInMemoryNetworkState()
 	st.DatabaseInfos["db1"] = network.DatabaseInfo{DatabaseId: "db1"}
 
@@ -68,9 +66,7 @@ func TestNativeEngineSmoke(t *testing.T) {
 // v0.16.0 / v0.17.0 / ClickHouse 26.8 (v0.22.0) table-reference discriminators. Without it the floor in go.mod and
 // ci.yml would be asserted only against a fake.
 func TestNativeEngineProbeSmoke(t *testing.T) {
-	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
-	}
+	ffitest.LibOrSkip(t)
 	st := network.NewInMemoryNetworkState()
 	st.DatabaseInfos["db1"] = network.DatabaseInfo{DatabaseId: "db1"}
 

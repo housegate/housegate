@@ -9,8 +9,8 @@
 | Backend seam | `backend.go` | `grpc` default, `native` FFI-backed service, shared proto contract. |
 | Per-session rewrite logic | `sentio.go` | Dynamic args, table/database maps, remote upstream credentials. |
 | Test backend | `backend_test.go` | Unit tests should use `fakeBackend`, not a live service. |
-| Native smoke | `native_smoke_test.go` | Skips unless `POLYGLOT_SQL_FFI_PATH` is set. |
-| Replica-table parity | `replica_parity_test.go` | Both engines resolve a Replica table to `hg_replica.<CopyTable>` before its database's remote mapping and accept a localized `USE` (spec 2026-10-14 §11); the engine cases skip unless `POLYGLOT_SQL_FFI_PATH` or `HOUSEGATE_TEST_REWRITER_GRPC_ADDR` is set. |
+| Native smoke | `native_smoke_test.go`, `materialize_smoke_test.go`, `auto_engine_test.go` (`TestAutoEngineFallsBackToTheRealPinnedLibrary`) | Gate on `ffitest.LibOrSkip`: skip unless `POLYGLOT_SQL_FFI_PATH` is set, fail instead under `HOUSEGATE_REQUIRE_NATIVE_FFI=1` (the CI `Build` job). New native-engine tests must use the same gate. |
+| Replica-table parity | `replica_parity_test.go` | Both engines resolve a Replica table to `hg_replica.<CopyTable>` before its database's remote mapping and accept a localized `USE` (spec 2026-10-14 §11); the native cases use `ffitest.LibOrSkip`, the gRPC cases skip unless `HOUSEGATE_TEST_REWRITER_GRPC_ADDR` is set. |
 | Plugin entry | `../plugins/rewrite/` | Query hook owns one `Rewriter` per connection and applies ordinary versus SI failure policy. |
 | SI contract adapter | `storage_integrity.go`, `sentio.go` | Builds contract-V2 args, validates acknowledgements, and turns SI uncertainty into `RejectedError`. |
 | SI startup conformance | `probe.go` | Bounded eight-case suite: the five original DESCRIBE/catch-all/protected-target/heredoc cases plus the three contract-V2 cases (the per-engine SI `DROP TABLE` fingerprint, the empty-table-map catch-all, and the empty-table-map `hg_safe` read); every concrete or injected SI factory must implement and pass it. |
@@ -40,7 +40,8 @@
 ## COMMANDS
 ```bash
 bazel test //pkg/rewriter:rewriter_test
-bazel test //pkg/rewriter:rewriter_test --test_filter=TestNativeEngineSmoke --test_env=POLYGLOT_SQL_FFI_PATH=/path/to/libpolyglot_sql_ffi.dylib
+# Reproduce the CI unit gate's native coverage (fetches ffifetch.DefaultRelease):
+bazel test //pkg/rewriter:rewriter_test //pkg/plugins/querysettings:querysettings_test --test_env=POLYGLOT_SQL_FFI_PATH="$(go run ./cmd fetch-rewriter-lib --require-checksum)" --test_env=HOUSEGATE_REQUIRE_NATIVE_FFI=1
 bazel test //pkg/rewriter:rewriter_test --test_filter='Test(Native|GRPC)EngineReplicaTableResolvesBeforeRemoteMapping' --test_env=POLYGLOT_SQL_FFI_PATH=/path/to/libpolyglot_sql_ffi.dylib --test_env=HOUSEGATE_TEST_REWRITER_GRPC_ADDR=127.0.0.1:50551
 bazel test //pkg/plugins/rewrite:rewrite_test
 ```

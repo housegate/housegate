@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/ffifetch/ffitest"
 	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 )
@@ -266,10 +266,7 @@ func TestChainSessionKinds(t *testing.T) {
 // the engine refuses in SQL, with the same value rule. Opt-in (needs the FFI
 // library); the integration suite repeats it for every system.settings name.
 func TestRefusedMatchesTheNativeEngine(t *testing.T) {
-	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
-	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
-	}
+	lib := ffitest.LibOrSkip(t)
 	svc, err := rewritergo.NewService(lib)
 	if err != nil {
 		t.Fatal(err)

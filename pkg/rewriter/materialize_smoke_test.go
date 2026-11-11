@@ -2,18 +2,16 @@ package rewriter
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
+
+	"github.com/housegate/housegate/pkg/ffifetch/ffitest"
 )
 
 // Runs the real native engine end-to-end. Skips unless POLYGLOT_SQL_FFI_PATH
 // points at libpolyglot_sql_ffi.{so,dylib}.
 func TestMaterialize_NativeSmoke(t *testing.T) {
-	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
-	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; skipping native materialize smoke test")
-	}
+	lib := ffitest.LibOrSkip(t)
 	m, err := NewMaterializer(Options{Engine: EngineNative, NativeLibraryPath: lib}, 16, "")
 	if err != nil {
 		t.Fatalf("NewMaterializer: %v", err)

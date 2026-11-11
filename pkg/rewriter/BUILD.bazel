@@ -62,6 +62,7 @@ go_test(
     ],
     embed = [":rewriter"],
     deps = [
+        "//pkg/ffifetch/ffitest",
         "//pkg/network",
         "//pkg/registry",
         "//pkg/sitable",

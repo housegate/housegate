@@ -92,6 +92,7 @@ For a rewriter-go bump, the known fan-out is:
 
 | File | What to update |
 |---|---|
+| `pkg/ffifetch/ffifetch.go` | `DefaultRelease` (a root test ties it to go.mod; both CI jobs fetch this tag, `ci.yml` names none) |
 | `configs/local.server.yaml` | `rewriter.native_library_release:` sample tag |
 | `configs/local.server-mock-remote.yaml` | same key, commented out |
 | `CLAUDE.md` (`pkg/ffifetch` bullet) | the "requires an FFI library built from rewriter-go >= vX.Y.Z (polyglot >= vA.B.C — the go.mod floor)" sentence |
@@ -125,7 +126,7 @@ It prints the resolved path to stdout (logs go to stderr). Feed that into Bazel:
 bazel test //pkg/rewriter:rewriter_test --test_env=POLYGLOT_SQL_FFI_PATH=<printed-path> --test_output=all --test_arg=-test.v --nocache_test_results
 ```
 
-**Confirm the tests actually RAN.** `TestNativeEngineSmoke` and `TestMaterialize_NativeSmoke` `t.Skip()` when `POLYGLOT_SQL_FFI_PATH` is unset — a green `--test_output=errors` run proves nothing. Grep the verbose output for `--- PASS: TestNativeEngineSmoke`.
+**Confirm the tests actually RAN.** The native-engine tests `t.Skip()` when `POLYGLOT_SQL_FFI_PATH` is unset — a green `--test_output=errors` run proves nothing. Add `--test_env=HOUSEGATE_REQUIRE_NATIVE_FFI=1` (what the CI `Build` job does) so a missing or empty lib fails instead, or grep the verbose output for `--- PASS: TestNativeEngineSmoke`. CI fetches `ffifetch.DefaultRelease`, so bumping that constant together with go.mod is what moves the CI lib.
 
 ### Rung 6 — docker integration
 
@@ -175,7 +176,7 @@ Commit message should carry: the version table, **the API break and why the fix 
 | `go get github.com/ClickHouse/ch-go@<tag>` to bump the sentio fork | It's a `replace`. Use `go mod edit -replace ...=github.com/sentioxyz/ch-go@<tag>`. |
 | Bumping rewriter-go in `go.mod` and stopping | The FFI binary is a separate artifact. Update `native_library_release` in configs + the version-floor line in CLAUDE.md, and run the rung-5 smoke against the new tag. |
 | Trusting `go build ./...` alone | It doesn't compile `_test.go` files. ch-go v0.73.0's removal of `proto.Exception.Nested` only surfaced under `go vet` / `bazel test`. |
-| Green rewriter test without setting `POLYGLOT_SQL_FFI_PATH` | The native smoke tests skipped. Pass `--test_env=POLYGLOT_SQL_FFI_PATH=...` and read the verbose output. |
+| Green rewriter test without setting `POLYGLOT_SQL_FFI_PATH` | The native smoke tests skipped. Pass `--test_env=POLYGLOT_SQL_FFI_PATH=...` with `--test_env=HOUSEGATE_REQUIRE_NATIVE_FFI=1`. |
 | Calling an integration failure a regression after one run | Measure it on stashed-clean `main` with `--runs_per_test=10` first. |
 | Hand-pinning transitive bumps back down | MVS chose them; fighting it produces an unbuildable graph. Let the diff be wide. |
 | Editing `MODULE.bazel` to match new versions | It reads `go.mod`. Only `bazel mod tidy` touches it, and usually it has nothing to do. |

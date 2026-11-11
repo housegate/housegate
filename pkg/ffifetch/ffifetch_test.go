@@ -226,3 +226,67 @@ func TestSupported(t *testing.T) {
 		}
 	}
 }
+
+func TestFetch_RequireChecksumRefusesAReleaseWithoutSums(t *testing.T) {
+	asset, _ := testAsset(t)
+	srv := fakeRelease(t, "v0.2.0", asset, []byte("payload"), "") // no SHA256SUMS → 404
+	defer srv.Close()
+
+	cache := t.TempDir()
+	_, err := Fetch(context.Background(), Options{Tag: "v0.2.0", BaseURL: srv.URL, CacheDir: cache, RequireChecksum: true})
+	if err == nil || !strings.Contains(err.Error(), "SHA256SUMS") {
+		t.Fatalf("err = %v, want a refusal naming SHA256SUMS", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(cache, "v0.2.0")); len(entries) != 0 {
+		t.Errorf("left files behind after refusing: %v", entries)
+	}
+}
+
+func TestFetch_RequireChecksumRefusesAManifestWithoutTheAsset(t *testing.T) {
+	asset, _ := testAsset(t)
+	sums := fmt.Sprintf("%s  some-other-asset\n", sumOf([]byte("x")))
+	srv := fakeRelease(t, "v0.2.0", asset, []byte("payload"), sums)
+	defer srv.Close()
+
+	_, err := Fetch(context.Background(), Options{Tag: "v0.2.0", BaseURL: srv.URL, CacheDir: t.TempDir(), RequireChecksum: true})
+	if err == nil || !strings.Contains(err.Error(), "no entry") {
+		t.Fatalf("err = %v, want a refusal for the missing manifest entry", err)
+	}
+}
+
+func TestFetch_RequireChecksumVerifiesTheDownloadAndTheCachedCopy(t *testing.T) {
+	asset, _ := testAsset(t)
+	lib := []byte("good payload")
+	srv := fakeRelease(t, "v0.2.0", asset, lib, fmt.Sprintf("%s  %s\n", sumOf(lib), asset))
+	defer srv.Close()
+
+	cache := t.TempDir()
+	opts := Options{Tag: "v0.2.0", BaseURL: srv.URL, CacheDir: cache, RequireChecksum: true}
+	path, err := Fetch(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	// A cached copy that no longer matches the manifest (here: truncated to
+	// empty) is re-downloaded instead of being trusted.
+	if err := os.WriteFile(path, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path, err = Fetch(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("Fetch over a corrupted cache: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(lib) {
+		t.Errorf("content = %q, want the re-downloaded library", got)
+	}
+}
+
+func TestFetch_RequireChecksumRefusesAMismatchedDownload(t *testing.T) {
+	asset, _ := testAsset(t)
+	srv := fakeRelease(t, "v0.2.0", asset, []byte("tampered"), fmt.Sprintf("%s  %s\n", sumOf([]byte("original")), asset))
+	defer srv.Close()
+
+	_, err := Fetch(context.Background(), Options{Tag: "v0.2.0", BaseURL: srv.URL, CacheDir: t.TempDir(), RequireChecksum: true})
+	if err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("err = %v, want a checksum mismatch", err)
+	}
+}
