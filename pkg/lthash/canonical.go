@@ -253,11 +253,18 @@ func canonicalFloat32Bits(f float32) uint32 {
 
 // encodeTime canonicalizes to the absolute instant. Date types encode days
 // since epoch; DateTime64 keeps nanoseconds; DateTime keeps seconds.
+//
+// The DateTime64 payload is the nanosecond count since the epoch modulo 2^64,
+// computed explicitly in uint64 arithmetic. That is the value t.UnixNano()
+// returns today, including for instants outside 1677-09-21..2262-04-11 where
+// UnixNano is documented as undefined; the explicit form keeps those bytes
+// fixed. It is a consensus encoding: every committed DateTime64 row element
+// depends on it, so it must not change (#343).
 func encodeTime(col Column, t time.Time) []byte {
 	var payload uint64
 	switch {
 	case strings.HasPrefix(col.Type, "DateTime64"):
-		payload = uint64(t.UnixNano())
+		payload = uint64(t.Unix())*1e9 + uint64(t.Nanosecond())
 	case strings.HasPrefix(col.Type, "Date"):
 		if strings.HasPrefix(col.Type, "DateTime") {
 			payload = uint64(t.Unix())

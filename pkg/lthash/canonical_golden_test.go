@@ -111,6 +111,19 @@ func TestCanonicalValueEncodingsAreFrozen(t *testing.T) {
 
 		{name: "DateTime64(3, 'UTC')", typ: "DateTime64(3, 'UTC')", value: milli, wantHex: "06c034c88143c5c218"},
 
+		// DateTime64 commits uint64 nanoseconds since the epoch, taken modulo
+		// 2^64 (#343). Inside the int64-nanosecond range (1677-09-21 to
+		// 2262-04-11) that is the exact count; outside it the count wraps, and an
+		// instant decoded exactly and the instant ch-go's int64-nanosecond decode
+		// wraps it to commit the same bytes. These rows freeze both.
+		{name: "DateTime64(9)/pre-epoch", typ: "DateTime64(9, 'UTC')", value: time.Date(1969, time.December, 31, 23, 59, 59, 999999999, time.UTC), wantHex: "06ffffffffffffffff"},
+		{name: "DateTime64(3)/1900", typ: "DateTime64(3, 'UTC')", value: time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC), wantHex: "0600002fdf631858e1"},
+		{name: "DateTime64(3)/int64-ns-min", typ: "DateTime64(3, 'UTC')", value: time.Date(1677, time.September, 21, 0, 12, 43, 146000000, time.UTC), wantHex: "0680d60b0000000080"},
+		{name: "DateTime64(3)/int64-ns-max", typ: "DateTime64(3, 'UTC')", value: time.Date(2262, time.April, 11, 23, 47, 16, 854000000, time.UTC), wantHex: "068029f4ffffffff7f"},
+		{name: "DateTime64(3)/2299-exact", typ: "DateTime64(3, 'UTC')", value: dateTime64At2299, wantHex: "06c0bdbe3ca6388590"},
+		{name: "DateTime64(3)/2299-wrapped", typ: "DateTime64(3, 'UTC')", value: dateTime64At2299Wrapped, wantHex: "06c0bdbe3ca6388590"},
+		{name: "DateTime64(3)/1600-exact", typ: "DateTime64(3, 'UTC')", value: time.Date(1600, time.January, 1, 0, 0, 0, 0, time.UTC), wantHex: "060000a4f48c2cf65d"},
+
 		// Date32 at 1900-01-01 encodes as int64(-25567) little-endian under
 		// kindTime. encodeTime's strings.HasPrefix(col.Type, "Date") branch
 		// computes t.Unix()/86400, which truncates toward zero — correct here
@@ -216,5 +229,53 @@ func TestCanonicalEncodingRefusesMisplacedValues(t *testing.T) {
 				t.Fatalf("EncodeRow(%s, %v) = nil error", tc.typ, tc.value)
 			}
 		})
+	}
+}
+
+// dateTime64At2299 is ClickHouse's last DateTime64(3) instant of 2299, which
+// it stores and renders; its nanosecond count exceeds int64.
+var dateTime64At2299 = time.Date(2299, time.December, 31, 23, 59, 59, 999000000, time.UTC)
+
+// dateTime64At2299Wrapped is what ch-go's DateTime64.Time returns for the same
+// raw tick count: raw*1e6 nanoseconds computed in int64, which wraps to 1715.
+var dateTime64At2299Wrapped = func() time.Time {
+	raw := int64(10413791999999)
+	nsec := raw * 1e6 // wraps, as ch-go's decode does
+	return time.Unix(nsec/1e9, nsec%1e9).UTC()
+}()
+
+// TestDateTime64CommitsWrappedNanoseconds pins the meaning of the DateTime64
+// value bytes: the little-endian uint64 of the true nanosecond count modulo
+// 2^64, for instants inside and outside the int64-nanosecond range, and equal
+// to Go's own UnixNano wherever that is defined (#343).
+func TestDateTime64CommitsWrappedNanoseconds(t *testing.T) {
+	if dateTime64At2299Wrapped.Year() != 1715 {
+		t.Fatalf("wrapped 2299 instant = %s, want a 1715 instant", dateTime64At2299Wrapped)
+	}
+	const want2299 = uint64(10413791999999000000) // true nanoseconds, fits uint64
+	for _, v := range []time.Time{dateTime64At2299, dateTime64At2299Wrapped} {
+		encoded, err := EncodeRow("tenant.golden", []Column{{Name: "c", Type: "DateTime64(3, 'UTC')"}}, []any{v})
+		if err != nil {
+			t.Fatal(err)
+		}
+		field := encodedValueField(t, encoded)
+		if len(field) != 9 || field[0] != kindTime || binary.LittleEndian.Uint64(field[1:]) != want2299 {
+			t.Fatalf("%s: value field %x, want kindTime ‖ LE(%d)", v, field, want2299)
+		}
+	}
+
+	// Across a sweep of instants, inside the range and up to ±2000 years
+	// outside it, the committed payload equals uint64(UnixNano()).
+	for sec := int64(-70e9); sec <= 70e9; sec += 9_876_543_211 {
+		for _, nsec := range []int64{0, 1, 999_999_999} {
+			v := time.Unix(sec, nsec).UTC()
+			encoded, err := EncodeRow("tenant.golden", []Column{{Name: "c", Type: "DateTime64(9, 'UTC')"}}, []any{v})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := binary.LittleEndian.Uint64(encodedValueField(t, encoded)[1:]), uint64(v.UnixNano()); got != want {
+				t.Fatalf("%s: payload %d, want uint64(UnixNano()) %d", v, got, want)
+			}
+		}
 	}
 }
