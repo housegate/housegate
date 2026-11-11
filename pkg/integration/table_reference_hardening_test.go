@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -20,7 +21,7 @@ func requireNativeLib(t *testing.T) string {
 	t.Helper()
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.2` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.4` and pass --test_env")
 	}
 	return lib
 }
@@ -353,6 +354,69 @@ func TestTableReference_MetadataTablesRefused(t *testing.T) {
 	}
 	var n uint64
 	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = '"+phys+"' AND name = 'db1.m'").Scan(&n); err != nil {
+		t.Fatalf("system.tables read: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("system.tables rows = %d, want 1", n)
+	}
+}
+
+// TestTableReference_UnmappedDatabaseRefused: a qualified read of a database
+// outside the session's database_map — here a real table in ClickHouse's
+// `default` database, readable by the shared ClickHouse user — is refused by
+// the engine in every read position (housegate/housegate#336). Before the fix
+// the engine forwarded it verbatim. Auth is off, so no permission observer
+// runs and the refusal is the engine's own. INSERT … SELECT must not copy the
+// rows into the tenant's table, and the session survives every refusal.
+func TestTableReference_UnmappedDatabaseRefused(t *testing.T) {
+	const phys = "phys_tr_unmapped"
+	proxy := startTableRefProxy(t, phys, "enforce")
+	ctx := context.Background()
+	seed := openConnNoDB(t, chEnv.Addr)
+	for _, q := range []string{
+		"DROP TABLE IF EXISTS default.tr336_secret",
+		"CREATE TABLE default.tr336_secret (a UInt64) ENGINE = MergeTree ORDER BY a",
+		"INSERT INTO default.tr336_secret VALUES (42)",
+	} {
+		if err := seed.Exec(ctx, q); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	t.Cleanup(func() { _ = seed.Exec(ctx, "DROP TABLE IF EXISTS default.tr336_secret") })
+	conn := openConn(t, proxy.Addr)
+	if err := conn.Exec(ctx, "CREATE TABLE db1.o (a UInt64) ENGINE = MergeTree ORDER BY a"); err != nil {
+		t.Fatal(err)
+	}
+	const msg = `database "%s" does not resolve through the caller's databases (it is not mapped for this account, or the account has no access)`
+	for _, tc := range []struct{ sql, db string }{
+		{"SELECT * FROM default.tr336_secret", "default"},
+		{"SELECT * FROM `default`.`tr336_secret`", "default"},
+		{"SELECT * FROM db1.o JOIN default.tr336_secret USING (a)", "default"},
+		{"SELECT * FROM db1.o WHERE a IN (SELECT a FROM default.tr336_secret)", "default"},
+		{"SELECT * FROM db1.o WHERE a IN default.tr336_secret", "default"},
+		{"SELECT (SELECT max(a) FROM default.tr336_secret)", "default"},
+		{"WITH x AS (SELECT * FROM default.tr336_secret) SELECT * FROM x", "default"},
+		{"SELECT * FROM db1.o UNION ALL SELECT * FROM default.tr336_secret", "default"},
+		{"SELECT * FROM view(SELECT * FROM default.tr336_secret)", "default"},
+		{"INSERT INTO db1.o SELECT * FROM default.tr336_secret", "default"},
+		{"CREATE TABLE db1.n ENGINE = Memory AS SELECT * FROM default.tr336_secret", "default"},
+		{"CREATE VIEW db1.v AS SELECT * FROM default.tr336_secret", "default"},
+		{"SELECT * FROM SYSTEM.processes", "SYSTEM"},
+	} {
+		want := fmt.Sprintf(msg, tc.db)
+		if err := conn.Exec(ctx, tc.sql); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%.60s: err = %v, want it to contain %q", tc.sql, err, want)
+		}
+	}
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM db1.o").Scan(&n); err != nil {
+		t.Fatalf("count db1.o: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("db1.o rows = %d, want 0 (INSERT … SELECT must not copy default.tr336_secret)", n)
+	}
+	// The driver's system.tables read is unchanged.
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = '"+phys+"' AND name = 'db1.o'").Scan(&n); err != nil {
 		t.Fatalf("system.tables read: %v", err)
 	}
 	if n != 1 {

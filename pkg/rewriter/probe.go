@@ -292,8 +292,10 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 // driver-grouped-literal-tuple; rewriter-go before v0.22.0 and rewriter-grpc
 // before v0.19.0 fail the ch268-* cases; rewriter-go before v0.23.2 and
 // rewriter-grpc before v0.21.1 fail system-completions-refused and
-// information-schema-refused (housegate/housegate#319).
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.2 or rewriter-grpc >= v0.21.1 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table refusals, and Sentio-driver compatibility)"
+// information-schema-refused (housegate/housegate#319); rewriter-go before
+// v0.23.4 and rewriter-grpc before v0.21.3 fail unmapped-database-refused
+// (housegate/housegate#336).
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.4 or rewriter-grpc >= v0.21.3 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table and unmapped-database refusals, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -379,6 +381,14 @@ var tableReferenceProbes = []buildProbe{
 		pb.RewriteCode_UnsupportedStatement, "system table system.completions is not accessible; tenant-filtered metadata reads are tracked in housegate/housegate#218"),
 	rejectedProbe("information-schema-refused", "SELECT * FROM information_schema.tables",
 		pb.RewriteCode_UnsupportedStatement, "database information_schema is not accessible; tenant-filtered metadata reads are tracked in housegate/housegate#218"),
+	// housegate/housegate#336: a qualified read of a database outside the
+	// session's database_map would be read by ClickHouse as a physical
+	// database under the shared ClickHouse user. Measured 2026-11-11 against
+	// rewriter-go v0.23.4's tree (native FFI) and rewriter-grpc v0.21.3's
+	// tree; every earlier engine answers Success, forwarding the SQL
+	// unchanged.
+	rejectedProbe("unmapped-database-refused", "SELECT * FROM default.t",
+		pb.RewriteCode_InvalidRewriteRequest, `database "default" does not resolve through the caller's databases (it is not mapped for this account, or the account has no access)`),
 	// Spec §13 round 2; rewriter-go v0.15.0 answers Success.
 	rejectedProbe("analyzer-off-refused", "SELECT * FROM db1.o SETTINGS allow_experimental_analyzer = 0",
 		pb.RewriteCode_UnsupportedStatement, "table setting allow_experimental_analyzer is not accepted"),
