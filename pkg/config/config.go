@@ -29,6 +29,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/housegate/housegate/pkg/cfgtypes"
+	"github.com/housegate/housegate/pkg/chgrants"
 	"github.com/housegate/housegate/pkg/cluster"
 	"github.com/housegate/housegate/pkg/ffifetch"
 	"github.com/housegate/housegate/pkg/plugins/agent"
@@ -135,17 +136,20 @@ type Config struct {
 
 	// --- Feature sections (each owned by its plugin package) ---
 
-	Auth             authplugin.Config        `json:"auth"              yaml:"auth"`
-	Rewriter         rewrite.Config           `json:"rewriter"          yaml:"rewriter"`
-	TableRefGuard    tablerefguard.Config     `json:"tableref_guard"    yaml:"tableref_guard"`
-	Materialize      materializeplugin.Config `json:"materialize"       yaml:"materialize"`
-	Agent            agent.Config             `json:"agent"             yaml:"agent"`
-	Usage            usage.Config             `json:"usage"             yaml:"usage"`
-	IndexingUsage    indexingusage.Config     `json:"indexing_usage"    yaml:"indexing_usage"`
-	ConcurrencyLimit concurrency.Config       `json:"concurrency_limit" yaml:"concurrency_limit"`
-	State            sessionstate.Config      `json:"state"             yaml:"state"`
-	LtHash           lthashplugin.Config      `json:"lthash"            yaml:"lthash"`
-	StorageIntegrity StorageIntegrityConfig   `json:"storage_integrity" yaml:"storage_integrity"`
+	Auth          authplugin.Config    `json:"auth"              yaml:"auth"`
+	Rewriter      rewrite.Config       `json:"rewriter"          yaml:"rewriter"`
+	TableRefGuard tablerefguard.Config `json:"tableref_guard"    yaml:"tableref_guard"`
+	// UpstreamGrantsCheck checks the upstream ClickHouse user's grants at
+	// startup and every 10 minutes (housegate/housegate#341).
+	UpstreamGrantsCheck chgrants.Config          `json:"upstream_grants_check" yaml:"upstream_grants_check"`
+	Materialize         materializeplugin.Config `json:"materialize"       yaml:"materialize"`
+	Agent               agent.Config             `json:"agent"             yaml:"agent"`
+	Usage               usage.Config             `json:"usage"             yaml:"usage"`
+	IndexingUsage       indexingusage.Config     `json:"indexing_usage"    yaml:"indexing_usage"`
+	ConcurrencyLimit    concurrency.Config       `json:"concurrency_limit" yaml:"concurrency_limit"`
+	State               sessionstate.Config      `json:"state"             yaml:"state"`
+	LtHash              lthashplugin.Config      `json:"lthash"            yaml:"lthash"`
+	StorageIntegrity    StorageIntegrityConfig   `json:"storage_integrity" yaml:"storage_integrity"`
 
 	// --- Plumbing sections owned by pkg/config ---
 
@@ -436,6 +440,9 @@ func (c *Config) Validate() error {
 	// Mode validity is mode-independent like the engine check: the guard is
 	// wired on any server that has a rewriter.
 	if err := c.TableRefGuard.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := c.UpstreamGrantsCheck.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 

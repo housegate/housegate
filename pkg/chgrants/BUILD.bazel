@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "chgrants",
+    srcs = [
+        "checker.go",
+        "grants.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/chgrants",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/log",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)
+
+go_test(
+    name = "chgrants_test",
+    srcs = ["grants_test.go"],
+    embed = [":chgrants"],
+    deps = ["@com_github_prometheus_client_golang//prometheus/testutil"],
+)

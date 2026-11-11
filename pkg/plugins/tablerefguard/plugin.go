@@ -319,6 +319,14 @@ func tableEngineAllowed(name string, args int) bool {
 	return allowedTableEngines[name]
 }
 
+// TableEngineGrantAllowed reports whether a ClickHouse `TABLE ENGINE ON
+// <engine>` grant names an engine the rewriter engines accept: an allowed
+// engine in its exact spelling, or its Replicated form (the grant carries no
+// arguments). The upstream grants check uses it (housegate/housegate#341).
+func TableEngineGrantAllowed(engine string) bool {
+	return tableEngineAllowed(engine, 0)
+}
+
 // isCall reports whether tokens[i] calls a function: a name immediately
 // followed, in the token stream (so across whitespace and comments), by an
 // opening parenthesis, and not in a position where ClickHouse reads the
