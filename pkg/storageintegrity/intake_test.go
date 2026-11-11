@@ -1812,3 +1812,47 @@ func TestStatementKindCode(t *testing.T) {
 		t.Fatal("an unmodelled kind must fail closed rather than sign 0")
 	}
 }
+
+// TestAdmissionIsFirst: true only for a statement the orchestrator has never
+// recorded, false once any record exists, live or journaled (a terminal one
+// loaded on demand after a restart), and for a sequenced statement that still
+// needs a Prepare (#343).
+func TestAdmissionIsFirst(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	prep := &recordingPreparer{prepared: boundSource(), claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}}
+	adm := admissionFixture()
+	o := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	if first, err := o.AdmissionIsFirst(ctx, adm.StatementID); err != nil || !first {
+		t.Fatalf("unrecorded statement: AdmissionIsFirst = (%v, %v), want true", first, err)
+	}
+	if res, err := o.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate = (%+v, %v)", res, err)
+	}
+	if first, err := o.AdmissionIsFirst(ctx, adm.StatementID); err != nil || first {
+		t.Fatalf("recorded statement: AdmissionIsFirst = (%v, %v), want false", first, err)
+	}
+	restarted := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	if first, err := restarted.AdmissionIsFirst(ctx, adm.StatementID); err != nil || first {
+		t.Fatalf("journaled terminal statement after restart: AdmissionIsFirst = (%v, %v), want false", first, err)
+	}
+
+	rejecting := &recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)}
+	other := admissionFixture()
+	other.StatementID = adm.StatementID + "-b"
+	o2 := NewOrchestrator(sub, rejecting, OrchestratorConfig{ExpectedSource: "snode-A"})
+	if res, _ := o2.Orchestrate(ctx, other); res.Ack2 {
+		t.Fatalf("rejected prepare reached ACK2: %+v", res)
+	}
+	requires, err := o2.AdmissionRequiresPrepare(ctx, other)
+	if err != nil || !requires {
+		t.Fatalf("AdmissionRequiresPrepare = (%v, %v), want true for the re-prepare", requires, err)
+	}
+	if first, err := o2.AdmissionIsFirst(ctx, other.StatementID); err != nil || first {
+		t.Fatalf("sequenced statement needing a Prepare: AdmissionIsFirst = (%v, %v), want false", first, err)
+	}
+}

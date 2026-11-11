@@ -795,6 +795,43 @@ func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm Admissi
 	return true, nil
 }
 
+// AdmissionIsFirst is the read-only preflight that answers whether this
+// orchestrator has never recorded the statement: no live record and no
+// journaled one (terminal records are loaded on demand). A record is persisted
+// before Prepare or Submit can run and is dropped only by a failed initial
+// persist, so a statement with any record may already be sequenced and was
+// admitted under the refusals of the binary that recorded it. Ingress applies
+// refusals introduced later (ValidateNewAdmissionPayload) to first admissions
+// only; whether another source Prepare is needed (AdmissionRequiresPrepare) is
+// a different question, because Prepare and Submit run concurrently.
+func (o *Orchestrator) AdmissionIsFirst(ctx context.Context, statementID string) (bool, error) {
+	if o == nil {
+		return false, errors.New("intake: orchestrator is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := o.ensureJournalRecovered(ctx); err != nil {
+		return false, err
+	}
+	o.mu.Lock()
+	_, known := o.records[statementID]
+	o.mu.Unlock()
+	if known {
+		return false, nil
+	}
+	if o.journal != nil {
+		_, ok, err := o.journal.LoadIntakeRecord(ctx, statementID)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionRecord, prepared PreparedLocalResult, hasPrepared, terminal bool, stage Lifecycle, incoming AdmissionRecord) (bool, error) {
 	if incoming.PayloadRef != "" && incoming.PayloadRef != boundEnv.PayloadRef {
 		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)

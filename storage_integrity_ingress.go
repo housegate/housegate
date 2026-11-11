@@ -731,11 +731,19 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
 	if requiresPrepare && schema != nil {
-		// Intake-only refusals (#343) guard a genuinely new prepare only: a
-		// statement an earlier binary admitted keeps its cached ACK2 or its
-		// resume, and its sequence number is never reported unspent.
-		if err := sicore.ValidateNewAdmissionPayload(*schema, rec.PayloadEncoding, rec.Revision, rec.Payload); err != nil {
-			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
+		// Intake-only refusals (#343) guard a first admission only. A statement
+		// this node already recorded was admitted by the binary that recorded
+		// it and may already be sequenced (Prepare and Submit run concurrently,
+		// so it can still need a Prepare): it keeps its ACK2, resume or
+		// re-prepare, and its sequence number is never reported unspent.
+		first, err := i.orch.AdmissionIsFirst(ctx, rec.StatementID)
+		if err != nil {
+			return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
+		}
+		if first {
+			if err := sicore.ValidateNewAdmissionPayload(*schema, rec.PayloadEncoding, rec.Revision, rec.Payload); err != nil {
+				return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
+			}
 		}
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
