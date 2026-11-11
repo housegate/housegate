@@ -70,6 +70,16 @@ type StorageIntegrityOptions struct {
 	InsertLaneEnabled bool
 }
 
+// storageIntegrityInsertLaneDisabledMessage is the refusal for an INSERT into
+// a storage-integrity table on a server without the signed ingress lane. Only
+// INSERT reaches it: the engines refuse every other statement on an SI table
+// with their own append-only or reference message (housegate/housegate#323),
+// so the lane is named only where it is the actionable route.
+func storageIntegrityInsertLaneDisabledMessage(key string) string {
+	return "storage-integrity table " + key +
+		" accepts INSERT only through the signed statement lane, which is not enabled on this server"
+}
+
 type tableSnapshotCtxKey struct{}
 
 // WithTableSnapshot attaches the query's table-state snapshot. The rewrite

@@ -260,4 +260,6 @@ A query that names a payer whose operator list does not include the signing key 
 | 497 `... is not a writer of database <db>` | your key has no Owner or Write grant on `<db>` | ask its Owner for `GRANT INSERT` |
 | 392 `... was refused: ...` | the table uses a type outside the admitted set | `DROP TABLE` and create it with admitted types (§5) |
 | 392 `... views and materialized views cannot be created there` | views are not supported in a database with SI tables | query the tables directly (§5) |
-| `... accepts writes only through the signed statement lane` | the statement is not an `INSERT` (SI tables are append-only) | §5 |
+| `... is append-only: only INSERT and SELECT are accepted, ...` | SI tables are append-only: `UPDATE`, `DELETE`, `ALTER`, `TRUNCATE`, `GRANT` and other DDL on them are refused, and signing does not change that | use `INSERT`; to change a schema, `DROP TABLE` and create it again (§5) |
+| `... can be read only by SELECT, or by INSERT ... SELECT or CREATE TABLE ... AS SELECT into an ordinary table; ...` | a view, a table engine, an `ALTER` / `UPDATE` / `DELETE` subquery or a write into an SI table reads an SI table | query the SI table with `SELECT`, or copy it into an ordinary table first |
+| `... accepts INSERT only through the signed statement lane, which is not enabled on this server` | the server you reached has no SI ingress lane | send the `INSERT` through the agent to an indexer that hosts the database |

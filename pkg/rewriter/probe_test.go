@@ -123,7 +123,7 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		responses["DROP TABLE db1.t"] = acknowledgedSIResponse(&pb.RewriteSQLResponse{
 			Code:            pb.RewriteCode_UnsupportedStatement,
 			SqlAfterRewrite: "DROP TABLE db1.t",
-			Message:         "storage-integrity table db1.t accepts writes only through the signed statement lane",
+			Message:         "storage-integrity table db1.t is append-only: only INSERT and SELECT are accepted, and UPDATE, DELETE, ALTER, TRUNCATE and other statements on it are refused",
 		})
 		err := newSIFactory(&scriptedProbeBackend{responses: responses}, nil, true).ProbeStorageIntegrityBuild(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "probe=v2-si-drop-ordinary-physical") {

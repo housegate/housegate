@@ -376,7 +376,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 		}
 		if resp.GetStatementType() == pb.StatementType_STATEMENT_TYPE_INSERT && !r.factory.options.StorageIntegrity.InsertLaneEnabled {
 			return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_UnsupportedStatement,
-				Message: "storage-integrity table " + key + " accepts writes only through the signed statement lane"}
+				Message: storageIntegrityInsertLaneDisabledMessage(key)}
 		}
 	}
 	// Spec 2026-09-26 T8 (and Spec I D3 before it, for the SI surface only):
