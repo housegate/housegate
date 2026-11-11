@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,6 +71,10 @@ type StorageIntegrityIngress struct {
 
 	cleanupProofTimeout time.Duration
 
+	// accountBudgetRetryAfter is the retry hint of the arbiter's
+	// ACCOUNT_BUDGET_EXCEEDED refusal; 0 is DefaultAccountBudgetRetryAfter.
+	accountBudgetRetryAfter time.Duration
+
 	// meter is the optional billing hook; nil disables it.
 	meter sicore.WriteMeter
 	// meterSem bounds in-flight meter calls; meterCtx/meterCancel (guarded by
@@ -82,6 +87,48 @@ type StorageIntegrityIngress struct {
 	backgroundCancel context.CancelFunc
 	backgroundWG     sync.WaitGroup
 	backgroundClosed bool
+}
+
+// DefaultAccountBudgetRetryAfter is the retry hint of the arbiter's
+// ACCOUNT_BUDGET_EXCEEDED refusal when none is configured
+// (storage_integrity.ingress.account_budget_retry_after).
+const DefaultAccountBudgetRetryAfter = time.Minute
+
+// SetAccountBudgetRetryAfter sets the retry hint the client sees when the
+// arbiter refuses a statement on its write budget; d <= 0 keeps
+// DefaultAccountBudgetRetryAfter. It is unsynchronised: call it once, before
+// the ingress serves.
+func (i *StorageIntegrityIngress) SetAccountBudgetRetryAfter(d time.Duration) {
+	i.accountBudgetRetryAfter = d
+}
+
+func (i *StorageIntegrityIngress) accountBudgetRetryAfterOrDefault() time.Duration {
+	if i.accountBudgetRetryAfter > 0 {
+		return i.accountBudgetRetryAfter
+	}
+	return DefaultAccountBudgetRetryAfter
+}
+
+// accountBudgetRefusalTarget reads which bucket the arbiter's
+// ACCOUNT_BUDGET_EXCEEDED reason names: the signer's (account returned) or
+// the network-wide total ("" returned), and the dimension. An unrecognised
+// reason is attributed to the signer's statements.
+func accountBudgetRefusalTarget(signer, reason string) (account, dimension string) {
+	account, dimension = strings.ToLower(signer), "statements"
+	if strings.Contains(reason, "the network-wide total exceeded") {
+		account = ""
+	}
+	if strings.Contains(reason, "exceeded its bytes budget") {
+		dimension = "bytes"
+	}
+	return account, dimension
+}
+
+func accountBudgetScope(account string) string {
+	if account == "" {
+		return "total"
+	}
+	return "account"
 }
 
 // SetWriteMeter installs the optional billing hook (spec 2026-10-09 §6.9).
@@ -942,6 +989,25 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
 			return &chproto.ClientError{Code: chproto.CodeTooManyParts,
 				Message:     chproto.CopiesBackpressureMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeAccountBudgetExceeded {
+			// The arbiter's consensus-level write budget (sentioxyz/arbiter#143
+			// layer C): the signer's bucket or the network-wide total is
+			// exhausted. The arbiter changed nothing, so the coordinate is
+			// unspent, and the terminal-submit path has already removed the
+			// prepared parts. The client gets the retryable 201 QUOTA_EXCEEDED
+			// with a fixed retry hint (the budget refills on L2 blocks, which
+			// this node cannot convert to seconds); it ends only the query,
+			// and the relay recognises the exact message on the wire.
+			account, dimension := accountBudgetRefusalTarget(rec.Signer, res.Submit.Reason)
+			storageIntegrityAccountBudgetRefusalsTotal.WithLabelValues(accountBudgetScope(account), dimension).Inc()
+			log.Warnw("storage_integrity statement refused: the arbiter's write budget is exhausted",
+				"statement_id", rec.StatementID, "signer", rec.Signer, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeQuotaExceeded,
+				Message:     chproto.WriteBudgetExceededMessage(account, dimension, i.accountBudgetRetryAfterOrDefault()),
 				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
 				KeepSession: true,
 				SeqUnspent:  true}

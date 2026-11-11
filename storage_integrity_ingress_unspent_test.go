@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -124,6 +125,8 @@ func TestConsumeAdmission_PostOrchestrateMarking(t *testing.T) {
 		"quarantined":        {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity indexer 1 is quarantined", AdmissionCode: sicore.AdmissionCodeIndexerQuarantined}, wantMarked: true, wantText: "the indexer that owns table net1.events is quarantined"},
 		"verifiers":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity verifiers unavailable for indexer 1: 2 eligible, at least 3 required", AdmissionCode: sicore.AdmissionCodeVerifiersUnavailable}, wantMarked: true, wantText: "the verifiers of table net1.events are not available yet"},
 		"copy floor":         {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity copy floor: net1.events holds 20001 uncleaned promoted parts", AdmissionCode: sicore.AdmissionCodeCopiesBackpressure}, wantMarked: true, wantText: "back-pressure: table net1.events waits for its replica copies"},
+		"account budget":     {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "account budget: account 0xabc exceeded its bytes budget (window 1800 L2 blocks); retry once the table-registry cursor reaches L2 block 9 (committed cursor 3)", AdmissionCode: sicore.AdmissionCodeAccountBudgetExceeded}, wantMarked: true, wantText: "exceeded its network write budget (bytes); retry in 60s (retryable)"},
+		"network budget":     {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "account budget: the network-wide total exceeded its statements budget (window 1800 L2 blocks); retry once the table-registry cursor reaches L2 block 9 (committed cursor 3)", AdmissionCode: sicore.AdmissionCodeAccountBudgetExceeded}, wantMarked: true, wantText: "storage_integrity: the network write budget is exhausted (statements); retry in 60s (retryable)"},
 		"duplicate":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "dup", AdmissionCode: sicore.AdmissionCodeDuplicateClientSeq}},
 		"no code":            {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "permission denied"}},
 		"retryable":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "fence"}},
@@ -326,5 +329,22 @@ func TestConsumeAdmission_BackpressureRefusalOfASequencedUnpreparedStatementIsUn
 	}
 	if chproto.IsSeqUnspent(err) {
 		t.Fatalf("err = %v carries the unspent flag although the statement was sequenced", err)
+	}
+}
+
+// TestConsumeAdmission_AccountBudgetRetryAfterIsConfigurable: the arbiter's
+// write-budget refusal answers 201 with the configured retry hint, keeps the
+// session and leaves the coordinate unspent.
+func TestConsumeAdmission_AccountBudgetRetryAfterIsConfigurable(t *testing.T) {
+	ingress, _, submitter, _ := newBackpressureIngress(t, &fakePartsPressure{})
+	ingress.SetAccountBudgetRetryAfter(15 * time.Second)
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "account budget: account 0xabc exceeded its statements budget", AdmissionCode: sicore.AdmissionCodeAccountBudgetExceeded}
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var clientErr *chproto.ClientError
+	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeQuotaExceeded || !chproto.KeepsSession(err) || !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want an unspent session-preserving 201", err)
+	}
+	if !strings.Contains(clientErr.Message, "(statements); retry in 15s (retryable)") || !chproto.IsWriteBudgetExceededMessage(clientErr.Message) {
+		t.Fatalf("message = %q", clientErr.Message)
 	}
 }

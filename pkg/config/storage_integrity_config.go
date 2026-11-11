@@ -171,6 +171,13 @@ type StorageIntegrityIngressConfig struct {
 	// AccountQuota bounds the signed writes one account may push through
 	// this ingress (default off).
 	AccountQuota StorageIntegrityAccountQuotaConfig `json:"account_quota" yaml:"account_quota"`
+	// AccountBudgetRetryAfter is the retry hint of the 201 QUOTA_EXCEEDED
+	// answering the arbiter's consensus write budget refusal
+	// (ACCOUNT_BUDGET_EXCEEDED, sentioxyz/arbiter#143). The budget refills
+	// on L2 blocks of the arbiter's table-registry cursor, which this node
+	// cannot convert to seconds, so the hint is fixed. Default 60s; 0 also
+	// means 60s.
+	AccountBudgetRetryAfter Duration `json:"account_budget_retry_after" yaml:"account_budget_retry_after"`
 }
 
 // StorageIntegrityAccountQuotaConfig is the ingress's per-account write
@@ -245,10 +252,11 @@ const pinnedPartsToThrowInsert = 3000
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	return StorageIntegrityConfig{
 		Ingress: StorageIntegrityIngressConfig{
-			Enabled:         false,
-			MaxTokenAge:     Duration{Duration: time.Minute},
-			RequestTimeout:  Duration{Duration: 5 * time.Second},
-			MaxPayloadBytes: defaultStorageIntegrityMaxPayloadBytes,
+			Enabled:                 false,
+			MaxTokenAge:             Duration{Duration: time.Minute},
+			RequestTimeout:          Duration{Duration: 5 * time.Second},
+			MaxPayloadBytes:         defaultStorageIntegrityMaxPayloadBytes,
+			AccountBudgetRetryAfter: Duration{Duration: time.Minute},
 			AccountQuota: StorageIntegrityAccountQuotaConfig{
 				Mode:                "off",
 				StatementsPerSecond: defaultStorageIntegrityQuotaStatementsPerSecond,
@@ -376,6 +384,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.Ingress.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_payload_bytes must be > 0 when storage_integrity.ingress.enabled"))
+	}
+	if c.Ingress.AccountBudgetRetryAfter.Duration < 0 {
+		errs = append(errs, errors.New("storage_integrity.ingress.account_budget_retry_after must not be negative"))
 	}
 	if quotaOn {
 		errs = append(errs, c.Ingress.AccountQuota.validate(c.Ingress.MaxPayloadBytes)...)

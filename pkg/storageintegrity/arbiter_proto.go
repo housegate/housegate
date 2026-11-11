@@ -500,6 +500,15 @@ var AdmissionCodeVerifiersUnavailable = pb.AdmissionCode_ADMISSION_CODE_VERIFIER
 // back-pressure.
 var AdmissionCodeCopiesBackpressure = pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE.String()
 
+// AdmissionCodeAccountBudgetExceeded is the arbiter's refusal of a statement
+// that would exceed its signer's or the network-wide write budget of the
+// committed account_budget parameter (sentioxyz/arbiter#143 layer C,
+// returned only with the budget enforced). The FSM changed nothing, so the
+// coordinate is unspent; the ingress removes the prepared parts through the
+// terminal-submit path and answers the client with a retryable,
+// session-preserving QUOTA_EXCEEDED.
+var AdmissionCodeAccountBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -524,7 +533,8 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAVAILABLE,
 		pb.AdmissionCode_ADMISSION_CODE_INDEXER_QUARANTINED,
 		pb.AdmissionCode_ADMISSION_CODE_VERIFIERS_UNAVAILABLE,
-		pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE:
+		pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE,
+		pb.AdmissionCode_ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED:
 		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String()), AdmissionCode: ack.GetCode().String()}
 	default:
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: firstNonEmpty(reason, ack.GetCode().String())}

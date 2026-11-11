@@ -3,7 +3,9 @@ package chproto
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientError_UnwrapsAndFormats(t *testing.T) {
@@ -316,5 +318,32 @@ func TestCopiesBackpressureMessage(t *testing.T) {
 	if IsVerifiersUnavailableMessage(backpressure) || IsSourceUnavailableMessage(backpressure) || IsTableActivatingMessage(backpressure) ||
 		IsTableNoLongerAcceptsWritesMessage(backpressure) || IsIndexerQuarantinedMessage(backpressure) {
 		t.Fatal("the copies back-pressure refusal must not match the other refusals")
+	}
+}
+
+// TestWriteBudgetExceededMessage (sentioxyz/arbiter#143 layer C): the two
+// shapes of the arbiter's write-budget refusal, the retry hint rounded up to
+// whole seconds, and an exact recognizer that the ingress's own account
+// quota message does not match.
+func TestWriteBudgetExceededMessage(t *testing.T) {
+	account := WriteBudgetExceededMessage("0xabc", "bytes", 1500*time.Millisecond)
+	if account != "storage_integrity: account 0xabc exceeded its network write budget (bytes); retry in 2s (retryable)" {
+		t.Fatalf("account message = %q", account)
+	}
+	total := WriteBudgetExceededMessage("", "statements", 0)
+	if total != "storage_integrity: the network write budget is exhausted (statements); retry in 1s (retryable)" {
+		t.Fatalf("total message = %q", total)
+	}
+	for msg, want := range map[string]bool{
+		account: true, total: true, account + SeqUnspentSuffix: true,
+		WriteBudgetExceededMessage("0x a", "bytes", time.Minute):        false,
+		WriteBudgetExceededMessage("0xabc", "rows", time.Minute):        false,
+		AccountQuotaExceededMessage("0xabc", "statements", time.Minute): false,
+		"prefix " + account:                       false,
+		strings.TrimSuffix(total, " (retryable)"): false,
+	} {
+		if got := IsWriteBudgetExceededMessage(msg); got != want {
+			t.Errorf("IsWriteBudgetExceededMessage(%q) = %v, want %v", msg, got, want)
+		}
 	}
 }

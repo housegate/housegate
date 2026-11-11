@@ -78,9 +78,9 @@ func TestIndexerQuarantinedIsATerminalRejectWithItsCode(t *testing.T) {
 	if !got.Category.RequiresAbort() {
 		t.Fatal("an indexer-quarantined refusal must remove the prepared parts through the terminal-submit path")
 	}
-	// Only codes 11-13 join the coded terminal rejects: a code this binary does not
+	// Only codes 11-14 join the coded terminal rejects: a code this binary does not
 	// know still converges through the status probe, as before.
-	if unknown := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode(14), Message: "future"}); unknown.Category != OutcomeUnknown || unknown.AdmissionCode != "" {
+	if unknown := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode(15), Message: "future"}); unknown.Category != OutcomeUnknown || unknown.AdmissionCode != "" {
 		t.Fatalf("unknown code outcome = %+v, want OutcomeUnknown without a code", unknown)
 	}
 }
@@ -129,5 +129,26 @@ func TestCopiesBackpressureIsATerminalRejectWithItsCode(t *testing.T) {
 	// Without a message the code names the reason, as for every coded reject.
 	if bare := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_COPIES_BACKPRESSURE}); bare.Reason != AdmissionCodeCopiesBackpressure {
 		t.Fatalf("reason without a message = %q, want %q", bare.Reason, AdmissionCodeCopiesBackpressure)
+	}
+}
+
+// TestAccountBudgetExceededIsATerminalRejectWithItsCode pins
+// sentioxyz/arbiter#143 layer C: with the arbiter's account_budget enforced,
+// a statement over its signer's or the network-wide budget gets
+// ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED with the arbiter's state unchanged,
+// so the outcome is a coded terminal reject that removes the prepared parts
+// and tells the ingress to answer QUOTA_EXCEEDED.
+func TestAccountBudgetExceededIsATerminalRejectWithItsCode(t *testing.T) {
+	const reason = "account budget: account 0xabc exceeded its statements budget (window 1800 L2 blocks); retry once the table-registry cursor reaches L2 block 9 (committed cursor 3)"
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED, Message: reason})
+	if got.Category != OutcomeTerminalReject || got.AdmissionCode != AdmissionCodeAccountBudgetExceeded ||
+		got.AdmissionCode != "ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED" || got.Reason != reason {
+		t.Fatalf("outcome = %+v", got)
+	}
+	if !got.Category.RequiresAbort() {
+		t.Fatal("a budget refusal must remove the prepared parts through the terminal-submit path")
+	}
+	if pb.AdmissionCode_ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED != 14 {
+		t.Fatalf("ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED = %d, want 14", pb.AdmissionCode_ADMISSION_CODE_ACCOUNT_BUDGET_EXCEEDED)
 	}
 }

@@ -164,6 +164,8 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 
 **按账户的写入配额。** `storage_integrity.ingress.account_quota` 用两个 token bucket 限制单个账户经本 ingress 的签名写入，按 principal（校验过的 owner，否则 signer）计：语句数（`statements_per_second`、`statement_burst`，默认 20 和 200）和 payload 字节数（`bytes_per_second`、`byte_burst`，默认 8 MiB 和 256 MiB，`byte_burst` 不得小于 `max_payload_bytes`）。只有字节桶没有欠账时才接纳语句；接纳时扣一个语句 token，并从字节桶预留 `max_payload_bytes`，输入结束时按实际 payload 长度结算，语句提前结束则退回预留。所以同一账户的并发会话不能凭同一份余额全部通过：一个账户同时提交的量不超过 `byte_burst + max_payload_bytes`，同时在接收输入的语句约不超过 `byte_burst / max_payload_bytes + 1` 条。`mode` 为 `off`（默认）、`dry_run`（全部放行，只在 `storage_integrity_ingress_account_quota_total{decision="would_refuse"}` 计数）或 `enforce`（在读 payload 之前以 201 `QUOTA_EXCEEDED` 拒绝：`storage_integrity: account 0x… exceeded its write quota (statements|bytes); retry in <n>s (retryable)`，会话保留，`client_seq` 不消耗）。计数只在本 ingress 内存里，重启清零，indexer 之间不共享。上线时先用 `dry_run`，指标确认预算合适后再切 `enforce`。
 
+**全网写入预算。** Arbiter 还可以在共识层执行一份任何 ingress 都绕不过去的预算：每个 signer 一个漏桶，全网再一个，按 Arbiter table-registry cursor 的 L2 块回补（Arbiter 的 `account_budget` 参数，sentioxyz/arbiter#143）。超出任一个桶的语句在输入暂存之后被 Arbiter 以 `ACCOUNT_BUDGET_EXCEEDED` 拒绝；ingress 清掉已准备的 part，以 201 `QUOTA_EXCEEDED` 回复 `storage_integrity: account 0x… exceeded its network write budget (statements|bytes); retry in <n>s (retryable)`，全网总量耗尽时回复 `storage_integrity: the network write budget is exhausted (statements|bytes); retry in <n>s (retryable)`。会话保留（relay 只认这两种格式），`client_seq` 不消耗。Arbiter 按 L2 块计数，所以重试提示是固定值：`storage_integrity.ingress.account_budget_retry_after`（默认 `60s`）。拒绝数见 `storage_integrity_account_budget_refusals_total{scope="account|total",dimension}`。Arbiter 开启 enforce 之前，所有 indexer 都要先换上这个版本：旧版 ingress 会把这个错误码当作结果未知处理。
+
 ```yaml
 storage_integrity:
   ingress:

@@ -588,6 +588,12 @@ func TestSessionPreservingIngressException(t *testing.T) {
 		{"table state unavailable", chproto.CodeQueryIsProhibited, "storage_integrity: table state is unavailable for this query", false},
 		{"governed create", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and cannot be created with data; create the table first, then INSERT", false},
 		{"no longer accepts writes id with whitespace", chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("net1 events"), false},
+		{"account write budget", chproto.CodeQuotaExceeded, chproto.WriteBudgetExceededMessage("0xabc", "statements", time.Minute), true},
+		{"network write budget", chproto.CodeQuotaExceeded, chproto.WriteBudgetExceededMessage("", "bytes", time.Minute), true},
+		{"marked write budget", chproto.CodeQuotaExceeded, chproto.WriteBudgetExceededMessage("0xabc", "bytes", time.Second) + chproto.SeqUnspentSuffix, true},
+		{"write budget under 252", chproto.CodeTooManyParts, chproto.WriteBudgetExceededMessage("0xabc", "statements", time.Minute), false},
+		{"ingress account quota", chproto.CodeQuotaExceeded, chproto.AccountQuotaExceededMessage("0xabc", "statements", time.Second), false},
+		{"native quota exceeded", chproto.CodeQuotaExceeded, "Quota for user `default` for 3600s has been exceeded", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exc := &chproto.Exception{Code: proto.Error(tc.code), Name: "DB::Exception", Message: tc.msg}
