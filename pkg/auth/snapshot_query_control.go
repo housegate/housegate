@@ -89,42 +89,53 @@ func DecodeSnapshotQueryControlPayload(token string) (SnapshotQueryControlPayloa
 
 func decodeSnapshotQueryControl(token string) (SnapshotQueryControlPayloadV1, string, []byte, error) {
 	var p SnapshotQueryControlPayloadV1
+	input, sig, err := decodeSnapshotQueryControlInto(token, &p)
+	return p, input, sig, err
+}
+
+// decodeSnapshotQueryControlInto checks the compact-JWS framing shared by
+// every control purpose and decodes the payload into p, which must be a
+// pointer to one payload version. The payload must be exactly the canonical
+// JSON of that version, so a token of one version never decodes as another:
+// a field the version lacks, or one it has but the token omits, makes the
+// re-encoding differ.
+func decodeSnapshotQueryControlInto(token string, p any) (string, []byte, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control JWS format: expected 3 parts")
+		return "", nil, fmt.Errorf("invalid snapshot query control JWS format: expected 3 parts")
 	}
 	header, err := decodeCanonicalRawURL("snapshot query control header", parts[0])
 	if err != nil {
-		return p, "", nil, err
+		return "", nil, err
 	}
 	if string(header) != canonicalJWSProtectedHeader {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control protected header: must be exact canonical %s", canonicalJWSProtectedHeader)
+		return "", nil, fmt.Errorf("invalid snapshot query control protected header: must be exact canonical %s", canonicalJWSProtectedHeader)
 	}
 	raw, err := decodeCanonicalRawURL("snapshot query control payload", parts[1])
 	if err != nil {
-		return p, "", nil, err
+		return "", nil, err
 	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control payload JSON: %w", err)
+	if err := json.Unmarshal(raw, p); err != nil {
+		return "", nil, fmt.Errorf("invalid snapshot query control payload JSON: %w", err)
 	}
 	canonical, err := json.Marshal(p)
 	if err != nil {
-		return p, "", nil, fmt.Errorf("marshal snapshot query control payload: %w", err)
+		return "", nil, fmt.Errorf("marshal snapshot query control payload: %w", err)
 	}
 	if !bytes.Equal(raw, canonical) {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control payload: noncanonical JSON")
+		return "", nil, fmt.Errorf("invalid snapshot query control payload: noncanonical JSON")
 	}
 	sig, err := decodeCanonicalRawURL("snapshot query control signature", parts[2])
 	if err != nil {
-		return p, "", nil, err
+		return "", nil, err
 	}
 	if len(sig) != 65 || (sig[64] != 27 && sig[64] != 28) {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control signature: expected 65 bytes with V=27/28")
+		return "", nil, fmt.Errorf("invalid snapshot query control signature: expected 65 bytes with V=27/28")
 	}
 	if !crypto.ValidateSignatureValues(sig[64]-27, new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:64]), true) {
-		return p, "", nil, fmt.Errorf("invalid snapshot query control signature: noncanonical scalar or high-S")
+		return "", nil, fmt.Errorf("invalid snapshot query control signature: noncanonical scalar or high-S")
 	}
-	return p, parts[0] + "." + parts[1], sig, nil
+	return parts[0] + "." + parts[1], sig, nil
 }
 
 // VerifySnapshotQueryControlSignature is pure replay-safe verification. It
