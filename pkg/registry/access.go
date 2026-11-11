@@ -27,6 +27,16 @@ type Access interface {
 	// account. (nil, false) means the account has no record on file; an
 	// account that exists but holds no grants returns (empty-map, true).
 	// The returned map is owned by the caller.
+	//
+	// The bitmap MUST already include the grants held by the wildcard
+	// (public) address 0x0000000000000000000000000000000000000000, ORed into
+	// the account's own: a grant to that address means "every account", as
+	// sentio-core's registry.MergeAccountPermissions applies it. The
+	// rewriter builds each session's database_map from this result
+	// (rewriter.SentioNetworkFactory.buildDatabaseMap), so a database
+	// granted only to the public address is reachable exactly when this
+	// method reports it; the permission observer then checks the statement's
+	// bit. housegate/housegate#340.
 	PermissionsFor(account string) (map[string]DbAuth, bool)
 
 	// HasPermission tests whether account holds the action bit on

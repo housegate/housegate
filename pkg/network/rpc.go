@@ -304,6 +304,11 @@ func (r *RpcNetworkState) All() map[string]registry.Database {
 // bitmap, so agent.Selector only needs "which databases is this
 // account allowed to query at all", which is satisfied by mapping
 // each owned database to DbAuthOwner (Owner implies all capabilities).
+// Unlike the registry.Access contract asks, it cannot see grants to other
+// accounts or to the public address (the RPC has no permission query): a
+// server on an RPC network_state therefore maps and admits only the
+// account's own databases, consistently in the rewriter's database_map and
+// the permission observer.
 //
 // An account with no database returns (empty-but-non-nil map, true) —
 // matches the registry.Access contract: ok=false is reserved for
