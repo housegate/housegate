@@ -68,8 +68,10 @@ var readPrivileges = map[string]bool{
 	"SHOW COLUMNS":   true,
 }
 
-// Check parses the lines of `SHOW GRANTS FINAL` and returns every violation
-// of p, in line order. REVOKE lines only narrow what a GRANT line allows, so
+// Check parses grant lines — those of `SHOW GRANTS FINAL` plus the role lines
+// of `SHOW GRANTS` (see ShowGrants) — and returns every violation of p, in
+// line order. A role grant is checked only for WITH ADMIN OPTION: FINAL
+// already lists the role's privileges. REVOKE lines only narrow what a GRANT line allows, so
 // they are ignored: a GRANT the policy does not expect is a violation even
 // when a REVOKE carves part of it out.
 func Check(p Policy, lines []string) []Violation {
@@ -88,7 +90,14 @@ func Check(p Policy, lines []string) []Violation {
 			continue
 		}
 		if g.role {
-			out = append(out, Violation{Line: line, Reason: "role grant not expanded (SHOW GRANTS FINAL lists the role's privileges instead)"})
+			// FINAL lists a role's privileges in place of the role grant, and
+			// drops the grant itself; the query also reads the plain SHOW
+			// GRANTS role lines (ShowGrants) for this check. A role held WITH
+			// ADMIN OPTION can be granted on, like a WITH GRANT OPTION
+			// privilege.
+			if g.adminOption {
+				out = append(out, Violation{Line: line, Reason: "WITH ADMIN OPTION lets the user grant the role on"})
+			}
 			continue
 		}
 		if g.grantOption {
@@ -165,6 +174,7 @@ type target struct {
 type grantLine struct {
 	revoke      bool
 	role        bool
+	adminOption bool
 	grantOption bool
 	privileges  []string
 	target      target
@@ -196,6 +206,7 @@ func parseLine(line string) (grantLine, error) {
 			return g, fmt.Errorf("no ON or %s", strings.TrimSpace(toWord))
 		}
 		g.role = true
+		g.adminOption = !g.revoke && strings.HasSuffix(rest, " WITH ADMIN OPTION")
 		return g, nil
 	}
 	privs, after := rest[:onAt], rest[onAt+len(" ON "):]
@@ -207,13 +218,19 @@ func parseLine(line string) (grantLine, error) {
 	if !g.revoke && strings.HasSuffix(grantee, " WITH GRANT OPTION") {
 		g.grantOption = true
 	}
-	for _, p := range splitTopLevel(privs) {
+	parts, err := splitTopLevel(privs)
+	if err != nil {
+		return g, err
+	}
+	for _, p := range parts {
+		// A privilege name is bare words; a column list follows the first
+		// '(' (column names are only inside it, so the name has no quote).
 		name := strings.TrimSpace(p)
 		if i := strings.IndexByte(name, '('); i >= 0 {
 			name = strings.TrimSpace(name[:i])
 		}
-		if name == "" {
-			return g, fmt.Errorf("empty privilege")
+		if name == "" || strings.ContainsAny(name, "`,)") {
+			return g, fmt.Errorf("malformed privilege %q", p)
 		}
 		g.privileges = append(g.privileges, strings.ToUpper(name))
 	}
@@ -316,14 +333,35 @@ func splitIdentifiers(s string) (parts []string, pattern []bool, err error) {
 	return parts, pattern, nil
 }
 
-// topLevelIndex finds sep outside parentheses and backtick quotes.
+// skipQuoted returns the index of the closing backtick of the quoted
+// identifier opening at s[i], honouring ClickHouse's escapes (a backslash
+// escapes the next byte, a doubled backtick is one backtick), or -1 when the
+// quote is not closed.
+func skipQuoted(s string, i int) int {
+	for j := i + 1; j < len(s); j++ {
+		switch {
+		case s[j] == '\\':
+			j++
+		case s[j] == '`' && j+1 < len(s) && s[j+1] == '`':
+			j++
+		case s[j] == '`':
+			return j
+		}
+	}
+	return -1
+}
+
+// topLevelIndex finds sep outside parentheses and quoted identifiers.
 func topLevelIndex(s, sep string) int {
-	depth, quoted := 0, false
+	depth := 0
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
 		case c == '`':
-			quoted = !quoted
-		case quoted:
+			j := skipQuoted(s, i)
+			if j < 0 {
+				return -1
+			}
+			i = j
 		case c == '(':
 			depth++
 		case c == ')':
@@ -335,12 +373,19 @@ func topLevelIndex(s, sep string) int {
 	return -1
 }
 
-// splitTopLevel splits a privilege list at commas outside parentheses.
-func splitTopLevel(s string) []string {
+// splitTopLevel splits a privilege list at commas outside parentheses and
+// quoted identifiers: `SELECT(`(`), INSERT(x)` is two privileges.
+func splitTopLevel(s string) ([]string, error) {
 	var out []string
 	depth, start := 0, 0
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
+		case '`':
+			j := skipQuoted(s, i)
+			if j < 0 {
+				return nil, fmt.Errorf("unterminated quoted identifier in %q", s)
+			}
+			i = j
 		case '(':
 			depth++
 		case ')':
@@ -352,5 +397,8 @@ func splitTopLevel(s string) []string {
 			}
 		}
 	}
-	return append(out, s[start:])
+	if depth != 0 {
+		return nil, fmt.Errorf("unbalanced parentheses in %q", s)
+	}
+	return append(out, s[start:]), nil
 }

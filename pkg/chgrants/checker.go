@@ -160,12 +160,14 @@ func (c *Checker) checkOne(ctx context.Context, u Upstream, phase string) (int, 
 	return len(violations), true
 }
 
-// ShowGrantsFinal returns a QueryFunc that runs `SHOW GRANTS FINAL` on addr
-// as user. It opens a fresh native connection per check, so a check
-// holds no connection between runs. FINAL lists the privileges of the
-// user's roles instead of the role grants. The current user needs no
-// privilege to read its own grants.
-func ShowGrantsFinal(addr, user, password string) QueryFunc {
+// ShowGrants returns a QueryFunc that reads addr's grants as user: every
+// line of `SHOW GRANTS FINAL`, which lists the privileges of the user's
+// roles in place of the role grants, plus the role-grant lines of plain
+// `SHOW GRANTS`, which FINAL drops and which alone carry WITH ADMIN OPTION.
+// It opens a fresh native connection per check, so a check holds no
+// connection between runs. The current user needs no privilege to read its
+// own grants.
+func ShowGrants(addr, user, password string) QueryFunc {
 	return func(ctx context.Context) ([]string, error) {
 		conn, err := clickhouse.Open(&clickhouse.Options{
 			Addr:     []string{addr},
@@ -176,19 +178,43 @@ func ShowGrantsFinal(addr, user, password string) QueryFunc {
 			return nil, fmt.Errorf("open: %w", err)
 		}
 		defer func() { _ = conn.Close() }()
-		rows, err := conn.Query(ctx, "SHOW GRANTS FINAL")
+		final, err := queryLines(ctx, conn, "SHOW GRANTS FINAL")
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = rows.Close() }()
-		var lines []string
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err != nil {
-				return nil, err
-			}
-			lines = append(lines, line)
+		plain, err := queryLines(ctx, conn, "SHOW GRANTS")
+		if err != nil {
+			return nil, err
 		}
-		return lines, rows.Err()
+		return append(final, RoleLines(plain)...), nil
 	}
+}
+
+// RoleLines keeps the role-grant lines (`GRANT <role> TO <user> …`) of plain
+// SHOW GRANTS output.
+func RoleLines(lines []string) []string {
+	var out []string
+	for _, l := range lines {
+		if g, err := parseLine(strings.TrimSpace(l)); err == nil && g.role {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func queryLines(ctx context.Context, conn clickhouse.Conn, query string) ([]string, error) {
+	rows, err := conn.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return nil, err
+		}
+		lines = append(lines, line)
+	}
+	return lines, rows.Err()
 }

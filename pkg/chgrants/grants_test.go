@@ -35,6 +35,27 @@ var gatewayGrants = []string{
 	"GRANT SELECT ON `phys`.`db1.t` TO gw",
 }
 
+func TestCheck_RoleWithoutAdminOptionPasses(t *testing.T) {
+	// FINAL already lists the role's privileges; the role line itself is
+	// only checked for WITH ADMIN OPTION.
+	if v := Check(devnetPolicy(), []string{"GRANT pr2 TO gw", "GRANT SELECT(`a\\`b`, `c,d`) ON phys.t TO gw"}); len(v) != 0 {
+		t.Fatalf("violations = %v, want none", v)
+	}
+}
+
+func TestRoleLines(t *testing.T) {
+	plain := []string{
+		"GRANT SELECT ON phys.* TO gw",
+		"GRANT pr2 TO gw",
+		"GRANT pr TO gw WITH ADMIN OPTION",
+		"REVOKE INSERT ON phys.secret FROM gw",
+	}
+	got := RoleLines(plain)
+	if len(got) != 2 || got[0] != "GRANT pr2 TO gw" || got[1] != "GRANT pr TO gw WITH ADMIN OPTION" {
+		t.Fatalf("RoleLines = %v", got)
+	}
+}
+
 func TestCheck_NarrowedGatewayPasses(t *testing.T) {
 	if v := Check(devnetPolicy(), gatewayGrants); len(v) != 0 {
 		t.Fatalf("violations = %v, want none", v)
@@ -68,7 +89,17 @@ func TestCheck_Violations(t *testing.T) {
 		{"refused engine", "GRANT TABLE ENGINE ON URL TO gw", devnetPolicy(), []string{"table engine the rewriter refuses"}},
 		{"every engine", "GRANT TABLE ENGINE ON * TO gw", devnetPolicy(), []string{"table engine grant on every engine"}},
 		{"empty physical database", "GRANT SELECT ON phys.* TO gw", Policy{}, []string{"database HouseGate does not serve"}},
-		{"unexpanded role", "GRANT r1 TO gw", devnetPolicy(), []string{"role grant not expanded"}},
+		{"role with admin option", "GRANT r1 TO gw WITH ADMIN OPTION", devnetPolicy(), []string{"WITH ADMIN OPTION"}},
+		// A quoted column name with a parenthesis or comma must not hide
+		// the privilege after it (ClickHouse 25.8 output).
+		{"privilege after a quoted parenthesis column", "GRANT SELECT(`(`), INSERT(x) ON hg_safe.t TO gw", devnetPolicy(),
+			[]string{"INSERT ON hg_safe.t: non-read privilege on a storage-integrity database"}},
+		{"privilege after a quoted comma column", "GRANT SELECT(`c,d`), INSERT ON system.t TO gw", devnetPolicy(),
+			[]string{"INSERT ON system.t: non-read privilege on system"}},
+		{"escaped backtick column", "GRANT SELECT(`a\\`b`), ALTER UPDATE(`)`) ON hg_unsafe.t TO gw", devnetPolicy(),
+			[]string{"ALTER UPDATE ON hg_unsafe.t"}},
+		{"escaped backtick database", "GRANT SELECT ON `we\\`ird`.* TO gw", devnetPolicy(), []string{"database HouseGate does not serve"}},
+		{"unterminated quote", "GRANT SELECT(`a) ON phys.t TO gw", devnetPolicy(), []string{"unrecognised grant line"}},
 		{"garbage", "SOMETHING ELSE", devnetPolicy(), []string{"unrecognised grant line"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

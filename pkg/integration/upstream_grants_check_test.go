@@ -15,8 +15,9 @@ import (
 // (housegate/housegate#341) against the CI ClickHouse server: a user narrowed
 // to what a storage-integrity gateway needs passes in enforce mode, and the
 // same user with one more grant on `default` (directly, or through a role,
-// which SHOW GRANTS FINAL expands) or a url() source refuses enforce-mode
-// startup. The superuser the other tests run as is reported, never refused,
+// which SHOW GRANTS FINAL expands), a url() source, a role held WITH ADMIN
+// OPTION, or a write behind a quoted column name refuses enforce-mode
+// startup. A role held without the admin option passes. The superuser the other tests run as is reported, never refused,
 // in warn mode.
 func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	ctx := context.Background()
@@ -34,7 +35,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 		exec(q)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{"DROP USER IF EXISTS hg341_gw", "DROP USER IF EXISTS hg341_wide", "DROP USER IF EXISTS hg341_role_user", "DROP ROLE IF EXISTS hg341_role", "DROP DATABASE IF EXISTS phys_341"} {
+		for _, q := range []string{"DROP USER IF EXISTS hg341_gw", "DROP USER IF EXISTS hg341_wide", "DROP USER IF EXISTS hg341_role_user", "DROP ROLE IF EXISTS hg341_role", "DROP USER IF EXISTS hg341_admin_user", "DROP USER IF EXISTS hg341_col", "DROP ROLE IF EXISTS hg341_phys_role"} {
 			_ = admin.Exec(ctx, q)
 		}
 	})
@@ -48,7 +49,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 		"GRANT SELECT ON system.processes TO %s",
 		"GRANT TABLE ENGINE ON MergeTree TO %s",
 	}
-	for _, u := range []string{"hg341_gw", "hg341_wide", "hg341_role_user"} {
+	for _, u := range []string{"hg341_gw", "hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col"} {
 		exec("CREATE USER " + u + " IDENTIFIED WITH plaintext_password BY 'pw341'")
 		for _, g := range gateway {
 			exec(strings.ReplaceAll(g, "%s", u))
@@ -59,17 +60,25 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 	exec("CREATE ROLE hg341_role")
 	exec("GRANT SELECT ON default.* TO hg341_role")
 	exec("GRANT hg341_role TO hg341_role_user")
+	// A role whose privileges are all expected, held WITH ADMIN OPTION: FINAL
+	// drops the role grant, so only the plain SHOW GRANTS line shows it.
+	exec("CREATE ROLE hg341_phys_role")
+	exec("GRANT SELECT ON phys_341.* TO hg341_phys_role")
+	exec("GRANT hg341_phys_role TO hg341_admin_user WITH ADMIN OPTION")
+	exec("GRANT hg341_phys_role TO hg341_gw")
+	// A write hidden behind a quoted column name with a parenthesis.
+	exec("GRANT SELECT(`(`), INSERT(a) ON hg_safe.t TO hg341_col")
 
 	policy := chgrants.Policy{PhysicalDatabase: "phys_341", StorageIntegrity: true, EngineAllowed: tablerefguard.TableEngineGrantAllowed}
 	check := func(mode chgrants.Mode, user, password string) error {
 		c := &chgrants.Checker{Mode: mode, Policy: policy, Upstreams: []chgrants.Upstream{{
-			Addr: ch.Addr, Query: chgrants.ShowGrantsFinal(ch.Addr, user, password)}}}
+			Addr: ch.Addr, Query: chgrants.ShowGrants(ch.Addr, user, password)}}}
 		return c.Startup(ctx)
 	}
 	if err := check(chgrants.ModeEnforce, "hg341_gw", "pw341"); err != nil {
 		t.Fatalf("narrowed gateway user refused: %v", err)
 	}
-	for _, u := range []string{"hg341_wide", "hg341_role_user"} {
+	for _, u := range []string{"hg341_wide", "hg341_role_user", "hg341_admin_user", "hg341_col"} {
 		if err := check(chgrants.ModeEnforce, u, "pw341"); !errors.Is(err, chgrants.ErrViolations) {
 			t.Fatalf("%s: err = %v, want ErrViolations", u, err)
 		}
@@ -77,7 +86,7 @@ func TestUpstreamGrantsCheck_RealClickHouse(t *testing.T) {
 			t.Fatalf("%s in warn mode: %v", u, err)
 		}
 	}
-	lines, err := chgrants.ShowGrantsFinal(ch.Addr, "hg341_wide", "pw341")(ctx)
+	lines, err := chgrants.ShowGrants(ch.Addr, "hg341_wide", "pw341")(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -145,7 +145,7 @@ What changes for clients:
 
 ## The upstream ClickHouse user's grants (`upstream_grants_check`)
 
-Every session HouseGate forwards to ClickHouse runs as one ClickHouse user: the credential provider's default credential (`ckh_manager_config_path`, `credential.subgraph`). That includes tenant sessions, the maintenance and platform-operator sessions the rewriter never sees, and peer `remote()` loopbacks. The engines refuse what they model. That user's grants are what stops everything else, for example the external table functions the engines leave alone (`url`, `s3`, `file`, …). From this release (housegate/housegate#341), a server that forwards to ClickHouse (a `shard` or an `upstream`) runs `SHOW GRANTS FINAL` as that user. It does so at startup and every 10 minutes, and reports every grant outside this set:
+Every session HouseGate forwards to ClickHouse runs as one ClickHouse user: the credential provider's default credential (`ckh_manager_config_path`, `credential.subgraph`). That includes tenant sessions, the maintenance and platform-operator sessions the rewriter never sees, and peer `remote()` loopbacks. The engines refuse what they model. That user's grants are what stops everything else, for example the external table functions the engines leave alone (`url`, `s3`, `file`, …). From this release (housegate/housegate#341), a server that forwards to ClickHouse (a `shard` or an `upstream`) runs `SHOW GRANTS FINAL` (and `SHOW GRANTS` for role grants) as that user. It does so at startup and every 10 minutes, and reports every grant outside this set:
 
 | Target | Expected privileges |
 |---|---|
@@ -161,9 +161,9 @@ Everything else is reported, for example:
 - any other `*.*` privilege (`SELECT`, `FILE`, `URL`, `S3`, `SOURCES`, `SYSTEM`, `KILL QUERY`, …);
 - user, role and named-collection privileges (`ON *`) and `TABLE ENGINE ON *`;
 - database or table patterns (`ph*.*`);
-- `WITH GRANT OPTION`.
+- `WITH GRANT OPTION`, and a role held `WITH ADMIN OPTION`.
 
-`FINAL` lists the privileges a user holds through its roles, so a role cannot hide a grant. `REVOKE` lines are ignored: a partial revoke does not narrow a grant the set does not expect. The `system` database stays readable without a grant (`select_from_system_db_requires_grant` is off by default); the engines' system-table allowlist decides those reads. The only maintenance statement sentio-node sends is the database GC's `DROP TABLE IF EXISTS <phys>.<db>.<table> SYNC`, which the physical-database row covers.
+`FINAL` lists the privileges a user holds through its roles, so a role cannot hide a grant. `FINAL` drops the role grants themselves, so the check also reads the role lines of plain `SHOW GRANTS` for `WITH ADMIN OPTION`. Column lists are parsed with ClickHouse's identifier quoting, so a quoted column such as `` SELECT(`(`) `` cannot hide the privilege after it. `REVOKE` lines are ignored: a partial revoke does not narrow a grant the set does not expect. The `system` database stays readable without a grant (`select_from_system_db_requires_grant` is off by default); the engines' system-table allowlist decides those reads. The only maintenance statement sentio-node sends is the database GC's `DROP TABLE IF EXISTS <phys>.<db>.<table> SYNC`, which the physical-database row covers.
 
 `upstream_grants_check.mode`:
 - `warn` (the default): the startup check runs in the background, and every violation is logged (`upstream grants check: …`, with the list) and counted in the gauge `clickhouse_proxy_upstream_grant_violations{upstream}`. A failed read is counted in `clickhouse_proxy_upstream_grant_check_errors_total{upstream}`.

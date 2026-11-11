@@ -65,7 +65,7 @@ func buildGrantsChecker(cfg *config.Config, credProvider credentials.CredentialP
 		},
 	}
 	for _, addr := range addrs {
-		c.Upstreams = append(c.Upstreams, chgrants.Upstream{Addr: addr, Query: chgrants.ShowGrantsFinal(addr, user, password)})
+		c.Upstreams = append(c.Upstreams, chgrants.Upstream{Addr: addr, Query: chgrants.ShowGrants(addr, user, password)})
 	}
 	return c
 }
