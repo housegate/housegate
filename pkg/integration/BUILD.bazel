@@ -23,6 +23,7 @@ go_test(
         "metrics_chpoller_test.go",
         "metrics_e2e_test.go",
         "metrics_test.go",
+        "partition_key_test.go",
         "peer_envelope_test.go",
         "permission_isolation_test.go",
         "query_settings_test.go",

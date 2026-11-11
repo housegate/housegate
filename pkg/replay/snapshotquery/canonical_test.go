@@ -202,3 +202,43 @@ func TestNormalizeCanonicalValues(t *testing.T) {
 		t.Fatal("coerced type")
 	}
 }
+
+// TestCanonicalPartitionExpressionKeys: a table partitioned by an admitted
+// expression or a non-String bare key canonicalizes, and each row's partition
+// is the key's evaluation over its source column (table admission rules v3).
+func TestCanonicalPartitionExpressionKeys(t *testing.T) {
+	ts := func(s string) time.Time {
+		v, err := time.Parse("2006-01-02 15:04:05", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.UTC()
+	}
+	for _, tc := range []struct {
+		key, columnType string
+		rows            [][]any
+		want            []string
+	}{
+		{"toYYYYMM(ts)", "DateTime('UTC')", [][]any{{uint64(1), ts("2024-01-31 23:59:59")}, {uint64(2), ts("2024-02-01 00:00:00")}, {uint64(3), ts("2024-01-01 00:00:00")}}, []string{"p_202401", "p_202402"}},
+		{"toStartOfDay(ts)", "DateTime('UTC')", [][]any{{uint64(1), ts("2024-01-15 10:00:00")}, {uint64(2), ts("2024-01-16 00:00:00")}}, []string{"p_2024-01-15 00:00:00", "p_2024-01-16 00:00:00"}},
+		{"intDiv(ts, 1000)", "Int64", [][]any{{uint64(1), int64(-1500)}, {uint64(2), int64(999)}, {uint64(3), int64(1000)}}, []string{"p_-1", "p_0", "p_1"}},
+		{"ts", "UInt64", [][]any{{uint64(1), uint64(7)}, {uint64(2), uint64(18446744073709551615)}}, []string{"p_18446744073709551615", "p_7"}},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			schema := payloadexec.TableSchema{TableID: "tenant.copy", PartitionBy: tc.key, Columns: []lthash.Column{{Name: "value", Type: "UInt64"}, {Name: "ts", Type: tc.columnType}}}
+			out, e := Canonicalize(context.Background(), "network", "statement", schema, &canonicalStream{rows: tc.rows}, canonicalLimits(), t.TempDir())
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer out.Close()
+			verifyCanonical(t, out, schema, tc.rows)
+			if !reflect.DeepEqual(out.TouchedPartitionIDs(), tc.want) {
+				t.Fatalf("touched = %v, want %v", out.TouchedPartitionIDs(), tc.want)
+			}
+		})
+	}
+	refused := payloadexec.TableSchema{TableID: "tenant.copy", PartitionBy: "toDate(ts)", Columns: []lthash.Column{{Name: "value", Type: "UInt64"}, {Name: "ts", Type: "DateTime"}}}
+	if _, e := Canonicalize(context.Background(), "network", "statement", refused, &canonicalStream{}, canonicalLimits(), t.TempDir()); !errors.Is(e, payloadexec.ErrPartitionKeyNotAdmitted) {
+		t.Fatalf("naive DateTime key: %v, want ErrPartitionKeyNotAdmitted", e)
+	}
+}

@@ -59,6 +59,7 @@ type sortState struct {
 	ctx                context.Context
 	network, statement string
 	schema             payloadexec.TableSchema
+	key                payloadexec.PartitionKey
 	limits             Limits
 	dir                string
 	binding            [32]byte
@@ -117,21 +118,20 @@ func newSortState(ctx context.Context, network, statement string, schema payload
 		return nil, fmt.Errorf("sort memory limit exceeded: base %d", base)
 	}
 	seen := make(map[string]bool, len(schema.Columns))
-	found := schema.PartitionBy == ""
 	for _, c := range schema.Columns {
 		if c.Name == "" || c.Name == "_hg_row_id" || seen[c.Name] {
 			return nil, fmt.Errorf("invalid or duplicate user column %q", c.Name)
 		}
 		seen[c.Name] = true
-		if c.Name == schema.PartitionBy {
-			found = true
-		}
 		if _, err := payloadexec.ResolveColumnProfile(c.Type); err != nil {
 			return nil, err
 		}
 	}
-	if !found {
-		return nil, fmt.Errorf("partition column is absent from schema")
+	// The partition key resolves to its source column, bare or under an
+	// admitted partition expression.
+	key, err := payloadexec.ParsePartitionKey(schema)
+	if err != nil {
+		return nil, err
 	}
 	schema.Columns = append([]lthash.Column(nil), schema.Columns...)
 	// Bind all cache files to this call's immutable schema/ID context. Run digests
@@ -153,7 +153,7 @@ func newSortState(ctx context.Context, network, statement string, schema payload
 		writeBinding(column.Type)
 	}
 
-	state := &sortState{ctx: ctx, network: network, statement: statement, schema: schema, limits: limits, base: base, peakMemory: base}
+	state := &sortState{ctx: ctx, network: network, statement: statement, schema: schema, key: key, limits: limits, base: base, peakMemory: base}
 	copy(state.binding[:], h.Sum(nil))
 	return state, nil
 }
@@ -273,7 +273,7 @@ func (s *sortState) add(values []any) error {
 	if e != nil {
 		return e
 	}
-	partition, e := payloadexec.PartitionIDForRow(s.schema, normalized)
+	partition, e := s.key.PartitionID(normalized)
 	if e != nil {
 		return e
 	}

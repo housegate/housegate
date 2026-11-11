@@ -50,8 +50,10 @@ type tablePartition struct{ table, partition string }
 // this is derived from the anchored DDL/schema snapshot; here it is configured.
 type TableSchema struct {
 	TableID string `json:"table_id"`
-	// PartitionBy is an optional user column whose value selects the partition.
-	// Empty means a single partition named "all".
+	// PartitionBy is the optional partition key, spelled as ClickHouse prints
+	// system.tables.partition_key: a bare user column or an admitted partition
+	// expression (ParsePartitionKey). Empty means a single partition named
+	// "all".
 	PartitionBy string `json:"partition_by"`
 	// Columns are the user (wire) columns in declared order; the CSV payload
 	// header must name exactly this set. _hg_row_id is injected by the executor
@@ -237,10 +239,9 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 		}
 		colPos[i] = pos
 	}
-	if sch.PartitionBy != "" {
-		if _, ok := headerIndex[sch.PartitionBy]; !ok {
-			return nil, fmt.Errorf("partition column %q not present in payload", sch.PartitionBy)
-		}
+	key, err := ParsePartitionKey(sch)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]Row, 0, len(rows)-1)
 	for ln, rec := range rows[1:] {
@@ -258,40 +259,32 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 			}
 			values[i] = v
 		}
-		partitionID := "all"
-		if sch.PartitionBy != "" {
-			partitionID = "p_" + rec[headerIndex[sch.PartitionBy]]
+		// The CSV lane derives the partition exactly as the Native lane does,
+		// from the parsed value. For a bare String key (the only key before
+		// rules v3) the parsed value is the field text, so ids are unchanged.
+		partitionID, err := key.PartitionID(values)
+		if err != nil {
+			return nil, fmt.Errorf("data row %d: %w", ln, err)
 		}
 		out = append(out, Row{Values: values, PartitionID: partitionID, RawBytes: raw})
 	}
 	return out, nil
 }
 
-// PartitionIDForRow derives the typed executor partition id for one schema-
-// ordered row. Native and other typed materializers use it; the legacy CSV
-// profile intentionally preserves its original wire-text partition ids.
+// PartitionIDForRow derives the logical partition id for one schema-ordered
+// row under the admitted partition key (ParsePartitionKey). Every lane uses
+// it: the Native and CSV decoders, the ClickHouse read-back and the snapshot
+// query. A caller deriving many rows of one table should parse the key once
+// and call PartitionKey.PartitionID instead.
 func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 	if len(values) != len(sch.Columns) {
 		return "", fmt.Errorf("row has %d values, schema has %d columns", len(values), len(sch.Columns))
 	}
-	if sch.PartitionBy == "" {
-		return "all", nil
+	key, err := ParsePartitionKey(sch)
+	if err != nil {
+		return "", err
 	}
-	for i, col := range sch.Columns {
-		if col.Name != sch.PartitionBy {
-			continue
-		}
-		profile, err := ResolveColumnProfile(col.Type)
-		if err != nil {
-			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
-		}
-		raw, err := partitionValueString(profile, values[i])
-		if err != nil {
-			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
-		}
-		return "p_" + raw, nil
-	}
-	return "", fmt.Errorf("partition column %q not present in schema", sch.PartitionBy)
+	return key.PartitionID(values)
 }
 
 // partitionValueString renders one partition-column value. The partition id is
@@ -302,8 +295,8 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 func partitionValueString(profile ColumnProfile, v any) (string, error) {
 	if v == nil {
 		// A NULL has no partition value; ClickHouse refuses a Nullable
-		// partition key unless allow_nullable_key is set, and the partition
-		// freeze admits only String.
+		// partition key unless allow_nullable_key is set, and
+		// ParsePartitionKey admits no Nullable key column.
 		return "", fmt.Errorf("partition column carries NULL")
 	}
 	switch profile.Family {

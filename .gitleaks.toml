@@ -77,3 +77,12 @@ description = "Frozen snapshot-query v3 interoperability identities"
 paths = [
     '''^pkg/auth/testdata/snapshot_query_identity_v1\.json$''',
 ]
+
+[[allowlists]]
+description = "ClickHouse partition-key golden vectors"
+# Measured ClickHouse output (pkg/replay/payloadexec/partition_key_golden_test.go):
+# column values such as the ClickHouse documentation's example UUID, and
+# 128-bit partition_id hashes. Nothing in them is a credential.
+paths = [
+    '''^pkg/replay/payloadexec/testdata/partition_key_golden/clickhouse-.*\.json$''',
+]
