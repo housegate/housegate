@@ -52,10 +52,10 @@ type Action = registry.Action
 // registry.DbAuthRead / DbAuthWrite / DbAuthAdmin / DbAuthOwner.
 type DatabasePermissions = map[Database]DbAuth
 
-// WildcardAddress is the all-zeros account whose permissions are
-// unioned into every caller's effective bitmap. A grant to this
-// address means "everyone has this permission" and is the encoding
-// the smart-contract layer uses for public reads.
+// WildcardAddress is the all-zeros account whose grants are the
+// encoding the smart-contract layer uses for public reads: the Read its
+// grant implies is unioned into every caller's effective bitmap, and
+// nothing else (PublicReadBits, housegate/housegate#346).
 const WildcardAddress AccountAddress = "0x0000000000000000000000000000000000000000"
 
 // IndexerInfo carries the network-visible address of a single indexer
