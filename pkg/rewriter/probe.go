@@ -294,8 +294,11 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 // rewriter-grpc before v0.21.1 fail system-completions-refused and
 // information-schema-refused (housegate/housegate#319); rewriter-go before
 // v0.23.4 and rewriter-grpc before v0.21.3 fail unmapped-database-refused
-// (housegate/housegate#336).
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.4 or rewriter-grpc >= v0.21.3 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table and unmapped-database refusals, and Sentio-driver compatibility)"
+// (housegate/housegate#336); rewriter-go before v0.23.5 fails
+// opaque-insert-comment-refused (housegate/rewriter-go#84). rewriter-grpc
+// v0.21.3 already refuses both INSERT-comment cases (measured against the
+// released image), so its floor stays v0.21.3.
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.5 or rewriter-grpc >= v0.21.3 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table, unmapped-database and INSERT-data comment refusals, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -389,6 +392,17 @@ var tableReferenceProbes = []buildProbe{
 	// unchanged.
 	rejectedProbe("unmapped-database-refused", "SELECT * FROM default.t",
 		pb.RewriteCode_InvalidRewriteRequest, `database "default" does not resolve through the caller's databases (it is not mapped for this account, or the account has no access)`),
+	// A comment ClickHouse reads as part of an INSERT's inline data can hide
+	// a read from a comment-free scan. rewriter-grpc refuses both shapes in
+	// dynamic mode. rewriter-go answered Success for a comment in plain
+	// VALUES rows before v0.23.3 (housegate/rewriter-go#77) and for a
+	// comment in the opaque INSERT … (cols) SETTINGS … text before v0.23.5
+	// (housegate/rewriter-go#84). Measured 2026-11-11 against rewriter-go
+	// v0.23.5 (native FFI) and the housegate-rewriter 0.21.3 / 0.21.4 images.
+	rejectedProbe("values-trailing-comment-refused", "INSERT INTO db1.o VALUES (1) -- c",
+		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
+	rejectedProbe("opaque-insert-comment-refused", "INSERT INTO db1.o (a) SETTINGS /* c */ max_threads = 1 VALUES (1)",
+		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
 	// Spec §13 round 2; rewriter-go v0.15.0 answers Success.
 	rejectedProbe("analyzer-off-refused", "SELECT * FROM db1.o SETTINGS allow_experimental_analyzer = 0",
 		pb.RewriteCode_UnsupportedStatement, "table setting allow_experimental_analyzer is not accepted"),

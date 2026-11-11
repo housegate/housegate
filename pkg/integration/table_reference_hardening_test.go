@@ -21,7 +21,7 @@ func requireNativeLib(t *testing.T) string {
 	t.Helper()
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.4` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.5` and pass --test_env")
 	}
 	return lib
 }
