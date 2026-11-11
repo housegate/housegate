@@ -550,32 +550,45 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 // (spec 2026-09-24 §9.1); journal recovery passes nil and resolves through the
 // table-state resolver, which answers Active and Gone tables and a Refused
 // table that carries a schema (a quarantined indexer's).
+//
+// The partitions come from the replay-compatible decode, so it answers for a
+// statement an earlier binary admitted (journal recovery, an exact retry)
+// exactly as that binary did; intake-only refusals belong to
+// sicore.ValidateNewAdmissionPayload, applied only before a genuinely new
+// prepare.
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, error) {
+	table, partitions, _, err := i.resolvePressureTarget(rec, snapshotSchema)
+	return table, partitions, err
+}
+
+// resolvePressureTarget is partsPressureTarget that also returns the schema it
+// validated the admission against, nil for a legacy ingress with none.
+func (i *StorageIntegrityIngress) resolvePressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, *payloadexec.TableSchema, error) {
 	if snapshotSchema == nil && i.schemas == nil && i.pressure == nil {
 		// Legacy ingress with no schema source at all. A supplied snapshot
 		// schema always drives the hash check and the touched partitions.
-		return "", nil, nil
+		return "", nil, nil, nil
 	}
 	var schema payloadexec.TableSchema
 	if snapshotSchema != nil {
 		schema = *snapshotSchema
 	} else {
 		if i.schemas == nil {
-			return "", nil, fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
+			return "", nil, nil, fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
 		}
 		var ok bool
 		schema, ok = i.schemas.StorageIntegrityTableSchema(rec.TableID)
 		if !ok {
-			return "", nil, fmt.Errorf("%w: no pinned schema for table %q", errStorageIntegritySchemaUnavailable, rec.TableID)
+			return "", nil, nil, fmt.Errorf("%w: no pinned schema for table %q", errStorageIntegritySchemaUnavailable, rec.TableID)
 		}
 	}
 	if schema.TableID != rec.TableID {
-		return "", nil, fmt.Errorf("storage_integrity ingress: schema table_id %q does not match admission table_id %q", schema.TableID, rec.TableID)
+		return "", nil, nil, fmt.Errorf("storage_integrity ingress: schema table_id %q does not match admission table_id %q", schema.TableID, rec.TableID)
 	}
 	if rec.EnvelopeVersion >= sicore.EnvelopeVersionV2 {
 		expectedSchemaHash := payloadexec.TableSchemaHash(rec.NetworkID, schema)
 		if rec.SchemaHash != expectedSchemaHash {
-			return "", nil, fmt.Errorf(
+			return "", nil, nil, fmt.Errorf(
 				"storage_integrity ingress: schema_hash %q does not match authoritative table schema %q for %s",
 				rec.SchemaHash,
 				expectedSchemaHash,
@@ -585,9 +598,9 @@ func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord
 	}
 	partitions, err := sicore.PayloadPartitionIDs(schema, rec.PayloadEncoding, rec.Revision, rec.Payload)
 	if err != nil {
-		return "", nil, fmt.Errorf("storage_integrity ingress: %w", err)
+		return "", nil, nil, fmt.Errorf("storage_integrity ingress: %w", err)
 	}
-	return sicore.PhysicalTableName(rec.TableID), partitions, nil
+	return sicore.PhysicalTableName(rec.TableID), partitions, &schema, nil
 }
 
 func (i *StorageIntegrityIngress) reservePartsPressure(ctx context.Context, statementID, table string, partitions []string) (sicore.PartsReservation, error) {
@@ -704,7 +717,7 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 	unlockStatement := i.lockStatement(rec.StatementID)
 	defer unlockStatement()
 
-	table, partitions, err := i.partsPressureTarget(rec, adm.TableSchema)
+	table, partitions, schema, err := i.resolvePressureTarget(rec, adm.TableSchema)
 	if err != nil {
 		return chproto.MarkSeqUnspent(err)
 	}
@@ -716,6 +729,14 @@ func (i *StorageIntegrityIngress) consumeStorageIntegrityAdmission(ctx context.C
 		// Not marked: a preflight failure (a re-presented id with a different
 		// envelope, journal recovery) says nothing about earlier attempts.
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
+	}
+	if requiresPrepare && schema != nil {
+		// Intake-only refusals (#343) guard a genuinely new prepare only: a
+		// statement an earlier binary admitted keeps its cached ACK2 or its
+		// resume, and its sequence number is never reported unspent.
+		if err := sicore.ValidateNewAdmissionPayload(*schema, rec.PayloadEncoding, rec.Revision, rec.Payload); err != nil {
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
+		}
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
 	trackedReservation := tracked.reservation
