@@ -165,6 +165,12 @@ permission: CREATE_VIEW references table "secret" of database "db2"; a view or m
 Holding Owner on both databases does not change this, and `system` tables are refused in a view
 body too (they always were). Query the other database directly, or join it in your own `SELECT`.
 
+For the same reason `RENAME TABLE` and `EXCHANGE TABLES` cannot move a table or view to another
+database (`... cannot move a table or view to another database`): a view renamed out of its
+database would keep reading it, and a materialized view keeps firing on a source, and writing into
+a `TO` table, that was moved elsewhere. Renames within one database work as before. To move a
+table's data, `INSERT INTO <db2>.<t> SELECT * FROM <db1>.<t>` and drop the old one.
+
 Why: every account's views run as the one ClickHouse user the server shares, so ClickHouse's own
 `SQL SECURITY` does not separate accounts. A view in `db1` over `db2` would let every reader of
 `db1` (including a public grant) read `db2`, and would go on doing so after the creator lost access
@@ -302,6 +308,7 @@ A query that names a payer whose operator list does not include the signing key 
 | 733 `... (retryable)` | the table is pending, or a source is restarting | retry shortly |
 | 497 `... is not a writer of database <db>` | your key has no Owner or Write grant on `<db>` | ask its Owner for `GRANT INSERT` |
 | 392 `... was refused: ...` | the table uses a type outside the admitted set | `DROP TABLE` and create it with admitted types (§5) |
+| `... cannot move a table or view to another database` | a `RENAME TABLE` or `EXCHANGE TABLES` names two databases | rename within one database; copy data with `INSERT ... SELECT` (§5) |
 | `... a view or materialized view may only reference its own database ...` | the view's body, or a materialized view's `TO` table, names another database or a `system` table | query the other database directly (§5) |
 | 392 `... views and materialized views cannot be created there` | views are not supported in a database with SI tables | query the tables directly (§5) |
 | `... is append-only: only INSERT and SELECT are accepted, ...` | SI tables are append-only: `UPDATE`, `DELETE`, `ALTER`, `TRUNCATE`, `GRANT` and other DDL on them are refused, and signing does not change that | use `INSERT`; to change a schema, `DROP TABLE` and create it again (§5) |

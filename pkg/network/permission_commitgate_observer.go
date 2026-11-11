@@ -38,6 +38,8 @@ import (
 //     DROP VIEW. A view or materialized view may only reference its
 //     own database (viewStaysInItsDatabase, housegate#330).
 //   - Admin-bit-required: ALTER TABLE, RENAME TABLE, GRANT, REVOKE.
+//     RENAME TABLE and EXCHANGE TABLES (classified RENAME TABLE) may not
+//     move an object between databases (renameStaysInOneDatabase).
 //   - Owner-bit-required: DROP DATABASE.
 //
 // Multi-target: every entry in ev.AccessedTables is checked
@@ -231,6 +233,9 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 	if err := viewStaysInItsDatabase(ev); err != nil {
 		return err
 	}
+	if err := renameStaysInOneDatabase(ev); err != nil {
+		return err
+	}
 
 	for _, a := range ev.AccessedTables {
 		if a.LogicalDatabase == "" {
@@ -276,6 +281,30 @@ func viewStaysInItsDatabase(ev *commitgate.Event) error {
 		if a.IsRemote {
 			return fmt.Errorf("permission: %s references table %q of database %q, which is hosted on another indexer; a view or materialized view may only reference its own database %q",
 				ev.Type, a.OriginalTable, a.LogicalDatabase, home)
+		}
+	}
+	return nil
+}
+
+// renameStaysInOneDatabase refuses a RENAME TABLE or EXCHANGE TABLES (both
+// engines classify EXCHANGE as RENAME TABLE) whose names span more than one
+// logical database (housegate#330). Every tenant table lives in the one
+// physical database, so ClickHouse would move the object as asked and keep
+// its links: a view created over its own database and renamed into another
+// keeps reading the first, a materialized view keeps firing on a source moved
+// out of its database and keeps writing into a TO table moved into another,
+// which is exactly what viewStaysInItsDatabase refuses at creation. HouseGate
+// cannot tell a view from a table here, so every cross-database move is
+// refused; within one database RENAME and EXCHANGE are unchanged.
+func renameStaysInOneDatabase(ev *commitgate.Event) error {
+	if ev.Type != sqlmeta.StatementTypeRenameTable || len(ev.AccessedTables) == 0 {
+		return nil
+	}
+	first := ev.AccessedTables[0].LogicalDatabase
+	for _, a := range ev.AccessedTables {
+		if a.LogicalDatabase != first {
+			return fmt.Errorf("permission: %s names databases %q and %q; RENAME TABLE and EXCHANGE TABLES cannot move a table or view to another database",
+				ev.Type, first, a.LogicalDatabase)
 		}
 	}
 	return nil

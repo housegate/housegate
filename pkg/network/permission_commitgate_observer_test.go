@@ -377,6 +377,42 @@ func TestPermission_ViewMustStayInItsDatabase(t *testing.T) {
 	})
 }
 
+// TestPermission_RenameStaysInOneDatabase: RENAME TABLE and EXCHANGE TABLES
+// (classified RENAME TABLE) may not move a name to another database
+// (housegate#330), or a view created over its own database could be renamed
+// into another and keep reading the first. Admin on both databases does not
+// help; renames within one database pass.
+func TestPermission_RenameStaysInOneDatabase(t *testing.T) {
+	st := fixturePerm("foo", "alice", "bob", registry.DbAuthOwner)
+	st.DatabaseInfos["bar"] = DatabaseInfo{DatabaseId: "bar", Tables: []TableInfo{}}
+	st.DatabasePermissions["bob"]["bar"] = registry.DbAuthOwner
+	o := newPermObserver(st)
+	rename := sqlmeta.StatementTypeRenameTable
+	for _, tc := range []struct {
+		name    string
+		ev      *commitgate.Event
+		refused bool
+	}{
+		{"within one database", viewEvent(rename, "bob", "foo.v", "foo.w"), false},
+		{"several pairs within one database", viewEvent(rename, "bob", "foo.a", "foo.b", "foo.c", "foo.d"), false},
+		{"to another database", viewEvent(rename, "bob", "foo.v", "bar.v"), true},
+		{"one pair of several crosses", viewEvent(rename, "bob", "foo.a", "foo.b", "bar.c", "foo.d"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := o.BeforeStatement(context.Background(), tc.ev)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("expected allow, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "cannot move a table or view to another database") {
+				t.Fatalf("expected the cross-database rename refusal, got %v", err)
+			}
+		})
+	}
+}
+
 func TestPermission_WriteBitPromotesToRead(t *testing.T) {
 	// Holding only DbAuthWrite must satisfy a Read check thanks to
 	// the promotion chain (Write → Read).
