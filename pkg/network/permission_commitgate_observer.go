@@ -35,7 +35,8 @@ import (
 //     TABLE, EXISTS TABLE, USE.
 //   - Write-bit-required: INSERT, UPDATE, DELETE, TRUNCATE TABLE,
 //     CREATE TABLE, DROP TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW,
-//     DROP VIEW.
+//     DROP VIEW. A view or materialized view may only reference its
+//     own database (viewStaysInItsDatabase, housegate#330).
 //   - Admin-bit-required: ALTER TABLE, RENAME TABLE, GRANT, REVOKE.
 //   - Owner-bit-required: DROP DATABASE.
 //
@@ -131,12 +132,10 @@ var permissionPolicy = map[sqlmeta.StatementType]registry.DbAuth{
 	// mutations symmetric with CREATE / DROP TABLE — same Write bit.
 	// Both engines report the view's own (db, name) first and then
 	// every table its body reads (and a materialized view's TO
-	// target), and BeforeStatement checks every entry with this bit,
-	// so creating a view needs Write on every database it reads, not
-	// only Read. A stored view keeps reading those databases for
-	// whoever reads the view, under the one shared ClickHouse user, so
-	// do not relax this to Read without a same-database or
-	// definer-rights rule (housegate#330).
+	// target). viewStaysInItsDatabase requires every entry to name the
+	// view's own database (housegate#330), and this bit is then checked
+	// on that one database, so Write on it also covers the body's
+	// reads (Write ⇒ Read).
 	sqlmeta.StatementTypeCreateView:             registry.DbAuthWrite,
 	sqlmeta.StatementTypeCreateMaterializedView: registry.DbAuthWrite,
 	sqlmeta.StatementTypeDropView:               registry.DbAuthWrite,
@@ -229,12 +228,54 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 		return fmt.Errorf("permission: %s requires a target database (rewriter surfaced no AccessedTables)", ev.Type)
 	}
 
+	if err := viewStaysInItsDatabase(ev); err != nil {
+		return err
+	}
+
 	for _, a := range ev.AccessedTables {
 		if a.LogicalDatabase == "" {
 			return fmt.Errorf("permission: %s has unresolved logical database for table %q", ev.Type, a.OriginalTable)
 		}
 		if err := o.checkAccess(account, Database(a.LogicalDatabase), required, ev.Type); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// viewStaysInItsDatabase enforces the same-database rule for CREATE VIEW and
+// CREATE MATERIALIZED VIEW (housegate#330): every entry of AccessedTables —
+// the view itself, a materialized view's TO target and every table the body
+// reads — must name one logical database, the first entry's (both engines
+// report the view's own name first). A stored view runs as the one ClickHouse
+// user every tenant shares, so a view in a that read b would serve b to every
+// reader of a (the public address(0) grant included), keep doing so after the
+// creator lost access to b, and, for a materialized view, copy b into a on
+// every insert into b by anyone. `system` is outside the rule's one database,
+// so a view body cannot read it either (it never could: creating a view
+// needs Write on every database it reads, and system is not registered). A
+// remote entry is refused too: a body read of a database hosted by another
+// indexer is rewritten into a remote() call that carries a peer-relay JWS,
+// which ClickHouse would store in the view's DDL.
+//
+// The check runs before the per-database permission checks, so the refusal
+// names the rule rather than a missing grant on the other database.
+func viewStaysInItsDatabase(ev *commitgate.Event) error {
+	if ev.Type != sqlmeta.StatementTypeCreateView && ev.Type != sqlmeta.StatementTypeCreateMaterializedView {
+		return nil
+	}
+	if len(ev.AccessedTables) == 0 {
+		return nil
+	}
+	home := ev.AccessedTables[0].LogicalDatabase
+	for _, a := range ev.AccessedTables {
+		if a.LogicalDatabase != home {
+			return fmt.Errorf("permission: %s references table %q of database %q; a view or materialized view may only reference its own database %q",
+				ev.Type, a.OriginalTable, a.LogicalDatabase, home)
+		}
+		if a.IsRemote {
+			return fmt.Errorf("permission: %s references table %q of database %q, which is hosted on another indexer; a view or materialized view may only reference its own database %q",
+				ev.Type, a.OriginalTable, a.LogicalDatabase, home)
 		}
 	}
 	return nil

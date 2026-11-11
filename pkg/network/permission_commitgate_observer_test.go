@@ -287,43 +287,94 @@ func TestPermission_ViewsRequireWrite(t *testing.T) {
 	}
 }
 
-// TestPermission_ViewBodySourcesRequireWrite: both engines report a view
-// body's sources after the view's own name in AccessedTables, and every
-// entry is checked with the statement's bit, so CREATE [MATERIALIZED] VIEW
-// needs Write on every database its body reads, not only Read
-// (housegate#24). A writer of foo with only Read on bar cannot create a view
-// in foo over bar; with Write on bar too it can.
-func TestPermission_ViewBodySourcesRequireWrite(t *testing.T) {
-	for _, typ := range []sqlmeta.StatementType{
-		sqlmeta.StatementTypeCreateView,
-		sqlmeta.StatementTypeCreateMaterializedView,
-	} {
-		for _, tc := range []struct {
-			name    string
-			barPerm registry.DbAuth
-			allowed bool
-		}{
-			{"source_read_only_denied", registry.DbAuthRead, false},
-			{"source_write_allowed", registry.DbAuthWrite, true},
-		} {
-			t.Run(typ.String()+"_"+tc.name, func(t *testing.T) {
-				st := fixturePerm("foo", "alice", "bob", registry.DbAuthWrite)
-				st.DatabaseInfos["bar"] = DatabaseInfo{DatabaseId: "bar", Tables: []TableInfo{}}
-				st.DatabasePermissions["bob"]["bar"] = tc.barPerm
-				ev := newEvent(typ, "bob", "foo", "v")
-				ev.AccessedTables = append(ev.AccessedTables, sqlmeta.AccessedTable{
-					OriginalDatabase: "bar", OriginalTable: "t", LogicalDatabase: "bar",
-				})
-				err := newPermObserver(st).BeforeStatement(context.Background(), ev)
-				if tc.allowed && err != nil {
-					t.Errorf("Write on both databases should satisfy %s, got %v", typ, err)
-				}
-				if !tc.allowed && err == nil {
-					t.Errorf("Read on a body source must NOT satisfy %s", typ)
-				}
-			})
-		}
+// viewEvent is a CREATE [MATERIALIZED] VIEW event whose AccessedTables are
+// the given "db.table" entries, in order.
+func viewEvent(typ sqlmeta.StatementType, user string, entries ...string) *commitgate.Event {
+	ev := &commitgate.Event{Type: typ, User: user, Values: make(map[string]any)}
+	for _, e := range entries {
+		db, table, _ := strings.Cut(e, ".")
+		ev.AccessedTables = append(ev.AccessedTables, sqlmeta.AccessedTable{
+			OriginalDatabase: db, OriginalTable: table, LogicalDatabase: db,
+		})
 	}
+	return ev
+}
+
+// TestPermission_ViewMustStayInItsDatabase: a view or materialized view may
+// reference only its own logical database (housegate#330). A stored view is
+// executed by the one ClickHouse user every tenant shares, so a body that
+// read another database would hand that database to every reader of the
+// view's database, keep doing so after the creator's access is revoked, and,
+// for a materialized view, copy it on every insert. Owner on both databases
+// does not help; the error names the foreign database and the rule.
+func TestPermission_ViewMustStayInItsDatabase(t *testing.T) {
+	newState := func() *InMemoryNetworkState {
+		st := fixturePerm("foo", "alice", "bob", registry.DbAuthOwner)
+		st.DatabaseInfos["bar"] = DatabaseInfo{DatabaseId: "bar", Tables: []TableInfo{}}
+		st.DatabasePermissions["bob"]["bar"] = registry.DbAuthOwner
+		return st
+	}
+	view, mv := sqlmeta.StatementTypeCreateView, sqlmeta.StatementTypeCreateMaterializedView
+	for _, tc := range []struct {
+		name    string
+		ev      *commitgate.Event
+		foreign string // "" = allowed
+	}{
+		{"view over its own database", viewEvent(view, "bob", "foo.v", "foo.t", "foo.u"), ""},
+		{"view with no source", viewEvent(view, "bob", "foo.v"), ""},
+		{"materialized view within its database", viewEvent(mv, "bob", "foo.mv", "foo.dst", "foo.src"), ""},
+		{"view over another database", viewEvent(view, "bob", "foo.v", "bar.secret"), "bar"},
+		{"view over both databases", viewEvent(view, "bob", "foo.v", "foo.t", "bar.secret"), "bar"},
+		{"materialized view reading another database", viewEvent(mv, "bob", "foo.mv", "foo.dst", "bar.src"), "bar"},
+		{"materialized view writing another database", viewEvent(mv, "bob", "foo.mv", "bar.dst", "foo.src"), "bar"},
+		{"view over a system table", viewEvent(view, "bob", "foo.v", "system.numbers"), "system"},
+		{"view not reported first", viewEvent(view, "bob", "bar.secret", "foo.v"), "foo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := newPermObserver(newState()).BeforeStatement(context.Background(), tc.ev)
+			if tc.foreign == "" {
+				if err != nil {
+					t.Fatalf("expected allow, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected the same-database refusal, got nil")
+			}
+			if !strings.Contains(err.Error(), `database "`+tc.foreign+`"`) ||
+				!strings.Contains(err.Error(), "may only reference its own database") {
+				t.Errorf("error should name %q and the same-database rule, got %v", tc.foreign, err)
+			}
+		})
+	}
+
+	t.Run("remote source", func(t *testing.T) {
+		ev := viewEvent(view, "bob", "foo.v", "bar.t")
+		ev.AccessedTables[1].IsRemote = true
+		if err := newPermObserver(newState()).BeforeStatement(context.Background(), ev); err == nil {
+			t.Fatal("a view over a database hosted on another indexer must be refused")
+		}
+	})
+
+	// The rule is about view bodies only: DROP VIEW and a cross-database
+	// SELECT keep the per-database checks.
+	t.Run("drop view and select unaffected", func(t *testing.T) {
+		o := newPermObserver(newState())
+		if err := o.BeforeStatement(context.Background(), viewEvent(sqlmeta.StatementTypeDropView, "bob", "foo.v")); err != nil {
+			t.Errorf("DROP VIEW: %v", err)
+		}
+		if err := o.BeforeStatement(context.Background(), viewEvent(sqlmeta.StatementTypeSelect, "bob", "foo.t", "bar.t")); err != nil {
+			t.Errorf("cross-database SELECT: %v", err)
+		}
+	})
+
+	// The view's own database still needs Write.
+	t.Run("read only on the view database", func(t *testing.T) {
+		st := fixturePerm("foo", "alice", "bob", registry.DbAuthRead)
+		if err := newPermObserver(st).BeforeStatement(context.Background(), viewEvent(view, "bob", "foo.v", "foo.t")); err == nil {
+			t.Fatal("Read on the view's database must not satisfy CREATE VIEW")
+		}
+	})
 }
 
 func TestPermission_WriteBitPromotesToRead(t *testing.T) {

@@ -59,11 +59,13 @@ go_test(
         "snapshot_query_test.go",
         "storage_integrity_test.go",
         "table_state_test.go",
+        "view_same_database_test.go",
     ],
     embed = [":rewriter"],
     deps = [
         "//pkg/ffifetch/ffitest",
         "//pkg/network",
+        "//pkg/plugins/commitgate",
         "//pkg/registry",
         "//pkg/sitable",
         "//pkg/sqlmeta",
