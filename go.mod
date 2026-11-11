@@ -14,6 +14,7 @@ require (
 	github.com/segmentio/asm v1.2.1
 	github.com/sentioxyz/arbiter-proto v0.15.0
 	github.com/shirou/gopsutil/v4 v4.26.5
+	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/clickhouse v0.42.0
 	github.com/zeebo/blake3 v0.2.4
 	go.opentelemetry.io/otel/trace v1.44.0
@@ -81,7 +82,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/supranational/blst v0.3.16 // indirect
-	github.com/testcontainers/testcontainers-go v0.43.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/tobilg/polyglot/packages/go v0.13.5 // indirect

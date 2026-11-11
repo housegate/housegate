@@ -61,6 +61,12 @@ rewriter:
 # tableref_guard:
 #   mode: enforce                    # enforce (default) | observe; case-sensitive
 
+# The upstream ClickHouse user's grants, checked at startup and every 10 minutes
+# (docs/table-reference-hardening.md, "The upstream ClickHouse user's grants").
+# upstream_grants_check:
+#   mode: warn                       # warn (default) | enforce | off
+#   replica_copies: false            # true when this server serves hg_replica copies
+
 # Storage-integrity table membership and read policy. The merge guard derives
 # both physical homes from each logical <database>.<table> id.
 # storage_integrity:

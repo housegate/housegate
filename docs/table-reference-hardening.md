@@ -143,8 +143,47 @@ What changes for clients:
 
 `TestTableReference_UnmappedDatabaseRefused` runs these refusals through a proxy on the native engine with auth off, against a real table in ClickHouse's `default` database.
 
+## The upstream ClickHouse user's grants (`upstream_grants_check`)
+
+Every session HouseGate forwards to ClickHouse runs as one ClickHouse user: the credential provider's default credential (`ckh_manager_config_path`, `credential.subgraph`). That includes tenant sessions, the maintenance and platform-operator sessions the rewriter never sees, and peer `remote()` loopbacks. The engines refuse what they model. That user's grants are what stops everything else, for example the external table functions the engines leave alone (`url`, `s3`, `file`, …). From this release (housegate/housegate#341), a server that forwards to ClickHouse (a `shard` or an `upstream`) runs `SHOW GRANTS FINAL` as that user. It does so at startup and every 10 minutes, and reports every grant outside this set:
+
+| Target | Expected privileges |
+|---|---|
+| `rewriter.physical_database` (`<phys>.*` or a table in it) | any |
+| `hg_safe.*`, `hg_unsafe.*` | `SELECT` / `SHOW …`, with storage integrity enabled |
+| `hg_replica.*` | `SELECT` / `SHOW …`, with storage integrity enabled and `upstream_grants_check.replica_copies: true` (the server serves stage-3 replica copies) |
+| `system.<table>` (column lists included) | `SELECT` / `SHOW …` |
+| `*.*` | `REMOTE` (`GRANT READ ON REMOTE`: the `remote()` reads of other indexers' databases) and `CREATE TEMPORARY TABLE` (`GLOBAL IN`, external tables) |
+| `TABLE ENGINE ON <engine>` | an engine the rewriter accepts (the MergeTree family and its Replicated forms, `Memory`, `Log`, …) |
+
+Everything else is reported, for example:
+- any other database (`default.*`, `hg_promote.*`, …);
+- any other `*.*` privilege (`SELECT`, `FILE`, `URL`, `S3`, `SOURCES`, `SYSTEM`, `KILL QUERY`, …);
+- user, role and named-collection privileges (`ON *`) and `TABLE ENGINE ON *`;
+- database or table patterns (`ph*.*`);
+- `WITH GRANT OPTION`.
+
+`FINAL` lists the privileges a user holds through its roles, so a role cannot hide a grant. `REVOKE` lines are ignored: a partial revoke does not narrow a grant the set does not expect. The `system` database stays readable without a grant (`select_from_system_db_requires_grant` is off by default); the engines' system-table allowlist decides those reads. The only maintenance statement sentio-node sends is the database GC's `DROP TABLE IF EXISTS <phys>.<db>.<table> SYNC`, which the physical-database row covers.
+
+`upstream_grants_check.mode`:
+- `warn` (the default): the startup check runs in the background, and every violation is logged (`upstream grants check: …`, with the list) and counted in the gauge `clickhouse_proxy_upstream_grant_violations{upstream}`. A failed read is counted in `clickhouse_proxy_upstream_grant_check_errors_total{upstream}`.
+- `enforce`: as `warn`, except that a violation found at startup refuses startup. A ClickHouse that cannot be read is never fatal, and a 10-minute re-check never stops a running server.
+- `off`: no check.
+
+The check is skipped when:
+- the ClickHouse cluster is host-injected;
+- the server is router-only;
+- `credential_replace_enabled` is off, so each client brings its own credentials.
+
+```yaml
+upstream_grants_check:
+  mode: warn            # warn (default) | enforce | off
+  replica_copies: false # true when this server serves hg_replica copies
+```
+
+A deployment that still forwards as a superuser (`default`, or a user with `GRANT ALL ON *.*`) is reported, not refused, in `warn` mode. Narrow the user before setting `enforce`. `TestUpstreamGrantsCheck_RealClickHouse` checks a narrowed gateway user, the same user with a `default.*` grant, a `url()` source and a role grant, on ClickHouse 25.8 and 26.8.
+
 ## Not covered yet
 
 - The class (c) `system` tables the Sentio driver reads by physical name (`tables`, `columns`, `data_skipping_indices`, `projections`, `parts`, `databases`, `mutations`) still pass through verbatim, and `PermissionCommitGateObserver` still exempts every `system` read: step 2, housegate/housegate#218. The metadata tables no client needs are refused instead (see "Metadata tables" above).
-- Nothing checks that the shared ClickHouse user's grants are limited to the databases HouseGate serves; maintenance, platform-operator and peer `remote()` sessions, which the rewriter does not see, still rely on them: housegate/housegate#341.
-- `url` / `s3` / `file` and the other external-storage table functions are a non-goal: ClickHouse user grants own egress.
+- `url` / `s3` / `file` and the other external-storage table functions are a non-goal for the engines: ClickHouse user grants own egress, and `upstream_grants_check` reports a `URL` / `S3` / `FILE` / `SOURCES` grant on the upstream user.

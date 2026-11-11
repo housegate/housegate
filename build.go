@@ -19,6 +19,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/chgrants"
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/cluster"
@@ -1286,6 +1287,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		pushTeardown(metricsCleanup)
 	}
 
+	// Upstream grants check (housegate/housegate#341): at startup in
+	// preServe, then every chgrants.RecheckInterval until the run ctx ends.
+	grantsChecker := buildGrantsChecker(cfg, credProvider, !isNilInterface(opts.Cluster))
+
 	return &builtServer{
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
@@ -1310,6 +1315,22 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if metricsCollector != nil {
 				go metricsCollector.Start(ctx)
 				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
+			}
+			if grantsChecker != nil {
+				// Only enforce mode holds startup for the check; warn mode
+				// checks in the background so a slow or absent ClickHouse
+				// never delays listening.
+				if grantsChecker.Mode == chgrants.ModeEnforce {
+					if err := grantsChecker.Startup(ctx); err != nil {
+						return err
+					}
+					go grantsChecker.Run(ctx, chgrants.RecheckInterval)
+				} else {
+					go func() {
+						_ = grantsChecker.Startup(ctx)
+						grantsChecker.Run(ctx, chgrants.RecheckInterval)
+					}()
+				}
 			}
 			return nil
 		},

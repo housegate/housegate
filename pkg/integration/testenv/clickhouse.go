@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	tcclickhouse "github.com/testcontainers/testcontainers-go/modules/clickhouse"
 	"golang.org/x/sync/errgroup"
 )
@@ -84,6 +85,21 @@ func StartClickHouse(t *testing.T) *ClickHouseEnv {
 	return env
 }
 
+// StartClickHouseWithAccessManagement starts a dedicated ClickHouse
+// container whose test user may create users, roles and grants
+// (CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1), for tests of grant-dependent
+// behaviour. The shared container stays without it.
+func StartClickHouseWithAccessManagement(t *testing.T) *ClickHouseEnv {
+	t.Helper()
+	env, cleanup, err := startClickHouse(context.Background(),
+		testcontainers.WithEnv(map[string]string{"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1"}))
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return env
+}
+
 // StartClickHouseForMain is the TestMain variant: returns the env and a
 // cleanup the caller must invoke before os.Exit.
 func StartClickHouseForMain() (*ClickHouseEnv, func(), error) {
@@ -111,12 +127,13 @@ func StartClickHousePairForMain() (*ClickHouseEnv, *ClickHouseEnv, func(), error
 	return startClickHousePair(context.Background())
 }
 
-func startClickHouse(ctx context.Context) (*ClickHouseEnv, func(), error) {
-	ctr, err := tcclickhouse.Run(ctx, chImage,
+func startClickHouse(ctx context.Context, extra ...testcontainers.ContainerCustomizer) (*ClickHouseEnv, func(), error) {
+	opts := append([]testcontainers.ContainerCustomizer{
 		tcclickhouse.WithUsername(chUser),
 		tcclickhouse.WithPassword(chPassword),
 		tcclickhouse.WithDatabase(chDatabase),
-	)
+	}, extra...)
+	ctr, err := tcclickhouse.Run(ctx, chImage, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("run ClickHouse container: %w", err)
 	}

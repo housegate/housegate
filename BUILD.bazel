@@ -14,6 +14,7 @@ go_library(
     srcs = [
         "build.go",
         "build_collector.go",
+        "build_grants_check.go",
         "proxy.go",
         "redis.go",
         "storage_integrity_backpressure.go",
@@ -28,6 +29,7 @@ go_library(
     deps = [
         "//pkg/auth",
         "//pkg/billing",
+        "//pkg/chgrants",
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/cluster",
@@ -85,6 +87,7 @@ go_test(
         "agent_replica_failover_build_test.go",
         "agent_table_status_test.go",
         "build_collector_test.go",
+        "build_grants_check_test.go",
         "build_inline_values_test.go",
         "build_peer_signers_test.go",
         "build_replication_proxy_test.go",
@@ -113,6 +116,7 @@ go_test(
     embed = [":housegate"],
     deps = [
         "//pkg/auth",
+        "//pkg/chgrants",
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/cluster",

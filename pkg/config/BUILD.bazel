@@ -13,6 +13,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cfgtypes",
+        "//pkg/chgrants",
         "//pkg/cluster",
         "//pkg/ffifetch",
         "//pkg/log",
