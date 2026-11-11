@@ -15,6 +15,14 @@ import (
 // SYSTEM STOP MERGES. While merges are stopped ClickHouse never deletes the
 // replaced parts, and a restart would reactivate them. After the guard runs, the
 // pinned setting still prevents merges while the outdated parts are deleted.
+//
+// It counts outdated parts that hold rows. From ClickHouse 26.8 a REPLACE
+// PARTITION also leaves an empty covering part over the replaced block range,
+// outdated from the start. ClickHouse deletes it only after the parts it covers
+// are gone and the cleanup backoff (max_cleanup_delay_period, 300 s) expires,
+// about five minutes later; while it exists a restart cannot reactivate the
+// retired parts. Cleanup itself runs every cleanup_delay_period (30 s) from
+// 26.3 on, against about a second on 25.8.
 func TestMergeGuard_ReleasesOutdatedPartCleanupWithoutMerging(t *testing.T) {
 	ctx := context.Background()
 	conn := openDirectCH(t)
@@ -48,9 +56,11 @@ func TestMergeGuard_ReleasesOutdatedPartCleanupWithoutMerging(t *testing.T) {
 			mustExec(t, conn, q)
 		}
 	}
+	// outdated counts the retired data parts: outdated safe parts that hold
+	// rows. An empty covering part (26.8) holds none and is not counted.
 	outdated := func() uint64 {
 		var n uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM system.parts WHERE database = ? AND table = ? AND NOT active", safeDB, table).Scan(&n); err != nil {
+		if err := conn.QueryRow(ctx, "SELECT count() FROM system.parts WHERE database = ? AND table = ? AND NOT active AND rows > 0", safeDB, table).Scan(&n); err != nil {
 			t.Fatalf("count outdated parts: %v", err)
 		}
 		return n
@@ -73,6 +83,13 @@ func TestMergeGuard_ReleasesOutdatedPartCleanupWithoutMerging(t *testing.T) {
 			t.Fatalf("outdated safe parts were not cleaned after the guard released cleanup (still %d)", outdated())
 		}
 		time.Sleep(time.Second)
+	}
+	var emptyActive uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.parts WHERE database = ? AND table = ? AND active AND rows = 0", safeDB, table).Scan(&emptyActive); err != nil {
+		t.Fatalf("count empty active safe parts: %v", err)
+	}
+	if emptyActive != 0 {
+		t.Fatalf("%d empty safe parts are active; a covering part must stay outdated", emptyActive)
 	}
 
 	// The pinned setting still prevents merges: several small parts stay apart.
