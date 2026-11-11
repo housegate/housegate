@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -619,5 +620,35 @@ func TestEnvelopeFromAdmissionAcceptsALanedID(t *testing.T) {
 	adm.StatementID = "0x0000000000000000000000000000000000000001:5e1f0a2b7c9d3e4f:1:n1"
 	if _, err := EnvelopeFromAdmission(adm); err == nil || !strings.Contains(err.Error(), "client_account does not match signer") {
 		t.Fatalf("laned id naming another account: err = %v", err)
+	}
+}
+
+// TestArbiterIntakeStatusQuerierPrunedStatement: a statement whose Arbiter
+// record was pruned with the sealed history answers found, Safe, pruned and
+// the checkpoint, with no statement_seq. Both probes report
+// ErrStatementPruned (already sequenced and safe, do not resend) instead of a
+// resend-safe or abort category, and an inconsistent pruned answer is refused.
+func TestArbiterIntakeStatusQuerierPrunedStatement(t *testing.T) {
+	pruned := &pb.StatementStatus{Found: true, Status: "Safe", Pruned: true, CheckpointThroughBlockSeq: 128}
+	client := &recordingArbiterIngressClient{statementStatus: pruned}
+	querier := NewArbiterIntakeStatusQuerier(client)
+
+	if _, err := querier.QuerySubmitStatus(context.Background(), "0xabc:7:nonce-7"); !errors.Is(err, ErrStatementPruned) || !strings.Contains(err.Error(), "through block 128") || !strings.Contains(err.Error(), "do not resend") {
+		t.Fatalf("QuerySubmitStatus err = %v, want ErrStatementPruned naming the checkpoint", err)
+	}
+	if _, err := querier.QueryClaimStatus(context.Background(), "0xabc:7:nonce-7"); !errors.Is(err, ErrStatementPruned) {
+		t.Fatalf("QueryClaimStatus err = %v, want ErrStatementPruned", err)
+	}
+	for name, bad := range map[string]*pb.StatementStatus{
+		"no checkpoint": {Found: true, Status: "Safe", Pruned: true},
+		"statement seq": {Found: true, Status: "Safe", Pruned: true, CheckpointThroughBlockSeq: 128, StatementSeq: 9},
+		"rc bound":      {Found: true, Status: "Safe", Pruned: true, CheckpointThroughBlockSeq: 128, RcBound: true, BoundSource: "s"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := NewArbiterIntakeStatusQuerier(&recordingArbiterIngressClient{statementStatus: bad})
+			if _, err := q.QuerySubmitStatus(context.Background(), "0xabc:7:nonce-7"); err == nil || errors.Is(err, ErrStatementPruned) {
+				t.Fatalf("err = %v, want an inconsistency error", err)
+			}
+		})
 	}
 }
