@@ -20,7 +20,7 @@ func requireNativeLib(t *testing.T) string {
 	t.Helper()
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.22.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.0` and pass --test_env")
 	}
 	return lib
 }
@@ -314,5 +314,93 @@ func TestTableReference_SystemReadsWithAuthOff(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("system.tables rows = %d, want 1 (the physical table of db1.s)", n)
+	}
+}
+
+// TestTableReference_ShowTablesLikeLimitFull: SHOW TABLES with a LIKE /
+// ILIKE pattern, a LIMIT and the FULL prefix is answered from the tenant's
+// own tables (housegate/housegate#319, rewriter-go v0.23.0): the pattern
+// applies to the logical name, another tenant's table in the same physical
+// database never appears, rows come back ordered by name, and SHOW TEMPORARY
+// TABLES stays refused.
+func TestTableReference_ShowTablesLikeLimitFull(t *testing.T) {
+	const phys = "phys_tr_show"
+	proxy := startTableRefProxy(t, phys, "enforce")
+	ctx := context.Background()
+	seed := openConnNoDB(t, chEnv.Addr)
+	if err := seed.Exec(ctx, "CREATE TABLE "+phys+".`db2.a_other` (a UInt8) ENGINE = Memory"); err != nil {
+		t.Fatal(err)
+	}
+	conn := openConn(t, proxy.Addr)
+	for _, q := range []string{
+		"CREATE TABLE db1.a_x (a UInt64) ENGINE = MergeTree ORDER BY a",
+		"CREATE TABLE db1.ab (a UInt64) ENGINE = Log",
+		"CREATE TABLE db1.b (a UInt64) ENGINE = MergeTree ORDER BY a",
+	} {
+		if err := conn.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	names := func(sql string) []string {
+		t.Helper()
+		rows, err := conn.Query(ctx, sql)
+		if err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatalf("%s: scan: %v", sql, err)
+			}
+			out = append(out, name)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		sql  string
+		want []string
+	}{
+		{"SHOW TABLES FROM db1 LIKE 'a%'", []string{"a_x", "ab"}},
+		{`SHOW TABLES FROM db1 LIKE 'a\_%'`, []string{"a_x"}},
+		{"SHOW TABLES IN db1 NOT ILIKE 'A%'", []string{"b"}},
+		{"SHOW TABLES FROM db1 LIMIT 2", []string{"a_x", "ab"}},
+		{"SHOW TABLES FROM db1 ILIKE '%B' LIMIT 1", []string{"ab"}},
+	} {
+		if got := names(tc.sql); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s = %v, want %v", tc.sql, got, tc.want)
+		}
+	}
+
+	rows, err := conn.Query(ctx, "SHOW FULL TABLES FROM db1 LIKE '%b%'")
+	if err != nil {
+		t.Fatalf("SHOW FULL TABLES: %v", err)
+	}
+	var full []string
+	for rows.Next() {
+		var name, engine string
+		if err := rows.Scan(&name, &engine); err != nil {
+			t.Fatalf("SHOW FULL TABLES scan: %v", err)
+		}
+		full = append(full, name+"/"+engine)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("SHOW FULL TABLES: %v", err)
+	}
+	if got, want := strings.Join(full, ","), "ab/Log,b/MergeTree"; got != want {
+		t.Errorf("SHOW FULL TABLES FROM db1 LIKE '%%b%%' = %s, want %s", got, want)
+	}
+
+	if err := conn.Exec(ctx, "SHOW TEMPORARY TABLES"); err == nil || !strings.Contains(err.Error(), "statement is not supported") {
+		t.Errorf("SHOW TEMPORARY TABLES: err = %v, want the engine refusal", err)
+	}
+	var one uint8
+	if err := conn.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil || one != 1 {
+		t.Fatalf("the session must survive the refusal: %v", err)
 	}
 }

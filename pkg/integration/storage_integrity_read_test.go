@@ -44,7 +44,7 @@ func (s *siReadStateStub) set(tableID string, parts ...string) {
 func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.22.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si"
@@ -165,8 +165,9 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	if _, err := count("latest"); err == nil || !strings.Contains(err.Error(), "SQL_x_read_mode") {
 		t.Fatalf("invalid SQL_x_read_mode must be rejected, got %v", err)
 	}
-	// 6. Non-lane write is refused with the spec message (no ingress configured here).
-	if err := conn.Exec(ctx, "ALTER TABLE db1.t DELETE WHERE a = 1"); err == nil || !strings.Contains(err.Error(), "accepts writes only through the signed statement lane") {
+	// 6. A mutation is refused with the engine's append-only message
+	// (rewriter-go v0.22.1, the engine side of #323; no ingress configured here).
+	if err := conn.Exec(ctx, "ALTER TABLE db1.t DELETE WHERE a = 1"); err == nil || !strings.Contains(err.Error(), "storage-integrity table db1.t is append-only") {
 		t.Fatalf("SI write must be refused, got %v", err)
 	}
 	// 7. DESCRIBE hides the reserved column.
@@ -361,7 +362,7 @@ const operatorGuardMessage = "is not addressable through the proxy"
 func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.22.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si_heredoc"
@@ -473,7 +474,7 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 func TestStorageIntegrityRead_SessionLevelSetIsRefused(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.22.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.23.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si_set"
