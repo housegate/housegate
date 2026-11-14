@@ -1182,8 +1182,8 @@ func (o *Orchestrator) prepareAndSubmit(ctx context.Context, env StatementEnvelo
 // for its result claim forever. With a querier wired the statement's status
 // decides: found converges forward exactly like a queried unknown submit, not
 // found keeps the terminal reject (the token can never be admitted again), and
-// a failed query is an unknown outcome that holds the frontier until a later
-// attempt can query. Every other outcome is returned unchanged.
+// a failed query or a transient answer is an unknown outcome that holds the
+// frontier until a later attempt can query. Every other outcome is returned unchanged.
 func (o *Orchestrator) submitStatement(ctx context.Context, env StatementEnvelope) (SubmitOutcome, error) {
 	submit, err := o.submitter.SubmitStatement(ctx, env)
 	if err != nil || o.querier == nil || submit.Category != OutcomeTerminalReject || submit.Reason != ArbiterStaleStatementTokenReason {
@@ -1193,10 +1193,16 @@ func (o *Orchestrator) submitStatement(ctx context.Context, env StatementEnvelop
 	if qerr != nil {
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: fmt.Sprintf("%s; statement status unresolved: %v", submit.Reason, qerr)}, nil
 	}
-	if classifyQueryConvergence(queried.Category) == convergeForward {
+	switch {
+	case classifyQueryConvergence(queried.Category) == convergeForward:
 		return queried, nil
+	case queried.Category == OutcomeUnspecified, queried.Category == OutcomeTerminalReject:
+		// Not found (or authoritatively rejected): the refusal stands.
+		return submit, nil
+	default:
+		// A transient answer (Retryable / Unknown) leaves sequencing unresolved.
+		return SubmitOutcome{Category: OutcomeUnknown, Reason: fmt.Sprintf("%s; statement status unresolved: %s", submit.Reason, firstNonEmpty(queried.Reason, "transient status answer"))}, nil
 	}
-	return submit, nil
 }
 
 // afterSubmit classifies a fresh submit outcome and, on acceptance, runs the

@@ -136,3 +136,27 @@ func TestOrchestrate_OtherTerminalRejectsDoNotQuery(t *testing.T) {
 		t.Fatalf("a terminal reject must abort: %+v", res)
 	}
 }
+
+// A querier may answer a transient category with a nil error. That leaves the
+// statement's sequencing unresolved, so a stale-token refusal must hold
+// exactly like a failed query, never abort.
+func TestOrchestrate_StaleTokenRefusalWithATransientQueryAnswerHolds(t *testing.T) {
+	for _, transient := range []OutcomeCategory{OutcomeRetryable, OutcomeUnknown} {
+		prep := &recordingPreparer{
+			prepared:     boundSource(),
+			claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+		}
+		sub := &orderRecordingSubmitter{outcomes: []SubmitOutcome{staleTokenRefusal()}}
+		q := &countingQuerier{submitStatus: SubmitOutcome{Category: transient, Reason: "arbiter busy"}}
+		orch := NewOrchestratorWithQuerier(sub, prep, q, OrchestratorConfig{ExpectedSource: "snode-A"})
+		adm := admissionFixture()
+
+		res, _ := orch.Orchestrate(context.Background(), adm)
+		if atomic.LoadInt64(&prep.abortAt) != 0 || res.Ack2 {
+			t.Fatalf("query answered %v: a stale-token refusal must hold: %+v", transient, res)
+		}
+		if _, pending := orch.recoveryAdmission(adm.StatementID); !pending {
+			t.Fatalf("query answered %v: the statement must stay pending", transient)
+		}
+	}
+}
