@@ -541,6 +541,13 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 	}
 }
 
+// ArbiterStaleStatementTokenReason is the Arbiter's freshness refusal of a
+// SubmitStatement whose user JWS is older than its ingress.max_statement_age
+// (InvalidArgument). It is a terminal reject of a statement the Arbiter has not
+// sequenced; for one it already sequenced it says nothing, so intake checks
+// the statement's status before it acts on it (Orchestrator.submitStatement).
+const ArbiterStaleStatementTokenReason = "user_jws iat is too old"
+
 func submitOutcomeFromRPCError(err error) SubmitOutcome {
 	st, ok := status.FromError(err)
 	if !ok {
