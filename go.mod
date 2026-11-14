@@ -123,6 +123,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
-replace github.com/ClickHouse/ch-go => github.com/sentioxyz/ch-go v0.73.0-sentioxyz-20260629
+replace github.com/ClickHouse/ch-go => github.com/sentioxyz/ch-go v0.73.0-sentioxyz-20261114
 
 replace github.com/ClickHouse/clickhouse-go/v2 => github.com/sentioxyz/clickhouse-go/v2 v2.47.0-sentioxyz-20260629
