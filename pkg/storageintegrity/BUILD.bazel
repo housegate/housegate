@@ -63,6 +63,7 @@ go_test(
         "intake_metrics_test.go",
         "intake_recovery_test.go",
         "intake_retry_test.go",
+        "intake_stale_token_test.go",
         "intake_test.go",
         "materializer_select_test.go",
         "merge_guard_tables_test.go",

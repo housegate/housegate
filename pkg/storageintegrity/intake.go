@@ -1087,7 +1087,7 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 			} else {
 				var submitErr error
 				submitStart := time.Now()
-				submit, submitErr = o.submitter.SubmitStatement(ctx, env)
+				submit, submitErr = o.submitStatement(ctx, env)
 				o.observeStage(IntakeStageSubmit, submitStart, submitErr)
 				if submitErr != nil {
 					return IntakeResult{StatementID: env.StatementID, Prepared: prepared}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
@@ -1165,11 +1165,44 @@ func (o *Orchestrator) prepareAndSubmit(ctx context.Context, env StatementEnvelo
 	go func() {
 		defer wg.Done()
 		start := time.Now()
-		submit, submitErr = o.submitter.SubmitStatement(ctx, env)
+		submit, submitErr = o.submitStatement(ctx, env)
 		o.observeStage(IntakeStageSubmit, start, submitErr)
 	}()
 	wg.Wait()
 	return prepared, submit, prepareErr, submitErr
+}
+
+// submitStatement is the submitter's SubmitStatement, except that it does not
+// let an Arbiter freshness refusal stand for a statement the Arbiter already
+// sequenced. That refusal (ArbiterStaleStatementTokenReason) only says the
+// user JWS is now older than max_statement_age, which every resubmit of a
+// statement whose first answer was lost reaches eventually, for example a
+// source's durable recovery after a restart. Treating it as terminal would
+// abort the candidate of a sequenced statement, whose sealed block then waits
+// for its result claim forever. With a querier wired the statement's status
+// decides: found converges forward exactly like a queried unknown submit, not
+// found keeps the terminal reject (the token can never be admitted again), and
+// a failed query or a transient answer is an unknown outcome that holds the
+// frontier until a later attempt can query. Every other outcome is returned unchanged.
+func (o *Orchestrator) submitStatement(ctx context.Context, env StatementEnvelope) (SubmitOutcome, error) {
+	submit, err := o.submitter.SubmitStatement(ctx, env)
+	if err != nil || o.querier == nil || submit.Category != OutcomeTerminalReject || submit.Reason != ArbiterStaleStatementTokenReason {
+		return submit, err
+	}
+	queried, qerr := o.querier.QuerySubmitStatus(ctx, env.StatementID)
+	if qerr != nil {
+		return SubmitOutcome{Category: OutcomeUnknown, Reason: fmt.Sprintf("%s; statement status unresolved: %v", submit.Reason, qerr)}, nil
+	}
+	switch {
+	case classifyQueryConvergence(queried.Category) == convergeForward:
+		return queried, nil
+	case queried.Category == OutcomeUnspecified, queried.Category == OutcomeTerminalReject:
+		// Not found (or authoritatively rejected): the refusal stands.
+		return submit, nil
+	default:
+		// A transient answer (Retryable / Unknown) leaves sequencing unresolved.
+		return SubmitOutcome{Category: OutcomeUnknown, Reason: fmt.Sprintf("%s; statement status unresolved: %s", submit.Reason, firstNonEmpty(queried.Reason, "transient status answer"))}, nil
+	}
 }
 
 // afterSubmit classifies a fresh submit outcome and, on acceptance, runs the
