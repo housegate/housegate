@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
@@ -53,6 +55,16 @@ type StorageIntegrityRuntimeOptions struct {
 	// listener, DDL, or Keeper-backed role can mix distinct logical tables.
 	TableSchemas  []payloadexec.TableSchema
 	PartsPressure StorageIntegrityPartsPressure
+	// RecoveryGate, when set, defers the drain of recovered intake records
+	// past preServe. preServe then only restores them (their source frontiers
+	// stay fenced, so a new admission for such a source waits behind them) and
+	// the listeners open; a background task drains them once RecoveryGate
+	// returns nil. An embedding host whose source can prepare only after its
+	// listeners are up (sentio-node's SNode role starts after the HouseGate
+	// surface is ready) must set it: without it a recovered statement that
+	// needs a fresh source prepare blocks preServe forever. Nil drains in
+	// preServe, before any listener admits a write.
+	RecoveryGate func(context.Context) error
 }
 
 // buildStorageIntegrityRuntimeConsumer builds the runtime over the table-state
@@ -160,10 +172,11 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 
 	var orch *sicore.Orchestrator
 	orchCfg := sicore.OrchestratorConfig{
-		ExpectedSource:      expectedSource,
-		Journal:             journal,
-		PayloadLeaseManager: leaseManager,
-		StageObserver:       intakeStageMetrics{},
+		ExpectedSource:        expectedSource,
+		Journal:               journal,
+		PayloadLeaseManager:   leaseManager,
+		StageObserver:         intakeStageMetrics{},
+		RecoveryRetryObserver: newRecoveryRetryLogger(time.Now, recoveryRetryLogEvery).observe,
 	}
 	orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, statusQuerier, orchCfg)
 	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerNative, payloadWriter)
@@ -262,7 +275,11 @@ func tableStateSchemaResolver(state sitable.TableState) StorageIntegrityTableSch
 // failOnTableError keeps the static table set's startup fail-fast; a dynamic
 // host starts with the failing tables' latches closed, so one unready table
 // blocks only its own admissions (spec 2026-09-24 §9.4).
-func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard *StorageIntegrityMergeSupervisor, failOnTableError bool) error {
+//
+// With recoveryGate set, recovery is split: the pending records are restored
+// here and drained in the background once the gate opens (see
+// StorageIntegrityRuntimeOptions.RecoveryGate).
+func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard *StorageIntegrityMergeSupervisor, failOnTableError bool, recoveryGate func(context.Context) error) error {
 	if guard != nil {
 		if err := guard.Assert(ctx); err != nil {
 			if failOnTableError {
@@ -279,6 +296,26 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 			return fmt.Errorf("storage_integrity.backpressure: initial parts snapshot: %w", err)
 		}
 	}
+	if recoveryGate != nil {
+		if err := runtime.RestorePending(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.recovery: %w", err)
+		}
+		runtime.StartBackground(ctx)
+		refresh := func(ctx context.Context) {
+			if runtime.pressureRunner == nil {
+				return
+			}
+			runtime.pressureRunner.Invalidate()
+			if err := runtime.pressureRunner.Refresh(ctx); err != nil && ctx.Err() == nil {
+				log.Warnw("storage_integrity.backpressure: post-recovery parts snapshot failed; the periodic refresh retries", "error", err)
+			}
+		}
+		if !runtime.startRecoveryDrain(ctx, recoveryGate, refresh) {
+			return fmt.Errorf("storage_integrity.recovery: the ingress is closed")
+		}
+		log.Info("storage_integrity durable intake records restored; the drain waits for the host's recovery gate")
+		return nil
+	}
 	if err := runtime.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("storage_integrity.recovery: %w", err)
 	}
@@ -289,6 +326,7 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 		}
 	}
 	runtime.StartBackground(ctx)
+	log.Info("storage_integrity durable intake recovery completed")
 	return nil
 }
 
@@ -300,4 +338,47 @@ func buildStorageIntegrityMergeGuard(opts StorageIntegrityRuntimeOptions) Storag
 		return nil
 	}
 	return sicore.NewMergeGuard(opts.MergeConn, nil)
+}
+
+// recoveryRetryLogEvery bounds how often one pending statement's recovery
+// retries are logged: the first attempt that leaves it pending, then at most
+// once per interval. Recovery retries every second, so an unbounded log would
+// flood; a silent one hid why a devnet host could not finish starting
+// (2026-11-14).
+const recoveryRetryLogEvery = 30 * time.Second
+
+// recoveryRetryLogger logs recovery attempts that left a statement pending,
+// rate-limited per statement.
+type recoveryRetryLogger struct {
+	mu    sync.Mutex
+	now   func() time.Time
+	every time.Duration
+	last  map[string]time.Time
+	count map[string]int
+}
+
+func newRecoveryRetryLogger(now func() time.Time, every time.Duration) *recoveryRetryLogger {
+	return &recoveryRetryLogger{now: now, every: every, last: map[string]time.Time{}, count: map[string]int{}}
+}
+
+// observe is a sicore.OrchestratorConfig.RecoveryRetryObserver.
+func (l *recoveryRetryLogger) observe(statementID string, res sicore.IntakeResult, err error) {
+	l.mu.Lock()
+	l.count[statementID]++
+	attempts := l.count[statementID]
+	at := l.now()
+	last, seen := l.last[statementID]
+	if seen && at.Sub(last) < l.every {
+		l.mu.Unlock()
+		return
+	}
+	l.last[statementID] = at
+	l.mu.Unlock()
+	reason := res.Reason
+	if reason == "" {
+		reason = res.Submit.Reason
+	}
+	log.Warnw("storage_integrity: intake recovery attempt left the statement pending; retrying",
+		"statement_id", statementID, "attempts", attempts, "lifecycle", res.Lifecycle,
+		"submit", res.Submit.Category, "reason", reason, "error", err)
 }

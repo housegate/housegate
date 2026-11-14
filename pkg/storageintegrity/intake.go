@@ -456,6 +456,11 @@ type OrchestratorConfig struct {
 	// StageObserver, when set, is told how long each intake stage took
 	// (intake_metrics.go). Nil records nothing.
 	StageObserver IntakeStageObserver
+	// RecoveryRetryObserver, when set, is told about every recovery attempt
+	// (DrainPending, RecoverPending) that left a statement pending: its id, the
+	// attempt's result and its error (nil for a non-terminal outcome such as a
+	// retryable submit). Recovery retries silently without it.
+	RecoveryRetryObserver func(statementID string, res IntakeResult, err error)
 }
 
 // IntakeResult is the orchestration outcome for one admission.

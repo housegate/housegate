@@ -566,3 +566,75 @@ func TestRecoverPendingDrainsKnownUnwrittenHolderBeforeLaterUnsafeRecord(t *test
 		t.Fatalf("submit order = %v, want safe-retry A then unsafe B", order)
 	}
 }
+
+// TestRestorePendingThenDrainPending splits RecoverPending for a host that
+// must open its listeners before the source can prepare: RestorePending
+// restores the durable record and fences its frontier without touching the
+// source or the arbiter, and DrainPending later drives it to a terminal stage,
+// reporting every attempt that left it pending.
+func TestRestorePendingThenDrainPending(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	prep := newLookupRecordingPreparer(boundSource())
+	sub := &retryThenAcceptSubmitter{retryUntil: 3}
+	orch1 := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal, RecoveryRetryInterval: time.Millisecond})
+	if res, err := orch1.Orchestrate(ctx, adm); err != nil || res.Ack2 {
+		t.Fatalf("initial Orchestrate = %+v, %v; want a pending retryable intake", res, err)
+	}
+
+	type retry struct {
+		id  string
+		err error
+	}
+	var mu sync.Mutex
+	var retries []retry
+	orch2 := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A", Journal: journal, RecoveryRetryInterval: time.Millisecond,
+		RecoveryRetryObserver: func(statementID string, _ IntakeResult, err error) {
+			mu.Lock()
+			retries = append(retries, retry{statementID, err})
+			mu.Unlock()
+		},
+	})
+	submitsBefore := atomic.LoadInt64(&sub.calls)
+	if err := orch2.RestorePending(ctx); err != nil {
+		t.Fatalf("RestorePending: %v", err)
+	}
+	if err := orch2.RestorePending(ctx); err != nil {
+		t.Fatalf("RestorePending is idempotent: %v", err)
+	}
+	if got := atomic.LoadInt64(&sub.calls); got != submitsBefore {
+		t.Fatalf("RestorePending submitted (%d -> %d)", submitsBefore, got)
+	}
+	if _, pending := orch2.recoveryAdmission(adm.StatementID); !pending {
+		t.Fatal("RestorePending must keep the record pending")
+	}
+	orch2.mu.Lock()
+	holder := orch2.frontiers["snode-A"]
+	orch2.mu.Unlock()
+	if holder == nil || holder.holder != adm.StatementID {
+		t.Fatalf("RestorePending must fence the source frontier for the recovered statement: %+v", holder)
+	}
+
+	if err := orch2.DrainPending(ctx); err != nil {
+		t.Fatalf("DrainPending: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok || !persisted.IsTerminal || persisted.Stage != LifecycleRCBound {
+		t.Fatalf("drained record = ok:%v terminal:%v stage:%q err:%v", ok, persisted.IsTerminal, persisted.Stage, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(retries) != 2 {
+		t.Fatalf("retry observer saw %d attempts, want the 2 that stayed pending: %+v", len(retries), retries)
+	}
+	for _, r := range retries {
+		if r.id != adm.StatementID {
+			t.Fatalf("retry observer statement %q, want %q", r.id, adm.StatementID)
+		}
+	}
+}
