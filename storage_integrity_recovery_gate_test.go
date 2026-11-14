@@ -186,3 +186,46 @@ func TestRecoveryRetryLoggerRateLimitsPerStatement(t *testing.T) {
 		t.Fatalf("attempts counted = %d, want 3", l.count["a"])
 	}
 }
+
+// With a recovery gate the drain finishes while new admissions are served, so
+// finalizing the recovered reservations must leave a new admission's live
+// reservation alone: finalizing it early released its debt and claims and
+// dropped its tracking (candidate binding, cleanup hooks) mid-flight.
+func TestFinalizeRecoveredReservationsLeavesNewAdmissionsAlone(t *testing.T) {
+	ingress, _, _, _, _ := pendingGateIngress(t)
+	pressure := &fakePartsPressure{}
+	recoveredA := &fakePartsReservation{pressure: pressure}
+	newB := &fakePartsReservation{pressure: pressure}
+	recoveredC := &fakePartsReservation{pressure: pressure}
+	newD := &fakePartsReservation{pressure: pressure}
+
+	ingress.pressureMu.Lock()
+	ingress.trackRecoveredReservationLocked("rec-a", trackedPartsReservation{reservation: recoveredA, tableID: "net1.events"})
+	ingress.trackRecoveredReservationLocked("rec-c", trackedPartsReservation{reservation: recoveredC, tableID: "net1.events"})
+	ingress.pressureMu.Unlock()
+	ingress.setPressureReservation("new-b", "net1.events", []string{"p_eu"}, newB)
+	ingress.setPressureReservation("rec-c", "net1.events", []string{"p_eu"}, newD) // the same id re-admitted
+
+	ingress.finalizeRecoveredReservations()
+
+	state := func(r *fakePartsReservation) string { r.mu.Lock(); defer r.mu.Unlock(); return r.state }
+	if state(recoveredA) != "finalized" || state(recoveredC) != "finalized" {
+		t.Fatalf("recovered reservations: A=%q C=%q, want both finalized", state(recoveredA), state(recoveredC))
+	}
+	if state(newB) != "" || state(newD) != "" {
+		t.Fatalf("new admissions' reservations were touched: B=%q D=%q", state(newB), state(newD))
+	}
+	if _, ok := ingress.trackedPressureReservation("rec-a"); ok {
+		t.Fatal("the recovered entry must be retired")
+	}
+	if got, ok := ingress.trackedPressureReservation("new-b"); !ok || got.reservation != sicore.PartsReservation(newB) {
+		t.Fatal("a new admission's tracked reservation was dropped")
+	}
+	if got, ok := ingress.trackedPressureReservation("rec-c"); !ok || got.reservation != sicore.PartsReservation(newD) {
+		t.Fatal("the re-admitted statement's new reservation was dropped")
+	}
+	ingress.finalizeRecoveredReservations() // idempotent
+	if state(newB) != "" || state(newD) != "" {
+		t.Fatal("a second finalize touched new admissions")
+	}
+}

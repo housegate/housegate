@@ -65,6 +65,9 @@ type StorageIntegrityIngress struct {
 	// addressable by statement until ACK2 finalizes them or a required source
 	// lookup / exact cleanup proves that no candidate part remains.
 	pressureReservations map[string]trackedPartsReservation
+	// recoveredReservations are the handles restorePressureReservations rebuilt
+	// (guarded by pressureMu); finalizeRecoveredReservations finalizes them.
+	recoveredReservations []sicore.PartsReservation
 	// requireAdmissionSchema is set for the table-state-backed runtime: every
 	// new admission must carry its query snapshot's schema.
 	requireAdmissionSchema bool
@@ -225,6 +228,11 @@ type trackedPartsReservation struct {
 	reservation sicore.PartsReservation
 	tableID     string
 	partitions  []string
+	// recovered marks an entry restorePressureReservations rebuilt from the
+	// journal. finalizeRecoveredReservations retires only these: with a
+	// recovery gate the drain ends while new admissions are tracked in the
+	// same map.
+	recovered bool
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -585,11 +593,11 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 		if reservation == nil {
 			continue
 		}
-		i.pressureReservations[record.StatementID] = trackedPartsReservation{
+		i.trackRecoveredReservationLocked(record.StatementID, trackedPartsReservation{
 			reservation: reservation,
 			tableID:     record.Admission.TableID,
 			partitions:  clonePartitionIDs(restoredPartitions[record.StatementID]),
-		}
+		})
 	}
 	i.pressureMu.Unlock()
 	return nil
@@ -643,13 +651,36 @@ func clonePartitionIDs(partitionIDs []string) []string {
 	return append([]string{}, partitionIDs...)
 }
 
+// trackRecoveredReservationLocked records a reservation restored from the
+// journal (caller holds pressureMu): it is the statement's tracked entry, and
+// recovery owns its handle until finalizeRecoveredReservations.
+func (i *StorageIntegrityIngress) trackRecoveredReservationLocked(statementID string, tracked trackedPartsReservation) {
+	tracked.recovered = true
+	i.pressureReservations[statementID] = tracked
+	i.recoveredReservations = append(i.recoveredReservations, tracked.reservation)
+}
+
+// finalizeRecoveredReservations retires what recovery restored once every
+// recovered record is terminal: each restored handle is finalized (a no-op for
+// one its exact-cleanup hook already released) and every entry still marked
+// recovered leaves the map. A new admission's entry is never touched: with a
+// recovery gate (StorageIntegrityRuntimeOptions.RecoveryGate) the drain ends
+// while new admissions are tracked in the same map, and finalizing one early
+// would release its debt and claims and drop its candidate binding and cleanup
+// tracking mid-flight. A statement re-admitted under a recovered id replaces
+// the entry (setPressureReservation) and keeps its own reservation.
 func (i *StorageIntegrityIngress) finalizeRecoveredReservations() {
 	i.pressureMu.Lock()
-	restored := i.pressureReservations
-	i.pressureReservations = map[string]trackedPartsReservation{}
+	handles := i.recoveredReservations
+	i.recoveredReservations = nil
+	for id, tracked := range i.pressureReservations {
+		if tracked.recovered {
+			delete(i.pressureReservations, id)
+		}
+	}
 	i.pressureMu.Unlock()
-	for _, tracked := range restored {
-		tracked.reservation.Finalize()
+	for _, reservation := range handles {
+		reservation.Finalize()
 	}
 }
 
