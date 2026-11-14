@@ -87,6 +87,9 @@ type StorageIntegrityIngress struct {
 	backgroundCancel context.CancelFunc
 	backgroundWG     sync.WaitGroup
 	backgroundClosed bool
+	// recoveryCancel (guarded by backgroundMu) stops a deferred recovery drain
+	// (startRecoveryDrain); Close cancels it and joins it through backgroundWG.
+	recoveryCancel context.CancelFunc
 }
 
 // DefaultAccountBudgetRetryAfter is the retry hint of the arbiter's
@@ -258,10 +261,29 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 // RecoverPending drains durable non-terminal intake records before listeners
 // admit new source writes.
 func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
+	if err := i.RestorePending(ctx); err != nil {
+		return err
+	}
+	return i.DrainPending(ctx)
+}
+
+// RestorePending restores the durable intake records, fences each source
+// frontier behind them and restores their parts-pressure reservations, without
+// touching the source or the arbiter (Orchestrator.RestorePending).
+func (i *StorageIntegrityIngress) RestorePending(ctx context.Context) error {
 	if i == nil || i.orch == nil {
 		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
-	if err := i.orch.RecoverPending(ctx); err != nil {
+	return i.orch.RestorePending(ctx)
+}
+
+// DrainPending drives every restored record to a terminal stage
+// (Orchestrator.DrainPending), then finalizes the restored reservations.
+func (i *StorageIntegrityIngress) DrainPending(ctx context.Context) error {
+	if i == nil || i.orch == nil {
+		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
+	}
+	if err := i.orch.DrainPending(ctx); err != nil {
 		return err
 	}
 	// Every recovered non-terminal record is now either exactly cleaned (whose
@@ -269,6 +291,45 @@ func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
 	// handles so their visible debt/claims follow normal post-ACK2 semantics.
 	i.finalizeRecoveredReservations()
 	return nil
+}
+
+// startRecoveryDrain runs DrainPending in the background once gate returns,
+// then after. It is the deferred half of recovery for a host whose source can
+// prepare only after its listeners are open (StorageIntegrityRuntimeOptions.
+// RecoveryGate). Close cancels it, also while it waits on the gate, and joins
+// it. It reports false when the ingress is already closed.
+func (i *StorageIntegrityIngress) startRecoveryDrain(ctx context.Context, gate func(context.Context) error, after func(context.Context)) bool {
+	i.backgroundMu.Lock()
+	if i.backgroundClosed || i.recoveryCancel != nil {
+		i.backgroundMu.Unlock()
+		return false
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	i.recoveryCancel = cancel
+	i.backgroundWG.Add(1)
+	i.backgroundMu.Unlock()
+	go func() {
+		defer i.backgroundWG.Done()
+		defer cancel()
+		if err := gate(runCtx); err != nil {
+			if runCtx.Err() == nil {
+				log.Errorw("storage_integrity: recovery gate failed; pending intake records stay fenced until the next start", "error", err)
+			}
+			return
+		}
+		log.Info("storage_integrity: recovery gate opened; draining pending intake records")
+		if err := i.DrainPending(runCtx); err != nil {
+			if runCtx.Err() == nil {
+				log.Errorw("storage_integrity: deferred intake recovery failed; pending records stay fenced until the next start", "error", err)
+			}
+			return
+		}
+		if after != nil {
+			after(runCtx)
+		}
+		log.Info("storage_integrity durable intake recovery completed")
+	}()
+	return true
 }
 
 func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
@@ -318,9 +379,13 @@ func (i *StorageIntegrityIngress) Close() {
 	i.backgroundCancel = nil
 	i.backgroundClosed = true
 	meterCancel := i.meterCancel
+	recoveryCancel := i.recoveryCancel
 	i.backgroundMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if recoveryCancel != nil {
+		recoveryCancel()
 	}
 	if meterCancel != nil {
 		meterCancel()

@@ -1309,7 +1309,7 @@ func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartit
 	if ingress.pressure != nil {
 		t.Fatal("disabled backpressure unexpectedly installed a pressure guard")
 	}
-	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true); err != nil {
+	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true, nil); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	adm := bpAdmission()
@@ -1359,7 +1359,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testin
 	if ingress.pressureRunner != runner {
 		t.Fatalf("pressure runner = %T, want injected lifecycle", ingress.pressureRunner)
 	}
-	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true); err != nil {
+	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true, nil); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	select {
@@ -1521,7 +1521,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true, nil); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	if guard.calls != 1 {
@@ -1625,7 +1625,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, guard, true); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, guard, true, nil); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
@@ -1712,7 +1712,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 	}
 	defer ingress.Close()
 
-	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true)
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
 		t.Fatalf("startStorageIntegrityRuntime err = %v, want merge guard failure", err)
 	}
@@ -1745,7 +1745,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 	}
 	defer ingress.Close()
 
-	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true)
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true, nil)
 	if err == nil || !errors.Is(err, partsErr) || !strings.Contains(err.Error(), "initial parts snapshot") {
 		t.Fatalf("startStorageIntegrityRuntime err = %v, want initial parts snapshot failure", err)
 	}
@@ -1916,7 +1916,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true, nil); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	events := order.snapshot()

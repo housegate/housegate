@@ -1296,14 +1296,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) error {
-			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard, siStatic != nil); err != nil {
+			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard, siStatic != nil, opts.StorageIntegrityRuntime.RecoveryGate); err != nil {
 				return err
 			}
 			if storageIntegrityMergeGuard != nil {
 				log.Info("storage_integrity merge guard asserted")
-			}
-			if storageIntegrityRuntime != nil {
-				log.Info("storage_integrity durable intake recovery completed")
 			}
 			if libCluster != nil {
 				libCluster.Start(ctx)

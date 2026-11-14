@@ -51,7 +51,7 @@ func TestStartStorageIntegrityRuntimeFailsFastOnlyForTheStaticSet(t *testing.T) 
 	guard := &controllableMergeGuard{}
 	guard.set("db1.bad", sicore.ErrMergeGuardTableMissing)
 	supervisor := NewStorageIntegrityMergeSupervisor(guard, sitable.NewFake(sitable.Ordinary, active("db1.good", "db1.bad")...), time.Second)
-	if err := startStorageIntegrityRuntime(context.Background(), nil, supervisor, false); err != nil {
+	if err := startStorageIntegrityRuntime(context.Background(), nil, supervisor, false, nil); err != nil {
 		t.Fatalf("a dynamic host must start with one unready table: %v", err)
 	}
 	if err := supervisor.CheckMergeHealth("db1.good"); err != nil {
@@ -60,7 +60,7 @@ func TestStartStorageIntegrityRuntimeFailsFastOnlyForTheStaticSet(t *testing.T) 
 	if err := supervisor.CheckMergeHealth("db1.bad"); err == nil {
 		t.Fatal("the unready table must stay closed")
 	}
-	if err := startStorageIntegrityRuntime(context.Background(), nil, supervisor, true); err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
+	if err := startStorageIntegrityRuntime(context.Background(), nil, supervisor, true, nil); err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
 		t.Fatalf("err = %v, want the static set to fail startup", err)
 	}
 }

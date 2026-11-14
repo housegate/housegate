@@ -16,12 +16,33 @@ type recoveryStateRestoreAttempt struct {
 
 // RecoverPending drains every durable non-terminal intake in source-frontier
 // order. It is intended for preServe: callers must not expose new admissions
-// until it returns.
+// until it returns. It is RestorePending followed by DrainPending.
 func (o *Orchestrator) RecoverPending(ctx context.Context) error {
+	return o.DrainPending(ctx)
+}
+
+// RestorePending is the half of recovery that touches neither the source nor
+// the arbiter: it loads the durable journal, restores every non-terminal record
+// and fences each source frontier behind its recovered holders, and runs the
+// before-recovery hook. A host whose source cannot prepare until its listeners
+// are open calls it before serving and DrainPending afterwards; a new
+// admission for a fenced source waits at the frontier until the recovered
+// statements ahead of it are terminal, so source order is unchanged. It is
+// idempotent.
+func (o *Orchestrator) RestorePending(ctx context.Context) error {
 	if err := o.ensureJournalRecovered(ctx); err != nil {
 		return err
 	}
-	if err := o.restoreRecoveryState(ctx); err != nil {
+	return o.restoreRecoveryState(ctx)
+}
+
+// DrainPending restores pending records when RestorePending has not run yet,
+// then drives every recovered non-terminal intake to a terminal stage in
+// source-frontier order, retrying each one every RecoveryRetryInterval until
+// it is terminal or ctx ends. Every attempt that leaves a statement pending is
+// reported to RecoveryRetryObserver.
+func (o *Orchestrator) DrainPending(ctx context.Context) error {
+	if err := o.RestorePending(ctx); err != nil {
 		return err
 	}
 	for {
@@ -29,12 +50,16 @@ func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 		if !ok {
 			return nil
 		}
-		if _, err := o.Orchestrate(ctx, adm); err == nil {
+		res, err := o.Orchestrate(ctx, adm)
+		if err == nil {
 			if _, stillPending := o.recoveryAdmission(adm.StatementID); !stillPending {
 				continue
 			}
 		} else if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if observe := o.cfg.RecoveryRetryObserver; observe != nil {
+			observe(adm.StatementID, res, err)
 		}
 		if err := waitRecoveryRetry(ctx, o.cfg.RecoveryRetryInterval); err != nil {
 			return err
