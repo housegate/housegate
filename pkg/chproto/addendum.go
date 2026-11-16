@@ -400,7 +400,7 @@ func (c *Codec) NegotiateAddendum(opts AddendumOpts) (AddendumResult, error) {
 
 	// 4. parallel_replicas_version — read and store in result.
 	var parallelReplicasVersion uint64
-	if proto.FeatureVersionedParallelReplicas.In(rev) {
+	if SupportsVersionedParallelReplicas(rev) {
 		parallelReplicasVersion, err = c.r.UVarInt()
 		if err != nil {
 			return AddendumResult{}, fmt.Errorf("addendum: read parallel_replicas_version: %w", err)

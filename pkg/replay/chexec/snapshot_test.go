@@ -3,6 +3,7 @@ package chexec
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,6 +36,12 @@ func (panicConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOpt
 	panic("clickhouse used")
 }
 func (panicConn) Exec(context.Context, string, ...any) error { panic("clickhouse used") }
+func (panicConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	panic("clickhouse used")
+}
+func (panicConn) InsertFormat(context.Context, string, string, io.Reader) error {
+	panic("clickhouse used")
+}
 func (panicConn) AsyncInsert(context.Context, string, bool, ...any) error {
 	panic("clickhouse used")
 }
@@ -64,9 +71,13 @@ func (c *recordingConn) Exec(_ context.Context, query string, _ ...any) error {
 	c.execs = append(c.execs, query)
 	return nil
 }
-func (c *recordingConn) AsyncInsert(context.Context, string, bool, ...any) error { return nil }
-func (c *recordingConn) Ping(context.Context) error                              { return nil }
-func (c *recordingConn) Stats() driver.Stats                                     { return driver.Stats{} }
+func (c *recordingConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (c *recordingConn) InsertFormat(context.Context, string, string, io.Reader) error { return nil }
+func (c *recordingConn) AsyncInsert(context.Context, string, bool, ...any) error       { return nil }
+func (c *recordingConn) Ping(context.Context) error                                    { return nil }
+func (c *recordingConn) Stats() driver.Stats                                           { return driver.Stats{} }
 func (c *recordingConn) Close() error {
 	c.closed++
 	return c.closeEr

@@ -33,6 +33,7 @@ go_test(
         "client_error_test.go",
         "codec_test.go",
         "compress_test.go",
+        "features_test.go",
         "query_codec_test.go",
         "sample_block_test.go",
         "server_data_test.go",

@@ -139,7 +139,7 @@ func DecodeQuery(r *proto.Reader, revision int) (*Query, error) {
 	}
 
 	// 4. ExternalRoles
-	if proto.FeatureInterserverExternallyGrantedRoles.In(revision) {
+	if SupportsInterserverExternallyGrantedRoles(revision) {
 		roles, err := r.Str()
 		if err != nil {
 			return nil, decodeFieldErr("ExternalRoles", err)
@@ -224,7 +224,7 @@ func EncodeQuery(b *proto.Buffer, q *Query, revision int) {
 	}
 
 	// 4. ExternalRoles
-	if proto.FeatureInterserverExternallyGrantedRoles.In(revision) {
+	if SupportsInterserverExternallyGrantedRoles(revision) {
 		b.PutString(q.ExternalRoles)
 	}
 
@@ -380,7 +380,7 @@ func decodeClientInfo(r *proto.Reader, info *ClientInfo, revision int, q *Query)
 		}
 	}
 
-	if proto.FeatureQueryAndLineNumbers.In(revision) {
+	if SupportsQueryAndLineNumbers(revision) {
 		if q.ScriptQueryNumber, err = r.UVarInt(); err != nil {
 			return decodeFieldErr("script query number", err)
 		}
@@ -474,7 +474,7 @@ func encodeClientInfo(b *proto.Buffer, info *ClientInfo, revision int, q *Query)
 		b.PutInt(info.NumberOfCurrentReplica)
 	}
 
-	if proto.FeatureQueryAndLineNumbers.In(revision) {
+	if SupportsQueryAndLineNumbers(revision) {
 		b.PutUVarInt(q.ScriptQueryNumber)
 		b.PutUVarInt(q.ScriptLineNumber)
 	}

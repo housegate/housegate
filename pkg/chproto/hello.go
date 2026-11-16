@@ -129,7 +129,7 @@ func rewriteServerHelloForProxy(raw []byte, clientRevision int) (rewritten []byt
 	// the client revision, so using only the server revision shifts the cursor
 	// when an older client such as clickhouse-go v2.40.3 advertises 54460 to a
 	// newer ClickHouse server. That drift surfaces as "display_name truncated".
-	if proto.FeatureVersionedParallelReplicas.In(wireRev) {
+	if SupportsVersionedParallelReplicas(wireRev) {
 		if _, err := readUVarInt("parallel_replicas_version"); err != nil {
 			return nil, "", "", err
 		}
@@ -164,7 +164,7 @@ func rewriteServerHelloForProxy(raw []byte, clientRevision int) (rewritten []byt
 	// fields are not on the wire. Still rewrite the server's advertised
 	// revision to the negotiated client/proxy revision so the downstream client
 	// decodes later packets with the same feature gates as the upstream server.
-	if !proto.FeatureChunkedPackets.In(wireRev) {
+	if !SupportsChunkedPackets(wireRev) {
 		out := rewriteRevision(len(raw))
 		return out, "", "", nil
 	}
@@ -262,7 +262,7 @@ func (c *Codec) decodeServerHello() (*ServerHello, error) {
 		wireRev = MaxSupportedRevision
 	}
 
-	if proto.FeatureVersionedParallelReplicas.In(wireRev) {
+	if SupportsVersionedParallelReplicas(wireRev) {
 		if _, err := c.r.UVarInt(); err != nil {
 			return nil, fmt.Errorf("%w: server hello parallel replicas version: %v", ErrDecode, err)
 		}

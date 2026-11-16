@@ -208,9 +208,9 @@ func TestTableReference_DriverTrafficIsUnaffected(t *testing.T) {
 		func(_ *config.Config, opts *housegate.Options) { opts.Signer = signer },
 	)
 	conn := openSignedConn(t, proxy.Addr, signer)
-	ctx := clickhouse.Context(context.Background(), clickhouse.WithSettings(clickhouse.Settings{
+	ctx := testenv.WithQuerySettings(context.Background(), clickhouse.Settings{
 		auth.DriverSettingKey: clickhouse.CustomSetting{Value: "1"},
-	}))
+	})
 	for _, q := range []string{
 		"CREATE TABLE drv1.d (a UInt64) ENGINE = MergeTree ORDER BY a",
 		"INSERT INTO drv1.d SELECT number FROM numbers(3)",
