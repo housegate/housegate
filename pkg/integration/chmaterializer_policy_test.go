@@ -13,6 +13,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	tcclickhouse "github.com/testcontainers/testcontainers-go/modules/clickhouse"
 
+	"github.com/housegate/housegate/pkg/integration/testenv"
 	"github.com/housegate/housegate/pkg/replay/chexec"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
@@ -49,7 +50,7 @@ func TestChexecMaterializerInWithStoragePolicyUsesMemberDisk(t *testing.T) {
 	if err := os.WriteFile(config, []byte(xml), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ctr, err := tcclickhouse.Run(ctx, "clickhouse/clickhouse-server:26.3.37.3", tcclickhouse.WithUsername("policy_test"), tcclickhouse.WithPassword("policy_test_local_only"), tcclickhouse.WithDatabase("policy_test"), tcclickhouse.WithConfigFile(config))
+	ctr, err := tcclickhouse.Run(ctx, testenv.CHImage(), tcclickhouse.WithUsername("policy_test"), tcclickhouse.WithPassword("policy_test_local_only"), tcclickhouse.WithDatabase("policy_test"), tcclickhouse.WithConfigFile(config))
 	if err != nil {
 		t.Fatal(err)
 	}

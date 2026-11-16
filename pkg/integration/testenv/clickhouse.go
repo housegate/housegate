@@ -33,6 +33,9 @@ var chImage = func() string {
 	return defaultCHImage
 }()
 
+// CHImage returns the ClickHouse server image the suite runs against.
+func CHImage() string { return chImage }
+
 const (
 	chUser     = "housegate_test"
 	chPassword = "housegate_test_pw"

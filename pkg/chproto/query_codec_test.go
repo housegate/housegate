@@ -206,7 +206,7 @@ func TestQueryCodecRoundTrip_ByteLevel(t *testing.T) {
 			if proto.FeatureInterServerSecret.In(rev) {
 				original.Secret = "s3cret"
 			}
-			if proto.FeatureInterserverExternallyGrantedRoles.In(rev) {
+			if SupportsInterserverExternallyGrantedRoles(rev) {
 				original.ExternalRoles = "ext-roles"
 			}
 			if proto.FeatureParameters.In(rev) {

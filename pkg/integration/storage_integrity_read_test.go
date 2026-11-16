@@ -407,9 +407,9 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 		}),
 	)
 	conn := openSignedConn(t, proxy.Addr, signer)
-	maintenance := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+	maintenance := testenv.WithQuerySettings(ctx, clickhouse.Settings{
 		"SQL_sentio_maintenance": clickhouse.CustomSetting{Value: "1"},
-	}))
+	})
 
 	// Step 1: the session is alive and not failing for unrelated reasons. If
 	// this errors, every negative assertion below would "pass" vacuously.

@@ -59,9 +59,8 @@ func authProxyConfig(addresses []string, allowNoAuth bool) testenv.ProxyOption {
 }
 
 // openSignedConn opens a clickhouse-go connection whose every query is
-// JWS-signed by the given signer. The fork we use exposes Options.SignFunc;
-// the driver calls it once per Query and stuffs the returned token into
-// the request's Settings map under the key the auth plugin reads.
+// JWS-signed by the given signer. testenv.SignedConn signs the query text and
+// sends the token in the query setting the auth plugin reads.
 func openSignedConn(t *testing.T, proxyAddr string, signer *auth.RelaySigner) clickhouse.Conn {
 	t.Helper()
 	conn, err := clickhouse.Open(&clickhouse.Options{
@@ -72,13 +71,12 @@ func openSignedConn(t *testing.T, proxyAddr string, signer *auth.RelaySigner) cl
 			Password: chEnv.Password,
 		},
 		Protocol: clickhouse.Native,
-		SignFunc: signer.SignToken,
 	})
 	if err != nil {
 		t.Fatalf("clickhouse.Open (signed): %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return testenv.SignedConn(conn, signer.SignToken)
 }
 
 // TestAuth_NoToken: an unsigned query is rejected when AllowNoAuth=false.
@@ -204,7 +202,7 @@ func TestAuth_ValidToken(t *testing.T) {
 // caller signs SQL A but sends SQL B, the proxy must reject with the
 // "query hash mismatch" error — preventing token reuse across statements.
 //
-// We attack the binding directly: a SignFunc that signs a fixed SQL
+// We attack the binding directly: a sign function that signs a fixed SQL
 // regardless of what the driver hands it, paired with a different
 // actual query. Without the binding (e.g. validator drops the QueryHash
 // check) this would silently succeed.
@@ -219,7 +217,7 @@ func TestAuth_QueryHashMismatch(t *testing.T) {
 		authProxyConfig([]string{signer.Address()}, false),
 	)
 
-	// Tamper with the SignFunc: always sign "SELECT 2" regardless of the
+	// Tamper with the sign function: always sign "SELECT 2" regardless of the
 	// SQL the driver is about to ship. The on-wire SQL is whatever the
 	// caller runs (here: SELECT 1).
 	tamper := func(_ string) (string, error) {
@@ -229,14 +227,14 @@ func TestAuth_QueryHashMismatch(t *testing.T) {
 		Addr:     []string{proxy.Addr},
 		Auth:     clickhouse.Auth{Database: chEnv.Database, Username: chEnv.User, Password: chEnv.Password},
 		Protocol: clickhouse.Native,
-		SignFunc: tamper,
 	})
 	if err != nil {
 		t.Fatalf("clickhouse.Open (tampered sign): %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
+	signedConn := testenv.SignedConn(conn, tamper)
 
-	err = conn.QueryRow(context.Background(), "SELECT 1").Scan(new(uint8))
+	err = signedConn.QueryRow(context.Background(), "SELECT 1").Scan(new(uint8))
 	if err == nil {
 		t.Fatal("expected query hash mismatch rejection, got nil error")
 	}

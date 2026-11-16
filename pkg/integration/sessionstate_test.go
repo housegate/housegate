@@ -36,14 +36,13 @@ func openSignedConnPinnedDB(t *testing.T, proxyAddr string, signer *auth.RelaySi
 			Password: chEnv.Password,
 		},
 		Protocol:     clickhouse.Native,
-		SignFunc:     signer.SignToken,
 		MaxOpenConns: 1,
 	})
 	if err != nil {
 		t.Fatalf("clickhouse.Open (signed + pinned): %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return testenv.SignedConn(conn, signer.SignToken)
 }
 
 // TestSessionState_USEUpdatesLogical pins the rewriter→SessionState
