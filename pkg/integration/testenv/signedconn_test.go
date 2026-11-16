@@ -46,6 +46,11 @@ func TestSignedConn(t *testing.T) {
 		t.Fatalf("QueryRow with args: %v, want ErrSignedQueryArgs", err)
 	}
 
+	// The fake's PrepareBatch would panic: the refusal must come first.
+	if _, err := conn.PrepareBatch(ctx, "INSERT INTO db.t"); !errors.Is(err, ErrSignedBatch) {
+		t.Fatalf("PrepareBatch: %v, want ErrSignedBatch", err)
+	}
+
 	boom := errors.New("boom")
 	failing := SignedConn(fake, func(string) (string, error) { return "", boom })
 	if err := failing.Exec(ctx, "SELECT 1"); !errors.Is(err, boom) {
