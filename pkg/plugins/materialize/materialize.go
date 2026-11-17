@@ -63,7 +63,15 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			p.Observer.MaterializeNonSuccess(out.Code.String())
 		}
 		recordOutcome(qctx, plugin.MaterializeOutcomeErrorPrefix+out.Code.String()+": "+out.Message)
-		logger.Warnw("materialize: engine non-success, forwarding original SQL",
+		logf := logger.Warnw
+		if out.Code == pb.MaterializeCode_MaterializeSyntaxError {
+			// The engine's parser does not understand the statement (e.g.
+			// clickhouse-client's viewIfPermitted(... ELSE ...) warnings
+			// probe on connect). Nothing is rewritten and the metric above
+			// counts it, so a Warn per such query is noise.
+			logf = logger.Debugw
+		}
+		logf("materialize: engine non-success, forwarding original SQL",
 			"code", out.Code.String(), "message", out.Message)
 		return nil // fail-open
 	}

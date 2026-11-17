@@ -1,13 +1,17 @@
 package materialize
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/rewriter"
 )
@@ -156,5 +160,46 @@ func TestOnQuery_ScopeLimitsTheRewrite(t *testing.T) {
 	all := &Plugin{Materializer: &recordingMat{}}
 	if got := runOnQuery(t, all, "SELECT rand() FROM numbers(3)").Query.Body; got != "SELECT rand() FROM numbers(3) /* materialized */" {
 		t.Fatalf("nil scope: body=%q; want materialized", got)
+	}
+}
+
+// A syntax error is the engine not understanding the statement (e.g.
+// clickhouse-client's viewIfPermitted(... ELSE ...) warnings probe). The SQL is
+// forwarded unchanged and the metric still counts it, so the log stays at
+// Debug; every other non-success code is still a Warn.
+func TestOnQuery_NonSuccessLogLevel(t *testing.T) {
+	cases := []struct {
+		code pb.MaterializeCode
+		want string
+	}{
+		{pb.MaterializeCode_MaterializeSyntaxError, "DEBUG"},
+		{pb.MaterializeCode_MaterializeUnsupportedStatement, "WARN"},
+		{pb.MaterializeCode_MaterializeError, "WARN"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			var buf bytes.Buffer
+			l := log.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			ctx := log.WithContext(context.Background(), l)
+			obs := &fakeObs{}
+			p := &Plugin{Materializer: &fakeMat{out: rewriter.MaterializeOutcome{Code: tc.code}}, Observer: obs}
+			qctx := &plugin.QueryContext{Query: &chproto.Query{Body: "SELECT 1"}}
+			if err := p.OnQuery(ctx, qctx); err != nil {
+				t.Fatalf("OnQuery: %v", err)
+			}
+			var rec struct {
+				Level string `json:"level"`
+				Code  string `json:"code"`
+			}
+			if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+				t.Fatalf("want one JSON log record, got %q: %v", buf.String(), err)
+			}
+			if rec.Level != tc.want || rec.Code != tc.code.String() {
+				t.Fatalf("log level/code = %s/%s, want %s/%s", rec.Level, rec.Code, tc.want, tc.code)
+			}
+			if len(obs.nonSuccess) != 1 {
+				t.Fatalf("nonSuccess metric = %v, want one entry", obs.nonSuccess)
+			}
+		})
 	}
 }
