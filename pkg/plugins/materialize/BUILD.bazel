@@ -23,6 +23,7 @@ go_test(
     embed = [":materialize"],
     deps = [
         "//pkg/chproto",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/rewriter",
         "@com_github_housegate_rewriter_proto//gen/pb",
