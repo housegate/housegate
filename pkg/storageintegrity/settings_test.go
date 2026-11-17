@@ -95,3 +95,31 @@ func TestOwnedSettingKeysTrackTheAuthConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestIsNoCompressionClientSettingAdmitsOnlyTheDisabledValue(t *testing.T) {
+	// clickhouse-client 26.8 sends its --compression option as the query
+	// setting `compression` (value normalised to true/false) because the
+	// server gained a setting of that name. Only "compression is off" is
+	// admitted; it says nothing the uncompressed payload does not.
+	for _, value := range []string{"false", "0"} {
+		if !IsNoCompressionClientSetting("compression", value) {
+			t.Fatalf("compression=%q must be admitted", value)
+		}
+	}
+	for _, value := range []string{"true", "1", "", "gz", "zstd", "'false'", "False", "off", "no", " false"} {
+		if IsNoCompressionClientSetting("compression", value) {
+			t.Fatalf("compression=%q must not be admitted", value)
+		}
+	}
+	for _, key := range []string{"Compression", "compress", "network_compression_method", "async_insert"} {
+		if IsNoCompressionClientSetting(key, "false") {
+			t.Fatalf("%s=false must not be admitted", key)
+		}
+	}
+	if IsHousegateOwnedSettingKey("compression") {
+		t.Fatal("compression is a client setting, not a housegate-owned key")
+	}
+	if err := RejectUserSettings([]string{"compression"}); err == nil {
+		t.Fatal("a bare compression key (value unknown, e.g. inline SETTINGS) stays rejected")
+	}
+}

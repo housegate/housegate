@@ -1600,3 +1600,59 @@ func TestIngressAdmitsALanedIDOnceClientLanesAreEnabled(t *testing.T) {
 		t.Fatalf("laned id naming another account: OnQuery = %v", err)
 	}
 }
+
+// A statement from clickhouse-client 26.8 carries compression=false next to
+// its uncompressed Query packet (the client's --compression=0). The ingress
+// admits it under the empty settings hash and does not forward the setting.
+func TestIngressV2_ClientCompressionOffSettingIsDroppedNotRefused(t *testing.T) {
+	for i, value := range []string{"false", "0"} {
+		p, signer, schemaHash := newV2Ingress(t)
+		sql := "INSERT INTO tenant.events FORMAT Native"
+		qctx := signedQueryContext(t, int64(70+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
+		qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+		payload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
+		qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{Key: "compression", Value: value})
+		withStatementToken(t, qctx, signer, v2Statement(signer, qctx.Query.ID, sql, schemaHash, payload, 54453))
+		before := len(qctx.Query.Settings)
+
+		if err := p.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("compression=%q OnQuery: %v", value, err)
+		}
+		if len(qctx.Query.Settings) != before-1 {
+			t.Fatalf("exactly the compression setting must be dropped: %+v", qctx.Query.Settings)
+		}
+		for _, s := range qctx.Query.Settings {
+			if s.Key == "compression" {
+				t.Fatalf("compression setting must not be forwarded: %+v", qctx.Query.Settings)
+			}
+		}
+		if err := p.OnClientDataStrict(context.Background(), qctx, payload); err != nil {
+			t.Fatalf("OnClientDataStrict: %v", err)
+		}
+		p.OnQueryInputComplete(context.Background(), qctx)
+		adm, err := p.ConsumeAdmission(qctx.Session.ID())
+		if err != nil {
+			t.Fatalf("ConsumeAdmission: %v", err)
+		}
+		if adm.SettingsHash != sicore.EmptySettingsHash {
+			t.Fatalf("settings_hash = %s, want the empty-set digest", adm.SettingsHash)
+		}
+	}
+}
+
+func TestIngressV2_ClientCompressionSettingWithAnyOtherValueIsRefused(t *testing.T) {
+	for i, value := range []string{"true", "1", "gz", ""} {
+		p, signer, schemaHash := newV2Ingress(t)
+		sql := "INSERT INTO tenant.events FORMAT Native"
+		qctx := signedQueryContext(t, int64(80+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
+		qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+		payload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
+		qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{Key: "compression", Value: value})
+		withStatementToken(t, qctx, signer, v2Statement(signer, qctx.Query.ID, sql, schemaHash, payload, 54453))
+
+		err := p.OnQuery(context.Background(), qctx)
+		if err == nil || !strings.Contains(err.Error(), `client query setting "compression"`) {
+			t.Fatalf("compression=%q: err = %v, want the setting refused by name", value, err)
+		}
+	}
+}

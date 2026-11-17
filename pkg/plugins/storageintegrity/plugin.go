@@ -234,7 +234,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return fmt.Errorf("storage_integrity insert-only ingress rejects %s; mutation integrity protocol is not available", kind)
 	}
 	if kind == KindInsert && qctx.Query.Compression == proto.CompressionEnabled {
-		return fmt.Errorf("storage_integrity rejects compressed payloads; retry INSERT with ClickHouse query compression disabled")
+		return fmt.Errorf("storage_integrity rejects compressed payloads; retry INSERT with ClickHouse query compression disabled (clickhouse-client: --compression=0)")
 	}
 	if err := rejectInlineUserSettings(signedSQL); err != nil {
 		return err
@@ -375,6 +375,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err != nil {
 		return err
 	}
+	// clickhouse-client 26.8+ sends --compression=0 as compression=false;
+	// it restates the uncompressed packet, so it is dropped, not refused.
+	qctx.Query.Settings = dropNoCompressionSetting(qctx.Query.Settings)
 	if err := sicore.RejectUserSettings(settingKeys(qctx)); err != nil {
 		return err
 	}
@@ -804,6 +807,25 @@ func settingKeys(qctx *plugin.QueryContext) []string {
 		keys = append(keys, setting.Key)
 	}
 	return keys
+}
+
+// dropNoCompressionSetting removes the client's compression=false setting
+// (sicore.IsNoCompressionClientSetting) and keeps every other setting in
+// order. It returns the input slice when there is nothing to remove.
+func dropNoCompressionSetting(settings []chproto.Setting) []chproto.Setting {
+	for i, s := range settings {
+		if !sicore.IsNoCompressionClientSetting(s.Key, s.Value) {
+			continue
+		}
+		kept := append([]chproto.Setting(nil), settings[:i]...)
+		for _, rest := range settings[i+1:] {
+			if !sicore.IsNoCompressionClientSetting(rest.Key, rest.Value) {
+				kept = append(kept, rest)
+			}
+		}
+		return kept
+	}
+	return settings
 }
 
 func querySettings(qctx *plugin.QueryContext) map[string]string {
