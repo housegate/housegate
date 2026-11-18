@@ -713,3 +713,63 @@ func TestPlugin_SignsInsertKind(t *testing.T) {
 		t.Fatalf("signed statement_kind = %d, want %d", payload.StatementKind, sicore.StatementKindCodeInsert)
 	}
 }
+
+// clickhouse-client 26.8 sends `--compression=0` as the query setting
+// compression=false next to an uncompressed Query packet; 25.8 sends the same
+// packet without the setting. Both must take the SI lane, and the setting must
+// not travel on: the statement is signed over the empty settings set.
+func TestPlugin_ClientCompressionOffSettingIsDroppedNotRefused(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	payer := chproto.Setting{Key: "SQL_x_payer", Value: "'0xabc'", Custom: true}
+	for i, tc := range []struct {
+		name     string
+		settings []chproto.Setting
+	}{
+		{"26.8 --compression=0", []chproto.Setting{payer, {Key: "compression", Value: "false"}}},
+		{"hand-built compression=0", []chproto.Setting{{Key: "compression", Value: "0"}, payer}},
+		{"25.8 --compression=0", []chproto.Setting{payer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := insertQctx(newSession(int64(40+i), ""), "INSERT INTO shop.orders FORMAT Native")
+			q.Query.Settings = tc.settings
+			if err := p.OnQuery(context.Background(), q); err != nil {
+				t.Fatalf("OnQuery: %v", err)
+			}
+			if q.DeferredInsert == nil {
+				t.Fatal("statement must take the SI lane")
+			}
+			for _, s := range q.Query.Settings {
+				if s.Key == "compression" {
+					t.Fatalf("compression setting must not be forwarded: %+v", q.Query.Settings)
+				}
+			}
+			if len(q.Query.Settings) == 0 || q.Query.Settings[0].Key != "SQL_x_payer" && q.Query.Settings[len(q.Query.Settings)-1].Key != "SQL_x_payer" {
+				t.Fatalf("other settings must be kept: %+v", q.Query.Settings)
+			}
+		})
+	}
+}
+
+func TestPlugin_ClientCompressionSettingWithAnyOtherValueIsRefused(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	for i, value := range []string{"true", "1", "gz", ""} {
+		q := insertQctx(newSession(int64(50+i), ""), "INSERT INTO shop.orders FORMAT Native")
+		q.Query.Settings = []chproto.Setting{{Key: "compression", Value: value}}
+		err := p.OnQuery(context.Background(), q)
+		if err == nil || !strings.Contains(err.Error(), `client query setting "compression"`) {
+			t.Fatalf("compression=%q: err = %v, want the setting refused by name", value, err)
+		}
+		if q.DeferredInsert != nil {
+			t.Fatal("refused query must not carry a deferred plan")
+		}
+	}
+	// The key in an inline SETTINGS clause has no admitted form.
+	q := insertQctx(newSession(60, ""), "INSERT INTO shop.orders SETTINGS compression=false FORMAT Native")
+	if err := p.OnQuery(context.Background(), q); err == nil || !strings.Contains(err.Error(), `"compression"`) {
+		t.Fatalf("inline SETTINGS compression: err = %v", err)
+	}
+}

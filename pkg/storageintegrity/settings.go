@@ -73,3 +73,21 @@ func RejectUserSettings(keys []string) error {
 	}
 	return nil
 }
+
+// NoCompressionSettingKey is the ClickHouse query setting clickhouse-client
+// 26.8 and newer send for their own --compression option: the server gained a
+// setting of that name (HTTP response-body compression, no effect on the
+// native protocol), so the client now forwards the option as a setting, with
+// the value normalised to "true" or "false". Older clients send nothing.
+const NoCompressionSettingKey = "compression"
+
+// IsNoCompressionClientSetting reports whether a client query setting is the
+// one statement "compression is off" (compression=false, or 0 as a hand-built
+// client may write it). The SI lane already requires an uncompressed payload,
+// so this setting carries no information; the lane drops it before signing
+// and forwarding instead of refusing the client, and settings_hash stays the
+// empty-set digest. Every other value, and the key in an inline SETTINGS
+// clause, remains a user setting and is rejected by RejectUserSettings.
+func IsNoCompressionClientSetting(key, value string) bool {
+	return key == NoCompressionSettingKey && (value == "false" || value == "0")
+}

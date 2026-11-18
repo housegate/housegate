@@ -230,9 +230,11 @@ clickhouse-client --host 127.0.0.1 --port 9000 \
 Client-side constraints on SI writes:
 
 - native protocol only (port 9000 of the agent); there is no HTTP interface;
-- no compression: do not pass `--compression` (the client does not compress to a loopback address
-  by default);
-- no query settings on an SI `INSERT` (including `async_insert`);
+- no compression: the client does not compress to a loopback address by default; when the agent is
+  on another host, pass `--compression=0` (a 26.8 or newer client also sends that option as the
+  query setting `compression=false`, which the lane accepts and drops; `--compression=1` is
+  refused);
+- no other query settings on an SI `INSERT` (including `async_insert`);
 - `INSERT ... SELECT` is not supported;
 - a 25.x `clickhouse-client` sends inline `VALUES` in a shape the lane refuses: upgrade, or use
   `FORMAT Values` with the rows on stdin;
