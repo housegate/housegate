@@ -109,9 +109,9 @@ func TestPermission_RejectsUnknownDatabase(t *testing.T) {
 // TestPermission_AllowsSystemReads: ClickHouse's built-in `system`
 // schema is never registered in NetworkState, but tools like
 // clickhouse-client UNION-read system.functions / system.tables / ...
-// for command-line suggestions on connect. Per-row visibility is
-// enforced server-side via viewIfPermitted, so reads must succeed
-// without a NetworkState entry.
+// for command-line suggestions on connect, and the Sentio driver reads the
+// class (c) metadata tables, which the rewriter serves tenant-filtered.
+// Reads of allowlisted tables must succeed without a NetworkState entry.
 func TestPermission_AllowsSystemReads(t *testing.T) {
 	st := NewInMemoryNetworkState() // system not registered
 	o := newPermObserver(st)
@@ -124,12 +124,70 @@ func TestPermission_AllowsSystemReads(t *testing.T) {
 		sqlmeta.StatementTypeExistsTable,
 		sqlmeta.StatementTypeUse,
 	} {
+		for _, table := range []string{"functions", "clusters", "tables", "columns", "parts", "mutations", "databases"} {
+			t.Run(typ.String()+"/"+table, func(t *testing.T) {
+				ev := newEvent(typ, "alice", "system", table)
+				if err := o.BeforeStatement(context.Background(), ev); err != nil {
+					t.Fatalf("expected system read to be allowed, got %v", err)
+				}
+			})
+		}
+	}
+}
+
+// TestPermission_AllowsDatabaseScopedSystemStatements: USE system and SHOW
+// TABLES FROM system name the database but no table, so no rows of any
+// system table.
+func TestPermission_AllowsDatabaseScopedSystemStatements(t *testing.T) {
+	o := newPermObserver(NewInMemoryNetworkState())
+	for _, typ := range []sqlmeta.StatementType{sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables} {
 		t.Run(typ.String(), func(t *testing.T) {
-			ev := newEvent(typ, "alice", "system", "functions")
+			ev := newEvent(typ, "alice", "system", "")
 			if err := o.BeforeStatement(context.Background(), ev); err != nil {
-				t.Fatalf("expected system read to be allowed, got %v", err)
+				t.Fatalf("expected %s of system to be allowed, got %v", typ, err)
 			}
 		})
+	}
+}
+
+// TestPermission_RejectsSystemReadsOffAllowlist (housegate/housegate#218):
+// every tenant reaches ClickHouse as one shared user, so a system table off
+// the engines' allowlist shows other tenants' queries, objects or settings.
+// The gate refuses it even if a rewriter let it through. Names match
+// exactly (ClickHouse table names are case-sensitive).
+func TestPermission_RejectsSystemReadsOffAllowlist(t *testing.T) {
+	o := newPermObserver(NewInMemoryNetworkState())
+	for _, table := range []string{
+		"processes", "query_log", "users", "grants", "parts_columns",
+		"completions", "projection_parts", "dictionaries", "Tables", "TABLES",
+	} {
+		t.Run(table, func(t *testing.T) {
+			ev := newEvent(sqlmeta.StatementTypeSelect, "alice", "system", table)
+			err := o.BeforeStatement(context.Background(), ev)
+			if err == nil || !strings.Contains(err.Error(), "system table") {
+				t.Fatalf("expected system.%s read to be refused, got %v", table, err)
+			}
+		})
+	}
+}
+
+// TestPermission_RejectsMixedReadOfSystemTableOffAllowlist: a tenant read
+// joined with a refused system table is refused as a whole, even when the
+// caller may read the tenant database.
+func TestPermission_RejectsMixedReadOfSystemTableOffAllowlist(t *testing.T) {
+	st := fixturePerm("foo", "alice", "", 0)
+	o := newPermObserver(st)
+	ev := &commitgate.Event{
+		Type:   sqlmeta.StatementTypeSelect,
+		User:   "alice",
+		Values: make(map[string]any),
+		AccessedTables: []sqlmeta.AccessedTable{
+			{OriginalDatabase: "foo", OriginalTable: "t", LogicalDatabase: "foo"},
+			{OriginalDatabase: "system", OriginalTable: "processes", LogicalDatabase: "system"},
+		},
+	}
+	if err := o.BeforeStatement(context.Background(), ev); err == nil || !strings.Contains(err.Error(), "processes") {
+		t.Fatalf("expected the system.processes entry to be refused, got %v", err)
 	}
 }
 
