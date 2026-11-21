@@ -295,10 +295,11 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 // information-schema-refused (housegate/housegate#319); rewriter-go before
 // v0.23.4 and rewriter-grpc before v0.21.3 fail unmapped-database-refused
 // (housegate/housegate#336); rewriter-go before v0.23.5 fails
-// opaque-insert-comment-refused (housegate/rewriter-go#84). rewriter-grpc
-// v0.21.3 already refuses both INSERT-comment cases (measured against the
-// released image), so its floor stays v0.21.3.
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.23.5 or rewriter-grpc >= v0.21.3 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table, unmapped-database and INSERT-data comment refusals, and Sentio-driver compatibility)"
+// opaque-insert-comment-refused (housegate/rewriter-go#84); rewriter-grpc
+// v0.21.3 already refused both INSERT-comment cases. rewriter-go before
+// v0.25.0 and rewriter-grpc before v0.24.0 fail
+// system-mutations-tenant-filtered (housegate/housegate#218).
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.25.0 or rewriter-grpc >= v0.24.0 (table-reference policy, spec 2026-09-26, its ClickHouse 26.8 refusals, the metadata-table, unmapped-database and INSERT-data comment refusals, the class (c) system-table tenant filter, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -392,6 +393,22 @@ var tableReferenceProbes = []buildProbe{
 	// unchanged.
 	rejectedProbe("unmapped-database-refused", "SELECT * FROM default.t",
 		pb.RewriteCode_InvalidRewriteRequest, `database "default" does not resolve through the caller's databases (it is not mapped for this account, or the account has no access)`),
+	// housegate/housegate#218: every tenant reads the class (c) metadata tables
+	// as the one shared ClickHouse user, and the observer allows them, so the
+	// engine must serve each read from a derived table that keeps only the
+	// rows of the caller's own logical databases. system.mutations carries
+	// other tenants' mutation predicates in command. Measured 2026-11-21
+	// against rewriter-go v0.25.0 (native FFI) and rewriter-grpc v0.24.0
+	// (bd2344a, release build, gRPC service); every earlier engine answers
+	// Success with the SQL unchanged.
+	{
+		name: "system-mutations-tenant-filtered", sql: "SELECT command FROM system.mutations WHERE database = 'phys'",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_SELECT, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: "SELECT command FROM (SELECT * FROM system.mutations WHERE database = 'phys' AND startsWith(table, 'db1.')) AS mutations WHERE database = 'phys'",
+			EngineGRPC:   "SELECT command FROM (SELECT * FROM system.mutations WHERE (database = 'phys') AND startsWith(`table`, 'db1.')) AS mutations WHERE database = 'phys'",
+		},
+	},
 	// A comment ClickHouse reads as part of an INSERT's inline data can hide
 	// a read from a comment-free scan. rewriter-grpc refuses both shapes in
 	// dynamic mode. rewriter-go answered Success for a comment in plain

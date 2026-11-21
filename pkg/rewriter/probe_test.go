@@ -494,6 +494,17 @@ func TestProbeTableReferencePolicy(t *testing.T) {
 			"SELECT a FROM db1.o WHERE a IN ((1, 2))": notSupported("SELECT a FROM db1.o WHERE a IN ((1, 2))"),
 		}}, "driver-grouped-literal-tuple", "code=UnsupportedStatement")
 	})
+	// housegate/housegate#218: rewriter-go before v0.25.0 and rewriter-grpc
+	// before v0.24.0 forward a class (c) read unchanged, so every tenant's
+	// rows (here other tenants' mutation predicates) reach the caller.
+	for _, engine := range []string{EngineNative, EngineGRPC} {
+		t.Run("an engine without the class (c) tenant filter is refused ("+engine+")", func(t *testing.T) {
+			const sql = "SELECT command FROM system.mutations WHERE database = 'phys'"
+			refused(t, &policyProbeBackend{engine: engine, override: map[string]*pb.RewriteSQLResponse{
+				sql: success(sql),
+			}}, "system-mutations-tenant-filtered", "SQL fingerprint mismatch")
+		})
+	}
 	t.Run("an unmodelled-class pass-through is refused", func(t *testing.T) {
 		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
 			"SYSTEM RELOAD CONFIG": success("SYSTEM RELOAD CONFIG"),
