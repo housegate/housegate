@@ -241,7 +241,7 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 		if a.LogicalDatabase == "" {
 			return fmt.Errorf("permission: %s has unresolved logical database for table %q", ev.Type, a.OriginalTable)
 		}
-		if err := o.checkAccess(account, Database(a.LogicalDatabase), required, ev.Type); err != nil {
+		if err := o.checkAccess(account, Database(a.LogicalDatabase), a.OriginalTable, required, ev.Type); err != nil {
 			return err
 		}
 	}
@@ -328,16 +328,85 @@ func allowsEmptyAccess(t sqlmeta.StatementType) bool {
 	return false
 }
 
-// systemDatabase is ClickHouse's built-in metadata schema. It is
-// never registered as a tenant database in NetworkState, but tools
-// like clickhouse-client read it on connect for command-line
-// suggestions (a UNION over system.functions / system.tables /
-// system.columns / ...). Per-row visibility is enforced server-side
-// via viewIfPermitted, so allowing read-only access here is safe.
-// Writes (INSERT / DDL targeting the system database) still fail-
-// closed because they require a registered DB and CH itself rejects
-// most of them anyway.
+// systemDatabase is ClickHouse's built-in metadata schema. It is never
+// registered as a tenant database in NetworkState, and every tenant reaches
+// ClickHouse as the one shared user, so ClickHouse's own per-user filtering
+// of system tables separates nothing between tenants. A read of it is
+// therefore allowed only for the tables on systemReadAllowlist (see
+// systemReadAllowed); every write to it fails closed in checkAccess because
+// the database is not registered.
 const systemDatabase Database = "system"
+
+// systemReadAllowlist is the closed set of system tables a read may name: the
+// table-reference allowlist both rewriter engines enforce (rewriter-go
+// nameresolve.systemTableAllowlist, rewriter-grpc systemTableAllowlist; spec
+// 2026-09-26 §5, "The system database"), kept here as defence in depth so a
+// rewriter that stopped refusing a table would still not reach it. Keep the
+// two in step: a table added to the engines' list is refused here until it is
+// added below, which fails closed.
+//
+//   - Class (b): static or server-global information that shows nothing of
+//     another tenant, and clusters (global topology the Sentio driver reads
+//     on connect).
+//   - Class (c), per-database metadata the Sentio driver reads by physical
+//     name: in dynamic mode both engines serve each read from a derived table
+//     filtered to the caller's own databases (housegate/housegate#218), so a
+//     caller sees only its own rows. ClickHouse does no per-row filtering of
+//     its own here.
+var systemReadAllowlist = map[string]bool{
+	// class (b)
+	"aggregate_function_combinators": true,
+	"azure_queue_settings":           true,
+	"build_options":                  true,
+	"codecs":                         true,
+	"collations":                     true,
+	"contributors":                   true,
+	"dashboards":                     true,
+	"data_type_families":             true,
+	"database_engines":               true,
+	"formats":                        true,
+	"functions":                      true,
+	"jemalloc_bins":                  true,
+	"jemalloc_stats":                 true,
+	"keywords":                       true,
+	"licenses":                       true,
+	"merge_tree_settings":            true,
+	"numbers":                        true,
+	"numbers_mt":                     true,
+	"one":                            true,
+	"primes":                         true,
+	"privileges":                     true,
+	"replicated_merge_tree_settings": true,
+	"s3_queue_settings":              true,
+	"settings":                       true,
+	"settings_changes":               true,
+	"table_engines":                  true,
+	"table_functions":                true,
+	"time_zones":                     true,
+	"tokenizers":                     true,
+	"unicode":                        true,
+	"warnings":                       true,
+	"zeros":                          true,
+	"zeros_mt":                       true,
+	// class (b*), read by the Sentio driver
+	"clusters": true,
+	// class (c), served tenant-filtered by the rewriter
+	"tables":                true,
+	"columns":               true,
+	"data_skipping_indices": true,
+	"projections":           true,
+	"parts":                 true,
+	"databases":             true,
+	"mutations":             true,
+}
+
+// systemReadAllowed reports whether a read of system.<table> may pass the
+// gate. ClickHouse table names are case-sensitive, so the match is exact. An
+// empty table is a database-scoped statement (USE system, SHOW TABLES FROM
+// system), which names no rows of any table.
+func systemReadAllowed(table string) bool {
+	return table == "" || systemReadAllowlist[table]
+}
 
 // PublicAccountAddress is the all-zeros Ethereum address acting as a
 // public-read pseudo-account. The Read implied by its grant is OR'd into
@@ -358,9 +427,13 @@ const PublicAccountAddress AccountAddress = "0x000000000000000000000000000000000
 // promotePermissionBits; callers pass the raw `required` bit from
 // permissionPolicy. The Owner bit is stored explicitly in
 // DatabasePermissions by sentio-node's database event handlers.
-func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Database, required registry.DbAuth, stmtType sqlmeta.StatementType) error {
+func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Database, table string, required registry.DbAuth, stmtType sqlmeta.StatementType) error {
 	if db == systemDatabase && required == registry.DbAuthRead {
-		return nil
+		if systemReadAllowed(table) {
+			return nil
+		}
+		return fmt.Errorf("permission: %s of system table %q is not allowed: every tenant shares one ClickHouse user, so only the system tables on the allowlist are readable",
+			stmtType, table)
 	}
 	info, infoOk := o.reg.Get(string(db))
 	if !infoOk {
