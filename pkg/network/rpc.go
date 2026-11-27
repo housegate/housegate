@@ -48,7 +48,12 @@ import (
 type RpcNetworkState struct {
 	endpoint string
 	client   *http.Client
-	nextID   atomic.Uint64
+	// indexerClient, when set, reaches the storage RPC endpoints indexers
+	// advertise; nil uses client. The source keeps client: it is the
+	// bootstrap entry, verified by host name, while an advertised indexer
+	// may be verified by its registered signer.
+	indexerClient atomic.Pointer[http.Client]
+	nextID        atomic.Uint64
 	// indexerScheme is the scheme of the storage RPC endpoints indexers
 	// advertise; empty means the scheme of endpoint.
 	indexerScheme string
@@ -165,7 +170,13 @@ func (r *RpcNetworkState) callAt(ctx context.Context, endpoint, method string, p
 		return false, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := r.client.Do(req)
+	client := r.client
+	if endpoint != r.endpoint {
+		if c := r.indexerClient.Load(); c != nil {
+			client = c
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("post: %w", err)
 	}
@@ -192,6 +203,12 @@ func (r *RpcNetworkState) callAt(ctx context.Context, endpoint, method string, p
 	return true, nil
 }
 
+// SetIndexerHTTPClient sets the client for calls to the storage RPC
+// endpoints indexers advertise (every call but those to the source); nil
+// restores the source's client. It may be built on r itself, since signer
+// lookups only read the source.
+func (r *RpcNetworkState) SetIndexerHTTPClient(c *http.Client) { r.indexerClient.Store(c) }
+
 // --- registry.Topology
 
 // AllIndexers calls sentio_getIndexerInfos. Returns a non-nil
@@ -210,11 +227,7 @@ func (r *RpcNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 		return out
 	}
 	for _, info := range infos {
-		out[info.IndexerId] = registry.ProxyAddress{
-			Url:            info.IndexerUrl,
-			HousegatePort:  info.ClickhouseProxyPort,
-			StorageRPCPort: info.StorageNodeRpcPort,
-		}
+		out[info.IndexerId] = info.proxyAddress()
 	}
 	return out
 }
@@ -261,11 +274,7 @@ func (r *RpcNetworkState) ProxyByIndexerIdContext(ctx context.Context, indexerId
 	if !ok {
 		return registry.ProxyAddress{}, false
 	}
-	return registry.ProxyAddress{
-		Url:            info.IndexerUrl,
-		HousegatePort:  info.ClickhouseProxyPort,
-		StorageRPCPort: info.StorageNodeRpcPort,
-	}, true
+	return info.proxyAddress(), true
 }
 
 // --- registry.Databases
@@ -566,10 +575,7 @@ func (r *RpcNetworkState) replicaHostsFromPeers(ctx context.Context, database st
 	}
 	all := make(map[uint64]registry.ProxyAddress, len(infos))
 	for _, info := range infos {
-		all[info.IndexerId] = registry.ProxyAddress{
-			Url: info.IndexerUrl, HousegatePort: info.ClickhouseProxyPort,
-			StorageRPCPort: info.StorageNodeRpcPort,
-		}
+		all[info.IndexerId] = info.proxyAddress()
 	}
 	ids := make([]uint64, 0, len(all))
 	for id := range all {
