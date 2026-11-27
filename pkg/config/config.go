@@ -238,6 +238,33 @@ type NetworkStateConfig struct {
 	// when verifying TLS endpoints (EndpointTLS, agent.upstream_tls, and
 	// https storage RPC). Empty uses the system roots.
 	TLSCAFile string `json:"tls_ca_file" yaml:"tls_ca_file"`
+
+	// EndpointVerify is how a TLS dial of an advertised endpoint
+	// (EndpointTLS) authenticates the server: "hostname" (the default)
+	// verifies the certificate chain against the system roots or TLSCAFile
+	// and the advertised host; "signer" accepts the indexer's self-signed
+	// certificate when it is bound to the signer the network state registers
+	// for that indexer (pkg/endpointtls signer.go), so an indexer needs no
+	// domain and no CA-issued certificate. Source itself, the bootstrap
+	// entry, is always verified by host name. agent.upstream_tls, a pinned
+	// upstream, is always verified by host name.
+	EndpointVerify string `json:"endpoint_verify,omitempty" yaml:"endpoint_verify,omitempty"`
+
+	// EndpointChainID is the chain id the indexers' endpoint certificates
+	// are bound to; required with EndpointVerify "signer".
+	EndpointChainID uint64 `json:"endpoint_chain_id,omitempty" yaml:"endpoint_chain_id,omitempty"`
+}
+
+// Endpoint verification modes for NetworkStateConfig.EndpointVerify.
+const (
+	EndpointVerifyHostname = "hostname"
+	EndpointVerifySigner   = "signer"
+)
+
+// EndpointSignerMode reports whether advertised endpoints are verified by
+// their registered signer.
+func (c NetworkStateConfig) EndpointSignerMode() bool {
+	return c.EndpointTLSEnabled() && c.EndpointVerify == EndpointVerifySigner
 }
 
 // EndpointTLSEnabled reports whether advertised endpoints are dialed over
@@ -384,6 +411,21 @@ func (c *Config) Validate() error {
 	if c.NetworkState.TLSCAFile != "" && c.NetworkState.EndpointTLS == nil && !c.Agent.UpstreamTLS &&
 		!strings.HasPrefix(c.NetworkState.Source, "https://") {
 		errs = append(errs, errors.New("network_state.tls_ca_file is set but nothing uses TLS: set network_state.endpoint_tls, agent.upstream_tls, or an https:// network_state.source"))
+	}
+	switch c.NetworkState.EndpointVerify {
+	case "", EndpointVerifyHostname:
+		if c.NetworkState.EndpointChainID != 0 {
+			errs = append(errs, errors.New("network_state.endpoint_chain_id is set but network_state.endpoint_verify is not \"signer\""))
+		}
+	case EndpointVerifySigner:
+		if !c.NetworkState.EndpointTLSEnabled() {
+			errs = append(errs, errors.New("network_state.endpoint_verify \"signer\" needs network_state.endpoint_tls: true"))
+		}
+		if c.NetworkState.EndpointChainID == 0 {
+			errs = append(errs, errors.New("network_state.endpoint_verify \"signer\" needs network_state.endpoint_chain_id"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("network_state.endpoint_verify %q: want \"hostname\" or \"signer\"", c.NetworkState.EndpointVerify))
 	}
 	if c.Agent.UpstreamTLS && c.Agent.Upstream == "" && c.Mode() == ModeAgent {
 		errs = append(errs, errors.New("agent.upstream_tls is set without agent.upstream: it applies only to a pinned upstream; use network_state.endpoint_tls for discovered upstreams"))
@@ -596,9 +638,11 @@ func Default() Config {
 			// non-yaml-suffixed as a Redis address so it still works.
 			// HOUSEGATE_NETWORK_STATE_SOURCE is the modern spelling
 			// and additionally accepts a YAML path.
-			Source:      EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
-			EndpointTLS: envBoolPtr("HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS"),
-			TLSCAFile:   EnvOrDefault("HOUSEGATE_NETWORK_STATE_TLS_CA_FILE", ""),
+			Source:          EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
+			EndpointTLS:     envBoolPtr("HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS"),
+			TLSCAFile:       EnvOrDefault("HOUSEGATE_NETWORK_STATE_TLS_CA_FILE", ""),
+			EndpointVerify:  EnvOrDefault("HOUSEGATE_NETWORK_STATE_ENDPOINT_VERIFY", ""),
+			EndpointChainID: envUint64("HOUSEGATE_NETWORK_STATE_ENDPOINT_CHAIN_ID"),
 		},
 		ReplicationProxy: defaultReplicationProxyConfig(),
 		Observability: ObservabilityConfig{

@@ -51,11 +51,7 @@ func (s *InMemoryNetworkState) ProxyByIndexerId(indexerId uint64) (registry.Prox
 	if !ok {
 		return registry.ProxyAddress{}, false
 	}
-	return registry.ProxyAddress{
-		Url:            info.IndexerUrl,
-		HousegatePort:  info.ClickhouseProxyPort,
-		StorageRPCPort: info.StorageNodeRpcPort,
-	}, true
+	return info.proxyAddress(), true
 }
 
 func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
@@ -63,11 +59,7 @@ func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	defer s.mu.RUnlock()
 	out := make(map[uint64]registry.ProxyAddress, len(s.IndexerInfos))
 	for id, info := range s.IndexerInfos {
-		out[id] = registry.ProxyAddress{
-			Url:            info.IndexerUrl,
-			HousegatePort:  info.ClickhouseProxyPort,
-			StorageRPCPort: info.StorageNodeRpcPort,
-		}
+		out[id] = info.proxyAddress()
 	}
 	return out
 }
@@ -95,11 +87,7 @@ func hostingProxyAddress(database string, indexerID uint64, info IndexerInfo) (r
 	if info.IndexerUrl == "" || info.ClickhouseProxyPort == 0 {
 		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s advertises no housegate address", indexerID, database)
 	}
-	return registry.ProxyAddress{
-		Url:            info.IndexerUrl,
-		HousegatePort:  info.ClickhouseProxyPort,
-		StorageRPCPort: info.StorageNodeRpcPort,
-	}, indexerID, true, nil
+	return info.proxyAddress(), indexerID, true, nil
 }
 
 // --- registry.Databases

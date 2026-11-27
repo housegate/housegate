@@ -370,6 +370,16 @@ network_state:
   endpoint_tls: true                 # the network's advertised endpoints are TLS
 ```
 
+**Signer verification.** With `network_state.endpoint_verify: signer` (default `hostname`) a TLS dial of an advertised endpoint does not check a certificate chain or a host name. It accepts the indexer's self-signed certificate when the certificate is bound to the `signer` the network state registers for the indexer that advertises the dialed host and port (housegate, storage RPC or compute RPC port). The indexer generates an ephemeral P-256 key at start and signs, with its signer key, `keccak256("housegate endpoint signer v1\0" || uint64be(chain id) || sha256(SubjectPublicKeyInfo))`; the signature travels in the URI SAN `urn:housegate:endpoint-signer:v1:<chain id>:<0x signature>` (`endpointtls.NewSignerCertificate`). An indexer therefore needs no domain and no CA-issued certificate. `network_state.endpoint_chain_id` is required and must match the certificate. A certificate bound to another signer or chain, an indexer without a registered signer, or an address no indexer advertises is refused. The `source` itself (the bootstrap entry) and a pinned `agent.upstream` stay on host-name verification; with an RPC source, the storage RPC calls to the indexers use the signer check. Env: `HOUSEGATE_NETWORK_STATE_ENDPOINT_VERIFY`, `HOUSEGATE_NETWORK_STATE_ENDPOINT_CHAIN_ID`; flags `-endpoint-verify`, `-endpoint-chain-id`.
+
+```yaml
+network_state:
+  source: "https://bootstrap.example.com"   # host-name verified
+  endpoint_tls: true
+  endpoint_verify: signer                   # indexers verified by their registered signer
+  endpoint_chain_id: 7892301
+```
+
 ### `shard`, `health_check`, `pool`, `routing` — Shard & Replicas
 
 Optional; takes priority over the flat `upstream` field. Each proxy instance manages one shard.
@@ -559,6 +569,8 @@ All CLI flags:
 | `-agent-upstream-tls` | `false` | Dial `-agent-upstream` over TLS (also `HOUSEGATE_AGENT_UPSTREAM_TLS`, config `agent.upstream_tls`) |
 | `-endpoint-tls` | (unset) | The network's advertised endpoints speak TLS (config `network_state.endpoint_tls`, see [§network_state](#network_state)); wins over the `-network` preset |
 | `-tls-ca-file` | (empty) | PEM CA bundle replacing the system roots for TLS endpoints (config `network_state.tls_ca_file`) |
+| `-endpoint-verify` | (empty: `hostname`) | `signer` verifies advertised endpoints by the indexer's registered signer (config `network_state.endpoint_verify`) |
+| `-endpoint-chain-id` | `0` | Chain id the indexers' endpoint certificates are bound to, required with `-endpoint-verify signer` (config `network_state.endpoint_chain_id`) |
 | `-agent-key` | (empty) | Ethereum private key for JWS signing |
 | `-agent-owner` | (empty) | Billed owner when `-agent-key` is an operator key (also `HOUSEGATE_AGENT_OWNER`) |
 | `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003`, plaintext endpoints (also `HOUSEGATE_NETWORK`). A preset also sets `network_state.endpoint_tls` unless it is configured. `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` win over it. With a pinned `-agent-upstream` the preset is still used for storage-integrity table status and network-id discovery (routing stays pinned) |

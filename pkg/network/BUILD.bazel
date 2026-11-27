@@ -33,6 +33,7 @@ go_test(
         "permission_commitgate_observer_test.go",
         "permission_writer_predicate_test.go",
         "rpc_indexer_scheme_test.go",
+        "rpc_indexer_signer_test.go",
         "rpc_indexer_signers_test.go",
         "rpc_replica_hosts_test.go",
         "rpc_routing_test.go",
@@ -45,11 +46,13 @@ go_test(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/endpointtls",
         "//pkg/plugin",
         "//pkg/plugins/agent",
         "//pkg/plugins/commitgate",
         "//pkg/registry",
         "//pkg/replay/payloadexec",
         "//pkg/sqlmeta",
+        "@com_github_ethereum_go_ethereum//crypto",
     ],
 )

@@ -111,6 +111,16 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create RPC network state: %w", err)
 		}
+		if cfg.NetworkState.EndpointSignerMode() {
+			// The source stays on host-name verification; the storage RPC
+			// endpoints the indexers advertise are checked against the signer
+			// the source registers for each of them.
+			signerTLS, err := endpointTLSConfig(cfg, func() (registry.Topology, error) { return rpcState, nil })
+			if err != nil {
+				return nil, err
+			}
+			rpcState.SetIndexerHTTPClient(signerTLS.HTTPClient(rpcTimeout(cfg.DialTimeout.Duration)))
+		}
 		log.Infow("network state loaded from RPC", "endpoint", cfg.NetworkState.Source)
 		return rpcState, nil
 	}
@@ -452,12 +462,6 @@ type builtServer struct {
 // opts.Config must be non-nil; New validates this before calling.
 func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	cfg := opts.Config
-	// peerTLS is how this server dials the peer housegates the network
-	// state advertises (forward pivots, routes, router-only picks).
-	peerTLS, err := endpointTLSConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
 
 	// Resolve every dep — opts override > built-from-config.
 	var teardownStack []func()
@@ -520,6 +524,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 	}
 	log.Infow("network state loaded", "source", cfg.NetworkState.Source)
+	// peerTLS is how this server dials the peer housegates the network
+	// state advertises (forward pivots, routes, router-only picks).
+	peerTLS, err := endpointTLSConfig(cfg, func() (registry.Topology, error) { return reg, nil })
+	if err != nil {
+		return nil, err
+	}
 	// A peer-relay login makes this proxy skip its own auth and rewrite, so
 	// the validator has to tell a peer from a stranger. A configured
 	// allowlist decides that by itself. Without one, only the registry's
@@ -1402,7 +1412,7 @@ func buildAgentWithBuilders(
 	evaluatorBuilder func(func(context.Context, string) (net.Conn, error), auth.Signer) inlineValuesEvaluator,
 ) (*builtServer, error) {
 	cfg := opts.Config
-	upstreamTLS, err := agentUpstreamTLS(cfg)
+	upstreamTLS, err := agentUpstreamTLS(cfg, agentTopology(opts, rf, nil))
 	if err != nil {
 		return nil, err
 	}
@@ -1718,7 +1728,7 @@ const agentTableStatusFailureTTL = 5 * time.Second
 // then stay off. The caller sets Signer, Evaluator and Observer.
 func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Registry, signerAddress string) (sistatement.Options, string, error) {
 	agentCfg := cfg.StorageIntegrity.Agent
-	upstreamTLS, err := agentUpstreamTLS(cfg)
+	upstreamTLS, err := agentUpstreamTLS(cfg, agentTopology(opts, nil, reg))
 	if err != nil {
 		return sistatement.Options{}, "", err
 	}
@@ -1947,7 +1957,7 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 	if cfg.Agent.Upstream != "" {
 		log.Infow("agent proxy mode: signing queries",
 			"signer_address", signerAddress, "upstream", cfg.Agent.Upstream)
-		upstreamTLS, err := agentUpstreamTLS(cfg)
+		upstreamTLS, err := agentUpstreamTLS(cfg, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1969,7 +1979,7 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 		Access:    reg,
 		Account:   routingAccount,
 	}
-	endpointTLS, err := endpointTLSConfig(cfg)
+	endpointTLS, err := endpointTLSConfig(cfg, func() (registry.Topology, error) { return reg, nil })
 	if err != nil {
 		return nil, err
 	}
@@ -1977,7 +1987,7 @@ func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAcco
 		"signer_address", signerAddress,
 		"routing_account", routingAccount,
 		"network_state_source", cfg.NetworkState.Source,
-		"endpoint_tls", endpointTLS.Enabled())
+		"endpoint_tls", endpointTLS.Enabled(), "endpoint_signer_mode", endpointTLS.SignerMode())
 
 	return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
 		// One *rand.Rand per Pick keeps the lock-free path goroutine-safe;
@@ -2039,22 +2049,57 @@ func dialEndpoint(ctx context.Context, addr string, timeout time.Duration, tlsCf
 	}, chproto.DirToUpstream), nil
 }
 
-// endpointTLSConfig is the client TLS posture for dials of the housegate
-// addresses the network state advertises: nil (plaintext) unless
-// network_state.endpoint_tls is on.
-func endpointTLSConfig(cfg *config.Config) (*endpointtls.Config, error) {
+// endpointTLSConfig is the client TLS posture for dials of the endpoints
+// the network state advertises: nil (plaintext) unless
+// network_state.endpoint_tls is on. With network_state.endpoint_verify
+// "signer" each server is checked against the signer topology registers for
+// the dialed endpoint; topology is called on each dial, so it may load the
+// registry lazily.
+func endpointTLSConfig(cfg *config.Config, topology func() (registry.Topology, error)) (*endpointtls.Config, error) {
 	if !cfg.NetworkState.EndpointTLSEnabled() {
 		return nil, nil
 	}
-	return endpointtls.New(cfg.NetworkState.TLSCAFile)
+	if !cfg.NetworkState.EndpointSignerMode() {
+		return endpointtls.New(cfg.NetworkState.TLSCAFile)
+	}
+	if topology == nil {
+		return nil, errors.New("network_state.endpoint_verify \"signer\" needs a network state")
+	}
+	return endpointtls.NewSigner(cfg.NetworkState.EndpointChainID, func(addr string) (string, error) {
+		t, err := topology()
+		if err != nil {
+			return "", err
+		}
+		if isNilInterface(t) {
+			return "", errors.New("no network state to look the signer up in")
+		}
+		return registry.SignerForEndpoint(t, addr)
+	})
+}
+
+// agentTopology returns the agent's registry for signer lookups: reg when
+// the caller already holds one, otherwise agentNetworkState, loaded once on
+// first use.
+func agentTopology(opts Options, rf *redisFactory, reg registry.Registry) func() (registry.Topology, error) {
+	if reg != nil {
+		return func() (registry.Topology, error) { return reg, nil }
+	}
+	load := sync.OnceValues(func() (registry.Registry, error) { return agentNetworkState(opts, rf) })
+	return func() (registry.Topology, error) {
+		r, err := load()
+		if err != nil {
+			return nil, err
+		}
+		return r, nil
+	}
 }
 
 // agentUpstreamTLS is the client TLS posture for the agent's upstream: a
-// pinned agent.upstream follows agent.upstream_tls, a discovered one
-// network_state.endpoint_tls.
-func agentUpstreamTLS(cfg *config.Config) (*endpointtls.Config, error) {
+// pinned agent.upstream follows agent.upstream_tls (verified by host name),
+// a discovered one network_state.endpoint_tls.
+func agentUpstreamTLS(cfg *config.Config, topology func() (registry.Topology, error)) (*endpointtls.Config, error) {
 	if cfg.Agent.Upstream == "" {
-		return endpointTLSConfig(cfg)
+		return endpointTLSConfig(cfg, topology)
 	}
 	if !cfg.Agent.UpstreamTLS {
 		return nil, nil

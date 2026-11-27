@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-
 func TestNetworkStateEndpointTLSHelpers(t *testing.T) {
 	for name, tc := range map[string]struct {
 		v       *bool
@@ -125,5 +124,56 @@ func TestDevnet2PresetStaysPlaintext(t *testing.T) {
 	}
 	if c.NetworkState.Source != "http://64.38.144.158:32003" || c.NetworkState.EndpointTLSEnabled() || c.NetworkState.IndexerRPCScheme() != "http" {
 		t.Fatalf("devnet2 preset changed: %+v", c.NetworkState)
+	}
+}
+
+func TestValidateEndpointVerify(t *testing.T) {
+	agent := func() *Config {
+		c := quickstartBase()
+		c.Agent.Mode = true
+		c.NetworkState.Source = "https://boot.example.com"
+		return c
+	}
+	for name, tc := range map[string]struct {
+		tls     *bool
+		verify  string
+		chainID uint64
+		want    string
+	}{
+		"hostname by default":     {boolPtr(true), "", 0, ""},
+		"explicit hostname":       {boolPtr(true), EndpointVerifyHostname, 0, ""},
+		"signer":                  {boolPtr(true), EndpointVerifySigner, 7892301, ""},
+		"signer without chain id": {boolPtr(true), EndpointVerifySigner, 0, "needs network_state.endpoint_chain_id"},
+		"signer without tls":      {nil, EndpointVerifySigner, 7892301, "needs network_state.endpoint_tls: true"},
+		"signer with tls off":     {boolPtr(false), EndpointVerifySigner, 7892301, "needs network_state.endpoint_tls: true"},
+		"chain id without signer": {boolPtr(true), "", 7892301, "endpoint_chain_id is set but"},
+		"unknown mode":            {boolPtr(true), "spiffe", 0, `want "hostname" or "signer"`},
+	} {
+		c := agent()
+		c.NetworkState.EndpointTLS = tc.tls
+		c.NetworkState.EndpointVerify = tc.verify
+		c.NetworkState.EndpointChainID = tc.chainID
+		err := c.Validate()
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			if c.NetworkState.EndpointSignerMode() != (tc.verify == EndpointVerifySigner) {
+				t.Errorf("%s: signer mode %v", name, c.NetworkState.EndpointSignerMode())
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestEndpointVerifyEnv(t *testing.T) {
+	t.Setenv("HOUSEGATE_NETWORK_STATE_ENDPOINT_VERIFY", "signer")
+	t.Setenv("HOUSEGATE_NETWORK_STATE_ENDPOINT_CHAIN_ID", "7892301")
+	d := Default()
+	if d.NetworkState.EndpointVerify != EndpointVerifySigner || d.NetworkState.EndpointChainID != 7892301 {
+		t.Fatalf("env not applied: %+v", d.NetworkState)
 	}
 }

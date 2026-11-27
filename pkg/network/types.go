@@ -71,6 +71,17 @@ type IndexerInfo struct {
 	Signer              string `json:"signer" yaml:"signer"`
 }
 
+// proxyAddress is the registry view of the indexer's endpoints and signer.
+func (info IndexerInfo) proxyAddress() registry.ProxyAddress {
+	return registry.ProxyAddress{
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
+		ComputeRPCPort: info.ComputeNodeRpcPort,
+		Signer:         info.Signer,
+	}
+}
+
 // ProcessorAllocation links a processor to the indexer(s) that host
 // its data. Wire-compatible with the upstream statemirror producer.
 type ProcessorAllocation struct {

@@ -80,6 +80,8 @@ func loadConfigWithOverrides() config.Config {
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
 	endpointTLS := flag.Bool("endpoint-tls", false, "the housegate and storage RPC endpoints indexers advertise speak TLS: dial them as verifying TLS clients (overrides config/env HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS and the -network preset)")
+	endpointVerify := flag.String("endpoint-verify", "", "how a TLS dial of an advertised endpoint authenticates the server: hostname (default) or signer, the indexer's registered signer (overrides config/env HOUSEGATE_NETWORK_STATE_ENDPOINT_VERIFY)")
+	endpointChainID := flag.Uint64("endpoint-chain-id", 0, "chain id the indexers' endpoint certificates are bound to, required with -endpoint-verify signer (overrides config/env HOUSEGATE_NETWORK_STATE_ENDPOINT_CHAIN_ID)")
 	tlsCAFile := flag.String("tls-ca-file", "", "PEM CA bundle that replaces the system roots for TLS endpoints (overrides config/env HOUSEGATE_NETWORK_STATE_TLS_CA_FILE)")
 	listenAddr := flag.String("listen", "", `proxy listen address, e.g. :9001 (overrides config/env; agent default "127.0.0.1:9000" without a config file)`)
 	metricsAddr := flag.String("metrics-listen", "", "Prometheus metrics listen address, e.g. :9091 (overrides config/env)")
@@ -149,6 +151,12 @@ func loadConfigWithOverrides() config.Config {
 	if explicitFlags["endpoint-tls"] {
 		v := *endpointTLS
 		cfg.NetworkState.EndpointTLS = &v
+	}
+	if explicitFlags["endpoint-verify"] {
+		cfg.NetworkState.EndpointVerify = *endpointVerify
+	}
+	if explicitFlags["endpoint-chain-id"] {
+		cfg.NetworkState.EndpointChainID = *endpointChainID
 	}
 	if explicitFlags["tls-ca-file"] {
 		cfg.NetworkState.TLSCAFile = *tlsCAFile

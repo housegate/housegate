@@ -279,6 +279,8 @@ network_state: { source: "redis.internal:6379" }                # Redis 模式
 
 "拨公布的 housegate 地址"包括 agent 选 upstream 和副本读 failover，以及 server 的 forward pivot、route target 和 router-only 选点。本地 ClickHouse upstream 或 shard 从不走 TLS。`network_state.tls_ca_file` 用一个 PEM bundle 取代系统根证书，作用于所有 TLS 拨号和 https storage RPC 调用。证书校验不能关闭。环境变量：`HOUSEGATE_NETWORK_STATE_ENDPOINT_TLS`（`true`/`false`）、`HOUSEGATE_NETWORK_STATE_TLS_CA_FILE`；flag：`-endpoint-tls`、`-tls-ca-file`。
 
+**Signer 校验。** 设置 `network_state.endpoint_verify: signer`（默认 `hostname`）后，拨公布端点的 TLS 连接不校验证书链和主机名，而是接受 indexer 的自签证书，前提是证书绑定到 network state 为该 indexer 登记的 `signer`（按拨号的主机和端口找 indexer：housegate、storage RPC 或 compute RPC 端口）。indexer 启动时生成临时 P-256 key，用 signer key 对 `keccak256("housegate endpoint signer v1\0" || uint64be(chain id) || sha256(SubjectPublicKeyInfo))` 签名，签名放在 URI SAN `urn:housegate:endpoint-signer:v1:<chain id>:<0x 签名>` 里（`endpointtls.NewSignerCertificate`）。所以 indexer 不需要域名，也不需要 CA 签发的证书。必须设置 `network_state.endpoint_chain_id`，且要和证书一致。绑定到别的 signer 或 chain 的证书、没有登记 signer 的 indexer、没有 indexer 公布的地址，都会被拒绝。`source` 本身（bootstrap 入口）和固定的 `agent.upstream` 仍按主机名校验；RPC source 下对各 indexer 的 storage RPC 调用走 signer 校验。环境变量：`HOUSEGATE_NETWORK_STATE_ENDPOINT_VERIFY`、`HOUSEGATE_NETWORK_STATE_ENDPOINT_CHAIN_ID`；flag：`-endpoint-verify`、`-endpoint-chain-id`。
+
 ### `shard`、`health_check`、`pool`、`routing` — 分片与副本
 
 可选；存在时优先于扁平的 `upstream` 字段。每个 proxy 实例管理一个 shard。
@@ -468,6 +470,8 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 | `-agent-upstream-tls` | `false` | 用 TLS 连接 `-agent-upstream`（也可用 `HOUSEGATE_AGENT_UPSTREAM_TLS`，配置 `agent.upstream_tls`） |
 | `-endpoint-tls` | (不设) | 网络公布的端点走 TLS（配置 `network_state.endpoint_tls`，见 [§network_state](#network_state)）；优先于 `-network` 预设 |
 | `-tls-ca-file` | (空) | 取代系统根证书的 PEM CA bundle（配置 `network_state.tls_ca_file`） |
+| `-endpoint-verify` | (空：`hostname`) | `signer` 按 indexer 登记的 signer 校验公布的端点（配置 `network_state.endpoint_verify`） |
+| `-endpoint-chain-id` | `0` | indexer 端点证书绑定的 chain id，`-endpoint-verify signer` 时必填（配置 `network_state.endpoint_chain_id`） |
 | `-agent-key` | (空) | JWS 签名用的以太坊私钥 |
 | `-agent-owner` | (空) | `-agent-key` 是 operator key 时的计费 owner（也可用 `HOUSEGATE_AGENT_OWNER`） |
 | `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`，端点为明文（也可用 `HOUSEGATE_NETWORK`）。预设在 `network_state.endpoint_tls` 未配置时也会设置它。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |

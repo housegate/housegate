@@ -2,17 +2,21 @@
 // (another indexer's housegate, a pinned agent upstream) with or without TLS.
 //
 // A nil *Config means plaintext, which keeps every caller's default exactly
-// as before TLS existed. A non-nil Config always verifies the server
-// certificate against the system roots, or against a CA bundle when one is
-// configured, and sends the dialed host as SNI. There is deliberately no way
-// to skip verification: the point is that an agent cannot be pointed at an
-// impostor endpoint.
+// as before TLS existed. A non-nil Config always verifies the server and sends
+// the dialed host as SNI. The hostname mode (New) verifies the certificate
+// against the system roots, or against a CA bundle when one is configured,
+// and the host name. The signer mode (NewSigner) verifies that the server's
+// self-signed certificate is bound to the signer the network state registers
+// for the dialed endpoint (signer.go). There is deliberately no way to skip
+// verification: the point is that an agent cannot be pointed at an impostor
+// endpoint.
 package endpointtls
 
 import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,6 +28,9 @@ import (
 // value is not useful; build one with New. A nil *Config dials plaintext.
 type Config struct {
 	base *tls.Config
+	// signer is set in the signer mode; it replaces chain and host name
+	// verification.
+	signer *signerVerifier
 }
 
 // New returns a TLS client configuration that verifies servers against the
@@ -44,6 +51,26 @@ func New(caFile string) (*Config, error) {
 	return &Config{base: base}, nil
 }
 
+// NewSigner returns a TLS client configuration in the signer mode: a server
+// is accepted when its certificate carries a signer URI for chainID whose
+// signature recovers to the address lookup returns for the dialed endpoint.
+// Chain, host name and CA bundle play no part.
+func NewSigner(chainID uint64, lookup SignerLookup) (*Config, error) {
+	if chainID == 0 {
+		return nil, errors.New("endpoint tls: the signer mode needs a chain id")
+	}
+	if lookup == nil {
+		return nil, errors.New("endpoint tls: the signer mode needs a signer lookup")
+	}
+	return &Config{
+		base:   &tls.Config{MinVersion: tls.VersionTLS12},
+		signer: &signerVerifier{chainID: chainID, lookup: lookup, now: time.Now},
+	}, nil
+}
+
+// SignerMode reports whether c verifies servers by their registered signer.
+func (c *Config) SignerMode() bool { return c != nil && c.signer != nil }
+
 // Enabled reports whether dials through c use TLS.
 func (c *Config) Enabled() bool { return c != nil }
 
@@ -60,14 +87,56 @@ func (c *Config) ClientConfig(addr string) *tls.Config {
 		host = addr
 	}
 	cfg.ServerName = host
+	if c.signer != nil {
+		// The certificate is self-signed and names no host: the standard
+		// verification would refuse it. VerifyConnection runs regardless and
+		// is the only check in this mode.
+		cfg.InsecureSkipVerify = true
+		v := c.signer
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error { return v.verify(addr, cs) }
+	}
 	return cfg
 }
 
+// DefaultSignerDialTimeout bounds the connect and handshake of a signer-mode
+// https connection when HTTPClient is given no timeout.
+const DefaultSignerDialTimeout = 10 * time.Second
+
 // HTTPClient returns an http.Client with the given timeout whose https
 // requests verify servers the same way dials through c do. A nil Config, or
-// one without a CA bundle, returns a client using the system roots.
+// one without a CA bundle, returns a client using the system roots. In the
+// signer mode every https connection is checked against the signer the
+// network state registers for the request's host and port, and the client
+// never uses an HTTP proxy: after a proxy CONNECT the transport would run the
+// target handshake with TLSClientConfig instead of DialTLSContext, which has
+// no dialed address to look the signer up for.
 func (c *Config) HTTPClient(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
+	if c.SignerMode() {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil
+		// The transport detaches this context from the request's deadline
+		// and skips TLSHandshakeTimeout for a custom DialTLSContext, so the
+		// connect and handshake carry their own bound.
+		dialTimeout := timeout
+		if dialTimeout <= 0 {
+			dialTimeout = DefaultSignerDialTimeout
+		}
+		tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return c.dial(ctx, network, addr, addr, dialTimeout)
+		}
+		// Unused while DialTLSContext handles every https connection; set so
+		// that any other path refuses instead of trusting the system roots.
+		tr.TLSClientConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true,
+			VerifyConnection: func(tls.ConnectionState) error {
+				return errors.New("endpoint tls: signer mode connection not dialed through the signer verifier")
+			},
+		}
+		client.Transport = tr
+		return client
+	}
 	if c != nil && c.base.RootCAs != nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.TLSClientConfig = c.base.Clone()

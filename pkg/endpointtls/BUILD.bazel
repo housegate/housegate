@@ -2,16 +2,24 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "endpointtls",
-    srcs = ["endpointtls.go"],
+    srcs = [
+        "endpointtls.go",
+        "signer.go",
+    ],
     importpath = "github.com/housegate/housegate/pkg/endpointtls",
     visibility = ["//visibility:public"],
+    deps = ["@com_github_ethereum_go_ethereum//crypto"],
 )
 
 go_test(
     name = "endpointtls_test",
-    srcs = ["endpointtls_test.go"],
+    srcs = [
+        "endpointtls_test.go",
+        "signer_test.go",
+    ],
     deps = [
         ":endpointtls",
         "//pkg/endpointtls/endpointtlstest",
+        "@com_github_ethereum_go_ethereum//crypto",
     ],
 )
