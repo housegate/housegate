@@ -29,12 +29,14 @@ func TestSignerForEndpoint(t *testing.T) {
 	topo := topology{
 		1: {Url: "Node-A.example", HousegatePort: 31001, ComputeRPCPort: 31002, StorageRPCPort: 31003, Signer: "0xAAAA"},
 		2: {Url: "10.0.0.2", HousegatePort: 31001, StorageRPCPort: 31003},
+		3: {Url: "https://node-c.example:8443", StorageRPCPort: 31003, Signer: "0xCCCC"},
 	}
 	for addr, want := range map[string]string{
 		"node-a.example:31001": "0xaaaa",
 		"node-a.example:31002": "0xaaaa",
 		"NODE-A.example:31003": "0xaaaa",
 		"10.0.0.2:31003":       "",
+		"node-c.example:31003": "0xcccc",
 	} {
 		got, err := registry.SignerForEndpoint(topo, addr)
 		if err != nil || got != want {

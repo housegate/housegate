@@ -102,13 +102,26 @@ func (c *Config) ClientConfig(addr string) *tls.Config {
 // requests verify servers the same way dials through c do. A nil Config, or
 // one without a CA bundle, returns a client using the system roots. In the
 // signer mode every https connection is checked against the signer the
-// network state registers for the request's host and port.
+// network state registers for the request's host and port, and the client
+// never uses an HTTP proxy: after a proxy CONNECT the transport would run the
+// target handshake with TLSClientConfig instead of DialTLSContext, which has
+// no dialed address to look the signer up for.
 func (c *Config) HTTPClient(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
 	if c.SignerMode() {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil
 		tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return c.dial(ctx, network, addr, addr, 0)
+		}
+		// Unused while DialTLSContext handles every https connection; set so
+		// that any other path refuses instead of trusting the system roots.
+		tr.TLSClientConfig = &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true,
+			VerifyConnection: func(tls.ConnectionState) error {
+				return errors.New("endpoint tls: signer mode connection not dialed through the signer verifier")
+			},
 		}
 		client.Transport = tr
 		return client

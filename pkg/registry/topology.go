@@ -12,6 +12,7 @@ package registry
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -76,6 +77,15 @@ type IndexerSigners interface {
 	IsIndexerSigner(address string) bool
 }
 
+// advertisedHost is the host of an indexer url, which producers may write as
+// a bare host or as a full URL (the storage RPC endpoint tolerates both).
+func advertisedHost(indexerURL string) string {
+	if u, err := url.Parse(indexerURL); err == nil && u.Host != "" {
+		return u.Hostname()
+	}
+	return indexerURL
+}
+
 // SignerForEndpoint returns the registered signer of the indexer that
 // advertises addr ("host:port") as its housegate, storage RPC or compute RPC
 // endpoint. It fails when no indexer advertises addr, when the indexers that
@@ -98,7 +108,7 @@ func SignerForEndpoint(t Topology, addr string) (string, error) {
 	var signer string
 	found := false
 	for id, a := range all {
-		if !strings.EqualFold(a.Url, host) {
+		if !strings.EqualFold(advertisedHost(a.Url), host) {
 			continue
 		}
 		p := uint16(port)

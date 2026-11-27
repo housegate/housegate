@@ -223,6 +223,10 @@ func TestSignerModeHTTPClient(t *testing.T) {
 		t.Fatalf("lookup asked %v, want %s", asked, target)
 	}
 
+	if tr, ok := cfg.HTTPClient(time.Second).Transport.(*http.Transport); !ok || tr.Proxy != nil || tr.DialTLSContext == nil {
+		t.Fatal("the signer mode HTTP client must not use a proxy and must dial TLS itself")
+	}
+
 	_, other := signerKey(t)
 	refuse, _ := endpointtls.NewSigner(chainID, func(string) (string, error) { return other, nil })
 	if _, err := refuse.HTTPClient(2 * time.Second).Get(srv.URL); err == nil || !strings.Contains(err.Error(), "presented a certificate of signer") {
