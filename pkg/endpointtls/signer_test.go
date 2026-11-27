@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -231,6 +232,36 @@ func TestSignerModeHTTPClient(t *testing.T) {
 	refuse, _ := endpointtls.NewSigner(chainID, func(string) (string, error) { return other, nil })
 	if _, err := refuse.HTTPClient(2 * time.Second).Get(srv.URL); err == nil || !strings.Contains(err.Error(), "presented a certificate of signer") {
 		t.Fatalf("another signer: %v", err)
+	}
+}
+
+// TestSignerModeHTTPClientBoundsAStalledHandshake: a server that accepts and
+// never answers the ClientHello has its connection closed once the client's
+// timeout expires, not left open after the request returns.
+func TestSignerModeHTTPClientBoundsAStalledHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	closed := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = io.Copy(io.Discard, c) // returns when the client closes
+		close(closed)
+	}()
+	cfg, _ := endpointtls.NewSigner(chainID, func(string) (string, error) { return "0x01", nil })
+	if _, err := cfg.HTTPClient(100 * time.Millisecond).Get("https://" + ln.Addr().String()); err == nil {
+		t.Fatal("request to a stalled server succeeded")
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stalled TLS dial kept its connection open")
 	}
 }
 

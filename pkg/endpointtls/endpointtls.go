@@ -98,6 +98,10 @@ func (c *Config) ClientConfig(addr string) *tls.Config {
 	return cfg
 }
 
+// DefaultSignerDialTimeout bounds the connect and handshake of a signer-mode
+// https connection when HTTPClient is given no timeout.
+const DefaultSignerDialTimeout = 10 * time.Second
+
 // HTTPClient returns an http.Client with the given timeout whose https
 // requests verify servers the same way dials through c do. A nil Config, or
 // one without a CA bundle, returns a client using the system roots. In the
@@ -111,8 +115,15 @@ func (c *Config) HTTPClient(timeout time.Duration) *http.Client {
 	if c.SignerMode() {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
+		// The transport detaches this context from the request's deadline
+		// and skips TLSHandshakeTimeout for a custom DialTLSContext, so the
+		// connect and handshake carry their own bound.
+		dialTimeout := timeout
+		if dialTimeout <= 0 {
+			dialTimeout = DefaultSignerDialTimeout
+		}
 		tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return c.dial(ctx, network, addr, addr, 0)
+			return c.dial(ctx, network, addr, addr, dialTimeout)
 		}
 		// Unused while DialTLSContext handles every https connection; set so
 		// that any other path refuses instead of trusting the system roots.
