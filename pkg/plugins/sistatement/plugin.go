@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -145,12 +146,17 @@ type Plugin struct {
 	// infoFailureTTL; discoveryWarnEvery throttles the P7 fallback warning.
 	infoFailures       map[string]infoFailure
 	discoveryWarnEvery time.Duration
-	statusWarnEvery    time.Duration               // throttles the status-lookup failure warning per table
-	skewWarned         map[string]bool             // by database
-	pending            map[int64]*pendingStatement // by session id; at most one per session
-	reserved           map[int64]*reservedSeq      // by session id; at most one per session
-	useDB              map[int64]string            // last successful standalone USE per session
-	useNext            map[int64]pendingUse        // candidate USE awaiting upstream success
+	statusWarnEvery    time.Duration // throttles the status-lookup failure warning per table
+	// logKey scopes this plugin's throttled-log ids. It is a per-process
+	// sequence number, not the plugin's address: the throttle state is
+	// process-global, and a later plugin allocated at a freed plugin's
+	// address would inherit its throttle window.
+	logKey     uint64
+	skewWarned map[string]bool             // by database
+	pending    map[int64]*pendingStatement // by session id; at most one per session
+	reserved   map[int64]*reservedSeq      // by session id; at most one per session
+	useDB      map[int64]string            // last successful standalone USE per session
+	useNext    map[int64]pendingUse        // candidate USE awaiting upstream success
 	// nonSwitchable marks sessions holding server-side state the agent cannot
 	// replay (a successful SET, temporary table or transaction); statefulNext
 	// is the query id of such a statement awaiting upstream success.
@@ -296,6 +302,7 @@ func New(opts Options) (*Plugin, error) {
 		infoFailures:       map[string]infoFailure{},
 		discoveryWarnEvery: discoveryWarnInterval,
 		statusWarnEvery:    statusWarnInterval,
+		logKey:             pluginLogKeys.Add(1),
 		skewWarned:         map[string]bool{},
 		pending:            map[int64]*pendingStatement{},
 		reserved:           map[int64]*reservedSeq{},
@@ -515,7 +522,7 @@ func (p *Plugin) activeStatus(ctx context.Context, target sicore.InsertTarget) (
 	status, err := p.statuses.StorageIntegrityTableStatus(ctx, target.Database, target.Table)
 	if err != nil {
 		p.observeStatus(func(o StatusObserver) { o.TableStatusLookupFailed() })
-		logger.WarnEvery(fmt.Sprintf("sistatement-status-%p-%s", p, tableID), p.statusWarnEvery,
+		logger.WarnEvery(fmt.Sprintf("sistatement-status-%d-%s", p.logKey, tableID), p.statusWarnEvery,
 			"sistatement: table status unavailable; passing the INSERT through unsigned", "table_id", tableID, "error", err)
 		return registry.TableStatus{}, false
 	}
@@ -1008,3 +1015,6 @@ func dropNoCompressionSetting(settings []chproto.Setting) []chproto.Setting {
 	}
 	return settings
 }
+
+// pluginLogKeys numbers Plugins for their throttled-log ids (Plugin.logKey).
+var pluginLogKeys atomic.Uint64

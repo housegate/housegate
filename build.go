@@ -1150,7 +1150,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	exceptionPlugins = append(exceptionPlugins, metrics)
 
 	helloPlugins := []plugin.HelloPlugin{
-		routeplugin.Stripper{},
+		// Stripper refuses any route whose target is not an advertised peer
+		// housegate or whose inner user is not one this proxy emits: a
+		// routed session skips credential replacement and auth.
+		routeplugin.Stripper{Topology: routeTopology(reg), Credentials: credProvider},
 		&credential.Plugin{
 			Provider:         credProvider,
 			PeerValidator:    peerValidator,
@@ -1185,8 +1188,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// Plugin-set route target (e.g. forward.Plugin's USE pivot, or
 		// routeplugin's __route__ envelope) wins over every other path.
 		if target := routeplugin.RouteTarget(sess.State()); target != "" {
-			// A route target is always an address the network state
-			// advertises (a forward pivot or a rewriter remote() route).
+			// A route target must be an address the network state
+			// advertises as a housegate (a forward pivot or a rewriter
+			// remote() route). Stripper already refuses any other; this
+			// re-check keeps the dialer fail-closed for every setter.
+			if _, err := registry.HousegateIndexersForEndpoint(routeTopology(reg), target); err != nil {
+				return nil, fmt.Errorf("refusing to dial route target: %w", err)
+			}
 			return dialEndpoint(ctx, target, cfg.DialTimeout.Duration, peerTLS)
 		}
 		// Local replica pool — present only when cfg.Shard is set.
@@ -2138,6 +2146,15 @@ func (c *configuredAddressConn) RedialExact(ctx context.Context, timeout time.Du
 		return nil, err
 	}
 	return &configuredAddressConn{Conn: conn, upstreamAddress: c.upstreamAddress, tls: c.tls}, nil
+}
+
+// routeTopology is reg as a registry.Topology, or nil when no network state
+// is loaded, so the route checks see a true nil and refuse.
+func routeTopology(reg registry.Registry) registry.Topology {
+	if isNilInterface(reg) {
+		return nil
+	}
+	return reg
 }
 
 func pickRandomBoundProxy(topo registry.Topology, selfPort int) (string, error) {

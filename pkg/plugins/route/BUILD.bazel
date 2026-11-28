@@ -13,8 +13,11 @@ go_library(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/credentials",
         "//pkg/log",
+        "//pkg/peer",
         "//pkg/plugin",
+        "//pkg/registry",
         "//pkg/route",
     ],
 )
@@ -30,8 +33,10 @@ go_test(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/credentials",
         "//pkg/peer",
         "//pkg/plugin",
+        "//pkg/registry",
         "//pkg/route",
     ],
 )
