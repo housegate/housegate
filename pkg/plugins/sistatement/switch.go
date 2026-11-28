@@ -234,7 +234,7 @@ func (p *Plugin) maybeSwitch(ctx context.Context, sess chsession.Session, databa
 func (p *Plugin) refuseSwitch(ctx context.Context, result, database string, refusal error) error {
 	p.observeSwitch(result)
 	_, logger := log.FromContext(ctx)
-	logger.InfoEvery(fmt.Sprintf("sistatement-switch-refused-%p-%s", p, result), switchRefusalLogEvery,
+	logger.InfoEvery(fmt.Sprintf("sistatement-switch-refused-%d-%s", p.logKey, result), switchRefusalLogEvery,
 		"sistatement: upstream switch refused locally; the session keeps its upstream", "database", database, "result", result, "err", refusal)
 	return refusal
 }
