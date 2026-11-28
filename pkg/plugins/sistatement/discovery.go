@@ -114,7 +114,7 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 			}
 			p.mu.Unlock()
 			_, logger := log.FromContext(ctx)
-			logger.WarnEvery(fmt.Sprintf("sistatement-info-refresh-%p-%s", p, database), p.discoveryWarnEvery,
+			logger.WarnEvery(fmt.Sprintf("sistatement-info-refresh-%d-%s", p.logKey, database), p.discoveryWarnEvery,
 				"sistatement: refreshing the hosting indexer's SI info failed; serving the last good answer",
 				"database", database, "age", now.Sub(stale.at), "step", step, "err", err)
 			return stale.info, "", nil
@@ -151,7 +151,7 @@ func (p *Plugin) resolveNetworkID(ctx context.Context, database string) (network
 	if err != nil {
 		if p.networkID != "" {
 			_, logger := log.FromContext(ctx)
-			logger.WarnEvery(fmt.Sprintf("sistatement-discovery-%p-%s", p, database), p.discoveryWarnEvery,
+			logger.WarnEvery(fmt.Sprintf("sistatement-discovery-%d-%s", p.logKey, database), p.discoveryWarnEvery,
 				"sistatement: network discovery failed; signing for the configured storage_integrity.agent.network_id",
 				"database", database, "network_id", p.networkID, "step", step, "err", err)
 			return p.networkID, false, nil

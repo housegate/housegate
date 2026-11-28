@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -125,4 +126,45 @@ func SignerForEndpoint(t Topology, addr string) (string, error) {
 		return "", fmt.Errorf("endpoint %q is not advertised by any indexer", addr)
 	}
 	return signer, nil
+}
+
+// HousegateIndexersForEndpoint returns the ids of the indexers that advertise
+// addr as their housegate endpoint, in ascending order. addr matches an
+// indexer when it equals the indexer's ProxyAddress.Addr() (the form the
+// rewriter and the forward plugin build route targets from), or when its
+// host equals the host of the indexer url and its port is the housegate
+// port. Storage and compute RPC ports never match: only a peer housegate is
+// a route target.
+//
+// It fails when the topology is nil or cannot be read, and when no indexer
+// advertises addr. A route target that does not resolve here is one this
+// proxy must not dial.
+func HousegateIndexersForEndpoint(t Topology, addr string) ([]uint64, error) {
+	if t == nil {
+		return nil, fmt.Errorf("endpoint %q: no network state", addr)
+	}
+	all := t.AllIndexers()
+	if all == nil {
+		return nil, fmt.Errorf("endpoint %q: the network state could not be read", addr)
+	}
+	host, portText, splitErr := net.SplitHostPort(addr)
+	var port uint64
+	if splitErr == nil {
+		port, splitErr = strconv.ParseUint(portText, 10, 16)
+	}
+	var ids []uint64
+	for id, a := range all {
+		if a.HousegatePort == 0 || strings.TrimSpace(a.Url) == "" {
+			continue
+		}
+		if strings.EqualFold(a.Addr(), addr) ||
+			(splitErr == nil && uint16(port) == a.HousegatePort && strings.EqualFold(advertisedHost(a.Url), host)) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("endpoint %q is not advertised as a housegate by any indexer", addr)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids, nil
 }
