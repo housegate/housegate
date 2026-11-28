@@ -67,7 +67,10 @@ type Plugin struct {
 }
 
 func (p *Plugin) OnHello(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello) error {
-	_, logger := log.FromContext(ctx, "original_user", hello.User, "original_password", hello.Password)
+	// Never log a password: the client's may be a ClickHouse credential or a
+	// peer-relay JWS (a bearer token), and the provider's is the upstream
+	// account's.
+	_, logger := log.FromContext(ctx, "original_user", hello.User)
 
 	// Peer-relay envelope is recognised before provider replacement so
 	// the JWS in the password is not lost. After validation the
@@ -101,7 +104,6 @@ func (p *Plugin) OnHello(ctx context.Context, sess chsession.Session, hello *chp
 
 	logger.Debugw("credential injector: replacing hello credentials",
 		"mapped_user", username,
-		"mapped_password", password,
 	)
 	return nil
 }
