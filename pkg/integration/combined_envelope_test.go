@@ -65,8 +65,9 @@ func TestCombinedRouteAndPeerEnvelope(t *testing.T) {
 
 	// Router proxy: normal server-mode with upstream CH. The Stripper
 	// is always in the HelloPlugin chain; it will extract the route
-	// envelope and pivot.
-	router := testenv.StartServerProxy(t, chEnv.Addr)
+	// envelope and pivot — the peer must be advertised in the router's
+	// network state, or Stripper refuses the route.
+	router := testenv.StartServerProxy(t, chEnv.Addr, testenv.WithPeerAt(peerIndexer, peerProxy))
 
 	// Sign a peer-relay JWS with audience = peer's indexer ID so the
 	// peer's credential plugin (PeerValidator) validates it.

@@ -101,6 +101,7 @@ go_test(
         "proxy_test.go",
         "rewriter_engine_auto_build_test.go",
         "rewriter_startup_gate_test.go",
+        "route_target_build_test.go",
         "storage_integrity_backpressure_ingress_test.go",
         "storage_integrity_backpressure_test.go",
         "storage_integrity_ingress_test.go",
